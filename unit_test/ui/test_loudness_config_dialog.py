@@ -34,7 +34,7 @@ class _ConfigManager:
         return True
 
 
-def test_loudness_is_registered_and_dispatches_its_config_dialog(qapp):
+def test_loudness_is_hidden_but_dispatches_legacy_config_dialog(qapp):
     config_name = "响度 (LOUD) 1"
     manager = _ConfigManager(
         {
@@ -47,7 +47,7 @@ def test_loudness_is_registered_and_dispatches_its_config_dialog(qapp):
     )
 
     assert "LOUD" in SUPPORTED_ANALYSIS_TYPES
-    assert "响度 (LOUD) " in SUPPORTED_ANALYSIS_ITEMS
+    assert "响度 (LOUD) " not in SUPPORTED_ANALYSIS_ITEMS
 
     dialog = OptionList.create_config_dialog(
         SimpleNamespace(mic_channels=[0, 1]),

@@ -44,8 +44,6 @@ from base.pre_processing.audio_equalizer import AudioEqualizer
 from base.pre_processing.spl_runtime_config import (
     apply_spl_analysis_time_range,
     calculate_overall_spl,
-    resolve_directional_additional_correction_db,
-    resolve_free_field_distance_correction_db,
     resolve_spl_unit,
 )
 from base.core_algorithm.response import (
@@ -71,6 +69,7 @@ from ui.plot_view import apply_plot_view_range
 from ui.reference_spectrum_analysis_window import ReferenceSpectrumCompareWindow
 from ui.ui_analysis_config.manual_limit_segments import (
     ManualLimitValidationError,
+    limits_from_constant_values,
     limits_from_manual_config,
 )
 from ui.ui_analysis_config.threshold_csv_manual import (
@@ -310,6 +309,17 @@ def _resolve_spl_limit_data(config, target_x):
         validate_limit_data_values(limit_data)
         return limit_x, upper_limit, lower_limit
     raise ValueError(f"不支持的阈值模式: {limit_mode}")
+
+
+def _resolve_spl_overall_limit_values(config):
+    scalar_config = {
+        "constant_upper_enabled": bool(config.get("scalar_upper_enabled", True)),
+        "constant_upper_value": config.get("scalar_upper_value", 100.0),
+        "constant_lower_enabled": bool(config.get("scalar_lower_enabled", False)),
+        "constant_lower_value": config.get("scalar_lower_value", 0.0),
+    }
+    _, upper_limits, lower_limits = limits_from_constant_values(scalar_config, [0.0])
+    return np.asarray(upper_limits), np.asarray(lower_limits)
 
 
 class AnalysisResultSummaryWindow(QWidget):
@@ -1042,38 +1052,26 @@ class Spl(AnalysisGraphWidget):
             self.analysis_config,
         )
         config = self.analysis_config or {}
-        try:
-            distance_correction_db = (
-                resolve_free_field_distance_correction_db(config)
-            )
-            directional_additional_correction_db = (
-                resolve_directional_additional_correction_db(config)
-            )
-        except ValueError as exc:
-            QMessageBox.warning(
-                self,
-                "提示",
-                f"SPL 修正配置无效: {str(exc)[:200]}",
-            )
-            return False
-        applied_correction_db = (
-            distance_correction_db
-            + directional_additional_correction_db
-        )
         show_overall_spl = bool(
             config.get(
                 "show_overall_spl",
                 False,
             )
         )
+        limit_checked = bool(config.get("limit_checked", False))
+        limit_metric = str(
+            config.get("limit_metric", "curve_y") or "curve_y"
+        ).lower()
+        judge_by_overall_spl = (
+            limit_checked and limit_metric == "overall_spl"
+        )
         overall_spl = None
-        if show_overall_spl:
+        if show_overall_spl or judge_by_overall_spl:
             overall_spl = calculate_overall_spl(
                 analysis_signal,
                 reference_pressure,
                 v2pa_factor=self.v2pa_factor,
             )
-            overall_spl += applied_correction_db
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
             analysis_signal,
             reference_pressure,
@@ -1090,62 +1088,67 @@ class Spl(AnalysisGraphWidget):
         if self.analysis_config and self.analysis_config.get("smooth_checked"):
             # NOTE: Do not apply RMS smoothing on dB values (squaring negatives turns silence into ~100 dB).
             signal_spl = smooth(signal_spl, window_size=1102, method="savgol")
-        signal_spl = np.asarray(signal_spl, dtype=float) + applied_correction_db
-        limit_checked = self.analysis_config.get("limit_checked")
         if limit_checked:
-            try:
-                csv_time_list, csv_upper_list, csv_lower_list = (
-                    _resolve_spl_limit_data(
-                        self.analysis_config,
-                        signal_duration,
+            if judge_by_overall_spl:
+                try:
+                    if overall_spl is None or not np.isfinite(overall_spl):
+                        raise ValueError("总体声压级不是有限数值")
+                    upper_limits, lower_limits = (
+                        _resolve_spl_overall_limit_values(config)
                     )
+                except (
+                    ManualLimitValidationError,
+                    TypeError,
+                    ValueError,
+                ) as exc:
+                    QMessageBox.warning(
+                        self,
+                        "提示",
+                        f"SPL 阈值配置无效: {str(exc)[:200]}",
+                    )
+                    return False
+                _, deviation, is_ok = LimitPlotUtils.compare_with_limits(
+                    np.asarray([overall_spl], dtype=float),
+                    upper_limits,
+                    lower_limits,
                 )
-            except (ManualLimitValidationError, TypeError, ValueError) as exc:
-                QMessageBox.warning(
-                    self,
-                    "提示",
-                    f"SPL 阈值配置无效: {str(exc)[:200]}",
+                self.data_struct.analysis_result_dict[self.title_name] = (
+                    is_ok,
+                    deviation,
                 )
-                return False
-            self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
+                self.plot_spl(signal_duration, signal_spl)
+            else:
+                try:
+                    csv_time_list, csv_upper_list, csv_lower_list = (
+                        _resolve_spl_limit_data(
+                            self.analysis_config,
+                            signal_duration,
+                        )
+                    )
+                except (ManualLimitValidationError, TypeError, ValueError) as exc:
+                    QMessageBox.warning(
+                        self,
+                        "提示",
+                        f"SPL 阈值配置无效: {str(exc)[:200]}",
+                    )
+                    return False
+                self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
         else:
             self.plot_spl(signal_duration, signal_spl)
         apply_plot_view_range(
             self.analysis_plot,
             self.analysis_config or {},
         )
-        self._set_overall_spl_title(overall_spl)
+        self._set_overall_spl_title(
+            overall_spl if show_overall_spl else None
+        )
         self.result = {
             "signal_duration": signal_duration.tolist(),
             "recorded_signal": np.asarray(analysis_signal).tolist(),
             "signal_spl": signal_spl.tolist(),
         }
-        if show_overall_spl:
+        if show_overall_spl or judge_by_overall_spl:
             self.result["overall_spl"] = overall_spl
-        if config.get(
-            "free_field_distance_enabled",
-            False,
-        ) or config.get("directional_correction_enabled", False):
-            self.result.update(
-                {
-                    "distance_correction_db": distance_correction_db,
-                    "directional_additional_correction_db": (
-                        directional_additional_correction_db
-                    ),
-                    "applied_correction_db": applied_correction_db,
-                }
-            )
-        if config.get("free_field_distance_enabled", False):
-            self.result.update(
-                {
-                    "measurement_distance_m": float(
-                        config["measurement_distance_m"]
-                    ),
-                    "target_distance_m": float(
-                        config["target_distance_m"]
-                    ),
-                }
-            )
         return self.result
 
     def plot_spl_with_limits(self, signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list):

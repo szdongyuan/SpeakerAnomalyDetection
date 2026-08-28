@@ -91,6 +91,109 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.mark.parametrize(
+    ("limits", "curve_value", "expected_ok", "expected_deviation"),
+    [
+        ({"scalar_upper_value": 101.0}, 130.0, True, 1.0),
+        ({"scalar_upper_value": 99.0}, 20.0, False, 1.0),
+        ({"scalar_upper_value": 100.0}, 130.0, True, 0.0),
+        ({"scalar_upper_enabled": False, "scalar_lower_enabled": True,
+          "scalar_lower_value": 101.0}, 130.0, False, 1.0),
+        ({"scalar_upper_enabled": False, "scalar_lower_enabled": True,
+          "scalar_lower_value": 100.0}, 130.0, True, 0.0),
+        ({"scalar_upper_value": 101.0, "scalar_lower_enabled": True,
+          "scalar_lower_value": 99.0}, 130.0, True, 1.0),
+    ],
+)
+def test_overall_judgment_uses_rms_independently_of_curve_and_title(
+    signal_module, qapp, monkeypatch, limits, curve_value, expected_ok,
+    expected_deviation,
+):
+    widget = signal_module.Spl("overall")
+    widget.data_struct.store_wave_data = np.tile([1.0, -1.0], 16)
+    widget.data_struct.store_wave_data_multi = None
+    widget.data_struct.sample_rate = 48000
+    widget.data_struct.analysis_result_dict.clear()
+    widget.v2pa_factor = 2.0
+    widget.analysis_config = {
+        "limit_checked": True, "limit_metric": "overall_spl",
+        "show_overall_spl": False,
+        **limits,
+    }
+    monkeypatch.setattr(
+        signal_module.AudioThdFrequencyResponseAnalysis, "spl_calculation",
+        lambda *_args, **_kwargs: np.array([curve_value, curve_value]),
+    )
+    titles = []
+    monkeypatch.setattr(signal_module.QMessageBox, "warning", lambda *_args: None)
+    monkeypatch.setattr(widget.analysis_plot, "setTitle", lambda title, **_kwargs: titles.append(title))
+
+    result = widget.calculate_spl()
+
+    assert result["overall_spl"] == pytest.approx(100.0)
+    assert widget.data_struct.analysis_result_dict["overall"][0] == expected_ok
+    assert widget.data_struct.analysis_result_dict["overall"][1] == pytest.approx(expected_deviation)
+    assert titles == [""]
+    widget.close()
+
+
+@pytest.mark.parametrize("limits", [
+    {"scalar_upper_enabled": False, "scalar_lower_enabled": False},
+    {"scalar_upper_value": float("nan")},
+    {"scalar_upper_value": 90.0, "scalar_lower_enabled": True, "scalar_lower_value": 95.0},
+])
+def test_invalid_overall_limits_do_not_produce_a_judgment(signal_module, qapp, monkeypatch, limits):
+    widget = signal_module.Spl("invalid-overall")
+    widget.data_struct.store_wave_data = np.tile([1.0, -1.0], 16)
+    widget.data_struct.store_wave_data_multi = None
+    widget.data_struct.sample_rate = 48000
+    widget.data_struct.analysis_result_dict.clear()
+    widget.v2pa_factor = 2.0
+    widget.analysis_config = {"limit_checked": True, "limit_metric": "overall_spl", **limits}
+    warnings = []
+    monkeypatch.setattr(signal_module.QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    assert widget.calculate_spl() is False
+    assert "invalid-overall" not in widget.data_struct.analysis_result_dict
+    assert len(warnings) == 1
+    widget.close()
+
+
+def test_overall_judgment_uses_weighting_time_range_and_ignores_legacy_correction(signal_module, qapp, monkeypatch):
+    widget = signal_module.Spl("weighted-overall")
+    widget.data_struct.store_wave_data = np.array([0.1, 0.1, 1.0, -1.0, 0.1, 0.1])
+    widget.data_struct.store_wave_data_multi = None
+    widget.data_struct.sample_rate = 10
+    widget.data_struct.analysis_result_dict.clear()
+    widget.v2pa_factor = 2.0
+    widget.analysis_config = {
+        "weighting": "A",
+        "analysis_time_range_enabled": True,
+        "analysis_start_time_sec": 0.2,
+        "analysis_end_time_sec": 0.4,
+        "directional_correction_enabled": True,
+        "directional_additional_correction_db": 3.0,
+        "limit_checked": True, "limit_metric": "overall_spl",
+        "scalar_upper_value": 96.0,
+    }
+    weighted = []
+
+    def apply_weighting(signal, sample_rate, **kwargs):
+        weighted.append((sample_rate, kwargs["weighting"]))
+        return signal * 0.5
+
+    monkeypatch.setattr(signal_module, "apply_weighting_filter", apply_weighting)
+    monkeypatch.setattr(signal_module.QMessageBox, "warning", lambda *_args: None)
+    result = widget.calculate_spl()
+
+    assert weighted == [(10, "A")]
+    assert result["recorded_signal"] == pytest.approx([0.5, -0.5])
+    assert result["overall_spl"] == pytest.approx(20.0 * np.log10(1.0 / 20e-6))
+    assert "applied_correction_db" not in result
+    assert widget.data_struct.analysis_result_dict["weighted-overall"][0] is True
+    widget.close()
+
+
 def test_spl_runtime_optionally_displays_overall_level(
     signal_module,
     qapp,
@@ -142,7 +245,7 @@ def test_spl_runtime_optionally_displays_overall_level(
     widget.close()
 
 
-def test_spl_runtime_projects_curve_and_overall_level_to_target_distance(
+def test_spl_runtime_ignores_legacy_corrections_for_curve_and_overall_level(
     signal_module,
     qapp,
     monkeypatch,
@@ -161,6 +264,7 @@ def test_spl_runtime_projects_curve_and_overall_level_to_target_distance(
         "free_field_distance_enabled": True,
         "measurement_distance_m": 0.1,
         "target_distance_m": 1.0,
+        "directional_correction_enabled": True,
         "directional_additional_correction_db": -5.0,
     }
     plotted = []
@@ -178,46 +282,12 @@ def test_spl_runtime_projects_curve_and_overall_level_to_target_distance(
 
     result = widget.calculate_spl()
 
-    assert result["signal_spl"] == pytest.approx([22.0, 23.0])
-    assert result["overall_spl"] == pytest.approx(80.0)
-    assert result["measurement_distance_m"] == pytest.approx(0.1)
-    assert result["target_distance_m"] == pytest.approx(1.0)
-    assert result["distance_correction_db"] == pytest.approx(-20.0)
-    assert result["directional_additional_correction_db"] == pytest.approx(0.0)
-    assert result["applied_correction_db"] == pytest.approx(-20.0)
-    assert plotted[0].tolist() == pytest.approx([22.0, 23.0])
-
-    widget.analysis_config["directional_correction_enabled"] = True
-    plotted.clear()
-    result = widget.calculate_spl()
-
-    assert result["signal_spl"] == pytest.approx([17.0, 18.0])
-    assert result["overall_spl"] == pytest.approx(75.0)
-    assert result["directional_additional_correction_db"] == pytest.approx(-5.0)
-    assert result["applied_correction_db"] == pytest.approx(-25.0)
-    assert plotted[0].tolist() == pytest.approx([17.0, 18.0])
-
-    widget.analysis_config["directional_correction_enabled"] = True
-    widget.analysis_config["directional_additional_correction_db"] = 5.0
-    plotted.clear()
-    result = widget.calculate_spl()
-
-    assert result["signal_spl"] == pytest.approx([27.0, 28.0])
-    assert result["overall_spl"] == pytest.approx(85.0)
-    assert result["directional_additional_correction_db"] == pytest.approx(5.0)
-    assert result["applied_correction_db"] == pytest.approx(-15.0)
-    assert plotted[0].tolist() == pytest.approx([27.0, 28.0])
-
-    widget.analysis_config["free_field_distance_enabled"] = False
-    plotted.clear()
-    result = widget.calculate_spl()
-
-    assert result["signal_spl"] == pytest.approx([47.0, 48.0])
-    assert result["overall_spl"] == pytest.approx(105.0)
+    assert result["signal_spl"] == pytest.approx([42.0, 43.0])
+    assert result["overall_spl"] == pytest.approx(100.0)
     assert "measurement_distance_m" not in result
     assert "target_distance_m" not in result
-    assert result["distance_correction_db"] == pytest.approx(0.0)
-    assert result["directional_additional_correction_db"] == pytest.approx(5.0)
-    assert result["applied_correction_db"] == pytest.approx(5.0)
-    assert plotted[0].tolist() == pytest.approx([47.0, 48.0])
+    assert "distance_correction_db" not in result
+    assert "directional_additional_correction_db" not in result
+    assert "applied_correction_db" not in result
+    assert plotted[0].tolist() == pytest.approx([42.0, 43.0])
     widget.close()

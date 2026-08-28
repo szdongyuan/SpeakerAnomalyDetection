@@ -719,7 +719,19 @@ class SequenceWidgetStreamingOpsMixin:
             return False, "当前配置未选择任何分析项"
         preflight_skips = getattr(self, "_analysis_preflight_skips", {}) or {}
         if isinstance(preflight_skips, dict) and preflight_skips:
-            seq = [key for key in seq if str(key) not in preflight_skips]
+            skipped_keys = {
+                getattr(skip, "config_key", "") or str(key)
+                for key, skip in preflight_skips.items()
+            }
+            executable_keys = {
+                getattr(instance, "_sequence_analysis_key", None)
+                for instance in getattr(self, "analysis_window", [])
+                if not getattr(instance, "_channel_mismatch", False)
+            }
+            seq = [
+                key for key in seq
+                if str(key) not in skipped_keys or key in executable_keys
+            ]
 
         candidates = []
         for key in seq:

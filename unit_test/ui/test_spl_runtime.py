@@ -129,7 +129,7 @@ def test_spl_constant_limit_covers_first_runtime_point(signal_module, qapp, monk
     widget.close()
 
 
-def test_spl_free_field_projection_is_applied_before_limit_judgment(
+def test_spl_runtime_ignores_legacy_correction_config(
     signal_module,
     qapp,
     monkeypatch,
@@ -143,14 +143,14 @@ def test_spl_free_field_projection_is_applied_before_limit_judgment(
     widget.data_struct.sample_rate = 10
     widget.data_struct.analysis_result_dict.clear()
     widget.v2pa_factor = 1.0
-    widget.analysis_config = _constant_upper_config(upper_db=0.0)
+    widget.analysis_config = _constant_upper_config(upper_db=8.0)
     widget.analysis_config.update(
         {
             "free_field_distance_enabled": True,
-            "measurement_distance_m": 0.1,
+            "measurement_distance_m": 0.0,
             "target_distance_m": 1.0,
             "directional_correction_enabled": True,
-            "directional_additional_correction_db": -2.0,
+            "directional_additional_correction_db": float("inf"),
         }
     )
     monkeypatch.setattr(
@@ -161,46 +161,9 @@ def test_spl_free_field_projection_is_applied_before_limit_judgment(
 
     result = widget.calculate_spl()
 
-    assert result["signal_spl"] == pytest.approx([-10.0, -17.0, -18.0])
-    assert widget.data_struct.analysis_result_dict["SPL"] == (True, 10.0)
-    widget.close()
-
-
-def test_spl_runtime_rejects_invalid_persisted_distance_config(
-    signal_module,
-    qapp,
-    monkeypatch,
-):
-    widget = signal_module.Spl("SPL")
-    widget.data_struct.store_wave_data = np.asarray([0.1, 0.2, 0.3])
-    widget.data_struct.store_wave_data_multi = None
-    widget.data_struct.sample_rate = 10
-    widget.v2pa_factor = 1.0
-    widget.analysis_config = {
-        "analysis_channel": 0,
-        "weighting": "Z",
-        "smooth_checked": False,
-        "limit_checked": False,
-        "free_field_distance_enabled": True,
-        "measurement_distance_m": 0.0,
-        "target_distance_m": 1.0,
-    }
-    warnings = []
-    monkeypatch.setattr(
-        signal_module.AudioThdFrequencyResponseAnalysis,
-        "spl_calculation",
-        lambda self, *args, **kwargs: pytest.fail(
-            "invalid distance must stop before SPL calculation"
-        ),
-    )
-    monkeypatch.setattr(
-        signal_module.QMessageBox,
-        "warning",
-        lambda *args: warnings.append(args[2]),
-    )
-
-    assert widget.calculate_spl() is False
-    assert warnings == ["SPL 修正配置无效: 测量距离必须为有限正数。"]
+    assert result["signal_spl"] == pytest.approx([12.0, 5.0, 4.0])
+    assert "applied_correction_db" not in result
+    assert widget.data_struct.analysis_result_dict["SPL"] == (False, 4.0)
     widget.close()
 
 

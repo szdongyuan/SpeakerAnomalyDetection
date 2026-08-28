@@ -25,6 +25,7 @@ from ui.ui_analysis_config.common_widgets import (
     AnalysisConfigDialogBase,
     AnalysisChannelSpinBoxWidget,
     ChannelSelectorWidget,
+    MultiChannelSelectorWidget,
     GoldenSampleWidget,
     HarmonicDetectionMethodSelectorWidget,
     HarmonicSelectorWidget,
@@ -53,6 +54,61 @@ def test_channel_selector_uses_available_channel(qapp):
 
     assert widget.current_channel() == 2
     assert widget.get_config() == {"analysis_channel": 2}
+
+
+def test_recorded_channel_selector_preserves_missing_saved_channels(qapp):
+    widget = MultiChannelSelectorWidget(
+        {"analysis_channels": [7, 0, 7]}, [0, 2]
+    )
+
+    assert widget.get_config() == {"analysis_channel": 0, "analysis_channels": [0, 7]}
+    assert widget.combo_box.itemText(widget.combo_box.findData(7)) == "In8（未录制）"
+    widget.set_selected_channels([0, 2])
+    assert widget.get_config() == {"analysis_channel": 0, "analysis_channels": [0, 2]}
+
+
+def test_new_recorded_item_defaults_to_first_available_channel(qapp):
+    widget = MultiChannelSelectorWidget({"type": "SPL"}, [2, 7])
+
+    assert widget.get_config() == {"analysis_channel": 2, "analysis_channels": [2]}
+
+
+def test_recorded_channel_selector_mouse_and_keyboard_keep_last_selection(qapp):
+    widget = MultiChannelSelectorWidget({"analysis_channels": [0]}, [0, 2])
+    widget.show()
+    combo = widget.combo_box
+    combo.showPopup()
+    qapp.processEvents()
+    view = combo.view()
+    second = combo.model().index(1, 0)
+    QTest.mouseClick(view.viewport(), Qt.LeftButton, pos=view.visualRect(second).center())
+    qapp.processEvents()
+    assert widget.selected_channels() == [0, 2]
+    assert view.isVisible()
+
+    view.setCurrentIndex(combo.model().index(0, 0))
+    QTest.keyClick(view, Qt.Key_Space)
+    assert widget.selected_channels() == [2]
+    view.setCurrentIndex(second)
+    QTest.keyClick(view, Qt.Key_Space)
+    assert widget.selected_channels() == [2]
+    combo.hidePopup()
+    assert combo.lineEdit().text() == "In3"
+    combo.setCurrentIndex(0)
+    assert combo.lineEdit().text() == "In3"
+    assert widget.selected_channels() == [2]
+    widget.close()
+
+
+@pytest.mark.parametrize("widget_type", [ChannelSelectorWidget, AnalysisChannelSpinBoxWidget])
+def test_single_channel_widgets_preserve_recorded_selection_when_editing_import(qapp, widget_type):
+    widget = widget_type({"analysis_channel": 0, "analysis_channels": [0, 2]}, [0, 1, 2])
+    if isinstance(widget, ChannelSelectorWidget):
+        widget.combo_box.setCurrentIndex(widget.combo_box.findData(1))
+    else:
+        widget.spin_box.setValue(2)
+
+    assert widget.get_config() == {"analysis_channel": 1, "analysis_channels": [0, 2]}
 
 
 @pytest.mark.parametrize(

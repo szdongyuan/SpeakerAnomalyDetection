@@ -4,10 +4,11 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QTreeView, QWidget
 
-from ui.operation_sequence import OptionList
-from ui.ui_analysis_config.common_widgets import ChannelSelectorWidget
+from ui.operation_sequence import AnalysisModelSelect, OptionList
+from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
+from ui.ui_analysis_config.common_widgets import ChannelSelectorWidget, MultiChannelSelectorWidget
 from ui.ui_analysis_config.fft_config_dialog import FftConfigWindow
 from ui.ui_analysis_config.loudness_config_dialog import LoudnessConfigWindow
 
@@ -41,8 +42,28 @@ def _option(mode, channels=(0, 2, 7)):
     )
 
 
-@pytest.mark.parametrize("analysis_type", ["SPL", "Spec", "FBA"])
-def test_record_only_routes_restricted_selected_channels(qapp, analysis_type):
+def test_analysis_catalog_hides_loud_and_lp_without_removing_other_entries(qapp):
+    container = QWidget()
+    host = SimpleNamespace(analysis_list=QTreeView(container))
+    container.setLayout(AnalysisModelSelect.create_analysis_list_layout(host))
+    try:
+        analysis_group = host.analysis_model.item(1)
+        visible_entries = [
+            analysis_group.child(row).text().strip()
+            for row in range(analysis_group.rowCount())
+        ]
+        assert visible_entries == [
+            "声压级 (SPL)", "频谱分析 (Spec)", "AI 分析",
+            "频段能量 (FBA)", "快速傅里叶变换 (FFT)", "结果导出 (Excel)",
+        ]
+    finally:
+        container.close()
+
+
+@pytest.mark.parametrize("analysis_type", ["SPL", "Spec", "FBA", "AI", "LP", "FFT", "LOUD"])
+def test_record_only_routes_multiple_selected_channels(qapp, monkeypatch, analysis_type):
+    monkeypatch.setattr(AIConfigWindow, "load_model_name_from_db", lambda _self: [])
+    monkeypatch.setattr(AIConfigWindow, "cheack_model_list", lambda _self: None)
     option = _option("RECORD_ONLY")
     dialog = OptionList.create_config_dialog(
         option,
@@ -53,10 +74,12 @@ def test_record_only_routes_restricted_selected_channels(qapp, analysis_type):
         0,
     )
 
-    assert dialog.channel_selector.spin_box.lineEdit().isReadOnly() is True
-    assert dialog.channel_selector.current_channel() == 0
-    dialog.channel_selector.spin_box.stepBy(-1)
-    assert dialog.channel_selector.current_channel() == 7
+    assert isinstance(dialog.channel_selector, MultiChannelSelectorWidget)
+    assert dialog.channel_selector.selected_channels() == [5]
+    dialog.channel_selector.set_selected_channels([0, 7])
+    saved = dialog.get_default_config()
+    assert saved["analysis_channel"] == 0
+    assert saved["analysis_channels"] == [0, 7]
     dialog.close()
 
 
@@ -85,8 +108,10 @@ def test_reopening_dialog_uses_current_acquisition_mode(qapp, analysis_type):
     record_dialog = OptionList.create_config_dialog(
         option, None, manager, analysis_type, analysis_type, 0
     )
-    assert record_dialog.channel_selector.spin_box.lineEdit().isReadOnly() is True
-    assert record_dialog.channel_selector.current_channel() == 0
+    assert isinstance(record_dialog.channel_selector, MultiChannelSelectorWidget)
+    assert record_dialog.channel_selector.current_channel() == 5
+    record_dialog.channel_selector.set_selected_channels([0, 2])
+    manager.config[analysis_type] = record_dialog.get_default_config()
     record_dialog.close()
 
     option.config[0].mode = "IMPORT_AUDIO"
@@ -94,15 +119,19 @@ def test_reopening_dialog_uses_current_acquisition_mode(qapp, analysis_type):
         option, None, manager, analysis_type, analysis_type, 0
     )
     assert import_dialog.channel_selector.spin_box.lineEdit().isReadOnly() is False
-    assert import_dialog.channel_selector.current_channel() == 5
+    assert import_dialog.channel_selector.current_channel() == 0
+    import_dialog.channel_selector.spin_box.setValue(6)
+    manager.config[analysis_type] = import_dialog.get_default_config()
+    assert manager.config[analysis_type]["analysis_channels"] == [0, 2]
+    assert manager.config[analysis_type]["analysis_channel"] == 5
     import_dialog.close()
 
     option.config[0].mode = "RECORD_ONLY"
     second_record_dialog = OptionList.create_config_dialog(
         option, None, manager, analysis_type, analysis_type, 0
     )
-    assert second_record_dialog.channel_selector.spin_box.lineEdit().isReadOnly() is True
-    assert second_record_dialog.channel_selector.current_channel() == 0
+    assert isinstance(second_record_dialog.channel_selector, MultiChannelSelectorWidget)
+    assert second_record_dialog.channel_selector.selected_channels() == [0, 2]
     second_record_dialog.close()
 
 

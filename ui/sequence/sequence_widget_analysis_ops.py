@@ -54,11 +54,15 @@ from consts.running_consts import DEFAULT_DIR
 
 from ui.signal_analysis_window import AnalysisResultSummaryWindow, get_class_mapping
 from ui.sequence.analysis_channel_preflight import (
+    MULTI_CHANNEL_ANALYSIS_TYPES,
     REQUIRED_CHANNEL_ANALYSIS_TYPES,
     preflight_analysis_channels,
 )
 from ui.sequence.analysis_report_snapshot import build_analysis_report_items
-from ui.ui_analysis_config.config_normalization import normalize_analysis_channel
+from ui.ui_analysis_config.config_normalization import (
+    normalize_analysis_channel,
+    normalize_analysis_channels,
+)
 from ui.sequence.product_condition_result_ops import (
     SequenceWidgetProductConditionResultOpsMixin,
 )
@@ -3138,7 +3142,7 @@ class SequenceWidgetAnalysisOpsMixin(
         item_sort_list = [
             key
             for key in configured_items
-            if str(key) not in self._analysis_preflight_skips
+            if str(key) not in preflight.fully_skipped_items
         ]
 
         # Only reflect THIS run(): clear previous summary results first
@@ -3193,8 +3197,8 @@ class SequenceWidgetAnalysisOpsMixin(
                 self.instance_analysis_class(key, item_type, key_config)
             self._show_missing_mic_channel_calibration_warning()
             for instance in self.analysis_window:
-                # Bind this instance to its analysis item key (used for geometry restore/persist)
-                instance_key = getattr(instance, "_sequence_analysis_key", None)
+                instance_key = getattr(instance, "_sequence_runtime_key", None)
+                window_key = getattr(instance, "_sequence_window_key", None)
                 setattr(instance, "_product_report_analysis_state", "running")
                 setattr(instance, "_product_report_analysis_error", "")
                 mismatch_info = getattr(instance, "_channel_mismatch_info", None)
@@ -3271,7 +3275,7 @@ class SequenceWidgetAnalysisOpsMixin(
 
                 if show_windows:
                     geo = self._analysis_window_display_geometry(
-                        instance_key,
+                        window_key,
                         {"x": width, "y": height, "w": 600, "h": 500},
                         min_width=300,
                         min_height=255,
@@ -3280,8 +3284,8 @@ class SequenceWidgetAnalysisOpsMixin(
                     instance.setGeometry(int(geo["x"]), int(geo["y"]), int(geo["w"]), int(geo["h"]))
 
                     # Install event filter to capture move/resize and persist geometry (no close listener)
-                    if instance_key:
-                        self._analysis_window_key_by_obj[instance] = instance_key
+                    if window_key:
+                        self._analysis_window_key_by_obj[instance] = window_key
                         instance.installEventFilter(self)
 
                     instance.show()
@@ -3566,7 +3570,16 @@ class SequenceWidgetAnalysisOpsMixin(
                 detail = getattr(inst, "export_detail", None)
                 if isinstance(detail, dict):
                     item.update(detail)
-                analysis_items_data[key] = item
+                runtime_key = getattr(inst, "_sequence_runtime_key", key)
+                item.update({
+                    "config_key": key,
+                    "result_key": getattr(inst, "title_name", runtime_key),
+                    "raw_channel": getattr(inst, "_analysis_raw_channel", None),
+                    "multi_channel_expansion": bool(
+                        getattr(inst, "_sequence_multi_channel_expansion", False)
+                    ),
+                })
+                analysis_items_data[runtime_key] = item
 
             self._excel_export_cache = {
                 "record_id": record_id,
@@ -3762,95 +3775,97 @@ class SequenceWidgetAnalysisOpsMixin(
                 break
 
     def instance_analysis_class(self, key, type, params):
-        """
-        Instantiates and configures an analysis class based on the given type and parameters,
-        and adds it to the analysis window list.
-        """
-        class_mapping = get_class_mapping()
-        if type in class_mapping.keys():
-            cls_map = class_mapping.get(type)
-            if cls_map:
-                if type == "RSC":
-                    class_instance = cls_map(key)
-                    class_instance.data_struct = self.data_struct
-                    setattr(class_instance, "_sequence_analysis_key", key)
-                    setattr(class_instance, "_channel_mismatch", False)
-                    setattr(class_instance, "_channel_mismatch_info", None)
-                    runtime_params = dict(params) if isinstance(params, dict) else {}
-                    class_instance.analysis_config = runtime_params
-                    self.analysis_window.append(class_instance)
-                    return
+        """Expand recorded channels without duplicating the saved analysis item."""
+        cls_map = get_class_mapping().get(type)
+        if cls_map is None:
+            return
+        config = params if isinstance(params, dict) else {}
+        if type == "RSC":
+            class_instance = cls_map(key)
+            class_instance.data_struct = self.data_struct
+            class_instance._sequence_analysis_key = key
+            class_instance._sequence_runtime_key = key
+            class_instance._sequence_window_key = key
+            class_instance._channel_mismatch = False
+            class_instance._channel_mismatch_info = None
+            class_instance.analysis_config = dict(config)
+            self.analysis_window.append(class_instance)
+            return
 
-                preflight_columns = getattr(
-                    self,
-                    "_analysis_channel_local_columns",
-                    {},
-                )
-                channel_preflighted = key in preflight_columns
-                if channel_preflighted:
-                    raw_channel = normalize_analysis_channel(params)
-                else:
-                    raw_channel = 0
-                    if not self._is_import_audio_mode() and isinstance(params, dict):
-                        raw_channel = params.get("analysis_channel", 0)
-                        try:
-                            raw_channel = int(raw_channel)
-                        except (TypeError, ValueError):
-                            raw_channel = 0
-                    if raw_channel < 0:
-                        raw_channel = 0
-
-                # 配置里保存的是硬件绝对通道号；运行分析时需要映射到“本次录制子集”的局部列索引。
-                mapped_channel = 0
-                channel_mismatch = False
-                active_input_channels = [0]
+        import_audio = self._is_import_audio_mode()
+        preflight_columns = getattr(self, "_analysis_channel_local_columns", {})
+        preflight_skips = getattr(self, "_analysis_preflight_skips", {})
+        uses_channel_list = (
+            not import_audio
+            and type in MULTI_CHANNEL_ANALYSIS_TYPES
+            and "analysis_channels" in config
+        )
+        if uses_channel_list:
+            raw_channels = normalize_analysis_channels(config)
+        elif key in preflight_columns:
+            raw_channels = [normalize_analysis_channel(config)]
+        else:
+            # Keep the legacy coercion for single-channel items outside preflight.
+            raw_channel = 0
+            if not import_audio:
                 try:
-                    active_input_channels = [int(ch) for ch in (getattr(self, "_active_input_channels", None) or [0])]
-                except Exception:
-                    active_input_channels = [0]
-                if channel_preflighted:
-                    mapped_channel = int(preflight_columns[key])
-                elif raw_channel in active_input_channels:
-                    mapped_channel = int(active_input_channels.index(raw_channel))
-                else:
-                    channel_mismatch = True
+                    raw_channel = int(config.get("analysis_channel", 0))
+                except (TypeError, ValueError):
+                    raw_channel = 0
+            raw_channels = [max(0, raw_channel)]
 
-                display_key = f"{key}--通道{raw_channel + 1}"
-                class_instance = cls_map(display_key)
-                class_instance.data_struct = self.data_struct
-                # Bind analysis key for geometry restore/persist
-                setattr(class_instance, "_sequence_analysis_key", key)
-                setattr(class_instance, "_channel_mismatch", channel_mismatch)
-                setattr(class_instance, "_channel_preflighted", channel_preflighted)
-                setattr(
-                    class_instance,
-                    "_channel_mismatch_info",
-                    {
-                        "raw_channel": raw_channel,
-                        "active_input_channels": list(active_input_channels),
-                    },
+        multi_channel_expansion = len(raw_channels) > 1
+        try:
+            active_input_channels = [
+                int(ch) for ch in (getattr(self, "_active_input_channels", None) or [0])
+            ]
+        except (TypeError, ValueError, OverflowError):
+            active_input_channels = [0]
+
+        for raw_channel in raw_channels:
+            display_key = f"{key}--通道{raw_channel + 1}"
+            window_key = display_key if multi_channel_expansion else key
+            if window_key in preflight_skips:
+                continue
+            channel_preflighted = window_key in preflight_columns
+            mapped_channel = 0
+            channel_mismatch = False
+            if channel_preflighted:
+                mapped_channel = int(preflight_columns[window_key])
+            elif raw_channel in active_input_channels:
+                mapped_channel = active_input_channels.index(raw_channel)
+            else:
+                channel_mismatch = True
+
+            class_instance = cls_map(display_key)
+            class_instance.data_struct = self.data_struct
+            class_instance._sequence_analysis_key = key
+            class_instance._sequence_runtime_key = display_key
+            class_instance._sequence_window_key = window_key
+            class_instance._sequence_multi_channel_expansion = multi_channel_expansion
+            class_instance._analysis_raw_channel = raw_channel
+            class_instance._channel_mismatch = channel_mismatch
+            class_instance._channel_preflighted = channel_preflighted
+            class_instance._channel_mismatch_info = {
+                "raw_channel": raw_channel,
+                "active_input_channels": list(active_input_channels),
+            }
+            if import_audio and type in REQUIRED_CHANNEL_ANALYSIS_TYPES:
+                class_instance.v2pa_factor = getattr(
+                    self, "_imported_wav_channel_v2pa_factors", {}
+                ).get(str(key), 1.0)
+            elif import_audio:
+                class_instance.v2pa_factor = self.v2pa_factor
+            else:
+                # Calibration uses physical input identity, not the array column.
+                class_instance.v2pa_factor = self._resolve_live_mic_channel_v2pa_factor(
+                    raw_channel
                 )
-                if (
-                    self._is_import_audio_mode()
-                    and type in REQUIRED_CHANNEL_ANALYSIS_TYPES
-                ):
-                    class_instance.v2pa_factor = getattr(
-                        self,
-                        "_imported_wav_channel_v2pa_factors",
-                        {},
-                    ).get(str(key), 1.0)
-                elif self._is_import_audio_mode():
-                    class_instance.v2pa_factor = self.v2pa_factor
-                else:
-                    class_instance.v2pa_factor = (
-                        self._resolve_live_mic_channel_v2pa_factor(raw_channel)
-                    )
-                runtime_params = dict(params) if isinstance(params, dict) else {}
-                runtime_params["analysis_channel"] = mapped_channel
-                # Inject sequence-level golden baseline path into per-item params
-                if isinstance(getattr(self, "analysis_config", None), dict):
-                    golden_path = self.analysis_config.get("golden_sample_result_path")
-                    if golden_path:
-                        runtime_params["golden_sample_result_path"] = golden_path
-                class_instance.analysis_config = runtime_params
-                self.analysis_window.append(class_instance)
+            runtime_params = dict(config)
+            runtime_params["analysis_channel"] = mapped_channel
+            if isinstance(getattr(self, "analysis_config", None), dict):
+                golden_path = self.analysis_config.get("golden_sample_result_path")
+                if golden_path:
+                    runtime_params["golden_sample_result_path"] = golden_path
+            class_instance.analysis_config = runtime_params
+            self.analysis_window.append(class_instance)

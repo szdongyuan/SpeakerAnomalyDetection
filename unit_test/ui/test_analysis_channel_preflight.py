@@ -77,6 +77,42 @@ def test_preflight_only_handles_explicit_channel_protocol_types():
     assert result.skipped == ()
 
 
+@pytest.mark.parametrize("item_type", ["SPL", "Spec", "FBA", "AI", "LP", "FFT", "LOUD"])
+def test_recorded_channel_list_keeps_valid_channels_when_one_is_missing(item_type):
+    result = preflight_analysis_channels(
+        _config(("item", item_type, {"analysis_channels": [7, 0, 2]})),
+        active_input_channels=[2, 0],
+    )
+
+    assert result.local_channels == {"item--通道1": 1, "item--通道3": 0}
+    assert result.fully_skipped_items == ()
+    assert len(result.skipped) == 1
+    assert result.skipped[0].item_key == "item--通道8"
+    assert result.skipped[0].config_key == "item"
+
+
+def test_all_recorded_channels_missing_marks_base_item_as_fully_skipped():
+    result = preflight_analysis_channels(
+        _config(("item", "SPL", {"analysis_channels": [2, 7]})),
+        active_input_channels=[0],
+    )
+
+    assert result.local_channels == {}
+    assert result.fully_skipped_items == ("item",)
+    assert [skip.item_key for skip in result.skipped] == ["item--通道3", "item--通道8"]
+
+
+def test_import_preflight_ignores_recorded_channel_list():
+    result = preflight_analysis_channels(
+        _config(("item", "SPL", {"analysis_channel": 1, "analysis_channels": [0, 7]})),
+        active_input_channels=[0, 7],
+        imported_channel_count=2,
+    )
+
+    assert result.local_channels == {"item": 1}
+    assert result.skipped == ()
+
+
 @pytest.mark.parametrize(
     "malformed",
     [None, True, -1, 128, 1.5, float("inf"), "bad", object()],

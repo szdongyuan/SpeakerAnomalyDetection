@@ -12,12 +12,17 @@ from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import ComboBox, GroupBox, Label, MessageBox
 from ui.ui_analysis_config.common_widgets import (
     ChannelSelectorWidget,
+    MultiChannelSelectorWidget,
     SemanticAnalysisConfigDialogBase,
 )
 
 
 class AIConfigWindow(SemanticAnalysisConfigDialogBase):
-    def __init__(self, config_manager, model_type, signal_len=None, available_channels: Optional[List[int]] = None):
+    def __init__(
+        self, config_manager, model_type, signal_len=None,
+        available_channels: Optional[List[int]] = None,
+        allow_multiple_channels: bool = False,
+    ):
         super().__init__(disable_close_button=True)
         self.signal_len = signal_len
         self.config_manager = config_manager
@@ -25,6 +30,7 @@ class AIConfigWindow(SemanticAnalysisConfigDialogBase):
         self.model_list = self.load_model_name_from_db()
         self.load_config = self.config_manager.load_config().get(self.config_key, {})
         self.show_channel_selector = available_channels is not None
+        self.allow_multiple_channels = allow_multiple_channels
         self.available_channels = available_channels
         self.init_ui()
 
@@ -40,7 +46,11 @@ class AIConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def _build_semantic_sections(self):
         if self.show_channel_selector:
-            self.channel_selector = ChannelSelectorWidget(
+            selector_type = (
+                MultiChannelSelectorWidget
+                if self.allow_multiple_channels else ChannelSelectorWidget
+            )
+            self.channel_selector = selector_type(
                 self.load_config,
                 self.available_channels,
                 self,
@@ -135,12 +145,13 @@ class AIConfigWindow(SemanticAnalysisConfigDialogBase):
     def get_default_config(self):
         default_config = {
             "analyse_model_name": self.analyse_model_combo_box.currentText(),
-            "analysis_channel": (
-                self.channel_selector.current_channel()
-                if self.show_channel_selector
-                else int(self.load_config.get("analysis_channel", 0) or 0)
-            ),
         }
+        if self.show_channel_selector:
+            default_config.update(self.channel_selector.get_config())
+        else:
+            default_config.update(
+                ChannelSelectorWidget.normalized_config(self.load_config)
+            )
         return default_config
 
     def on_default_btn_clicked(self):

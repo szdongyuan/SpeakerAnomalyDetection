@@ -10,7 +10,7 @@ from ui.sequence.analysis_report_snapshot import (
     build_analysis_report_items,
     export_plot_widget_png,
 )
-from ui.sequence.analysis_channel_preflight import AnalysisChannelSkip
+from ui.sequence.analysis_channel_preflight import AnalysisChannelSkip, preflight_analysis_channels
 
 
 class _StubTitleLabel:
@@ -86,6 +86,39 @@ def test_build_analysis_report_items_keeps_item_without_threshold():
     assert items[0]["status"] == "未启用判定"
     assert items[0]["state"] == "completed"
     assert items[0]["images"] == []
+
+
+@pytest.mark.parametrize("available", [[0, 2], [0]])
+def test_multichannel_report_keeps_independent_results_and_missing_channel(available):
+    config = {
+        "display_sequence": ["SPL 1"],
+        "SPL 1": {"type": "SPL", "analysis_channels": [0, 2], "limit_checked": True},
+    }
+    preflight = preflight_analysis_channels(config, active_input_channels=available)
+    instances = [
+        SimpleNamespace(
+            _sequence_analysis_key="SPL 1",
+            _sequence_runtime_key=f"SPL 1--通道{channel + 1}",
+            _sequence_multi_channel_expansion=True,
+            title_name=f"SPL 1--通道{channel + 1}",
+            _product_report_analysis_state="completed",
+        )
+        for channel in available
+    ]
+
+    items = build_analysis_report_items(
+        instances, config,
+        {"SPL 1--通道1": (True, 0.0), "SPL 1--通道3": (False, 1.0)},
+        {skip.item_key: skip for skip in preflight.skipped},
+    )
+
+    assert [item["name"] for item in items] == ["SPL 1--通道1", "SPL 1--通道3"]
+    assert items[0]["status"] == "OK"
+    if len(available) == 2:
+        assert items[1]["status"] == "NG"
+    else:
+        assert items[1]["state"] == "skipped"
+        assert "status" not in items[1]
 
 
 def test_build_analysis_report_items_adds_each_preflight_skip_once_without_values():
@@ -164,6 +197,48 @@ def test_build_analysis_report_items_adds_structured_spl_measurement_and_limits(
     assert items[0]["upper_limit"] == "见分析图"
     assert items[0]["unit"] == "dB(A)"
     assert items[0]["status"] == "OK"
+
+
+@pytest.mark.parametrize(("overall", "expected_measurement"), [(72.345, "72.345"), (None, "-")])
+def test_overall_spl_report_uses_scalar_limits_and_never_substitutes_curve_peak(overall, expected_measurement):
+    instance = SimpleNamespace(
+        _sequence_analysis_key="SPL", title_name="SPL--通道1",
+        result={"overall_spl": overall, "signal_spl": [130.0]},
+    )
+    item = build_analysis_report_items([instance], {"SPL": {
+        "type": "SPL", "limit_checked": True, "limit_metric": "overall_spl",
+        "scalar_upper_enabled": True, "scalar_upper_value": 80.0,
+        "scalar_lower_enabled": True, "scalar_lower_value": 60.0,
+        "constant_upper_enabled": True, "constant_upper_value": 10.0,
+    }}, {"SPL--通道1": (True, 0.0)})[0]
+
+    assert item["measurement"] == expected_measurement
+    assert item["upper_limit"] == "80"
+    assert item["lower_limit"] == "60"
+
+
+@pytest.mark.parametrize(
+    ("config", "lower", "upper"),
+    [
+        ({}, "-", "100"),
+        ({"scalar_upper_enabled": False, "scalar_lower_enabled": True,
+          "scalar_lower_value": 60.0}, "60", "-"),
+        ({"limit_checked": False}, "-", "-"),
+    ],
+)
+def test_spl_overall_report_never_uses_inactive_curve_limits(config, lower, upper):
+    instance = SimpleNamespace(
+        _sequence_analysis_key="SPL", title_name="SPL",
+        result={"overall_spl": 72.0},
+    )
+    item = build_analysis_report_items([instance], {"SPL": {
+        "type": "SPL", "limit_checked": True, "limit_metric": "overall_spl",
+        "limit_mode": "csv", "limit_data": [[0.0], [10.0], [5.0]],
+        **config,
+    }}, {"SPL": (True, 0.0)})[0]
+
+    assert item["lower_limit"] == lower
+    assert item["upper_limit"] == upper
 
 
 def test_curve_report_keeps_constant_limit_values_without_scalar_measurement():

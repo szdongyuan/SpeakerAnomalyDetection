@@ -13,6 +13,7 @@ from consts.harmonic_detection_consts import (
 from ui.ui_analysis_config.config_normalization import (
     CONFIG_CONCEPTS,
     normalize_analysis_channel,
+    normalize_analysis_channels,
     normalize_octave_smoothing,
     normalize_time_smoothing,
     normalize_weighting,
@@ -100,6 +101,30 @@ def test_normalize_time_smoothing_accepts_legacy_smooth_checked():
 )
 def test_normalize_analysis_channel_accepts_compatible_zero_based_values(value, expected):
     assert normalize_analysis_channel({"analysis_channel": value}) == expected
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ({}, [0]),
+        ({"analysis_channel": "2"}, [2]),
+        ({"analysis_channel": 7, "analysis_channels": [2, 0, 2]}, [0, 2]),
+        ({"analysis_channel": 7, "analysis_channels": []}, [7]),
+        ({"analysis_channel": 7, "analysis_channels": "0,2"}, [7]),
+        ({"analysis_channels": [True, -1, 128, 1.5, "bad", "2", 127]}, [2, 127]),
+        ({"analysis_channels": [float("nan"), float("inf"), None]}, [0]),
+        ({"analysis_channels": (7, 2)}, [2, 7]),
+    ],
+)
+def test_normalize_recorded_channel_list(config, expected):
+    assert normalize_analysis_channels(config) == expected
+
+
+def test_scalar_normalizer_ignores_recorded_channel_list():
+    assert normalize_analysis_channel({
+        "analysis_channel": 1,
+        "analysis_channels": [0, 2],
+    }) == 1
 
 
 @pytest.mark.parametrize(

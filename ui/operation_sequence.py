@@ -48,7 +48,6 @@ SUPPORTED_ANALYSIS_ITEMS = [
     "AI 分析 ",
     "频段能量 (FBA) ",
     "快速傅里叶变换 (FFT) ",
-    "响度 (LOUD) ",
     "结果导出 (Excel) ",
 ]
 SUPPORTED_ANALYSIS_TYPES = {
@@ -732,9 +731,11 @@ class OptionList(QListView):
         self, model: QDialog, config_manager: ConfigManager, name, type, signal_len
     ):
         available_channels = list(self.mic_channels or [0])
+        acquisition_config = getattr(self, "config", ())
+        mode = getattr(acquisition_config[0], "mode", None) if acquisition_config else None
+        allow_multiple_channels = mode == "RECORD_ONLY"
         restrict_analysis_channel = False
         if type in {"SPL", "Spec", "FBA"}:
-            mode = getattr(self.config[0], "mode", None) if self.config else None
             if mode == "RECORD_ONLY":
                 restrict_analysis_channel = True
             elif mode != "IMPORT_AUDIO":
@@ -748,6 +749,7 @@ class OptionList(QListView):
                 name,
                 available_channels=available_channels,
                 restrict_analysis_channel=restrict_analysis_channel,
+                allow_multiple_channels=allow_multiple_channels,
             )
         if type == "AI":
             return AIConfigWindow(
@@ -755,6 +757,7 @@ class OptionList(QListView):
                 name,
                 signal_len,
                 available_channels=available_channels,
+                allow_multiple_channels=allow_multiple_channels,
             )
         if type == "Spec":
             return SpecConfigWindow(
@@ -762,6 +765,7 @@ class OptionList(QListView):
                 name,
                 available_channels=available_channels,
                 restrict_analysis_channel=restrict_analysis_channel,
+                allow_multiple_channels=allow_multiple_channels,
             )
         if type == "RSC":
             return ReferenceSpectrumConfigWindow(
@@ -770,25 +774,31 @@ class OptionList(QListView):
                 available_channels=available_channels,
             )
         if type == "LP":
-            return LPConfigWindow(config_manager, name, available_channels=available_channels)
+            return LPConfigWindow(
+                config_manager, name, available_channels=available_channels,
+                allow_multiple_channels=allow_multiple_channels,
+            )
         if type == "FBA":
             return FbaConfigWindow(
                 config_manager,
                 name,
                 available_channels=available_channels,
                 restrict_analysis_channel=restrict_analysis_channel,
+                allow_multiple_channels=allow_multiple_channels,
             )
         if type == "FFT":
             return FftConfigWindow(
                 config_manager,
                 name,
                 available_channels=available_channels,
+                allow_multiple_channels=allow_multiple_channels,
             )
         if type == "LOUD":
             return LoudnessConfigWindow(
                 config_manager,
                 name,
                 available_channels=available_channels,
+                allow_multiple_channels=allow_multiple_channels,
             )
         if type == "Excel":
             return ExcelConfigWindow(config_manager, name)

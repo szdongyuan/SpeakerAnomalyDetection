@@ -16,6 +16,8 @@ from ui.custom_ui_widget.widgets import (
 )
 from ui.ui_analysis_config.common_widgets import (
     AnalysisChannelSpinBoxWidget,
+    ChannelSelectorWidget,
+    MultiChannelSelectorWidget,
     SemanticAnalysisConfigDialogBase,
 )
 
@@ -35,6 +37,7 @@ class SpecConfigWindow(SemanticAnalysisConfigDialogBase):
         model_type,
         available_channels: Optional[List[int]] = None,
         restrict_analysis_channel: bool = False,
+        allow_multiple_channels: bool = False,
     ):
         super().__init__(disable_close_button=True)
         self.config_manager = config_manager
@@ -44,6 +47,7 @@ class SpecConfigWindow(SemanticAnalysisConfigDialogBase):
             {},
         )
         self.show_channel_selector = available_channels is not None
+        self.allow_multiple_channels = allow_multiple_channels
         self.available_channels = available_channels
         self.restrict_analysis_channel = restrict_analysis_channel
         self.init_ui()
@@ -60,14 +64,17 @@ class SpecConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def _build_semantic_sections(self):
         if self.show_channel_selector:
-            self.channel_selector = AnalysisChannelSpinBoxWidget(
-                self.load_config,
-                self.available_channels,
-                self,
-                restrict_to_available_channels=(
-                    self.restrict_analysis_channel
-                ),
-            )
+            if self.allow_multiple_channels:
+                self.channel_selector = MultiChannelSelectorWidget(
+                    self.load_config, self.available_channels, self,
+                )
+            else:
+                self.channel_selector = AnalysisChannelSpinBoxWidget(
+                    self.load_config,
+                    self.available_channels,
+                    self,
+                    restrict_to_available_channels=self.restrict_analysis_channel,
+                )
             self.add_semantic_section(
                 "input",
                 widget=self.channel_selector,
@@ -180,15 +187,11 @@ class SpecConfigWindow(SemanticAnalysisConfigDialogBase):
             "top_limit": self.top_limit_spinbox.value(),
             "bottom_limit": self.bottom_limit_spinbox.value(),
             "custom_limit": self.custom_limit_checkbox.isChecked(),
-            "analysis_channel": (
-                self.channel_selector.current_channel()
-                if self.show_channel_selector
-                else int(
-                    self.load_config.get("analysis_channel", 0)
-                    or 0
-                )
-            ),
         }
+        if self.show_channel_selector:
+            config.update(self.channel_selector.get_config())
+        else:
+            config.update(ChannelSelectorWidget.normalized_config(self.load_config))
         if (
             config["custom_limit"]
             and config["top_limit"] <= config["bottom_limit"]
