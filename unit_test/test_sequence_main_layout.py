@@ -29,7 +29,7 @@ from ui.sequence.multichannel_waveform_session import MultichannelWaveformSessio
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
-from consts import error_code
+from consts import error_code, ui_style_const
 from base.product_test_project_config import ProductTestProjectConfigManager
 
 
@@ -306,6 +306,10 @@ class TestSequenceMainLayout(unittest.TestCase):
             self.assertTrue(plot_item.ctrl.xGridCheck.isChecked())
             self.assertTrue(plot_item.ctrl.yGridCheck.isChecked())
         first.set_data([0, 1], [0.5, -0.5])
+        self.assertEqual(
+            first.plot_item.opts["pen"].color().name().upper(),
+            ui_style_const.COLOR_WAVEFORM,
+        )
         saved = first.snapshot_plot_state()
         panel.clear_plots()
         self.assertIsNone(first.plot_item)
@@ -743,6 +747,10 @@ class TestSequenceMainLayout(unittest.TestCase):
         panel.set_direction_data("01", [0, 1], [0.0, 0.5])
 
         self.assertIsNotNone(panel._cards["01"].plot_item)
+        self.assertEqual(
+            panel._cards["01"].plot_item.opts["pen"].color().name().upper(),
+            ui_style_const.COLOR_WAVEFORM,
+        )
         self.assertIsNone(panel._cards["02"].plot_item)
 
     def test_final_projection_does_not_reconfigure_condition_workspace(self):

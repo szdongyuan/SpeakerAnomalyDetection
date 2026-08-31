@@ -156,7 +156,11 @@ class DirectionWaveformCard(QFrame):
     def set_data(self, x, y) -> None:
         self._last_x, self._last_y = x, y
         if self.plot_item is None:
-            self.plot_item = self.plot_widget.plot(x, y, pen=pg.mkPen("#3B82F6", width=1.4))
+            self.plot_item = self.plot_widget.plot(
+                x,
+                y,
+                pen=pg.mkPen(ui_style_const.COLOR_WAVEFORM, width=1.4),
+            )
         else:
             self.plot_item.setData(x, y)
 
