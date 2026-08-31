@@ -17,6 +17,7 @@ from ui.sequence.sequence_tools_bar import SequenceToolsBar
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 
 from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
+from ui.sequence.sequence_widget_test_metadata_ops import SequenceWidgetTestMetadataOpsMixin
 from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
 from ui.sequence.sequence_widget_tcp_ops import SequenceWidgetTcpOpsMixin
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
@@ -29,6 +30,7 @@ from ui.sequence.multichannel_waveform_session import MultichannelWaveformSessio
 
 class SequenceWindow(
     SequenceWidgetUiOpsMixin,
+    SequenceWidgetTestMetadataOpsMixin,
     SequenceWidgetBarcodeOpsMixin,
     SequenceWidgetTcpOpsMixin,
     SequenceWidgetSerialTriggerOpsMixin,
@@ -88,10 +90,12 @@ class SequenceWindow(
         self.product_test_pdf_report_config = self.load_active_product_test_pdf_report_config()
         self._product_pdf_report_states = {}
         self._product_pdf_report_paths = {}
+        self.default_logger = LogManager.set_log_handler("core")
         self.left_panel = MotorDetectionLeftPanel(
             self.count_board,
             condition_configs=self.product_test_condition_configs,
         )
+        self._init_test_round_metadata()
         self._refresh_test_mode_availability()
         self.player_status_flag = False
         # True while a record run is still processing (record -> analysis -> save -> count updates).
@@ -115,7 +119,6 @@ class SequenceWindow(
         self._active_product_condition_key = ""
         self._active_product_condition_config = None
 
-        self.default_logger = LogManager.set_log_handler("core")
         self._missing_config_prompted = False
         # Only show missing-config prompt after the window is shown (i.e. after login success).
         self._missing_config_prompt_enabled = False

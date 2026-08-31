@@ -126,7 +126,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1030, 760)
         title_layout.setContentsMargins(10, 3, 15, 0)
         self.setStyleSheet(
-            ui_style_const.qlabel_style + ui_style_const.qpushbutton_style + ui_style_const.qmainwindow_style
+            ui_style_const.main_window_base_style
         )
         self.get_current_version()
 
@@ -207,16 +207,25 @@ class MainWindow(QMainWindow):
         self.sequence_window.speaker_channels = self.speaker_channels
         self.sequence_window.update_v2pa_factor()
 
+    def _expand_sequence_workspace(self):
+        """Let the logged-in workspace consume the remaining window height."""
+        main_layout = self.centralWidget().layout()
+        sequence_index = main_layout.indexOf(self.sequence_window)
+        main_layout.setAlignment(Qt.Alignment())
+        main_layout.setStretch(sequence_index, 1)
+
+
     @staticmethod
     def _create_menu_row(menu_bar):
         menu_row = QWidget()
         menu_row.setObjectName("mainWindowMenuRow")
-        menu_row.setFixedHeight(29)
+        menu_row.setMinimumHeight(29)
+        menu_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         menu_row.setStyleSheet(ui_style_const.main_window_menu_row_style)
 
         menu_bar.setObjectName("mainWindowMenuBar")
         menu_bar.setNativeMenuBar(False)
-        menu_bar.setFixedHeight(27)
+        menu_bar.setMinimumHeight(27)
         menu_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         menu_bar.setContentsMargins(0, 0, 0, 0)
 
@@ -311,9 +320,9 @@ class MainWindow(QMainWindow):
         # create status bar, show the user data and device data, and close drag status bar modify window size
         self.user_label = QLabel()
         self.user_label.setAlignment(Qt.AlignLeft)
-        self.user_label.setStyleSheet(ui_style_const.qlabel_style)
+        self.user_label.setStyleSheet(ui_style_const.main_window_status_label_style)
         self.device_label = QLabel()
-        self.device_label.setStyleSheet(ui_style_const.qlabel_style)
+        self.device_label.setStyleSheet(ui_style_const.main_window_status_label_style)
         self.update_statusbar()
 
         statusbar = QStatusBar()
@@ -361,6 +370,7 @@ class MainWindow(QMainWindow):
         access_lvl, user_name = dlg.on_exec()
         if access_lvl is not None:
             self.access_lvl, self.user_name = access_lvl, user_name
+            self._expand_sequence_workspace()
             self.sequence_window.show()
             if hasattr(self.sequence_window, "init_serial_trigger_runtime"):
                 self.sequence_window.init_serial_trigger_runtime()

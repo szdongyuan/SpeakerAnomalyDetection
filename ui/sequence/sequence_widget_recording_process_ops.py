@@ -84,6 +84,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
 
     def _on_process_recording_started(self, session):
         if self._is_current_recording_process(session):
+            self._set_active_product_condition_stage("采集中")
             self.default_logger.info(f"Recording started request={session.request.request_id} pid={session.worker_pid}")
 
     def _on_process_recording_preview(self, session, preview):

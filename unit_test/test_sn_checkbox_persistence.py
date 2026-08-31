@@ -190,6 +190,10 @@ def test_save_recorded_data_to_json_merge_preserves_checkbox(tmp_path, monkeypat
 
     save_data.save_recorded_data_to_json(scanner_barcode_check=True)
     save_data.save_recorded_data_to_json(product_model="MODEL_A", sequence_mode="mark")
+    save_data.save_recorded_data_to_json(
+        sample_number="SAMPLE-001",
+        current_test_round=7,
+    )
 
     import json
     with open(os.path.join(fake_dir, "ui", "ui_config", "recorded_number.json"), "r") as f:
@@ -198,3 +202,5 @@ def test_save_recorded_data_to_json_merge_preserves_checkbox(tmp_path, monkeypat
     assert data["scanner_barcode_check"] is True
     assert data["product_model"] == "MODEL_A"
     assert data["sequence_mode"] == "mark"
+    assert data["sample_number"] == "SAMPLE-001"
+    assert data["current_test_round"] == 7

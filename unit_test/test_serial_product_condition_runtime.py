@@ -110,6 +110,11 @@ class _Button:
 
 
 class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
+    _set_active_product_condition_stage = _load_analysis_method("_set_active_product_condition_stage")
+    _automatic_round_display_state = _load_analysis_method(
+        "_automatic_round_display_state"
+    )
+
     def __init__(self):
         self.product_test_condition_configs = [
             {
@@ -313,6 +318,7 @@ def test_production_cycle_methods_keep_fixture_order_in_one_group():
         lambda condition, _index=0: condition["trigger_state"]
     )
     host._set_product_condition_round_pending = lambda: None
+    host._product_group_result_state = lambda _group_id: (False, "not_labeled")
 
     def load_condition(condition):
         host.loaded_queues.append(condition["test_queue"])
@@ -349,6 +355,7 @@ def test_production_cycle_waits_for_close_frame_when_configured():
         lambda condition, _index=0: condition["trigger_state"]
     )
     host._set_product_condition_round_pending = lambda: None
+    host._product_group_result_state = lambda _group_id: (False, "not_labeled")
     host._load_sequence_config_for_product_condition = lambda _condition: (True, "")
 
     for index, frame in ((2, FRAME_8000), (0, FRAME_6000), (1, FRAME_7000)):

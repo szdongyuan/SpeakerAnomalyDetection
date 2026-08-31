@@ -138,6 +138,9 @@ class SequenceWidgetBarcodeOpsMixin:
         self._sync_sn_lock_ui()
 
     def _unlock_sn_for_product_round(self, clear: bool = False) -> None:
+        end_metadata = getattr(self, "_end_test_round_metadata", None)
+        if callable(end_metadata):
+            end_metadata()
         if not self._is_sn_locked_for_product_round():
             return
         self._sn_locked_for_product_round = False

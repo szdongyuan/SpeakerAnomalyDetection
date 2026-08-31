@@ -1,6 +1,19 @@
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon, QPainter, QPixmap
-from PyQt5.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFrame, QCheckBox, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (
+    QAbstractSpinBox,
+    QCheckBox,
+    QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSizePolicy,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -30,7 +43,12 @@ class SequenceToolsBar(QWidget):
         self.serial_trigger_btn = QPushButton()
         self.data_btn = QPushButton()
         self.using_file_combobox = RefreshBeforePopupComboBox()
-        self.condition_mode_combobox = QComboBox()
+        self.sample_number_lineedit = QLineEdit()
+        self.current_round_spinbox = QSpinBox()
+        # 历史模式同步仍依赖该对象；仅从操作界面隐藏。
+        self.condition_mode_combobox = QComboBox(self)
+        self.condition_mode_combobox.addItems(["测试", "标记"])
+        self.condition_mode_combobox.hide()
         self.lineedit_type = QLineEdit()
         self.lineedit_count = QLineEdit()
         self.lineedit_s_or_n = QLineEdit()
@@ -76,7 +94,8 @@ class SequenceToolsBar(QWidget):
         mode_type_layout = self.create_mode_type_layout()
         barcode_scanner_layout = self.create_barcode_scanner_layout()
         using_file_combobox_layout = self.create_using_file_combobox()
-        condition_mode_layout = self.create_condition_mode_layout()
+        sample_number_layout = self.create_sample_number_layout()
+        current_round_layout = self.create_current_round_layout()
 
         layout = QHBoxLayout()
         layout.addWidget(self.player_btn)
@@ -89,13 +108,13 @@ class SequenceToolsBar(QWidget):
         layout.addWidget(vertical_line_4)
         layout.addWidget(self.serial_trigger_btn)
         layout.addWidget(vertical_line_5)
-        layout.addLayout(using_file_combobox_layout)
-        layout.addLayout(condition_mode_layout)
         layout.addLayout(mode_type_layout)
+        layout.addLayout(using_file_combobox_layout)
+        layout.addLayout(sample_number_layout)
+        layout.addLayout(current_round_layout)
         layout.addLayout(barcode_scanner_layout)
+        layout.addStretch(1)
 
-        # layout.addStretch()
-        layout.addSpacing(50)
         layout.setContentsMargins(5, 0, 5, 0)
 
         return layout
@@ -153,47 +172,77 @@ class SequenceToolsBar(QWidget):
         type_label = QLabel(" 使用配置：")
         type_label.setFixedHeight(40)
         type_label.setStyleSheet(ui_style_const.toolbar_field_label_style)
-        self.using_file_combobox.setFixedHeight(35)
+        self.using_file_combobox.setFixedSize(200, 35)
         self.using_file_combobox.setStyleSheet(ui_style_const.toolbar_combobox_style)
         vertical_line = self._create_separator(QFrame.VLine)
 
         using_file_combobox_layout = self.create_part_layout()
         using_file_combobox_layout.addWidget(type_label)
-        using_file_combobox_layout.addWidget(self.using_file_combobox, 1)
+        using_file_combobox_layout.addWidget(self.using_file_combobox)
         using_file_combobox_layout.addSpacing(10)
         using_file_combobox_layout.addWidget(vertical_line)
 
         return using_file_combobox_layout
 
-    def create_condition_mode_layout(self):
-        mode_label = QLabel(" 模式：")
-        mode_label.setFixedHeight(40)
-        mode_label.setStyleSheet(ui_style_const.toolbar_field_label_style)
-        self.condition_mode_combobox.setFixedSize(110, 35)
-        self.condition_mode_combobox.addItems(["测试", "标记"])
-        self.condition_mode_combobox.setStyleSheet(ui_style_const.toolbar_combobox_style)
+    def create_sample_number_layout(self):
+        sample_number_label = QLabel("样本编号：")
+        sample_number_label.setFixedHeight(40)
+        sample_number_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        sample_number_label.setStyleSheet(ui_style_const.toolbar_field_label_style)
+        self.sample_number_lineedit.setObjectName("sampleNumberLineEdit")
+        self.sample_number_lineedit.setFixedSize(100, 35)
+        self.sample_number_lineedit.setAlignment(Qt.AlignCenter)
+        self.sample_number_lineedit.setToolTip("请输入样本编号")
+        self.sample_number_lineedit.setAccessibleName("样本编号")
+        self.sample_number_lineedit.setAccessibleDescription("请输入样本编号")
+        self.sample_number_lineedit.setStyleSheet(ui_style_const.toolbar_input_style)
         vertical_line = self._create_separator(QFrame.VLine)
 
-        condition_mode_layout = self.create_part_layout()
-        condition_mode_layout.addWidget(mode_label)
-        condition_mode_layout.addWidget(self.condition_mode_combobox)
-        condition_mode_layout.addSpacing(10)
-        condition_mode_layout.addWidget(vertical_line)
+        sample_number_layout = self.create_part_layout()
+        sample_number_layout.addWidget(sample_number_label)
+        sample_number_layout.addWidget(self.sample_number_lineedit)
+        sample_number_layout.addSpacing(10)
+        sample_number_layout.addWidget(vertical_line)
 
-        return condition_mode_layout
+        return sample_number_layout
+
+    def create_current_round_layout(self):
+        current_round_label = QLabel(" 当前测试轮次：")
+        current_round_label.setFixedHeight(40)
+        current_round_label.setStyleSheet(ui_style_const.toolbar_field_label_style)
+        self.current_round_spinbox.setObjectName("currentRoundSpinBox")
+        self.current_round_spinbox.setRange(1, 9999)
+        self.current_round_spinbox.setValue(1)
+        self.current_round_spinbox.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.current_round_spinbox.setFixedSize(60, 35)
+        self.current_round_spinbox.setAlignment(Qt.AlignCenter)
+        self.current_round_spinbox.setToolTip("请输入当前测试轮次")
+        self.current_round_spinbox.setAccessibleName("当前测试轮次")
+        self.current_round_spinbox.setAccessibleDescription("请输入当前测试轮次")
+        self.current_round_spinbox.setStyleSheet(ui_style_const.toolbar_spinbox_style)
+        vertical_line = self._create_separator(QFrame.VLine)
+
+        current_round_layout = self.create_part_layout()
+        current_round_layout.addWidget(current_round_label)
+        current_round_layout.addWidget(self.current_round_spinbox)
+        current_round_layout.addSpacing(10)
+        current_round_layout.addWidget(vertical_line)
+
+        return current_round_layout
 
     def create_mode_type_layout(self):
-        type_label = QLabel(" 型 号：")
+        type_label = QLabel("型 号：")
         type_label.setFixedHeight(40)
+        type_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         type_label.setStyleSheet(ui_style_const.toolbar_field_label_style)
-        self.lineedit_type.setFixedHeight(35)
+        self.lineedit_type.setFixedSize(160, 35)
         self.lineedit_type.setAlignment(Qt.AlignCenter)
         self.lineedit_type.setStyleSheet(ui_style_const.toolbar_input_style)
         vertical_line = self._create_separator(QFrame.VLine)
 
         mode_type_layout = self.create_part_layout()
         mode_type_layout.addWidget(type_label)
-        mode_type_layout.addWidget(self.lineedit_type, 1)
+        mode_type_layout.addWidget(self.lineedit_type)
         mode_type_layout.addSpacing(10)
         mode_type_layout.addWidget(vertical_line)
 
@@ -203,14 +252,14 @@ class SequenceToolsBar(QWidget):
         self.barcode_scanner_box.setChecked(False)
         self.barcode_scanner_box.setStyleSheet(ui_style_const.toolbar_checkbox_style)
         self.lineedit_s_or_n.setDisabled(True)
-        self.lineedit_s_or_n.setFixedHeight(35)
+        self.lineedit_s_or_n.setFixedSize(240, 35)
         self.lineedit_s_or_n.setAlignment(Qt.AlignCenter)
         self.lineedit_s_or_n.setStyleSheet(ui_style_const.toolbar_input_style)
         vertical_line = self._create_separator(QFrame.VLine)
 
         barcode_scanner_layout = self.create_part_layout()
         barcode_scanner_layout.addWidget(self.barcode_scanner_box)
-        barcode_scanner_layout.addWidget(self.lineedit_s_or_n, 1)
+        barcode_scanner_layout.addWidget(self.lineedit_s_or_n)
         barcode_scanner_layout.addSpacing(10)
         barcode_scanner_layout.addWidget(vertical_line)
 

@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import QApplication
 from consts.running_consts import DEFAULT_DIR
 
 UI_FONT_FAMILY = "'SimSun'"
+MAIN_UI_FONT_FAMILY = "'Microsoft YaHei UI'"
 COMBO_DOWN_ARROW_ICON = DEFAULT_DIR + "ui/ui_pic/select_analysis_model/down.svg"
 
 _BASE_SCREEN_HEIGHT = 1080
@@ -224,7 +225,7 @@ main_window_title_label_style = _style("""
             QLabel {
                 color: $COLOR_TEXT;
                 background-color: transparent;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_FONT_FAMILY;
                 font-size: 20px;
                 font-weight: 600;
             }
@@ -272,9 +273,11 @@ main_window_menubar_style = _style("""
                 background-color: transparent;
                 color: $COLOR_TEXT;
                 font-family: $UI_FONT_FAMILY;
-                font-size: 20px;
+                font-size: 18px;
+                font-weight: 600;
                 border: none;
                 padding-left: 0px;
+                padding-top: 3px;
                 margin: 0px;
             }
             QMenuBar#mainWindowMenuBar::item {
@@ -289,11 +292,11 @@ main_window_menubar_style = _style("""
                 background-color: #FFFFFF;
                 border: 1px solid $COLOR_BORDER;
                 font-family: $UI_FONT_FAMILY;
-                font-size: 20px;
+                font-size: 18px;
             }
             QMenu::item {
                 font-family: $UI_FONT_FAMILY;
-                font-size: 20px;
+                font-size: 18px;
                 padding: 5px 18px 5px 30px;
             }
             QMenu::item:selected {
@@ -320,9 +323,20 @@ main_window_statusbar_style = _style("""
             QStatusBar {
                 background-color: $COLOR_MENU_BAR_BG;
                 border-top: 1px solid $COLOR_BORDER;
-                color: $COLOR_TEXT;
-                font-family: $UI_FONT_FAMILY;
-                font-size: 18px;
+                color: $COLOR_TEXT_MUTED;
+                font-family: $MAIN_UI_FONT_FAMILY;
+                font-size: 15px;
+                font-weight: 400;
+            }
+""")
+
+main_window_status_label_style = _style("""
+            QLabel {
+                color: $COLOR_TEXT_MUTED;
+                background-color: transparent;
+                font-family: $MAIN_UI_FONT_FAMILY;
+                font-size: 15px;
+                font-weight: 400;
             }
 """)
 
@@ -331,6 +345,36 @@ motor_left_panel_style = """
                 background: transparent;
             }
 """
+
+motor_port_combo_style = _style("""
+            QComboBox {
+                background: #FFFFFF;
+                color: $COLOR_TEXT;
+                border: 1px solid #B7C8DC;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-family: $MAIN_UI_FONT_FAMILY;
+                font-size: 13px;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 24px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #FFFFFF;
+                color: $COLOR_TEXT;
+                selection-background-color: $COLOR_PRIMARY;
+                selection-color: #FFFFFF;
+            }
+            QComboBox QAbstractItemView::item {
+                background-color: #FFFFFF;
+                color: $COLOR_TEXT;
+            }
+            QComboBox QAbstractItemView::item:selected {
+                background-color: $COLOR_PRIMARY;
+                color: #FFFFFF;
+            }
+""")
 
 motor_left_panel_scroll_area_style = """
             QScrollArea {
@@ -661,7 +705,7 @@ toolbar_button_style = _style("""
                 border: 1px solid $COLOR_BORDER_STRONG;
                 background-color: $COLOR_TOOLBAR_BUTTON_BG;
                 color: $COLOR_TEXT;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_FONT_FAMILY;
                 font-size: 20px;
                 border-radius: 4px;
                 padding: 2px;
@@ -701,7 +745,7 @@ toolbar_input_style = _style("""
                 color: $COLOR_TEXT;
                 border: 1px solid $COLOR_BORDER_STRONG;
                 border-radius: 4px;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_FONT_FAMILY;
                 font-size: 18px;
                 padding: 3px 8px;
                 selection-background-color: $COLOR_PRIMARY;
@@ -719,7 +763,7 @@ toolbar_combobox_style = _style("""
                 color: $COLOR_TEXT;
                 border: 1px solid $COLOR_BORDER_STRONG;
                 border-radius: 4px;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_FONT_FAMILY;
                 font-size: 18px;
                 padding: 3px 30px 3px 8px;
             }
@@ -739,10 +783,29 @@ toolbar_combobox_style = _style("""
                 background-color: #FFFFFF;
                 color: $COLOR_TEXT;
                 selection-background-color: #E1EAF6;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_FONT_FAMILY;
                 font-size: 18px;
             }
 """)
+
+toolbar_spinbox_style = _style("""
+            QSpinBox {
+                background-color: #FFFFFF;
+                color: $COLOR_TEXT;
+                border: 1px solid $COLOR_BORDER_STRONG;
+                border-radius: 4px;
+                font-family: $MAIN_UI_FONT_FAMILY;
+                font-size: 18px;
+                padding: 3px 8px;
+                selection-background-color: $COLOR_PRIMARY;
+            }
+            QSpinBox:disabled {
+                background-color: #FFFFFF;
+                color: $COLOR_DISABLED_TEXT;
+                border-color: $COLOR_BORDER;
+            }
+""")
+
 
 toolbar_checkbox_style = _style("""
             QCheckBox {
@@ -762,7 +825,7 @@ serial_trigger_button_base_style = _style("""
                 border: 1px solid $COLOR_BORDER_STRONG;
                 border-radius: 4px;
                 padding: 2px 10px;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_FONT_FAMILY;
                 font-size: 14px;
                 font-weight: 600;
             }
@@ -1166,6 +1229,12 @@ qmainwindow_style = _style("""
                 border: 1px solid rgb(0, 0, 0);
             }
 """)
+
+main_window_base_style = (
+    qlabel_style.replace(UI_FONT_FAMILY, MAIN_UI_FONT_FAMILY)
+    + qpushbutton_style.replace(UI_FONT_FAMILY, MAIN_UI_FONT_FAMILY)
+    + qmainwindow_style
+)
 
 qradiobutton_style = _style("""
             QRadioButton {
