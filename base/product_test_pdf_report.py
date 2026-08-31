@@ -17,6 +17,7 @@ _REPORT_DISPLAY_VALUES = {
     "not_labeled": "未标记",
     "not labeled": "未标记",
     "completed": "分析完成",
+    "incomplete": "未完成",
     "failed": "分析失败",
     "pending": "等待分析",
 }
