@@ -140,7 +140,7 @@ class AnalysisWaveformRow(QFrame):
             self.plot_item = self.plot_widget.plot(
                 x_values,
                 y_values,
-                pen=pg.mkPen(ui_style_const.COLOR_PRIMARY, width=1.4),
+                pen=pg.mkPen(ui_style_const.COLOR_WAVEFORM, width=1.4),
             )
         else:
             self.plot_item.setData(x_values, y_values)
