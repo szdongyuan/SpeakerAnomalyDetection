@@ -296,6 +296,71 @@ class SequenceWidgetAnalysisOpsMixin(
     def _set_product_condition_round_pending(self) -> None:
         self._reset_product_condition_display_state()
 
+    def _set_active_product_condition_stage(self, stage_text, tone="running"):
+        key = self._get_active_product_condition_key()
+        left_panel = getattr(self, "left_panel", None)
+        if not key or left_panel is None:
+            return
+        condition = getattr(self, "_active_product_condition_config", None) or {}
+        name = str(
+            condition.get("display_name")
+            or condition.get("condition_name")
+            or condition.get("name")
+            or key
+        )
+        left_panel.set_current_stage(f"{name} {stage_text}", tone=tone)
+        left_panel.set_condition_result(key, stage_text, tone=tone)
+        workspace = getattr(self, "channel_workspace", None)
+        set_context = getattr(workspace, "set_condition_context", None)
+        if callable(set_context):
+            set_context(key, status=stage_text)
+
+    def _finish_product_condition_analysis_display(self):
+        key = self._get_active_product_condition_key()
+        left_panel = getattr(self, "left_panel", None)
+        if not key or left_panel is None:
+            return
+        text, tone = self._product_condition_overall_display_state()
+        left_panel.set_condition_result(key, text, tone=tone)
+        round_text, round_tone, round_resolved = self._automatic_round_display_state()
+        if round_resolved:
+            left_panel.set_final_result(round_text, tone=round_tone)
+            stage_text = (
+                "本轮完成"
+                if round_text in ("OK", "NG")
+                else "本轮分析完成，未判定"
+            )
+            left_panel.set_current_stage(stage_text, tone=round_tone)
+        else:
+            left_panel.set_current_stage("本档位分析完成", tone="pending")
+        workspace = getattr(self, "channel_workspace", None)
+        set_context = getattr(workspace, "set_condition_context", None)
+        if callable(set_context):
+            set_context(key, status="分析完成")
+
+    def _automatic_round_display_state(self):
+        left_panel = getattr(self, "left_panel", None)
+        get_result = getattr(left_panel, "get_automatic_round_result", None)
+        if not callable(get_result):
+            return "待判定", "pending", False
+        state = get_result()
+        if not isinstance(state, tuple) or len(state) != 3:
+            return "待判定", "pending", False
+        return state
+
+    def _product_condition_overall_display_state(self):
+        """Summarize the current gear from per-channel automatic judgments."""
+        channel_results = self._build_left_panel_channel_results()
+        verdicts = [
+            str(item.get("result") or "").strip().upper()
+            for item in channel_results
+        ]
+        if "NG" in verdicts:
+            return "NG", "ng"
+        if verdicts and all(verdict == "OK" for verdict in verdicts):
+            return "OK", "ok"
+        return "未判定", "pending"
+
     def _mark_manual_product_condition_recording_completed(self) -> None:
         key = self._get_active_product_condition_key()
         if not key:
@@ -317,7 +382,8 @@ class SequenceWidgetAnalysisOpsMixin(
             )
             left_panel.set_condition_result(key, result_text, tone=tone)
         else:
-            left_panel.set_condition_result(key, "完成", tone="ok")
+            left_panel.set_condition_result(key, "待判定", tone="pending")
+        left_panel.set_current_stage("本档位采集完成", tone="pending")
 
         condition_keys = [
             self._product_condition_runtime_key(item, index)
@@ -328,15 +394,15 @@ class SequenceWidgetAnalysisOpsMixin(
             self._refresh_current_manual_product_final_from_group(
                 getattr(self, "_manual_product_condition_group_id", ""),
             )
-            left_panel.set_current_stage("本轮采集完成", tone="ok")
+            left_panel.set_current_stage("本轮采集完成", tone="pending")
         else:
-            left_panel.set_final_result("检测中", tone="running")
+            left_panel.set_final_result("待判定", tone="pending")
 
     @staticmethod
     def _manual_product_final_text(label: str) -> str:
         normalized = str(label or "").strip()
         if normalized == "not_labeled":
-            return "未标记"
+            return "待判定"
         return normalized
 
     @staticmethod
@@ -355,7 +421,7 @@ class SequenceWidgetAnalysisOpsMixin(
         if normalized == "NG":
             return "NG", "ng"
         if normalized == "not_labeled":
-            return "未标记", "pending"
+            return "待判定", "pending"
         return "待检测", "pending"
 
     def _manual_product_group_raw_results(self, group_id: str):
@@ -391,8 +457,15 @@ class SequenceWidgetAnalysisOpsMixin(
             return False
 
         results = self._manual_product_group_raw_results(group_id)
+        active_key = self._get_active_product_condition_key()
+        analysis_key = getattr(self, "_manual_product_analysis_key", "")
         for condition_key in condition_keys:
             if condition_key not in results:
+                continue
+            # A persisted placeholder is not the current capture/analysis phase.
+            if condition_key == analysis_key or (
+                condition_key == active_key and getattr(self, "player_status_flag", False)
+            ):
                 continue
             result_text, tone = self._manual_product_condition_display_state(results.get(condition_key))
             left_panel.set_condition_result(condition_key, result_text, tone=tone)
@@ -512,9 +585,67 @@ class SequenceWidgetAnalysisOpsMixin(
             return False
 
         detail_values = self._build_left_panel_analysis_details(ai_runtime_state)
+        set_channel_results = getattr(left_panel, "set_condition_channel_results", None)
+        if callable(set_channel_results):
+            set_channel_results(condition_key, self._build_left_panel_channel_results())
         if not detail_values:
             return False
         return bool(set_details(condition_key, detail_values))
+
+    def _build_left_panel_channel_results(self):
+        """Project runtime results by physical channel; never reuse a channel's verdict."""
+        column_names = {
+            "SPL": "SPL", "SPLF": "SPL", "FBA": "FBA", "FFT": "FFT",
+            "AI": "AI分析", "LOUD": "响度", "Loudness": "响度", "PRB": "响度",
+        }
+        analysis_config = getattr(self, "analysis_config", {}) or {}
+        result_dict = getattr(getattr(self, "data_struct", None), "analysis_result_dict", {}) or {}
+        channels = {}
+        for instance in getattr(self, "analysis_window", []) or []:
+            raw_channel = getattr(instance, "_analysis_raw_channel", None)
+            config = analysis_config.get(getattr(instance, "_sequence_analysis_key", ""), {})
+            analysis_type = config.get("type")
+            column = column_names.get(analysis_type)
+            if raw_channel is None or column is None:
+                continue
+            runtime_key = getattr(instance, "_sequence_runtime_key", instance.title_name)
+            result_value = result_dict.get(runtime_key)
+            judgement = self._analysis_judgement_text(result_value)
+            reason = "未判定" if analysis_type == "AI" else self._analysis_judgement_or_reason(config, result_value)
+            value = judgement or reason
+            channel = channels.setdefault(raw_channel, {"columns": {}, "judgements": [], "details": {}})
+            channel["columns"].setdefault(column, []).append(value)
+            if judgement or analysis_type == "AI" or config.get("limit_checked", False):
+                channel["judgements"].append(judgement)
+            if column == "SPL":
+                detail = self._format_spl_left_panel_detail(instance, config, judgement)
+            elif column == "响度":
+                detail = self._format_loudness_left_panel_detail(instance, config, judgement)
+            elif column == "AI分析":
+                detail = self._format_ai_left_panel_detail(instance=instance)
+            else:
+                detail = value
+            channel["details"].setdefault(column, []).append(f"{runtime_key}：{detail}")
+
+        results = []
+        for raw_channel, channel in channels.items():
+            result = {"raw_channel": raw_channel, "details": {}}
+            for column, values in channel["columns"].items():
+                result[column] = self._channel_judgement_summary(values)
+                if result[column] == "待判定" and all(value == "未启用阈值" for value in values):
+                    result[column] = "未启用阈值"
+                result["details"][column] = "\n".join(channel["details"][column])
+            result["result"] = self._channel_judgement_summary(channel["judgements"])
+            results.append(result)
+        return results
+
+    @staticmethod
+    def _channel_judgement_summary(values):
+        if "NG" in values:
+            return "NG"
+        if values and all(value == "OK" for value in values):
+            return "OK"
+        return "待判定"
 
     def _build_left_panel_analysis_details(self, ai_runtime_state=None) -> dict:
         detail_values = {}
@@ -890,6 +1021,11 @@ class SequenceWidgetAnalysisOpsMixin(
         return self._update_manual_product_mark_group_count(session_record.get("group_id"))
 
     def _prepare_next_manual_product_condition_recording(self):
+        if getattr(self, "_record_workflow_busy", False) or getattr(self, "player_status_flag", False):
+            return None
+        validate_metadata = getattr(self, "_validate_test_round_metadata", None)
+        if callable(validate_metadata) and not validate_metadata():
+            return None
         load_condition_config = getattr(self, "_load_sequence_config_for_product_condition", None)
         workflow_enabled = callable(load_condition_config)
 
@@ -933,6 +1069,9 @@ class SequenceWidgetAnalysisOpsMixin(
             QMessageBox.warning(self, "提示", message or "当前工况测试队列配置不可用。")
             return None
 
+        begin_metadata = getattr(self, "_begin_test_round_metadata", None)
+        if callable(begin_metadata) and not begin_metadata():
+            return None
         group_id = str(getattr(self, "_manual_product_condition_group_id", "") or "").strip()
         if not group_id:
             group_id = self._generate_recording_token()
@@ -954,17 +1093,12 @@ class SequenceWidgetAnalysisOpsMixin(
         self._waveform_display_override_direction = key
         self._current_trigger_direction = key
 
+        import_audio_mode = self._is_import_audio_mode()
+        if import_audio_mode:
+            self._set_active_product_condition_stage("等待导入")
         left_panel = getattr(self, "left_panel", None)
         if left_panel is not None:
-            condition_name = str(
-                condition.get("display_name")
-                or condition.get("condition_name")
-                or condition.get("name")
-                or key
-            )
-            left_panel.set_current_stage(f"{condition_name} 检测中", tone="running")
-            left_panel.set_condition_result(key, "采集中", tone="running")
-            left_panel.set_final_result("检测中", tone="running")
+            left_panel.set_final_result("待判定", tone="pending")
         return True
 
     def _advance_manual_product_condition_cycle_after_recording(self) -> None:
@@ -1007,6 +1141,28 @@ class SequenceWidgetAnalysisOpsMixin(
             self._manual_product_condition_index = next_index
             if next_index == 0:
                 all_conditions_completed = True
+
+        left_panel = getattr(self, "left_panel", None)
+        if left_panel is not None:
+            stage = "等待下一档位"
+            stage_tone = "pending"
+            if all_conditions_completed:
+                _complete, label = self._product_group_result_state(
+                    getattr(self, "_manual_product_condition_group_id", "")
+                )
+                stage = "本轮完成" if label in ("OK", "NG") else "本轮采集完成，待判定"
+                round_text, round_tone, round_resolved = (
+                    self._automatic_round_display_state()
+                )
+                if round_resolved:
+                    left_panel.set_final_result(round_text, tone=round_tone)
+                    stage = (
+                        "本轮完成"
+                        if round_text in ("OK", "NG")
+                        else "本轮分析完成，未判定"
+                    )
+                    stage_tone = round_tone
+            left_panel.set_current_stage(stage, tone=stage_tone)
 
         if all_conditions_completed:
             close_trigger_state = str(
@@ -1182,6 +1338,9 @@ class SequenceWidgetAnalysisOpsMixin(
                     "labels": "not_labeled",
                     "source_type": "imported",
                 }
+                attach_metadata = getattr(self, "_attach_test_round_metadata", None)
+                if callable(attach_metadata):
+                    attach_metadata(self.recorded_signal_info)
                 self._pending_wav_plot_channel_mapping = channel_mapping
                 try:
                     self._apply_audio_to_data_struct(
@@ -1765,6 +1924,9 @@ class SequenceWidgetAnalysisOpsMixin(
         self._active_product_condition_config = None
         self._waveform_display_override_direction = ""
         self._current_trigger_direction = ""
+        cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
+        if callable(cancel_metadata):
+            cancel_metadata()
 
     def _clear_failed_import_audio_state(
         self,
@@ -1998,6 +2160,8 @@ class SequenceWidgetAnalysisOpsMixin(
             "time_text": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "barcode": barcode,
             "product_model": product_model,
+            "sample_number": recorded_signal_info.get("sample_number"),
+            "test_round": recorded_signal_info.get("test_round"),
             "mode": mode_key,
             "condition_key": mode_key,
             "mode_text": mode_text,
@@ -2462,6 +2626,9 @@ class SequenceWidgetAnalysisOpsMixin(
         if getattr(self, "player_status_flag", False):
             return
         if self.checked_work_status_message():
+            cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
+            if callable(cancel_metadata):
+                cancel_metadata()
             return
 
         tcp_completion_address = None
@@ -2469,6 +2636,9 @@ class SequenceWidgetAnalysisOpsMixin(
         if not manual_start:
             if self.tcp_flag and self.__class__.tcp_server.client_address is None:
                 QMessageBox.warning(self, "提示", "TCP链接异常")
+                cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
+                if callable(cancel_metadata):
+                    cancel_metadata()
                 return
             if self.tcp_flag:
                 tcp_completion_address = tuple(self.__class__.tcp_server.client_address)
@@ -2501,6 +2671,9 @@ class SequenceWidgetAnalysisOpsMixin(
             self.default_logger.error(f"Recording TCP completion failed: {address}: {error}")
 
     def checked_work_status_message(self):
+        validate_metadata = getattr(self, "_validate_test_round_metadata", None)
+        if callable(validate_metadata) and not validate_metadata():
+            return True
         if not self.sequence_config:
             QMessageBox.warning(
                 self,
@@ -2554,6 +2727,9 @@ class SequenceWidgetAnalysisOpsMixin(
             use_product_model_dir=use_product_model_dir,
             recording_root=recording_root,
         )
+        attach_metadata = getattr(self, "_attach_test_round_metadata", None)
+        if callable(attach_metadata):
+            attach_metadata(self.recorded_signal_info)
         if name_suffix:
             self.recorded_signal_info["record_name_suffix"] = name_suffix
         total_time = float(acq_detail.get("total_time", 5.0))
@@ -2775,12 +2951,21 @@ class SequenceWidgetAnalysisOpsMixin(
             return
         bridge = getattr(self, "recording_bridge", None)
         if bridge is not None and bridge.service.busy:
+            cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
+            if callable(cancel_metadata):
+                cancel_metadata()
             QMessageBox.warning(self, "提示", "录音服务正在使用或等待文件释放，请稍后重试。")
             return
         if self.checked_work_status_message():
+            cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
+            if callable(cancel_metadata):
+                cancel_metadata()
             return
         if is_replay and self.last_play_count is None:
             QMessageBox.warning(self, "提示", "请先进行录音")
+            return
+        begin_metadata = getattr(self, "_begin_test_round_metadata", None)
+        if callable(begin_metadata) and not begin_metadata():
             return
 
         begin_hardware_presentation = getattr(
@@ -2902,14 +3087,29 @@ class SequenceWidgetAnalysisOpsMixin(
                 or getattr(self, "_current_recent_session_id", "")
                 or ""
             ).strip()
+        mode = str(getattr(getattr(self, "count_board", None), "mode", ""))
+        condition_key = self._get_active_product_condition_key() if mode in ("test", "mark") else ""
+        previous_analysis_key = getattr(self, "_manual_product_analysis_key", "")
+        if condition_key:
+            self._manual_product_analysis_key = condition_key
+            self._set_active_product_condition_stage("分析中")
         try:
-            return self._run_analysis_impl(
+            result = self._run_analysis_impl(
                 show_windows=show_windows,
                 report_session_id=target_session_id,
             )
         except Exception as exc:
             self._capture_analysis_report_failure(target_session_id, exc)
+            if condition_key and condition_key == self._get_active_product_condition_key():
+                self._set_active_product_condition_stage("分析失败", tone="ng")
             raise
+        else:
+            if condition_key and condition_key == self._get_active_product_condition_key():
+                self._finish_product_condition_analysis_display()
+            return result
+        finally:
+            if condition_key:
+                self._manual_product_analysis_key = previous_analysis_key
 
     def _reset_live_mic_calibration_batch(self):
         self._live_mic_channel_v2pa_factors = {}

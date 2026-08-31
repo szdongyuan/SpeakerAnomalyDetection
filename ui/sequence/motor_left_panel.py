@@ -1,16 +1,18 @@
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QFrame, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from consts import ui_style_const
 from ui.sequence.motor_ai_result_panel import MotorAiResultPanel
-from ui.sequence.motor_summary_panel import MotorSummaryPanel
+from ui.sequence.motor_video_monitor_panel import MotorVideoMonitorPanel
 
 
 class MotorDetectionLeftPanel(QWidget):
+    condition_selected = pyqtSignal(str)
+
     """
     Composite left sidebar for motor detection mode.
 
-    It delegates the top AI-result area and the bottom summary area to two
+    It delegates the top AI-result area and the bottom video-monitor area to two
     dedicated sub-widgets so later business wiring can evolve independently.
     """
 
@@ -18,9 +20,17 @@ class MotorDetectionLeftPanel(QWidget):
         super().__init__(parent)
         # Mode switch panel removed from UI (no "测试/标记" toggle buttons).
         self.mode_switch_panel = None
+        self.count_board = summary_widget
+        if self.count_board is not None:
+            self.count_board.hide()
         self.ai_result_panel = MotorAiResultPanel(self, condition_configs=condition_configs)
-        self.summary_panel = MotorSummaryPanel(summary_widget, self.mode_switch_panel, self)
+        self.ai_result_panel.condition_selected.connect(self.condition_selected.emit)
+        self.video_monitor_panel = MotorVideoMonitorPanel(self)
         self._init_ui()
+
+    @property
+    def selected_condition_key(self):
+        return self.ai_result_panel.selected_key
 
     def _init_ui(self):
         # The two inner sections are normally moved into outer QSplitters
@@ -33,7 +43,7 @@ class MotorDetectionLeftPanel(QWidget):
         self.content_widget = QWidget(self)
         self.content_layout = QVBoxLayout()
         self.content_layout.addWidget(self.ai_result_panel)
-        self.content_layout.addWidget(self.summary_panel)
+        self.content_layout.addWidget(self.video_monitor_panel)
         self.content_layout.addStretch(1)
         self.content_layout.setContentsMargins(0, 0, 6, 0)
         self.content_layout.setSpacing(12)
@@ -56,7 +66,7 @@ class MotorDetectionLeftPanel(QWidget):
     def take_split_sections(self):
         return (
             self._detach_section_widget(self.ai_result_panel),
-            self._detach_section_widget(self.summary_panel),
+            self._detach_section_widget(self.video_monitor_panel),
         )
 
     def _detach_section_widget(self, widget: QWidget):
@@ -97,6 +107,9 @@ class MotorDetectionLeftPanel(QWidget):
     def set_final_result(self, result_text: str, tone: str = None):
         self.ai_result_panel.set_final_result(result_text, tone=tone)
 
+    def get_automatic_round_result(self):
+        return self.ai_result_panel.get_automatic_round_result()
+
     def set_forward_scores(self, ok_score=None, ng_score=None):
         self.ai_result_panel.set_forward_scores(ok_score, ng_score)
 
@@ -111,6 +124,15 @@ class MotorDetectionLeftPanel(QWidget):
 
     def set_condition_analysis_details(self, condition, detail_values):
         return self.ai_result_panel.set_condition_analysis_details(condition, detail_values)
+
+    def set_condition_channel_results(self, condition, channel_results):
+        return self.ai_result_panel.set_condition_channel_results(condition, channel_results)
+
+    def set_channels(self, channels):
+        self.ai_result_panel.set_channels(channels)
+
+    def set_current_round(self, round_number):
+        self.ai_result_panel.set_current_round(round_number)
 
     def set_condition_configs(self, condition_configs):
         self.ai_result_panel.set_condition_configs(condition_configs)

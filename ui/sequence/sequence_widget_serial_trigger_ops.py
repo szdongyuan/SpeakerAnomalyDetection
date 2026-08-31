@@ -395,6 +395,11 @@ class SequenceWidgetSerialTriggerOpsMixin:
             self._show_serial_product_notice_once("产品测试无法开始", reason)
             return False
 
+        preflight = getattr(self, "checked_work_status_message", None)
+        if callable(preflight) and preflight():
+            self._cancel_prepared_serial_product_condition()
+            return False
+
         self._serial_product_condition_executing = True
         self._serial_product_session_started = False
         self.default_logger.info(f"serial_product_condition_start frame={received_frame}")
@@ -542,6 +547,9 @@ class SequenceWidgetSerialTriggerOpsMixin:
 
     def _on_serial_product_runtime_error(self, reason):
         if not getattr(self, "_serial_product_condition_executing", False):
+            abort_metadata = getattr(self, "_abort_test_round_metadata", None)
+            if callable(abort_metadata):
+                return abort_metadata(reason)
             return False
         self._abort_serial_product_round(str(reason or "产品工况执行异常"))
         return True

@@ -29,7 +29,7 @@ from base.soundcard_calibration_manager import (
 from base.wav_calibration_metadata import append_wav_calibration_metadata
 from consts import error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
-from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
+from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
 from ui.sequence.recent_session_panel import RecentSessionPanel
 
@@ -678,9 +678,13 @@ class SequenceWidgetStreamingOpsMixin:
                 self.channel_workspace, "set_conditions"
             ):
                 self.channel_workspace.set_conditions(self.product_test_condition_configs)
+            self._refresh_waveform_condition_metadata()
             apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
             if callable(apply_mode):
                 apply_mode()
+            self._sync_waveform_condition_from_left(
+                getattr(self.left_panel, "selected_condition_key", "")
+            )
         if getattr(self, "recent_session_panel", None) is not None:
             if should_clear_history and hasattr(self.recent_session_panel, "set_conditions"):
                 self.recent_session_panel.set_conditions(self.product_test_condition_configs)
@@ -960,11 +964,47 @@ class SequenceWidgetStreamingOpsMixin:
         if needs_rebuild:
             self.channel_workspace.set_conditions(condition_configs)
             self._direction_waveform_condition_signature = signature
+        self._refresh_waveform_condition_metadata()
         apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
         if callable(apply_mode):
             apply_mode()
         if needs_rebuild:
             self._refresh_direction_waveform_workspace()
+
+    def _refresh_waveform_condition_metadata(self):
+        """Read queue summaries for display without applying recording settings."""
+        set_context = getattr(self.channel_workspace, "set_condition_context", None)
+        if not callable(set_context):
+            return
+        conditions = DirectionWaveformPanel._normalize_conditions(
+            getattr(self, "product_test_condition_configs", []) or []
+        )
+        if not conditions:
+            return
+        queue_catalog = self._get_product_program_manager().load_queue_catalog()
+        for condition in conditions:
+            queue_info = queue_catalog.get(condition["test_queue"], {})
+            duration = queue_info.get("duration")
+            set_context(
+                condition["key"],
+                recording_duration=duration if duration is not None else "--",
+                test_items=queue_info.get("analysis_items") or "--",
+            )
+
+    def _sync_waveform_condition_from_left(self, condition_key: str) -> bool:
+        channel_workspace = getattr(self, "channel_workspace", None)
+        if channel_workspace is None or not hasattr(channel_workspace, "set_active_condition"):
+            return False
+
+        target_key = str(condition_key or "").strip()
+        get_active_condition = getattr(self, "_get_active_product_condition_key", None)
+        if callable(get_active_condition):
+            active_key = str(get_active_condition() or "").strip()
+            if active_key:
+                target_key = active_key
+        if not target_key:
+            return False
+        return bool(channel_workspace.set_active_condition(target_key))
 
     def _refresh_direction_waveform_workspace(self, direction: str = None):
         if self.channel_workspace is None or not hasattr(
@@ -998,17 +1038,20 @@ class SequenceWidgetStreamingOpsMixin:
         """
             Create the main work area layout.
 
-            Arrange the workspace into a top-bottom structure:
-            top row = AI result + waveform workspace
-            bottom row = operation panel + recent session history
+            Arrange task/video panels on the left and physical-channel waveforms on the right.
 
             Returns:
                 QVBoxLayout: The configured layout object.
         """
         layout = QVBoxLayout()
-        self.channel_workspace = ChannelPlotWorkspace(self)
-        self.channel_workspace.set_channels(
-            getattr(self, "_active_input_channels", [0]) or [0]
+        self.channel_workspace = AnalysisWaveformPanel(
+            self,
+            condition_configs=getattr(self, "product_test_condition_configs", []) or [],
+        )
+        self.channel_workspace.channels_changed.connect(self.left_panel.set_channels)
+        self.channel_workspace.set_channels(getattr(self, "_active_input_channels", [0]) or [0])
+        self.left_panel.condition_selected.connect(
+            self._sync_waveform_condition_from_left
         )
         self.recent_session_panel = RecentSessionPanel(
             on_play_session=self._resolve_recent_session,
@@ -1017,53 +1060,51 @@ class SequenceWidgetStreamingOpsMixin:
             condition_configs=getattr(self, "product_test_condition_configs", []) or [],
             parent=self,
         )
+        self.recent_session_panel.hide()
         self._last_recent_session_mode = str(getattr(self.count_board, "mode", "") or "")
         self.recent_session_panel.set_result_editable(self._last_recent_session_mode == "mark")
         if self.count_board is not None:
             self.count_board.register_mode_change_callback(self._on_recent_session_mode_changed)
+        self._configure_direction_waveform_workspace()
+        self._sync_waveform_condition_from_left(
+            self.left_panel.selected_condition_key
+        )
 
-        ai_result_panel, summary_panel = self.left_panel.take_split_sections()
+        ai_result_panel, video_monitor_panel = self.left_panel.take_split_sections()
         if ai_result_panel is not None:
             ai_result_panel.setMinimumWidth(340)
-        if summary_panel is not None:
-            summary_panel.setMinimumWidth(340)
+        if video_monitor_panel is not None:
+            video_monitor_panel.setMinimumWidth(340)
 
         # Compute initial splitter sizes from the current screen so the layout
         # does not stay glued to a small left column on high-DPI / large screens.
         screen_width, screen_height = self._resolve_workspace_screen_size()
-        # Keep ratios close to the original 380 : 920 (~29 : 71) and 450 : 550 (~45 : 55),
-        # but scale them with the actual screen size.
-        h_left = max(380, int(screen_width * 0.22))
+        # The visible workspace is a left task/video sidebar and a full-height
+        # waveform area. Recent-session state remains alive but is not presented
+        # on the main screen.
+        h_left = max(380, int(screen_width * 0.30))
         h_right = max(900, screen_width - h_left)
-        v_top = max(450, int(screen_height * 0.45))
-        v_bottom = max(500, int(screen_height * 0.55))
+        v_task = max(420, int(screen_height * 0.60))
+        v_video = max(260, screen_height - v_task)
 
-        top_row_splitter = QSplitter(Qt.Horizontal)
-        top_row_splitter.addWidget(ai_result_panel)
-        top_row_splitter.addWidget(self.channel_workspace)
-        top_row_splitter.setChildrenCollapsible(False)
-        top_row_splitter.setStretchFactor(0, 4)
-        top_row_splitter.setStretchFactor(1, 9)
-        top_row_splitter.setSizes([h_left, h_right])
+        left_sidebar_splitter = QSplitter(Qt.Vertical)
+        left_sidebar_splitter.addWidget(ai_result_panel)
+        left_sidebar_splitter.addWidget(video_monitor_panel)
+        left_sidebar_splitter.setChildrenCollapsible(False)
+        left_sidebar_splitter.setStretchFactor(0, 3)
+        left_sidebar_splitter.setStretchFactor(1, 2)
+        left_sidebar_splitter.setSizes([v_task, v_video])
 
-        bottom_row_splitter = QSplitter(Qt.Horizontal)
-        bottom_row_splitter.addWidget(summary_panel)
-        bottom_row_splitter.addWidget(self.recent_session_panel)
-        bottom_row_splitter.setChildrenCollapsible(False)
-        bottom_row_splitter.setStretchFactor(0, 4)
-        bottom_row_splitter.setStretchFactor(1, 9)
-        bottom_row_splitter.setSizes([h_left, h_right])
-
-        main_splitter = QSplitter(Qt.Vertical)
-        main_splitter.addWidget(top_row_splitter)
-        main_splitter.addWidget(bottom_row_splitter)
+        main_splitter = QSplitter(Qt.Horizontal)
+        main_splitter.addWidget(left_sidebar_splitter)
+        main_splitter.addWidget(self.channel_workspace)
         main_splitter.setChildrenCollapsible(False)
-        main_splitter.setStretchFactor(0, 9)
-        main_splitter.setStretchFactor(1, 11)
-        main_splitter.setSizes([v_top, v_bottom])
+        main_splitter.setStretchFactor(0, 4)
+        main_splitter.setStretchFactor(1, 9)
+        main_splitter.setSizes([h_left, h_right])
 
         layout.addWidget(main_splitter)
-        layout.setContentsMargins(40, 20, 40, 20)
+        layout.setContentsMargins(8, 12, 8, 12)
         layout.setSpacing(0)
         return layout
 

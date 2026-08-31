@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import numpy as np
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QComboBox, QSplitter, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QComboBox, QLabel, QPushButton, QSplitter, QVBoxLayout, QWidget
 
 if "concurrent_log_handler" not in sys.modules:
     concurrent_log_handler = types.ModuleType("concurrent_log_handler")
@@ -23,13 +23,14 @@ if "concurrent_log_handler" not in sys.modules:
 from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
 from ui.sequence.motor_panel_common import MotorSectionCard
 from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
+from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
 from ui.sequence.multichannel_waveform_session import MultichannelWaveformSession
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 from consts import error_code
-from base.product_test_program_config import ProductTestProgramConfigManager
+from base.product_test_project_config import ProductTestProjectConfigManager
 
 
 class _DummyCountBoard(QWidget):
@@ -111,6 +112,10 @@ class _DummyProductProgramWidget(QWidget, SequenceWidgetConfigOpsMixin):
 
 
 class _DummySequenceWidget(QWidget, SequenceWidgetStreamingOpsMixin):
+    def closeEvent(self, event):
+        # This fixture does not own recording hardware or background exporters.
+        event.accept()
+
     def __init__(self):
         super().__init__()
         self.count_board = _DummyCountBoard()
@@ -259,39 +264,159 @@ class _ProductConditionSyncWidget(SequenceWidgetStreamingOpsMixin):
 
 
 class TestSequenceMainLayout(unittest.TestCase):
+    def test_waveform_restores_display_only_channel_rows_and_grid(self):
+        panel = AnalysisWaveformPanel(
+            condition_configs=[{"key": "import", "condition_name": "导入工况"}],
+        )
+        self.addCleanup(panel.close)
+        panel.set_channels([0, 2])
+        panel.set_mode("mark")
+        panel.set_condition_audio_path("import", "fixture.wav")
+        self.assertEqual(panel.findChildren(QPushButton), [])
+        first, second = panel.all_subwindows()
+        self.assertEqual(first.channel_caption.text(), "CH1")
+        self.assertEqual(second.channel_caption.text(), "CH3")
+        for waveform_row in (first, second):
+            left_axis = waveform_row.plot_widget.getAxis("left")
+            bottom_axis = waveform_row.plot_widget.getAxis("bottom")
+            self.assertTrue(left_axis.isVisible())
+            self.assertTrue(bottom_axis.isVisible())
+            self.assertEqual(left_axis.labelText, "Amplitude")
+            self.assertEqual(bottom_axis.labelText, "Time")
+            self.assertEqual(bottom_axis.labelUnits, "s")
+            self.assertEqual(
+                waveform_row.plot_widget.getViewBox().state["mouseEnabled"],
+                [True, True],
+            )
+            self.assertIn(
+                "Grid",
+                [
+                    action.text()
+                    for action in waveform_row.plot_widget.getPlotItem().getMenu().actions()
+                ],
+            )
+            self.assertNotIn(
+                "同步辅助网格",
+                [
+                    action.text()
+                    for action in waveform_row.plot_widget.getPlotItem().getMenu().actions()
+                ],
+            )
+            plot_item = waveform_row.plot_widget.getPlotItem()
+            self.assertTrue(plot_item.ctrl.xGridCheck.isChecked())
+            self.assertTrue(plot_item.ctrl.yGridCheck.isChecked())
+        first.set_data([0, 1], [0.5, -0.5])
+        saved = first.snapshot_plot_state()
+        panel.clear_plots()
+        self.assertIsNone(first.plot_item)
+        self.assertTrue(first.plot_widget.getPlotItem().ctrl.xGridCheck.isChecked())
+        self.assertTrue(first.plot_widget.getPlotItem().ctrl.yGridCheck.isChecked())
+        first.restore_plot_state(saved)
+        np.testing.assert_array_equal(first.plot_item.getData()[1], saved[1])
+
+    def test_video_and_hidden_history_match_stashed_layout(self):
+        widget = _RealisticSequenceWidget()
+        widget.setLayout(widget.create_waveform_layout())
+        self.addCleanup(widget.close)
+        widget.show()
+        self.app.processEvents()
+        video = widget.left_panel.video_monitor_panel
+        self.assertEqual(video.findChildren(QPushButton), [])
+        self.assertIn("2K预览", [label.text() for label in video.findChildren(QLabel)])
+        self.assertFalse(widget.count_board.isVisible())
+        self.assertFalse(widget.recent_session_panel.isVisible())
+
+    def test_waveform_rows_support_dynamic_and_noncontiguous_channels(self):
+        panel = AnalysisWaveformPanel()
+        panel.resize(1000, 780)
+        panel.show()
+        self.addCleanup(panel.close)
+        for channels in ([0], [2, 7], list(range(5)), list(range(8))):
+            with self.subTest(channels=channels):
+                panel.set_channels(channels)
+                for _ in range(3):
+                    self.app.processEvents()
+                windows = panel.all_subwindows()
+                self.assertEqual([window.channel_index for window in windows], channels)
+                self.assertTrue(panel._layout_is_valid())
+                for index, window in enumerate(windows):
+                    values = np.array([index, index + 1.0, -index - 1.0])
+                    window.set_data([0.0, 0.1, 0.2], values)
+                    np.testing.assert_array_equal(window.snapshot_plot_state()[1], values)
+
+    def test_waveform_selection_clears_previous_condition_data_and_preserves_runtime(self):
+        widget = _DummySequenceWidget()
+        widget.product_test_condition_configs = [
+            {"key": "first", "condition_name": "第一档", "test_queue": "queue1"},
+            {"key": "second", "condition_name": "第二档", "test_queue": "queue2"},
+        ]
+        widget._get_product_program_manager = lambda: types.SimpleNamespace(load_queue_catalog=lambda: {
+            "queue1": {"duration": 10, "analysis_items": ["SPL"]},
+            "queue2": {"duration": 600, "analysis_items": ["FFT"]},
+        })
+        widget.left_panel.set_condition_configs(widget.product_test_condition_configs)
+        widget.setLayout(widget.create_waveform_layout())
+        self.addCleanup(widget.close)
+        widget._refresh_waveform_condition_metadata()
+        panel = widget.channel_workspace
+        panel.all_subwindows()[0].set_data([0, 1], [0.5, -0.5])
+        widget.left_panel.ai_result_panel.select_condition("second")
+        self.assertIn("第二档", panel.current_condition_label.text())
+        self.assertIn("600秒", panel.duration_label.text())
+        self.assertIn("FFT", panel.test_items_label.text())
+        self.assertIsNone(panel.all_subwindows()[0].plot_item)
+        widget._get_active_product_condition_key = lambda: "first"
+        widget._sync_waveform_condition_from_left("second")
+        self.assertIn("第一档", panel.current_condition_label.text())
+        self.assertIn("10秒", panel.duration_label.text())
+
+    def test_channel_alias_does_not_change_physical_plot_identity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "channel_layout.json")
+            panel = AnalysisWaveformPanel(channel_layout_path=path)
+            panel.set_channels([7])
+            window = panel.all_subwindows()[0]
+            window.direction_editor.setText("后排")
+            window.direction_editor.editingFinished.emit()
+            self.assertEqual(window.channel_index, 7)
+            self.assertEqual(window.channel_caption.text(), "CH8")
+            restored = AnalysisWaveformPanel(channel_layout_path=path)
+            restored.set_channels([7])
+            self.assertEqual(restored.all_subwindows()[0].direction_editor.text(), "后排")
+            panel.close()
+            restored.close()
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_waveform_layout_uses_top_bottom_split_with_two_horizontal_rows(self):
+    def test_waveform_layout_uses_left_sidebar_and_full_height_workspace(self):
         widget = _DummySequenceWidget()
 
         layout = widget.create_waveform_layout()
 
         self.assertIsInstance(layout, QVBoxLayout)
         self.assertEqual(layout.count(), 1)
+        margins = layout.contentsMargins()
+        self.assertEqual(
+            (margins.left(), margins.top(), margins.right(), margins.bottom()),
+            (8, 12, 8, 12),
+        )
 
         main_splitter = layout.itemAt(0).widget()
         self.assertIsInstance(main_splitter, QSplitter)
-        self.assertEqual(main_splitter.orientation(), Qt.Vertical)
+        self.assertEqual(main_splitter.orientation(), Qt.Horizontal)
         self.assertEqual(main_splitter.count(), 2)
 
-        top_row_splitter = main_splitter.widget(0)
-        bottom_row_splitter = main_splitter.widget(1)
-        self.assertIsInstance(top_row_splitter, QSplitter)
-        self.assertIsInstance(bottom_row_splitter, QSplitter)
-        self.assertEqual(top_row_splitter.orientation(), Qt.Horizontal)
-        self.assertEqual(bottom_row_splitter.orientation(), Qt.Horizontal)
-
-        self.assertIs(top_row_splitter.widget(0), widget.left_panel.ai_result_panel)
-        self.assertIs(top_row_splitter.widget(1), widget.channel_workspace)
-        self.assertIsInstance(widget.channel_workspace, ChannelPlotWorkspace)
-        self.assertNotIsInstance(widget.channel_workspace, DirectionWaveformPanel)
-        self.assertIs(bottom_row_splitter.widget(0), widget.left_panel.summary_panel)
-        self.assertIs(bottom_row_splitter.widget(1), widget.recent_session_panel)
-        widget.hide()
-        widget.deleteLater()
-        self.app.processEvents()
+        left_sidebar_splitter = main_splitter.widget(0)
+        self.assertIsInstance(left_sidebar_splitter, QSplitter)
+        self.assertEqual(left_sidebar_splitter.orientation(), Qt.Vertical)
+        self.assertEqual(left_sidebar_splitter.count(), 2)
+        self.assertIs(left_sidebar_splitter.widget(0), widget.left_panel.ai_result_panel)
+        self.assertIs(left_sidebar_splitter.widget(1), widget.left_panel.video_monitor_panel)
+        self.assertIs(main_splitter.widget(1), widget.channel_workspace)
+        self.assertIsInstance(widget.channel_workspace, AnalysisWaveformPanel)
+        self.assertTrue(widget.recent_session_panel.isHidden())
 
     def test_common_window_size_keeps_waveform_and_history_readable(self):
         widget = _DummySequenceWidget()
@@ -300,15 +425,10 @@ class TestSequenceMainLayout(unittest.TestCase):
         widget.show()
         self.app.processEvents()
 
-        self.assertGreaterEqual(widget.channel_workspace.width(), 700)
-        self.assertGreaterEqual(widget.channel_workspace.height(), 360)
-        self.assertGreaterEqual(widget.recent_session_panel.width(), 700)
-        self.assertGreaterEqual(widget.recent_session_panel.height(), 300)
+        self.assertGreaterEqual(widget.channel_workspace.width(), 900)
+        self.assertGreaterEqual(widget.channel_workspace.height(), 700)
         self.assertGreater(widget.channel_workspace.width(), widget.left_panel.ai_result_panel.width())
-        self.assertGreater(widget.recent_session_panel.width(), widget.left_panel.summary_panel.width())
-        widget.hide()
-        widget.deleteLater()
-        self.app.processEvents()
+        self.assertTrue(widget.recent_session_panel.isHidden())
 
     def test_threshold_analyses_can_output_ok_ng(self):
         widget = _DummySequenceWidget()
@@ -361,9 +481,6 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.app.processEvents()
 
         self.assertLessEqual(widget.minimumSizeHint().height(), 700)
-        widget.hide()
-        widget.deleteLater()
-        self.app.processEvents()
 
     def test_left_cards_stretch_to_match_their_row_heights(self):
         widget = _RealisticSequenceWidget()
@@ -373,39 +490,37 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.app.processEvents()
 
         ai_card = widget.left_panel.ai_result_panel.findChild(MotorSectionCard)
-        summary_card = widget.left_panel.summary_panel.findChild(MotorSectionCard)
+        video_card = widget.left_panel.video_monitor_panel.findChild(MotorSectionCard)
 
         self.assertIsNotNone(ai_card)
-        self.assertIsNotNone(summary_card)
+        self.assertIsNotNone(video_card)
         self.assertEqual(ai_card.height(), widget.left_panel.ai_result_panel.height())
-        self.assertEqual(summary_card.height(), widget.left_panel.summary_panel.height())
+        self.assertEqual(video_card.height(), widget.left_panel.video_monitor_panel.height())
 
-        recent_card = widget.recent_session_panel.layout().itemAt(0).widget()
-        recent_title = recent_card.layout().itemAt(0).widget()
-        summary_title = summary_card.layout().itemAt(0).widget()
-        self.assertEqual(recent_title.sizeHint().height(), summary_title.sizeHint().height())
-        widget.hide()
-        widget.deleteLater()
-        self.app.processEvents()
+        task_header = widget.left_panel.ai_result_panel.findChild(QWidget, "testTaskHeader")
+        self.assertIsNotNone(task_header)
+        self.assertEqual(task_header.height(), widget.left_panel.video_monitor_panel.header.height())
 
-    def test_default_main_splitter_ratio_is_45_to_55(self):
+    def test_default_main_splitter_ratio_balances_left_sidebar(self):
         widget = _RealisticSequenceWidget()
-        layout = widget.create_waveform_layout()
+        with patch.object(
+            widget,
+            "_resolve_workspace_screen_size",
+            return_value=(1920, 1080),
+        ):
+            layout = widget.create_waveform_layout()
         widget.setLayout(layout)
-        widget.resize(1400, 900)
+        widget.resize(1920, 1080)
         widget.show()
         self.app.processEvents()
 
         main_splitter = layout.itemAt(0).widget()
-        top_height, bottom_height = main_splitter.sizes()
-        total_height = top_height + bottom_height
+        left_width, right_width = main_splitter.sizes()
+        total_width = left_width + right_width
 
-        self.assertGreater(total_height, 0)
-        self.assertAlmostEqual(top_height / total_height, 0.45, delta=0.03)
-        self.assertAlmostEqual(bottom_height / total_height, 0.55, delta=0.03)
-        widget.hide()
-        widget.deleteLater()
-        self.app.processEvents()
+        self.assertGreater(total_width, 0)
+        self.assertAlmostEqual(left_width / total_width, 0.30, delta=0.03)
+        self.assertAlmostEqual(right_width / total_width, 0.70, delta=0.03)
 
     def test_count_board_keeps_test_summary_visible_in_mark_mode(self):
         board = SequenceCountBoard({})
@@ -486,72 +601,34 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(widget.reset_cycles, [False])
         self.assertEqual(widget.apply_mode_count, 1)
 
-    def test_using_config_combobox_reads_product_program_registry(self):
+    def test_using_config_combobox_reads_product_project_registry(self):
         with tempfile.TemporaryDirectory() as folder:
-            program_dir = os.path.join(folder, "product_test_programs")
-            queue_dir = os.path.join(folder, "analysis_sequence_config")
-            os.makedirs(program_dir)
-            os.makedirs(queue_dir)
-            manager = ProductTestProgramConfigManager(
-                program_dir,
-                os.path.join(program_dir, "program_registry.json"),
-                os.path.join(queue_dir, "sequence_config_registry.json"),
+            manager = ProductTestProjectConfigManager(
+                folder,
+                os.path.join(folder, "program_registry.json"),
+                os.path.join(folder, "sequence_config_registry.json"),
             )
-            manager.load_queue_catalog = lambda: {
-                "queue_6000": {
-                    "available": True,
-                    "acquisition_mode": "RECORD_ONLY",
-                },
-                "queue_9000": {
-                    "available": True,
-                    "acquisition_mode": "RECORD_ONLY",
-                },
-            }
-            manager.save_program(
-                None,
-                {
-                    "name": "2条波形",
-                    "sub_configs": [
-                        {
-                            "condition_name": "6000 rpm",
-                            "trigger_state": "01",
-                            "test_queue": "queue_6000",
-                        }
-                    ],
-                },
-            )
-            manager.save_program(
-                None,
-                {
-                    "name": "4条波形",
-                    "sub_configs": [
-                        {
-                            "condition_name": "9000 rpm",
-                            "trigger_state": "08",
-                            "test_queue": "queue_9000",
-                        }
-                    ],
-                },
-            )
-            registry = manager.load_registry()
-            registry["active_file"] = "4条波形.json"
-            manager.save_registry(registry)
+            manager.save_registry({
+                "active_file": "4条波形.json",
+                "configs": [
+                    {"file": "2条波形.json", "project_name": "2条波形"},
+                    {"file": "4条波形.json", "project_name": "4条波形"},
+                ],
+            })
             widget = _DummyProductProgramWidget(manager)
-
             widget.add_file_to_using_file_combobox()
-
-            texts = [widget.using_file_combobox.itemText(i) for i in range(widget.using_file_combobox.count())]
-            self.assertEqual(texts, ["2条波形", "4条波形"])
-            self.assertEqual(widget.using_file_combobox.currentText(), "4条波形")
-            self.assertEqual(widget.using_file_combobox.currentData(), "4条波形.json")
+            combo = widget.using_file_combobox
+            self.assertEqual([combo.itemText(i) for i in range(combo.count())], ["2条波形", "4条波形"])
+            self.assertEqual(combo.currentText(), "4条波形")
+            self.assertEqual(combo.currentData(), "4条波形.json")
 
     def test_initial_product_program_population_does_not_emit_switch_signal(self):
         manager = types.SimpleNamespace(
             load_registry=lambda: {
                 "active_file": "b.json",
                 "configs": [
-                    {"file": "a.json", "name": "配置 A"},
-                    {"file": "b.json", "name": "配置 B"},
+                    {"file": "a.json", "project_name": "配置 A"},
+                    {"file": "b.json", "project_name": "配置 B"},
                 ],
             }
         )
@@ -572,7 +649,7 @@ class TestSequenceMainLayout(unittest.TestCase):
                 "active_file": "motor.json",
                 "configs": [{"file": "motor.json", "name": "motor"}],
             },
-            load_program=lambda _file_name: (
+            load_project=lambda _file_name: (
                 error_code.OK,
                 {
                     "name": "motor",
@@ -590,7 +667,7 @@ class TestSequenceMainLayout(unittest.TestCase):
                     ],
                 },
             ),
-            validate_program=lambda _program, _file_name: {
+            validate_project=lambda _program, _file_name: {
                 "is_usable": True,
                 "is_test_mode_usable": False,
                 "use_errors": [],

@@ -312,7 +312,11 @@ class DirectionWaveformPanel(QWidget):
             if key in used_keys:
                 key = f"{base_key}#{index + 1}"
             used_keys.add(key)
-            result.append({"key": key, "name": name})
+            result.append({
+                "key": key,
+                "name": name,
+                "test_queue": str(item.get("test_queue") or "").strip(),
+            })
         return result
 
     def _clear_grid(self):

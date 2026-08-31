@@ -55,6 +55,8 @@ def save_recorded_data_to_json(
     scanner_barcode=None,
     scanner_barcode_check=None,
     sequence_mode=None,
+    sample_number=None,
+    current_test_round=None,
 ):
     """
     Persist lightweight sequence-page UI state with merge semantics.
@@ -86,6 +88,10 @@ def save_recorded_data_to_json(
         normalized_mode = str(sequence_mode).strip().lower()
         if normalized_mode in ("test", "mark"):
             data["sequence_mode"] = normalized_mode
+    if sample_number is not None:
+        data["sample_number"] = sample_number
+    if current_test_round is not None:
+        data["current_test_round"] = current_test_round
 
     data["datetime"] = datetime.now().strftime("%Y-%m-%d")
 

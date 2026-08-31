@@ -252,8 +252,7 @@ class SequenceWidgetUiOpsMixin:
 
         sequence_layout = QVBoxLayout()
         sequence_layout.addWidget(self.toolsbar)
-        sequence_layout.addLayout(waveform_layout)
-        sequence_layout.setAlignment(Qt.AlignCenter)
+        sequence_layout.addLayout(waveform_layout, stretch=1)
         sequence_layout.setContentsMargins(1, 0, 1, 0)
 
         self.add_file_to_using_file_combobox()
@@ -499,6 +498,15 @@ class SequenceWidgetUiOpsMixin:
         self.player_btn.setDisabled(True)
 
     def update_player_btn_is_paused(self):
+        end_metadata = getattr(self, "_end_test_round_metadata", None)
+        if (
+            callable(end_metadata)
+            and not getattr(self, "_manual_product_condition_group_id", "")
+            and not getattr(self, "_current_cycle_recorded_count", None)
+            and not getattr(self, "_record_workflow_busy", False)
+            and not getattr(self, "player_status_flag", False)
+        ):
+            end_metadata()
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/play.png"))
         self.player_btn.setIconSize(QSize(35, 35))
         workflow_enabled = callable(getattr(self, "_load_sequence_config_for_product_condition", None))

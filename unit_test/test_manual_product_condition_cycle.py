@@ -24,6 +24,7 @@ class _SpyLeftPanel:
         self.final_results = []
         self.stages = []
         self.analysis_details = []
+        self.automatic_round_result = None
 
     def set_condition_result(self, condition, result_text, tone=None):
         self.condition_results.append((condition, result_text, tone))
@@ -37,6 +38,9 @@ class _SpyLeftPanel:
     def set_condition_analysis_details(self, condition, detail_values):
         self.analysis_details.append((condition, dict(detail_values or {})))
         return True
+
+    def get_automatic_round_result(self):
+        return self.automatic_round_result
 
 
 class _SpyCountBoard:
@@ -218,7 +222,7 @@ class TestManualProductConditionCycle(unittest.TestCase):
         self.assertNotEqual(widget._manual_product_condition_group_id, first_group_id)
         self.assertEqual(widget.cleared_waveforms, 2)
 
-    def test_manual_product_condition_runtime_key_prefers_trigger_state(self):
+    def test_manual_product_condition_runtime_key_prefers_explicit_key(self):
         widget = _DummyManualCycleWidget()
         widget.product_test_condition_configs = [
             {"key": "uuid_6000", "trigger_state": "01", "condition_name": "6000", "test_queue": "queue_6000"},
@@ -231,7 +235,7 @@ class TestManualProductConditionCycle(unittest.TestCase):
                 widget._product_condition_runtime_key(condition, index)
                 for index, condition in enumerate(widget.product_test_condition_configs)
             ],
-            ["01", "02", "03"],
+            ["uuid_6000", "uuid_7000", "uuid_8000"],
         )
 
     def test_play_button_does_not_start_complete_status_code_config(self):
@@ -505,23 +509,23 @@ class TestManualProductConditionCycle(unittest.TestCase):
 
         widget.on_clicked_player_btn()
         widget._mark_manual_product_condition_recording_completed()
-        self.assertIn(("q6000", "完成", "ok"), widget.left_panel.condition_results)
-        self.assertEqual(widget.left_panel.final_results[-1], ("检测中", "running"))
+        self.assertIn(("q6000", "待判定", "pending"), widget.left_panel.condition_results)
+        self.assertEqual(widget.left_panel.final_results[-1], ("待判定", "pending"))
 
         widget._advance_manual_product_condition_cycle_after_recording()
         widget.on_clicked_player_btn()
         widget._mark_manual_product_condition_recording_completed()
-        self.assertIn(("q7000", "完成", "ok"), widget.left_panel.condition_results)
-        self.assertEqual(widget.left_panel.final_results[-1], ("检测中", "running"))
+        self.assertIn(("q7000", "待判定", "pending"), widget.left_panel.condition_results)
+        self.assertEqual(widget.left_panel.final_results[-1], ("待判定", "pending"))
 
         widget._advance_manual_product_condition_cycle_after_recording()
         widget.on_clicked_player_btn()
         widget._mark_manual_product_condition_recording_completed()
-        self.assertIn(("q8000", "完成", "ok"), widget.left_panel.condition_results)
-        self.assertEqual(widget.left_panel.final_results[-1], ("未标记", "pending"))
-        self.assertEqual(widget.left_panel.stages[-1], ("本轮采集完成", "ok"))
+        self.assertIn(("q8000", "待判定", "pending"), widget.left_panel.condition_results)
+        self.assertEqual(widget.left_panel.final_results[-1], ("待判定", "pending"))
+        self.assertEqual(widget.left_panel.stages[-1], ("本轮采集完成", "pending"))
 
-    def test_mark_mode_recording_completion_shows_unlabeled_instead_of_completed(self):
+    def test_recording_completion_does_not_expose_legacy_unlabeled_state(self):
         widget = _DummyManualCycleWidget()
         widget.count_board.mode = "mark"
         widget.recorded_signal_info = {"labels": "not_labeled"}
@@ -529,8 +533,62 @@ class TestManualProductConditionCycle(unittest.TestCase):
         widget.on_clicked_player_btn()
         widget._mark_manual_product_condition_recording_completed()
 
-        self.assertIn(("q6000", "未标记", "pending"), widget.left_panel.condition_results)
+        self.assertIn(("q6000", "待判定", "pending"), widget.left_panel.condition_results)
         self.assertNotIn(("q6000", "完成", "ok"), widget.left_panel.condition_results)
+
+    def test_analysis_completion_uses_channel_overall_judgement(self):
+        cases = [
+            (["OK", "OK"], ("OK", "ok")),
+            (["OK", "NG"], ("NG", "ng")),
+            (["NG", "待判定"], ("NG", "ng")),
+            (["OK", "待判定"], ("未判定", "pending")),
+            (["待判定", "待判定"], ("未判定", "pending")),
+        ]
+        for channel_verdicts, expected in cases:
+            with self.subTest(channel_verdicts=channel_verdicts):
+                widget = _DummyManualCycleWidget()
+                widget._active_product_condition_key = "q6000"
+                widget._build_left_panel_channel_results = lambda: [
+                    {"raw_channel": index, "result": verdict}
+                    for index, verdict in enumerate(channel_verdicts)
+                ]
+
+                widget._finish_product_condition_analysis_display()
+
+                self.assertEqual(
+                    widget.left_panel.condition_results[-1],
+                    ("q6000", *expected),
+                )
+                self.assertNotEqual(
+                    widget.left_panel.condition_results[-1][1],
+                    "未标记",
+                )
+
+    def test_last_automatic_gear_updates_round_result_and_stage(self):
+        widget = _DummyManualCycleWidget()
+        widget._active_product_condition_key = "q8000"
+        widget.left_panel.automatic_round_result = ("OK", "ok", True)
+        widget._build_left_panel_channel_results = lambda: [
+            {"raw_channel": 0, "result": "OK"},
+            {"raw_channel": 1, "result": "OK"},
+        ]
+
+        widget._finish_product_condition_analysis_display()
+
+        self.assertEqual(widget.left_panel.final_results[-1], ("OK", "ok"))
+        self.assertEqual(widget.left_panel.stages[-1], ("本轮完成", "ok"))
+
+    def test_round_completion_does_not_restore_legacy_pending_result(self):
+        widget = _DummyManualCycleWidget()
+        widget.left_panel.automatic_round_result = ("OK", "ok", True)
+
+        for _condition in widget.product_test_condition_configs:
+            widget.on_clicked_player_btn()
+            widget._mark_manual_product_condition_recording_completed()
+            widget._advance_manual_product_condition_cycle_after_recording()
+
+        self.assertEqual(widget.left_panel.final_results[-1], ("OK", "ok"))
+        self.assertEqual(widget.left_panel.stages[-1], ("本轮完成", "ok"))
 
     def test_left_final_result_uses_current_group_summary_only(self):
         widget = _DummyManualCycleWidget()
