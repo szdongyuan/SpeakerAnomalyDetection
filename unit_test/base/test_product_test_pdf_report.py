@@ -66,6 +66,7 @@ def make_png_bytes(color="orange"):
 def test_report_display_value_translates_internal_states_without_changing_results():
     assert _report_display_value("not_labeled") == "未标记"
     assert _report_display_value("completed") == "分析完成"
+    assert _report_display_value("incomplete") == "未完成"
     assert _report_display_value("failed") == "分析失败"
     assert _report_display_value("pending") == "等待分析"
     assert _report_display_value("OK") == "OK"
