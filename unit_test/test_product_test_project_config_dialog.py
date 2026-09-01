@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QApplication, QComboBox, QLabel, QMessageBox
 
 from base.load_config import LoadUiConfig
 from base.product_test_project_config import ProductTestProjectConfigManager
+from consts import ui_style_const
 from ui.product_test_project_config_dialog import (
     ProductTestProjectConfigDialog,
 )
@@ -144,8 +145,8 @@ def test_dialog_uses_project_port_condition_layout(app, tmp_path):
     assert dialog.delete_project_btn.objectName() != "productProjectDangerButton"
     assert "#D4E1F2" in dialog.styleSheet()
     assert "#1F2937" in dialog.styleSheet()
-    assert 'font-family: "Microsoft YaHei UI"' in dialog.styleSheet()
-    assert 'font-family: "SimSun"' not in dialog.styleSheet()
+    assert ui_style_const.UI_FONT_FAMILY in dialog.styleSheet()
+    assert ui_style_const.MAIN_UI_SMALL_FONT_FAMILY not in dialog.styleSheet()
     assert "font-weight: 500" in dialog.styleSheet()
     assert "border-top: 1px solid #AFC0D6" not in dialog.styleSheet()
     assert "border-bottom: 1px solid #AFC0D6" not in dialog.styleSheet()

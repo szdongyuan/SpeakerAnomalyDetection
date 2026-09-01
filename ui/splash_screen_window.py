@@ -3,8 +3,9 @@ import importlib
 
 from PyQt5.QtCore import Qt, QObject, pyqtSignal, QRect
 from PyQt5.QtWidgets import QWidget, QProgressBar, QLabel
+from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR, MODULES_LOAD
-from PyQt5.QtGui import QFontDatabase, QPixmap
+from PyQt5.QtGui import QPixmap
 
 
 class Splash(QWidget):
@@ -20,7 +21,7 @@ class Splash(QWidget):
         self.setObjectName("Form")
         self.resize(633, 426)
         self.prg = QProgressBar(self)
-        self.prg.setGeometry(QRect(20, 360, 591, 8))
+        self.prg.setGeometry(QRect(20, 366, 591, 8))
         self.prg.setProperty("value", 0)
         self.prg.setAlignment(Qt.AlignBottom | Qt.AlignHCenter)
         self.prg.setTextVisible(False)
@@ -34,19 +35,23 @@ class Splash(QWidget):
         self.label.setScaledContents(True)
         self.label.setObjectName("label")
 
-        QFontDatabase.addApplicationFont("C:/Windows/Fonts/STXINGKA.TTF")
         self.product_name_label = QLabel(self)
         self.product_name_label.setGeometry(QRect(30, 292, 350, 42))
         self.product_name_label.setStyleSheet(
             'background-color: white; color: black; '
-            'font-family: "STXingkai", "KaiTi"; font-size: 26px;'
+            f'font-family: {ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; '
+            'font-size: 22px;'
         )
         self.product_name_label.setText("欢迎使用希听异音检测系统")
         self.product_name_label.setObjectName("productNameLabel")
 
         self.lab = QLabel(self)
-        self.lab.setGeometry(QRect(30, 340, 200, 16))
-        self.lab.setStyleSheet("color: rgb(0, 0, 0);")
+        self.lab.setGeometry(QRect(30, 344, 320, 20))
+        self.lab.setStyleSheet(
+            'color: rgb(0, 0, 0); '
+            f'font-family: {ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; '
+            'font-size: 12px;'
+        )
         self.lab.setObjectName("lab")
         self.lab.setText("正在初始化...0%")
 

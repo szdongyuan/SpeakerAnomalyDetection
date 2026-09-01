@@ -50,31 +50,38 @@ class TestSequenceToolbarStyle(unittest.TestCase):
         self.assertEqual(toolbar.objectName(), "sequenceToolsBar")
         self.assertIn(ui_style_const.COLOR_TOOLBAR_BG, toolbar.styleSheet())
 
-    def test_main_ui_font_is_isolated_and_used_by_main_styles(self):
+    def test_main_ui_uses_simsun_except_for_small_auxiliary_text(self):
+        self.assertEqual(ui_style_const.UI_FONT_FAMILY_NAME, "SimSun")
         self.assertEqual(ui_style_const.UI_FONT_FAMILY, "'SimSun'")
         self.assertEqual(
-            ui_style_const.MAIN_UI_FONT_FAMILY,
+            ui_style_const.MAIN_UI_SMALL_FONT_FAMILY_NAME,
+            "Microsoft YaHei UI",
+        )
+        self.assertEqual(
+            ui_style_const.MAIN_UI_SMALL_FONT_FAMILY,
             "'Microsoft YaHei UI'",
         )
-        main_styles = (
+        default_font_styles = (
             ui_style_const.main_window_base_style,
             ui_style_const.main_window_title_label_style,
-            ui_style_const.main_window_statusbar_style,
-            ui_style_const.main_window_status_label_style,
             ui_style_const.toolbar_button_style,
             ui_style_const.toolbar_input_style,
             ui_style_const.toolbar_spinbox_style,
             ui_style_const.toolbar_combobox_style,
             ui_style_const.serial_trigger_button_base_style,
         )
-        for style in main_styles:
+        for style in default_font_styles:
             with self.subTest(style=style[:40]):
-                self.assertIn(ui_style_const.MAIN_UI_FONT_FAMILY, style)
+                self.assertIn(ui_style_const.UI_FONT_FAMILY, style)
+                self.assertNotIn(
+                    ui_style_const.MAIN_UI_SMALL_FONT_FAMILY,
+                    style,
+                )
 
     def test_menu_and_toolbar_labels_share_bold_legacy_font(self):
         menu_style = ui_style_const.main_window_menubar_style
         self.assertIn(ui_style_const.UI_FONT_FAMILY, menu_style)
-        self.assertNotIn(ui_style_const.MAIN_UI_FONT_FAMILY, menu_style)
+        self.assertNotIn(ui_style_const.MAIN_UI_SMALL_FONT_FAMILY, menu_style)
         self.assertEqual(menu_style.count("font-size: 18px"), 3)
         self.assertIn("font-weight: 600", menu_style)
         self.assertIn("padding-top: 3px", menu_style)
@@ -85,7 +92,10 @@ class TestSequenceToolbarStyle(unittest.TestCase):
         ):
             with self.subTest(style=style[:40]):
                 self.assertIn(ui_style_const.UI_FONT_FAMILY, style)
-                self.assertNotIn(ui_style_const.MAIN_UI_FONT_FAMILY, style)
+                self.assertNotIn(
+                    ui_style_const.MAIN_UI_SMALL_FONT_FAMILY,
+                    style,
+                )
                 self.assertIn("font-size: 18px", style)
                 self.assertIn("font-weight: 600", style)
 
@@ -98,8 +108,30 @@ class TestSequenceToolbarStyle(unittest.TestCase):
         for style in status_styles:
             with self.subTest(style=style[:40]):
                 self.assertIn(ui_style_const.COLOR_TEXT_MUTED, style)
+                self.assertIn(
+                    ui_style_const.MAIN_UI_SMALL_FONT_FAMILY,
+                    style,
+                )
                 self.assertIn("font-size: 15px", style)
                 self.assertIn("font-weight: 400", style)
+
+    def test_splash_uses_the_yahei_ui_font(self):
+        from ui.splash_screen_window import Splash
+
+        splash = Splash()
+        style = splash.product_name_label.styleSheet()
+        status_style = splash.lab.styleSheet()
+
+        self.assertIn(ui_style_const.MAIN_UI_SMALL_FONT_FAMILY, style)
+        self.assertIn("font-size: 22px", style)
+        self.assertIn(ui_style_const.MAIN_UI_SMALL_FONT_FAMILY, status_style)
+        self.assertIn("font-size: 12px", status_style)
+        self.assertEqual(splash.lab.width(), 320)
+        self.assertEqual(splash.lab.y(), 344)
+        self.assertEqual(splash.prg.y(), 366)
+        self.assertNotIn("STXingkai", style)
+        self.assertNotIn("KaiTi", style)
+        splash.close()
 
     def test_main_menu_stays_horizontal_when_font_needs_more_height(self):
         from main_window import MainWindow

@@ -111,13 +111,13 @@ class MotorVideoMonitorPanel(QWidget):
     def _header_label_style():
         return (
             "QLabel { background:transparent; border:none; color:#FFFFFF; "
-            f"font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; font-size:16px; font-weight:bold; }}"
+            f"font-family:{ui_style_const.UI_FONT_FAMILY}; font-size:16px; font-weight:bold; }}"
         )
 
     @staticmethod
     def _placeholder_text_style(color, font_size):
         return (
             "QLabel { background:transparent; border:none; "
-            f"color:{color}; font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; "
+            f"color:{color}; font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; "
             f"font-size:{font_size}px; }}"
         )

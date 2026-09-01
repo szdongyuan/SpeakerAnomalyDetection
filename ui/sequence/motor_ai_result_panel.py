@@ -1015,7 +1015,7 @@ class MotorAiResultPanel(QWidget):
     def _row_label_style():
         return (
             "QLabel { background:transparent; border:none; color:#1F2937; "
-            f"font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; font-size:13px; }}"
+            f"font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; font-size:13px; }}"
         )
 
     @staticmethod
@@ -1027,7 +1027,7 @@ class MotorAiResultPanel(QWidget):
         }.get(str(tone or ""), "#64748B")
         return (
             "QLabel { background:transparent; border:none; "
-            f"color:{color}; font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; "
+            f"color:{color}; font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; "
             "font-size:13px; font-weight:bold; }"
         )
 
@@ -1035,7 +1035,7 @@ class MotorAiResultPanel(QWidget):
     def _final_style(tone):
         base = (
             "QLabel {"
-            f"font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; "
+            f"font-family:{ui_style_const.UI_FONT_FAMILY}; "
             "font-size:22px; font-weight:bold;"
             "border-radius:5px; padding: 8px 12px;"
             "}"
@@ -1058,7 +1058,7 @@ class MotorAiResultPanel(QWidget):
         return (
             "QLabel {"
             f"background:{background}; color:{foreground}; border:1px solid {border};"
-            f"border-radius:4px; padding:3px 10px; font-family:{ui_style_const.MAIN_UI_FONT_FAMILY};"
+            f"border-radius:4px; padding:3px 10px; font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY};"
             "font-size:13px; font-weight:bold;"
             "}"
         )
@@ -1068,12 +1068,16 @@ class MotorAiResultPanel(QWidget):
         weight = "font-weight:bold;" if bold else ""
         return (
             "QLabel { background:transparent; color:#FFFFFF; border:none; "
-            f"font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; font-size:14px; {weight} }}"
+            f"font-family:{ui_style_const.UI_FONT_FAMILY}; font-size:14px; {weight} }}"
         )
 
     @classmethod
     def _header_status_style(cls, tone):
-        return cls._header_text_style(bold=True)
+        return (
+            "QLabel { background:transparent; color:#FFFFFF; border:none; "
+            f"font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; "
+            "font-size:14px; font-weight:bold; }"
+        )
 
     @staticmethod
     def _channel_value_style(tone):
@@ -1084,7 +1088,7 @@ class MotorAiResultPanel(QWidget):
         }.get(tone, "#64748B")
         return (
             "QLabel { background:transparent; border:none; "
-            f"color:{color}; font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; font-size:12px; }}"
+            f"color:{color}; font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; font-size:12px; }}"
         )
 
     @staticmethod
@@ -1097,7 +1101,7 @@ class MotorAiResultPanel(QWidget):
         return (
             f"QLabel {{ background:{background}; border:1px solid {border}; "
             "border-radius:10px; padding:2px 8px; "
-            f"color:{color}; font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; "
+            f"color:{color}; font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; "
             "font-size:13px; font-weight:bold; }"
         )
 
@@ -1106,7 +1110,7 @@ class MotorAiResultPanel(QWidget):
         weight = "font-weight:bold;" if bold else ""
         return (
             "QLabel { background:transparent; border:none; border-radius:0; "
-            f"color:{color}; font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; "
+            f"color:{color}; font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; "
             f"font-size:13px; {weight} }}"
         )
 

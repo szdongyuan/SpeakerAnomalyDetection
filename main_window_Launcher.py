@@ -3,12 +3,15 @@ import sys
 class MainWindowLauncher(object):
     def __init__(self):
         from PyQt5.QtCore import QThread
+        from PyQt5.QtGui import QFont
         from PyQt5.QtWidgets import QApplication
+        from consts import ui_style_const
         from ui.splash_screen_window import Splash, LoaderThread
         from base.recording_service import RecordingService
         from ui.recording_service_bridge import RecordingServiceBridge
 
         self.app = QApplication(sys.argv)
+        self.app.setFont(QFont(ui_style_const.UI_FONT_FAMILY_NAME))
         self.recording_service = RecordingService()
         self.recording_bridge = RecordingServiceBridge(self.recording_service, self.app)
         self.app.aboutToQuit.connect(self.recording_bridge.shutdown)
