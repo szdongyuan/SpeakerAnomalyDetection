@@ -83,7 +83,7 @@ class AnalysisWaveformRow(QFrame):
         weight = "font-weight:600;" if bold else ""
         return (
             "QLabel { background:transparent; border:none; "
-            f"color:{color}; font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; "
+            f"color:{color}; font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; "
             f"font-size:{font_size}px; {weight} }}"
         )
 
@@ -93,7 +93,7 @@ class AnalysisWaveformRow(QFrame):
             "QLineEdit#waveformDirectionEditor { background:transparent; "
             "border:1px solid transparent; border-radius:2px; padding:0; "
             f"color:{ui_style_const.COLOR_PRIMARY}; "
-            f"font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; "
+            f"font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; "
             "font-size:14px; font-weight:600; }"
             "QLineEdit#waveformDirectionEditor:focus { background:#FFFFFF; "
             f"border:1px solid {ui_style_const.COLOR_PRIMARY}; }}"
@@ -190,7 +190,7 @@ class AnalysisWaveformPanel(ChannelPlotWorkspace):
             f"QFrame#analysisWaveformHeader {{ background:{ui_style_const.COLOR_PRIMARY}; "
             "border:none; border-top-left-radius:4px; border-top-right-radius:4px; }"
             "QLabel { background:transparent; color:white; border:none; "
-            f"font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; "
+            f"font-family:{ui_style_const.UI_FONT_FAMILY}; "
             "font-size:16px; font-weight:bold; }"
         )
         header_layout = QHBoxLayout(header)
@@ -208,7 +208,7 @@ class AnalysisWaveformPanel(ChannelPlotWorkspace):
             "QFrame#analysisWaveformMeta { background:white; border:none; "
             "border-bottom:1px solid #D7E1EA; }"
             "QLabel { background:transparent; border:none; color:#526477; "
-            f"font-family:{ui_style_const.MAIN_UI_FONT_FAMILY}; font-size:13px; }}"
+            f"font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; font-size:13px; }}"
         )
         meta_layout = QHBoxLayout(meta)
         meta_layout.setContentsMargins(12, 0, 12, 0)

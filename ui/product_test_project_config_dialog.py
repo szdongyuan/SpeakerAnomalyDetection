@@ -362,10 +362,10 @@ class _CopyConditionsDialog(ConfigDialogBase):
 
 class ProductTestProjectConfigDialog(ConfigDialogBase):
     CONDITION_CONTROL_HEIGHT = 30
-    CONDITION_CONTROL_FONT_FAMILY = "Microsoft YaHei UI"
+    CONDITION_CONTROL_FONT_FAMILY = ui_style_const.UI_FONT_FAMILY_NAME
     CONDITION_CONTROL_FONT_SIZE = 16
     CONDITION_CONTROL_FONT_STYLE = (
-        'font-family: "Microsoft YaHei UI"; font-size: 16px;'
+        f"font-family: {ui_style_const.UI_FONT_FAMILY}; font-size: 16px;"
     )
 
     projects_changed = pyqtSignal()
@@ -546,7 +546,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             QDialog#productTestProjectDialog QComboBox,
             QDialog#productTestProjectDialog QTableWidget,
             QDialog#productTestProjectDialog QHeaderView::section {
-                font-family: "Microsoft YaHei UI";
+                font-family: __UI_FONT_FAMILY__;
                 font-size: 16px;
             }
             QDialog#productTestProjectDialog QTableWidget#productProgramTable QHeaderView::section {
@@ -559,7 +559,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
                 color: #1F2937;
                 background-color: #D4E1F2;
                 border: none;
-                font-family: "Microsoft YaHei UI";
+                font-family: __UI_FONT_FAMILY__;
                 font-size: 16px;
                 font-weight: 400;
             }
@@ -572,7 +572,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             QLabel#productProjectConditionTitle {
                 color: #1F2937;
                 background-color: transparent;
-                font-family: "Microsoft YaHei UI";
+                font-family: __UI_FONT_FAMILY__;
                 font-size: 16px;
                 font-weight: 400;
             }
@@ -612,7 +612,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             QScrollArea#productProjectPortScrollArea QWidget#qt_scrollarea_viewport {
                 background-color: transparent;
             }
-            """
+            """.replace("__UI_FONT_FAMILY__", ui_style_const.UI_FONT_FAMILY)
         )
 
     @staticmethod

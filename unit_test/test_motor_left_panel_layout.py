@@ -48,7 +48,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         live_label = second_widget.findChild(QLabel, "videoMonitorLiveLabel")
         self.assertIsNotNone(live_label)
         self.assertIn(
-            ui_style_const.MAIN_UI_FONT_FAMILY,
+            ui_style_const.MAIN_UI_SMALL_FONT_FAMILY,
             live_label.styleSheet(),
         )
 
@@ -111,11 +111,11 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertNotIn("index", panel.rows["01"]["labels"])
         self.assertEqual(panel.rows["01"]["labels"]["name"].text(), "0.1")
         self.assertIn(
-            ui_style_const.MAIN_UI_FONT_FAMILY,
+            ui_style_const.MAIN_UI_SMALL_FONT_FAMILY,
             panel.stage_label.styleSheet(),
         )
         self.assertIn(
-            ui_style_const.MAIN_UI_FONT_FAMILY,
+            ui_style_const.UI_FONT_FAMILY,
             panel.current_port_combo.styleSheet(),
         )
 
