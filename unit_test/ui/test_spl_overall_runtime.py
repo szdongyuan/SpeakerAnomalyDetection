@@ -239,7 +239,9 @@ def test_spl_runtime_optionally_displays_overall_level(
     widget.analysis_config["show_overall_spl"] = False
     result = widget.calculate_spl()
 
-    assert "overall_spl" not in result
+    # The display switch only controls the plot title. Product CSV export
+    # requires the overall value for every completed SPL analysis.
+    assert result["overall_spl"] == pytest.approx(100.0)
     assert titles == [""]
     assert "distance_correction_db" not in result
     widget.close()

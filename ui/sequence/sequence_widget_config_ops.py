@@ -8,6 +8,10 @@ from PyQt5.QtWidgets import QApplication, QMessageBox, QLineEdit
 from base.load_config import LoadUiConfig
 from base.product_test_project_config import ProductTestProjectConfigManager
 from consts import error_code
+from consts.product_test_project_consts import (
+    PROJECT_NAME_KEY,
+    RESULT_ROOT_DIRECTORY_KEY,
+)
 from consts.running_consts import DEFAULT_DIR
 
 
@@ -51,6 +55,25 @@ class SequenceWidgetConfigOpsMixin:
             self._get_active_product_program_path()
         )
 
+    def load_active_product_test_context(self):
+        """Load the immutable project fields needed by result storage."""
+        manager = self._get_product_program_manager()
+        active_file = os.path.basename(self._get_active_product_program_path() or "")
+        if not active_file:
+            return {}
+        load_code, project_data = manager.load_project(active_file)
+        if load_code != error_code.OK or not isinstance(project_data, dict):
+            return {}
+        return {
+            "project_name": str(
+                project_data.get(PROJECT_NAME_KEY, "") or ""
+            ).strip(),
+            "result_root_directory": str(
+                project_data.get(RESULT_ROOT_DIRECTORY_KEY, "") or ""
+            ).strip(),
+            "active_file": active_file,
+        }
+
     def _active_product_program_test_mode_availability(self):
         manager = self._get_product_program_manager()
         registry = manager.load_registry()
@@ -87,6 +110,14 @@ class SequenceWidgetConfigOpsMixin:
             )
             return False, message
 
+        warnings = list(validation.get("use_warnings", []) or [])
+        if warnings:
+            details = "\n".join(f"- {message}" for message in warnings)
+            return (
+                True,
+                "以下工况未配置自动判定规则，分析结果仍会保存，"
+                f"最终分类为 not_labeled：\n{details}",
+            )
         return True, ""
 
     def _validate_active_product_program_acquisition_modes(self):
@@ -511,6 +542,14 @@ class SequenceWidgetConfigOpsMixin:
         """
         Handles the change of the using file combobox.
         """
+        if getattr(self, "_analysis_round_config_locked", False):
+            self.restore_previous_configuration()
+            QMessageBox.warning(
+                self,
+                "配置已锁定",
+                "当前轮次尚未完成，暂时不能切换使用配置。",
+            )
+            return
         # Prefer the item's userData (full file path). During combobox refresh,
         # `text` may temporarily be empty which would otherwise resolve to None.
         if self.player_status_flag:

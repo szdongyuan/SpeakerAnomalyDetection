@@ -141,6 +141,45 @@ def _format_freq(f: float) -> str:
     return f"{f:.4g}"
 
 
+def parse_custom_bands(text):
+    """Parse custom FBA band definitions from the configuration text."""
+    edges = []
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = (
+            [part.strip() for part in line.split(",") if part.strip()]
+            if "," in line
+            else [part for part in line.replace("\t", " ").split(" ") if part]
+        )
+        label = None
+        try:
+            if len(parts) == 1 and "-" in parts[0]:
+                lower, upper = parts[0].split("-", 1)
+                low, high = float(lower.strip()), float(upper.strip())
+            elif len(parts) >= 2:
+                low, high = float(parts[0]), float(parts[1])
+                if len(parts) >= 3:
+                    label = " ".join(parts[2:]).strip() or None
+            else:
+                raise ValueError
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"格式错误: {raw!r}") from exc
+        if low <= 0 or high <= 0:
+            raise ValueError(f"频率必须为正数: {raw!r}")
+        if high <= low:
+            raise ValueError(f"频段上限必须大于下限: {raw!r}")
+        edges.append((low, high, label))
+    edges.sort(key=lambda item: item[0])
+    if not edges:
+        raise ValueError("请至少输入一个频段")
+    for index in range(1, len(edges)):
+        if edges[index][0] < edges[index - 1][1]:
+            raise ValueError("自定义频段不允许重叠，请检查相邻频段边界")
+    return edges
+
+
 def compute_octave_bands(f_min: float = 20, f_max: float = 20000, fraction: int = 3) -> List[Band]:
     """1/N 倍频程划分"""
     if fraction == 3:

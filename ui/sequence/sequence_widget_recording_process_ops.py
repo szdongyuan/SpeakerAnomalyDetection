@@ -84,7 +84,23 @@ class SequenceWidgetRecordingProcessOpsMixin:
 
     def _on_process_recording_started(self, session):
         if self._is_current_recording_process(session):
-            self._set_active_product_condition_stage("采集中")
+            self._set_active_product_condition_stage(
+                "采集中",
+                update_task_stage=False,
+            )
+            has_pending_analysis = getattr(
+                self,
+                "_analysis_has_pending_tasks",
+                None,
+            )
+            if not (
+                callable(has_pending_analysis)
+                and has_pending_analysis()
+            ):
+                left_panel = getattr(self, "left_panel", None)
+                clear_stage = getattr(left_panel, "clear_current_stage", None)
+                if callable(clear_stage):
+                    clear_stage()
             self.default_logger.info(f"Recording started request={session.request.request_id} pid={session.worker_pid}")
 
     def _on_process_recording_preview(self, session, preview):

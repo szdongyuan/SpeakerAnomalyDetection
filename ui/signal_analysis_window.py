@@ -28,6 +28,12 @@ from PyQt5.QtWidgets import (
 from scipy.signal import find_peaks
 
 from base.core_algorithm.harmonic_distortion.weighted import apply_weighting_filter
+from base.analysis_limit_evaluation import (
+    interpolate_spl_limit_curves,
+    resolve_limit_source,
+    resolve_limits,
+    resolve_spl_overall_limits,
+)
 from base.core_algorithm.sound_quality import run_sound_quality
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
@@ -48,10 +54,15 @@ from base.pre_processing.spl_runtime_config import (
 )
 from base.core_algorithm.response import (
     BandAnalysisResult,
+    DEFAULT_MAX_SPEC_TIME_BINS,
     FftAnalyzer,
     FrequencyBandAnalyzer,
     FrequencyResponseAnalyzer,
+    SpectrogramAnalyzer,
     SplFrequencyAnalyzer,
+    load_fft_baseline,
+    parse_custom_bands,
+    smooth_fft_baseline,
 )
 from base.training_model_management import TrainingModelManagement
 from base.utils.smooth import smooth
@@ -225,101 +236,26 @@ def _sorted_finite_positive_x_for_limits(x_values, y_values):
     return x_valid
 
 
-def _interpolate_spl_limit_side(target, x_values, y_values):
-    """Interpolate one SPL limit polyline without bridging missing values."""
-    interpolated = np.full(target.shape, np.nan, dtype=float)
-    finite_target = np.isfinite(target)
-
-    right_indices = np.searchsorted(x_values, target, side="right")
-    left_indices = right_indices - 1
-    between_points = (
-        finite_target
-        & (left_indices >= 0)
-        & (right_indices < x_values.size)
-    )
-    safe_left = np.clip(left_indices, 0, x_values.size - 1)
-    safe_right = np.clip(right_indices, 0, x_values.size - 1)
-    left_x = x_values[safe_left]
-    right_x = x_values[safe_right]
-    left_y = y_values[safe_left]
-    right_y = y_values[safe_right]
-    segment_mask = (
-        between_points
-        & (right_x > left_x)
-        & np.isfinite(left_y)
-        & np.isfinite(right_y)
-    )
-    ratio = (target[segment_mask] - left_x[segment_mask]) / (
-        right_x[segment_mask] - left_x[segment_mask]
-    )
-    interpolated[segment_mask] = left_y[segment_mask] + ratio * (
-        right_y[segment_mask] - left_y[segment_mask]
-    )
-
-    finite_rows = np.isfinite(y_values)
-    if np.any(finite_rows):
-        finite_x = x_values[finite_rows]
-        finite_y = y_values[finite_rows]
-        exact_x, first_indices = np.unique(finite_x, return_index=True)
-        exact_y = finite_y[first_indices]
-        exact_indices = np.searchsorted(exact_x, target, side="left")
-        safe_exact = np.clip(exact_indices, 0, exact_x.size - 1)
-        exact_mask = finite_target & np.isclose(
-            target,
-            exact_x[safe_exact],
-            rtol=1e-12,
-            atol=1e-12,
-        )
-        interpolated[exact_mask] = exact_y[safe_exact[exact_mask]]
-
-    return interpolated
-
-
 def _interpolate_spl_limit_curves(
     target_x,
     limit_x,
     upper_limits,
     lower_limits,
 ):
-    """Match upper and lower SPL CSV polylines to measured time points."""
-    target = np.asarray(target_x, dtype=float)
-    x_values = np.asarray(limit_x, dtype=float)
-    order = np.argsort(x_values, kind="stable")
-    x_values = x_values[order]
-    upper_values = np.asarray(upper_limits, dtype=float)[order]
-    lower_values = np.asarray(lower_limits, dtype=float)[order]
-    return (
-        _interpolate_spl_limit_side(target, x_values, upper_values),
-        _interpolate_spl_limit_side(target, x_values, lower_values),
+    return interpolate_spl_limit_curves(
+        target_x,
+        limit_x,
+        upper_limits,
+        lower_limits,
     )
 
 
 def _resolve_spl_limit_data(config, target_x):
-    limit_mode = str(config.get("limit_mode", "csv") or "csv").lower()
-    if limit_mode == "manual":
-        return limits_from_manual_config(config, target_x)
-    if limit_mode == "csv":
-        limit_data = config.get("limit_data")
-        if not limit_data:
-            raise ValueError("已启用阈值，但未加载 CSV 配置文件")
-        try:
-            limit_x, upper_limit, lower_limit = limit_data
-        except (TypeError, ValueError) as exc:
-            raise ValueError("CSV 阈值数据格式不正确") from exc
-        validate_limit_data_values(limit_data)
-        return limit_x, upper_limit, lower_limit
-    raise ValueError(f"不支持的阈值模式: {limit_mode}")
+    return resolve_limit_source(config, target_x)
 
 
 def _resolve_spl_overall_limit_values(config):
-    scalar_config = {
-        "constant_upper_enabled": bool(config.get("scalar_upper_enabled", True)),
-        "constant_upper_value": config.get("scalar_upper_value", 100.0),
-        "constant_lower_enabled": bool(config.get("scalar_lower_enabled", False)),
-        "constant_lower_value": config.get("scalar_lower_value", 0.0),
-    }
-    _, upper_limits, lower_limits = limits_from_constant_values(scalar_config, [0.0])
-    return np.asarray(upper_limits), np.asarray(lower_limits)
+    return resolve_spl_overall_limits(config)
 
 
 class AnalysisResultSummaryWindow(QWidget):
@@ -1065,13 +1001,11 @@ class Spl(AnalysisGraphWidget):
         judge_by_overall_spl = (
             limit_checked and limit_metric == "overall_spl"
         )
-        overall_spl = None
-        if show_overall_spl or judge_by_overall_spl:
-            overall_spl = calculate_overall_spl(
-                analysis_signal,
-                reference_pressure,
-                v2pa_factor=self.v2pa_factor,
-            )
+        overall_spl = calculate_overall_spl(
+            analysis_signal,
+            reference_pressure,
+            v2pa_factor=self.v2pa_factor,
+        )
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
             analysis_signal,
             reference_pressure,
@@ -1088,6 +1022,8 @@ class Spl(AnalysisGraphWidget):
         if self.analysis_config and self.analysis_config.get("smooth_checked"):
             # NOTE: Do not apply RMS smoothing on dB values (squaring negatives turns silence into ~100 dB).
             signal_spl = smooth(signal_spl, window_size=1102, method="savgol")
+        realtime_upper_limits = None
+        realtime_lower_limits = None
         if limit_checked:
             if judge_by_overall_spl:
                 try:
@@ -1132,7 +1068,15 @@ class Spl(AnalysisGraphWidget):
                         f"SPL 阈值配置无效: {str(exc)[:200]}",
                     )
                     return False
-                self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
+                realtime_upper_limits, realtime_lower_limits = (
+                    self.plot_spl_with_limits(
+                        signal_duration,
+                        signal_spl,
+                        csv_time_list,
+                        csv_upper_list,
+                        csv_lower_list,
+                    )
+                )
         else:
             self.plot_spl(signal_duration, signal_spl)
         apply_plot_view_range(
@@ -1146,9 +1090,18 @@ class Spl(AnalysisGraphWidget):
             "signal_duration": signal_duration.tolist(),
             "recorded_signal": np.asarray(analysis_signal).tolist(),
             "signal_spl": signal_spl.tolist(),
+            "overall_spl": overall_spl,
+            "upper_limits": (
+                np.asarray(realtime_upper_limits, dtype=float).tolist()
+                if realtime_upper_limits is not None
+                else []
+            ),
+            "lower_limits": (
+                np.asarray(realtime_lower_limits, dtype=float).tolist()
+                if realtime_lower_limits is not None
+                else []
+            ),
         }
-        if show_overall_spl or judge_by_overall_spl:
-            self.result["overall_spl"] = overall_spl
         return self.result
 
     def plot_spl_with_limits(self, signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list):
@@ -1205,6 +1158,7 @@ class Spl(AnalysisGraphWidget):
 
         # === 7. Plot out-of-limit segments using LimitPlotUtils ===
         LimitPlotUtils.plot_out_segments(self.analysis_plot, sig_t, sig_spl, out_mask)
+        return upper_at, lower_at
 
     def plot_spl(self, signal_duration, signal_spl):
         self.analysis_plot.clear()
@@ -2110,111 +2064,127 @@ class Spectrogram(QWidget):
             # color_bar_axis.setStyle(tickTextOffset=10)
 
     def calculate_spec(self):
-        recorded_signal = resolve_analysis_channel_signal(self.data_struct, self.analysis_config, self.title_name)
-        sample_rate = self.data_struct.sample_rate
+        config = self.analysis_config or {}
+        recorded_signal = resolve_analysis_channel_signal(
+            self.data_struct,
+            config,
+            self.title_name,
+        )
+        result = SpectrogramAnalyzer().analyze(
+            recorded_signal,
+            fs=self.data_struct.sample_rate,
+            n_fft=int(config.get("n_fft", 2048)),
+            hop_length=int(config.get("hop_length", 256)),
+            window=str(config.get("window_func", "hann") or "hann"),
+            scale=str(config.get("freq_scale_type", "linear") or "linear"),
+            max_time_bins=DEFAULT_MAX_SPEC_TIME_BINS,
+        )
+        times = result.times_s
+        frequencies = result.frequencies_hz
+        values_db = result.values_db
+        color_map = str(config.get("color_map", "viridis") or "viridis")
 
-        n_fft = self.analysis_config.get("n_fft", 2048)
-        hop_length = self.analysis_config.get("hop_length", 256)
-        color_map = self.analysis_config.get("color_map", "viridis")
-        window_func = self.analysis_config.get("window_func", "hann")
-        freq_scale_type = self.analysis_config.get("freq_scale_type", "linear")
-        top_limit = self.analysis_config.get("top_limit", 70)
-        bottom_limit = self.analysis_config.get("bottom_limit", 50)
-        custom_limit_flag = self.analysis_config.get("custom_limit", False)
-
-        mid_value = (top_limit - bottom_limit) / 2
-        max_value = top_limit + mid_value
-        min_value = bottom_limit - mid_value
-
-        if freq_scale_type == "log":
-            fmin_cqt = librosa.note_to_hz("C1")
-            CQT_complex, freqs, times = AudioThdFrequencyResponseAnalysis().compute_cqt(
-                y=recorded_signal, sr=sample_rate, hop_length=hop_length, n_fft=n_fft, fmin=fmin_cqt
-            )
-
-            CQT_mag = np.abs(CQT_complex)
-            CQT_db = librosa.amplitude_to_db(CQT_mag, ref=20e-6)
-            Z = CQT_db.T
-
-            target_ticks_hz = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
+        if result.scale == "log":
+            target_ticks_hz = [
+                50,
+                100,
+                200,
+                500,
+                1000,
+                2000,
+                5000,
+                10000,
+            ]
             major_ticks = []
-            custom_y_ticks = None
-
-            y_min_hz, y_max_hz = freqs.min(), freqs.max()
-            for freq in target_ticks_hz:
-                if y_min_hz <= freq <= y_max_hz:
-                    label = f"{freq} Hz" if freq < 1000 else f"{freq/1000:.0f} kHz"
-                    major_ticks.append((freq, label))
-
-            custom_y_ticks = [major_ticks, []] if major_ticks else None
-
-            cqt_plot_widget, self.stft_colorbar = plot_2d_image(
+            y_min_hz, y_max_hz = frequencies.min(), frequencies.max()
+            for frequency in target_ticks_hz:
+                if y_min_hz <= frequency <= y_max_hz:
+                    label = (
+                        f"{frequency} Hz"
+                        if frequency < 1000
+                        else f"{frequency / 1000:.0f} kHz"
+                    )
+                    major_ticks.append((frequency, label))
+            y_ticks = [major_ticks, []] if major_ticks else None
+            plot_widget, self.stft_colorbar = plot_2d_image(
                 x=times,
-                y=freqs,
-                z=Z,
-                title="Spectrogram(Log Scale)",
+                y=frequencies,
+                z=values_db.T,
+                title="Spectrogram (Log Scale)",
                 xlabel="Time (s)",
                 ylabel="Frequency (Hz)",
                 colormap=color_map,
                 x_range=(times.min(), times.max()),
-                y_range=(freqs.min(), freqs.max()),
-                y_ticks=custom_y_ticks,
+                y_range=(frequencies.min(), frequencies.max()),
+                y_ticks=y_ticks,
                 background_color="white",
             )
-            self.plot_container_layout.addWidget(cqt_plot_widget)
-            self.current_plot_widget = cqt_plot_widget
-
+            self.plot_container_layout.addWidget(plot_widget)
+            self.current_plot_widget = plot_widget
         else:
-            spec = np.abs(librosa.stft(y=recorded_signal, n_fft=n_fft, hop_length=hop_length, window=window_func))
-            spec_dB = librosa.amplitude_to_db(spec, ref=20e-6)
-            freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
-            times = librosa.times_like(spec_dB, sr=sample_rate, hop_length=hop_length)
-
             if self.stft_plot_widget is None or self.img_item is None:
                 self._init_stft_plot_components()
-
-            self.img_item.setImage(spec_dB.T, autoLevels=False)
+            self.img_item.setImage(values_db.T, autoLevels=False)
 
             times_min, times_max = times.min(), times.max()
-            freqs_min, freqs_max = freqs.min(), freqs.max()
-            width = times_max - times_min
-            height = freqs_max - freqs_min
-
-            self.img_item.setRect(pg.QtCore.QRectF(times_min, freqs_min, width, height))
-
+            frequencies_min, frequencies_max = (
+                frequencies.min(),
+                frequencies.max(),
+            )
+            self.img_item.setRect(
+                pg.QtCore.QRectF(
+                    times_min,
+                    frequencies_min,
+                    times_max - times_min,
+                    frequencies_max - frequencies_min,
+                )
+            )
             self.stft_plot_widget.setTitle("Spectrogram (Linear Scale)")
             self.stft_plot_widget.setLabel("bottom", "Time (s)")
             self.stft_plot_widget.setLabel("left", "Frequency (Hz)")
             self.stft_plot_widget.setLogMode(x=False, y=False)
 
-            pos = np.linspace(0.0, 1.0, 256)
-
+            positions = np.linspace(0.0, 1.0, 256)
             colors = pg.colormap.get(color_map).getLookupTable(nPts=256)
-            cmap = pg.ColorMap(pos, colors)
-            db_min, db_max = np.nanmin(spec_dB), np.nanmax(spec_dB)
-
-            lut = cmap.getLookupTable(nPts=256)
-            self.img_item.setLookupTable(lut)
+            color_map_item = pg.ColorMap(positions, colors)
+            db_min, db_max = np.nanmin(values_db), np.nanmax(values_db)
+            self.img_item.setLookupTable(
+                color_map_item.getLookupTable(nPts=256)
+            )
             self.img_item.setLevels([db_min, db_max])
 
             view_box = self.stft_plot_widget.getViewBox()
             if view_box:
                 view_box.setDefaultPadding(0.0)
-
             self.stft_plot_widget.setXRange(times_min, times_max, padding=0)
-            self.stft_plot_widget.setYRange(freqs_min, freqs_max, padding=0)
+            self.stft_plot_widget.setYRange(
+                frequencies_min,
+                frequencies_max,
+                padding=0,
+            )
             plot_item = self.stft_plot_widget.getPlotItem()
             if plot_item:
-                self.stft_colorbar = pg.ColorBarItem(values=(db_min, db_max), width=25, colorMap=cmap)
-                self.stft_colorbar.setImageItem(self.img_item, insert_in=plot_item)
+                self.stft_colorbar = pg.ColorBarItem(
+                    values=(db_min, db_max),
+                    width=25,
+                    colorMap=color_map_item,
+                )
+                self.stft_colorbar.setImageItem(
+                    self.img_item,
+                    insert_in=plot_item,
+                )
             else:
                 self.stft_colorbar = None
             self.plot_container_layout.addWidget(self.stft_plot_widget)
             self.current_plot_widget = self.stft_plot_widget
 
-        if custom_limit_flag:
-            self.stft_colorbar.setLevels((min_value, max_value))
-
+        if config.get("custom_limit") and self.stft_colorbar is not None:
+            top = float(config.get("top_limit", 70))
+            bottom = float(config.get("bottom_limit", 50))
+            middle = (top - bottom) / 2.0
+            self.stft_colorbar.setLevels(
+                (bottom - middle, top + middle)
+            )
         self.set_color_font_size()
 
 
@@ -3119,47 +3089,19 @@ class FftAnalysis(AnalysisGraphWidget):
         weighting,
         v2pa_factor,
     ):
-        baseline_file_path = str(
-            config.get("baseline_file_path", "") or ""
-        ).strip()
-        if not baseline_file_path:
-            return None
         try:
-            baseline_signal, _ = librosa.load(
-                baseline_file_path,
-                sr=sample_rate,
-                mono=True,
-            )
-            baseline_result = analyzer.analyze(
-                baseline_signal,
-                fs=sample_rate,
+            return load_fft_baseline(
+                config,
+                analyzer,
+                frequency,
+                sample_rate=sample_rate,
                 n_fft=n_fft,
                 window=window,
                 overlap_ratio=overlap_ratio,
                 weighting=weighting,
                 v2pa_factor=v2pa_factor,
+                audio_loader=librosa.load,
             )
-            baseline_db = np.interp(
-                frequency,
-                np.asarray(
-                    baseline_result.frequencies_hz,
-                    dtype=np.float64,
-                ),
-                np.asarray(
-                    baseline_result.spectrum_db,
-                    dtype=np.float64,
-                ),
-                left=np.nan,
-                right=np.nan,
-            )
-            if bool(
-                config.get("baseline_smooth_third_octave", False)
-            ):
-                baseline_db = self._smooth_baseline_third_octave(
-                    frequency,
-                    baseline_db,
-                )
-            return baseline_db
         except Exception as exc:
             QMessageBox.warning(
                 self,
@@ -3191,55 +3133,7 @@ class FftAnalysis(AnalysisGraphWidget):
 
     @staticmethod
     def _smooth_baseline_third_octave(frequency, baseline_db):
-        frequency = np.asarray(frequency, dtype=np.float64)
-        baseline = np.asarray(baseline_db, dtype=np.float64)
-        smoothed = np.full_like(baseline, np.nan, dtype=np.float64)
-        factor = 2.0 ** (1.0 / 6.0)
-
-        valid_points = np.isfinite(frequency) & np.isfinite(baseline)
-        if not np.any(valid_points):
-            return smoothed
-        order = np.argsort(frequency[valid_points])
-        sorted_frequency = frequency[valid_points][order]
-        sorted_power = np.power(
-            10.0,
-            baseline[valid_points][order] / 10.0,
-        )
-        prefix_power = np.concatenate(
-            ([0.0], np.cumsum(sorted_power))
-        )
-
-        valid_centers = np.isfinite(frequency) & (frequency > 0.0)
-        lower_frequency = frequency[valid_centers] / factor
-        upper_frequency = frequency[valid_centers] * factor
-        left_indices = np.searchsorted(
-            sorted_frequency,
-            lower_frequency,
-            side="left",
-        )
-        right_indices = np.searchsorted(
-            sorted_frequency,
-            upper_frequency,
-            side="right",
-        )
-        counts = right_indices - left_indices
-        power_sum = (
-            prefix_power[right_indices] - prefix_power[left_indices]
-        )
-        center_values = np.full(
-            counts.shape,
-            np.nan,
-            dtype=np.float64,
-        )
-        non_empty = counts > 0
-        center_values[non_empty] = 10.0 * np.log10(
-            np.maximum(
-                power_sum[non_empty] / counts[non_empty],
-                1e-30,
-            )
-        )
-        smoothed[valid_centers] = center_values
-        return smoothed
+        return smooth_fft_baseline(frequency, baseline_db)
 
     @staticmethod
     def _build_frequency_mask(
@@ -3260,91 +3154,9 @@ class FftAnalysis(AnalysisGraphWidget):
             )
         return mask
 
-    @classmethod
-    def _resolve_limits(cls, config, target_x):
-        limit_mode = str(
-            config.get("limit_mode", "csv") or "csv"
-        ).lower()
-        if limit_mode == "manual":
-            _, upper_values, lower_values = limits_from_manual_config(
-                config,
-                target_x,
-            )
-            upper_limits = np.asarray(
-                upper_values,
-                dtype=np.float64,
-            )
-            lower_limits = np.asarray(
-                lower_values,
-                dtype=np.float64,
-            )
-        elif limit_mode == "csv":
-            limit_data = config.get("limit_data")
-            if not limit_data:
-                raise ValueError("已启用阈值，但未加载 CSV 配置文件")
-            try:
-                csv_x, csv_upper, csv_lower = limit_data
-            except (TypeError, ValueError) as exc:
-                raise ValueError("CSV 阈值数据格式不正确") from exc
-            validate_limit_data_values(limit_data)
-            upper_limits = cls._interpolate_limit_side(
-                target_x,
-                csv_x,
-                csv_upper,
-            )
-            lower_limits = cls._interpolate_limit_side(
-                target_x,
-                csv_x,
-                csv_lower,
-            )
-        else:
-            raise ValueError(f"不支持的阈值模式: {limit_mode}")
-
-        overlap = np.isfinite(upper_limits) & np.isfinite(lower_limits)
-        if np.any(lower_limits[overlap] > upper_limits[overlap]):
-            raise ValueError("下限不能大于上限")
-        return upper_limits, lower_limits
-
     @staticmethod
-    def _interpolate_limit_side(target_x, raw_x, raw_values):
-        x_values = np.asarray(list(raw_x), dtype=np.float64)
-        side_values = np.asarray(list(raw_values), dtype=np.float64)
-        if x_values.size != side_values.size:
-            raise ValueError("CSV 阈值数据长度不一致")
-
-        finite = np.isfinite(x_values) & np.isfinite(side_values)
-        output = np.full(
-            np.asarray(target_x).shape,
-            np.nan,
-            dtype=np.float64,
-        )
-        if not np.any(finite):
-            return output
-
-        points = {}
-        for x_value, side_value in zip(
-            x_values[finite],
-            side_values[finite],
-        ):
-            points[float(x_value)] = float(side_value)
-        sorted_keys = sorted(points)
-        sorted_x = np.asarray(sorted_keys, dtype=np.float64)
-        sorted_values = np.asarray(
-            [points[x_value] for x_value in sorted_keys],
-            dtype=np.float64,
-        )
-        target_values = np.asarray(target_x, dtype=np.float64)
-        in_range = (
-            (target_values >= sorted_x[0])
-            & (target_values <= sorted_x[-1])
-        )
-        if np.any(in_range):
-            output[in_range] = np.interp(
-                target_values[in_range],
-                sorted_x,
-                sorted_values,
-            )
-        return output
+    def _resolve_limits(config, target_x):
+        return resolve_limits(config, target_x)
 
     def _plot_fft(
         self,
@@ -3662,129 +3474,13 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
         }
         return self.result
 
-    @classmethod
-    def _resolve_limits(cls, config, centers):
-        limit_mode = str(config.get("limit_mode", "csv") or "csv").lower()
-        if limit_mode == "manual":
-            _, upper_values, lower_values = limits_from_manual_config(
-                config,
-                centers,
-            )
-            upper_limits = np.asarray(upper_values, dtype=np.float64)
-            lower_limits = np.asarray(lower_values, dtype=np.float64)
-        elif limit_mode == "csv":
-            limit_data = config.get("limit_data")
-            if not limit_data:
-                raise ValueError("已启用阈值，但未加载 CSV 配置文件")
-            try:
-                csv_x, csv_upper, csv_lower = limit_data
-            except (TypeError, ValueError) as exc:
-                raise ValueError("CSV 阈值数据格式不正确") from exc
-            validate_limit_data_values(limit_data)
-            upper_limits = cls._interpolate_limit_side(
-                centers,
-                csv_x,
-                csv_upper,
-            )
-            lower_limits = cls._interpolate_limit_side(
-                centers,
-                csv_x,
-                csv_lower,
-            )
-        else:
-            raise ValueError(f"不支持的阈值模式: {limit_mode}")
-
-        overlap = np.isfinite(upper_limits) & np.isfinite(lower_limits)
-        if np.any(lower_limits[overlap] > upper_limits[overlap]):
-            raise ValueError("下限不能大于上限")
-        return upper_limits, lower_limits
-
     @staticmethod
-    def _interpolate_limit_side(target_x, raw_x, raw_values):
-        x_values = np.asarray(list(raw_x), dtype=np.float64)
-        side_values = np.asarray(list(raw_values), dtype=np.float64)
-        if x_values.size != side_values.size:
-            raise ValueError("CSV 阈值数据长度不一致")
-
-        finite = np.isfinite(x_values) & np.isfinite(side_values)
-        if not np.any(finite):
-            return np.full(np.asarray(target_x).shape, np.nan, dtype=np.float64)
-
-        points = {}
-        for x_value, side_value in zip(
-            x_values[finite],
-            side_values[finite],
-        ):
-            points[float(x_value)] = float(side_value)
-        sorted_x = np.asarray(sorted(points), dtype=np.float64)
-        sorted_values = np.asarray(
-            [points[x_value] for x_value in sorted(points)],
-            dtype=np.float64,
-        )
-        target_values = np.asarray(target_x, dtype=np.float64)
-        output = np.full(
-            target_values.shape,
-            np.nan,
-            dtype=np.float64,
-        )
-        in_range = (
-            (target_values >= sorted_x[0])
-            & (target_values <= sorted_x[-1])
-        )
-        if np.any(in_range):
-            output[in_range] = np.interp(
-                target_values[in_range],
-                sorted_x,
-                sorted_values,
-            )
-        return output
+    def _resolve_limits(config, centers):
+        return resolve_limits(config, centers)
 
     @staticmethod
     def _parse_custom_bands_text(text: str):
-        edges = []
-        for raw in (text or "").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-
-            if "," in line:
-                parts = [part.strip() for part in line.split(",") if part.strip()]
-            else:
-                parts = [
-                    part.strip()
-                    for part in line.replace("\t", " ").split(" ")
-                    if part.strip()
-                ]
-
-            label = None
-            try:
-                if len(parts) == 1 and "-" in parts[0]:
-                    lower, upper = [
-                        part.strip() for part in parts[0].split("-", 1)
-                    ]
-                    f_low, f_high = float(lower), float(upper)
-                elif len(parts) >= 2:
-                    f_low, f_high = float(parts[0]), float(parts[1])
-                    if len(parts) >= 3:
-                        label = " ".join(parts[2:]).strip() or None
-                else:
-                    raise ValueError
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"格式错误: {raw!r}") from exc
-
-            if f_low <= 0 or f_high <= 0:
-                raise ValueError(f"频率必须为正数: {raw!r}")
-            if f_high <= f_low:
-                raise ValueError(f"频段上限必须大于下限: {raw!r}")
-            edges.append((f_low, f_high, label))
-
-        edges.sort(key=lambda item: item[0])
-        if not edges:
-            raise ValueError("请至少输入一个频段")
-        for index in range(1, len(edges)):
-            if edges[index][0] < edges[index - 1][1]:
-                raise ValueError("自定义频段不允许重叠，请检查相邻频段边界")
-        return edges
+        return parse_custom_bands(text)
 
     def _plot_bar_chart(
         self,

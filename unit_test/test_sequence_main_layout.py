@@ -348,7 +348,7 @@ class TestSequenceMainLayout(unittest.TestCase):
                     window.set_data([0.0, 0.1, 0.2], values)
                     np.testing.assert_array_equal(window.snapshot_plot_state()[1], values)
 
-    def test_waveform_selection_clears_previous_condition_data_and_preserves_runtime(self):
+    def test_waveform_selection_follows_view_while_recording_runtime_stays_active(self):
         widget = _DummySequenceWidget()
         widget.product_test_condition_configs = [
             {"key": "first", "condition_name": "第一档", "test_queue": "queue1"},
@@ -371,8 +371,8 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertIsNone(panel.all_subwindows()[0].plot_item)
         widget._get_active_product_condition_key = lambda: "first"
         widget._sync_waveform_condition_from_left("second")
-        self.assertIn("第一档", panel.current_condition_label.text())
-        self.assertIn("10秒", panel.duration_label.text())
+        self.assertIn("第二档", panel.current_condition_label.text())
+        self.assertIn("600秒", panel.duration_label.text())
 
     def test_channel_alias_does_not_change_physical_plot_identity(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -384,6 +384,7 @@ class TestSequenceMainLayout(unittest.TestCase):
             window.direction_editor.editingFinished.emit()
             self.assertEqual(window.channel_index, 7)
             self.assertEqual(window.channel_caption.text(), "CH8")
+            self.assertEqual(panel.channel_layout["CH8"], "后排")
             restored = AnalysisWaveformPanel(channel_layout_path=path)
             restored.set_channels([7])
             self.assertEqual(restored.all_subwindows()[0].direction_editor.text(), "后排")
