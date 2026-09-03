@@ -345,6 +345,19 @@ def test_production_cycle_methods_keep_fixture_order_in_one_group():
     assert host._manual_product_condition_index == 0
 
 
+def test_product_condition_preflight_rejects_before_round_state_is_created():
+    prepare = _load_analysis_method("_prepare_next_manual_product_condition_recording")
+    host = _SerialProductHost()
+    host._load_sequence_config_for_product_condition = lambda _condition: (True, "")
+    host._validate_automatic_analysis_channels_before_recording = lambda: False
+
+    assert prepare(host) is None
+    assert host._manual_product_condition_group_id == ""
+    assert host._active_product_condition_key == ""
+    assert host._current_cycle_recorded_count is None
+    assert host.cleared_waveforms == 0
+
+
 def test_production_cycle_waits_for_close_frame_when_configured():
     prepare = _load_analysis_method("_prepare_next_manual_product_condition_recording")
     advance = _load_analysis_method("_advance_manual_product_condition_cycle_after_recording")
@@ -366,7 +379,8 @@ def test_production_cycle_waits_for_close_frame_when_configured():
 
     assert host._manual_product_condition_group_id == "round-1"
     assert host._serial_product_waiting_for_close is True
-    assert host.left_panel.stages[-1] == ("全部工况完成，等待关闭测试", "ok")
+    assert host.left_panel.stages[-1] == ("本轮采集完成，待判定", "pending")
+    assert all("等待关闭测试" not in text for text, _tone in host.left_panel.stages)
 
 
 def test_manual_play_is_ignored_while_serial_round_waits_for_close():

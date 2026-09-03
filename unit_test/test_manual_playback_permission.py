@@ -149,7 +149,7 @@ def test_actual_qt_button_allows_empty_codes_when_serial_is_enabled():
     host.update_player_btn_is_paused()
 
     assert player_btn.isEnabled() is True
-    assert player_btn.toolTip() == "开始录制"
+    assert player_btn.toolTip() == "开始录制：6000"
 
 
 def test_complete_config_stays_disabled_without_serial_config():
@@ -179,7 +179,17 @@ def test_close_frame_does_not_change_empty_status_code_permission():
     host.update_player_btn_is_paused()
 
     assert host.player_btn.disabled is False
-    assert host.player_btn.tooltip == "开始录制"
+    assert host.player_btn.tooltip == "开始录制：6000"
+
+
+def test_play_button_tooltip_follows_next_queue_condition():
+    host = _PlaybackPermissionHost(EMPTY_CONDITIONS, serial_enabled=False)
+    host._manual_product_condition_index = 1
+
+    host.update_player_btn_is_paused()
+
+    assert host.player_btn.disabled is False
+    assert host.player_btn.tooltip == "开始录制：7000"
 
 
 def test_mark_reset_does_not_bypass_playback_permission():

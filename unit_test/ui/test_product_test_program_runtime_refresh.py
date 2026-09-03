@@ -102,6 +102,64 @@ def test_product_program_update_refreshes_selector_and_runtime_conditions():
     assert events == ["selector", ("conditions", True), "play_button"]
 
 
+def test_active_project_context_exposes_result_storage_identity():
+    class _Manager:
+        def load_project(self, file_name):
+            assert file_name == "motor.json"
+            return error_code.OK, {
+                "project_name": "电机耐久测试",
+                "result_root_directory": "D:/results",
+            }
+
+    host = SimpleNamespace(
+        _get_product_program_manager=lambda: _Manager(),
+        _get_active_product_program_path=lambda: "D:/projects/motor.json",
+    )
+
+    context = SequenceWidgetConfigOpsMixin.load_active_product_test_context(host)
+
+    assert context == {
+        "project_name": "电机耐久测试",
+        "result_root_directory": "D:/results",
+        "active_file": "motor.json",
+    }
+
+
+def test_no_threshold_program_is_usable_with_not_labeled_notice():
+    class _Manager:
+        def load_registry(self):
+            return {"active_file": "motor.json"}
+
+        def load_project(self, file_name):
+            assert file_name == "motor.json"
+            return error_code.OK, {"project_name": "P"}
+
+        def validate_project(self, _program, file_name):
+            assert file_name == "motor.json"
+            return {
+                "is_usable": True,
+                "is_test_mode_usable": True,
+                "use_errors": [],
+                "use_warnings": ["A口/6000rpm未配置自动判定规则"],
+            }
+
+    host = SimpleNamespace(
+        product_program_manager=_Manager(),
+        active_product_program_file="motor.json",
+    )
+    host._get_product_program_manager = lambda: host.product_program_manager
+
+    available, notice = (
+        SequenceWidgetConfigOpsMixin._active_product_program_test_mode_availability(
+            host
+        )
+    )
+
+    assert available is True
+    assert "not_labeled" in notice
+    assert "A口/6000rpm" in notice
+
+
 class _ComboBoxStub:
     def __init__(self, current_data):
         self._current_data = current_data

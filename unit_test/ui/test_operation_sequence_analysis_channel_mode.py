@@ -6,11 +6,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PyQt5.QtWidgets import QApplication, QTreeView, QWidget
 
+from base.load_config import LoadUiConfig
 from ui.operation_sequence import AnalysisModelSelect, OptionList
 from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.common_widgets import ChannelSelectorWidget, MultiChannelSelectorWidget
 from ui.ui_analysis_config.fft_config_dialog import FftConfigWindow
 from ui.ui_analysis_config.loudness_config_dialog import LoudnessConfigWindow
+from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 
 
 @pytest.fixture(scope="module")
@@ -29,9 +31,13 @@ class _ConfigManager:
 class _Logger:
     def __init__(self):
         self.warnings = []
+        self.errors = []
 
     def warning(self, message):
         self.warnings.append(message)
+
+    def error(self, message):
+        self.errors.append(message)
 
 
 def _option(mode, channels=(0, 2, 7)):
@@ -42,7 +48,7 @@ def _option(mode, channels=(0, 2, 7)):
     )
 
 
-def test_analysis_catalog_hides_loud_and_lp_without_removing_other_entries(qapp):
+def test_analysis_catalog_only_shows_first_release_analysis_types(qapp):
     container = QWidget()
     host = SimpleNamespace(analysis_list=QTreeView(container))
     container.setLayout(AnalysisModelSelect.create_analysis_list_layout(host))
@@ -54,10 +60,78 @@ def test_analysis_catalog_hides_loud_and_lp_without_removing_other_entries(qapp)
         ]
         assert visible_entries == [
             "声压级 (SPL)", "频谱分析 (Spec)", "AI 分析",
-            "频段能量 (FBA)", "快速傅里叶变换 (FFT)", "结果导出 (Excel)",
+            "频段能量 (FBA)", "快速傅里叶变换 (FFT)",
         ]
     finally:
         container.close()
+
+
+def test_new_queue_defaults_to_automatic_analysis_enabled(qapp):
+    container = QWidget()
+    select_list = QWidget(container)
+    select_list.config = []
+    host = SimpleNamespace(select_list=select_list)
+    container.setLayout(AnalysisModelSelect.create_select_list_layout(host))
+    try:
+        assert host.auto_analysis_box.isChecked()
+    finally:
+        container.close()
+
+
+def test_saved_automatic_analysis_choice_remains_respected(qapp):
+    container = QWidget()
+    select_list = QWidget(container)
+    select_list.config = [SimpleNamespace(auto_analysis=False)]
+    host = SimpleNamespace(select_list=select_list)
+    container.setLayout(AnalysisModelSelect.create_select_list_layout(host))
+    try:
+        assert not host.auto_analysis_box.isChecked()
+    finally:
+        container.close()
+
+
+def test_new_spec_item_uses_code_defaults_when_default_file_is_missing(monkeypatch):
+    monkeypatch.setattr(
+        LoadUiConfig,
+        "load_data_from_json",
+        lambda _path: (1, "missing"),
+    )
+    option = SimpleNamespace(
+        config=[SimpleNamespace(analysis_list={})],
+        default_logger=_Logger(),
+    )
+
+    OptionList.get_item_default_config(
+        option,
+        "频谱分析 (Spec) ",
+        "频谱分析 (Spec) 1",
+    )
+
+    config = option.config[0].analysis_list["频谱分析 (Spec) 1"]
+    assert config == {**SpecConfigWindow.DEFAULT_CONFIG, "type": "Spec"}
+
+
+def test_new_recorded_analysis_item_defaults_to_all_hardware_channels(monkeypatch):
+    monkeypatch.setattr(
+        LoadUiConfig,
+        "load_data_from_json",
+        lambda _path: (0, {"SPL": {}}),
+    )
+    option = SimpleNamespace(
+        config=[SimpleNamespace(mode="RECORD_ONLY", analysis_list={})],
+        mic_channels=[0, 2, 7],
+        default_logger=_Logger(),
+    )
+
+    OptionList.get_item_default_config(
+        option,
+        "声压级 (SPL) ",
+        "声压级 (SPL) 1",
+    )
+
+    config = option.config[0].analysis_list["声压级 (SPL) 1"]
+    assert config["analysis_channel"] == 0
+    assert config["analysis_channels"] == [0, 2, 7]
 
 
 @pytest.mark.parametrize("analysis_type", ["SPL", "Spec", "FBA", "AI", "LP", "FFT", "LOUD"])
@@ -75,7 +149,7 @@ def test_record_only_routes_multiple_selected_channels(qapp, monkeypatch, analys
     )
 
     assert isinstance(dialog.channel_selector, MultiChannelSelectorWidget)
-    assert dialog.channel_selector.selected_channels() == [5]
+    assert dialog.channel_selector.selected_channels() == [0, 2, 7]
     dialog.channel_selector.set_selected_channels([0, 7])
     saved = dialog.get_default_config()
     assert saved["analysis_channel"] == 0
@@ -109,7 +183,7 @@ def test_reopening_dialog_uses_current_acquisition_mode(qapp, analysis_type):
         option, None, manager, analysis_type, analysis_type, 0
     )
     assert isinstance(record_dialog.channel_selector, MultiChannelSelectorWidget)
-    assert record_dialog.channel_selector.current_channel() == 5
+    assert record_dialog.channel_selector.selected_channels() == [0, 2, 7]
     record_dialog.channel_selector.set_selected_channels([0, 2])
     manager.config[analysis_type] = record_dialog.get_default_config()
     record_dialog.close()

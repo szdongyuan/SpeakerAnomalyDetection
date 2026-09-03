@@ -12,7 +12,6 @@ from base.sound_device_manager import SoundDeviceManager
 from consts import ui_style_const
 from consts.model_consts import DATABASE_PATH
 from consts.running_consts import DEFAULT_DIR
-from ui.ai_window import AiWindow
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from ui.calibration_window import CalibrationWindow
 from ui.hardware_window import open_hardware_selection_window
@@ -287,6 +286,17 @@ class MainWindow(QMainWindow):
 
     def analysis_model_select(self):
         # Test items for configuring speakers
+        if getattr(
+            self.sequence_window,
+            "_analysis_round_config_locked",
+            False,
+        ):
+            QMessageBox.information(
+                self,
+                "配置已锁定",
+                "当前轮次尚未完成，暂时不能修改测试队列配置。",
+            )
+            return
         self._open_analysis_model_select(self.sequence_window.using_config_path)
 
     def _open_analysis_model_select(self, using_config_path):
@@ -302,6 +312,17 @@ class MainWindow(QMainWindow):
         self.sequence_window.on_sequence_config_updated()
 
     def on_product_test_program_config(self):
+        if getattr(
+            self.sequence_window,
+            "_analysis_round_config_locked",
+            False,
+        ):
+            QMessageBox.information(
+                self,
+                "配置已锁定",
+                "当前轮次尚未完成，暂时不能修改产品测试配置。",
+            )
+            return
         self.sequence_window._product_test_program_config_dialog_open = True
         try:
             dialog = ProductTestProjectConfigDialog(
@@ -349,6 +370,8 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def on_ai_window_init():
+        from ui.ai_window import AiWindow
+
         dlg = AiWindow(LogManager.set_log_handler("train"))
         dlg.exec()
 
@@ -482,6 +505,20 @@ class MainWindow(QMainWindow):
             shutdown_product_pdf()
 
     def closeEvent(self, event):
+        sequence = getattr(self, "sequence_window", None)
+        has_pending_analysis = getattr(
+            sequence,
+            "_analysis_has_pending_tasks",
+            None,
+        )
+        if callable(has_pending_analysis) and has_pending_analysis():
+            event.ignore()
+            QMessageBox.information(
+                self,
+                "分析任务未完成",
+                "还有分析任务未完成，请等待分析结束后再退出。",
+            )
+            return
         bridge = getattr(self, "recording_bridge", None)
         if (bridge is not None and not bridge.service.closed.is_set()
                 and not getattr(self, "_recording_shutdown_reported", False)):

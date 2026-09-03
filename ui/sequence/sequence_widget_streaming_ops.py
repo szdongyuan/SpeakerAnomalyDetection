@@ -114,6 +114,15 @@ def _claim_and_finalize_streaming_wav_writer(host):
     return True
 
 
+def _refresh_manual_analysis_action(host, *, fallback_enabled):
+    """Refresh the integrated analysis action without breaking mixin-only hosts."""
+    refresh = getattr(host, "_refresh_analysis_action_state", None)
+    if callable(refresh):
+        refresh()
+        return
+    host.data_btn.setEnabled(bool(fallback_enabled))
+
+
 class SequenceWidgetStreamingOpsMixin:
     _DIRECTION_WAVEFORM_ORDER = tuple()
     _WAVEFORM_DISPLAY_MAX_POINTS = 4_000
@@ -477,6 +486,27 @@ class SequenceWidgetStreamingOpsMixin:
             if normalized_candidate and normalized_candidate not in old_file_path_candidates:
                 old_file_path_candidates.append(normalized_candidate)
 
+        # Product-test recordings use one stable WAV path.  A judgment updates
+        # only the existing database label; it never moves the WAV into an
+        # OK/NG/not_labeled directory.
+        if isinstance(updated_signal_info.get("analysis_storage"), dict):
+            updated_signal_info["labels"] = target_label
+            updated_signal_info["file_path"] = self._normalize_db_audio_path(
+                source_path
+            )
+            save_code = error_code.INVALID_UPDATE
+            msg = "未找到可更新的数据库记录。"
+            for old_file_path in old_file_path_candidates:
+                save_code, msg = RecordingManager().update_audio_label(
+                    updated_signal_info,
+                    old_file_path,
+                )
+                if save_code == error_code.OK:
+                    break
+            if save_code != error_code.OK:
+                updated_signal_info["labels"] = previous_label or "not_labeled"
+            return save_code, msg, source_path, updated_signal_info
+
         try:
             recording_root = str(
                 updated_signal_info.get(
@@ -536,13 +566,12 @@ class SequenceWidgetStreamingOpsMixin:
         return save_code, msg, final_file_path, updated_signal_info
 
     def _should_run_silent_analysis_after_recording(self) -> bool:
-        if bool((getattr(self, "analysis_config", {}) or {}).get("auto_analysis", False)):
-            return True
-        is_manual_product_cycle_active = getattr(self, "_is_manual_product_condition_cycle_active", None)
-        if callable(is_manual_product_cycle_active) and is_manual_product_cycle_active():
-            return True
-        is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
-        return callable(is_directional_cycle_active) and is_directional_cycle_active()
+        return bool(
+            (getattr(self, "analysis_config", {}) or {}).get(
+                "auto_analysis",
+                True,
+            )
+        )
 
     def on_sequence_config_updated(self, *_):
         """
@@ -564,8 +593,7 @@ class SequenceWidgetStreamingOpsMixin:
 
     def _refresh_test_mode_availability(self):
         """
-        Enable test mode only when every condition in the active product
-        program can output OK/NG.
+        Enable test mode for usable programs and expose no-judgment warnings.
         """
         count_board = getattr(self, "count_board", None)
         try:
@@ -632,6 +660,10 @@ class SequenceWidgetStreamingOpsMixin:
             getattr(self, "product_test_close_trigger_state", "") or ""
         ).strip()
         self.product_test_condition_configs = LoadUiConfig.load_product_test_program_condition_configs(config_path)
+        load_project_context = getattr(self, "load_active_product_test_context", None)
+        self.product_test_project_context = (
+            load_project_context() if callable(load_project_context) else {}
+        )
         self.product_test_close_trigger_state = ""
         self.product_test_pdf_report_config = {"enabled": False, "save_dir": ""}
         new_signature = self._product_condition_signature(self.product_test_condition_configs)
@@ -997,11 +1029,10 @@ class SequenceWidgetStreamingOpsMixin:
             return False
 
         target_key = str(condition_key or "").strip()
-        get_active_condition = getattr(self, "_get_active_product_condition_key", None)
-        if callable(get_active_condition):
-            active_key = str(get_active_condition() or "").strip()
-            if active_key:
-                target_key = active_key
+        if not target_key:
+            get_active_condition = getattr(self, "_get_active_product_condition_key", None)
+            if callable(get_active_condition):
+                target_key = str(get_active_condition() or "").strip()
         if not target_key:
             return False
         return bool(channel_workspace.set_active_condition(target_key))
@@ -2093,8 +2124,8 @@ class SequenceWidgetStreamingOpsMixin:
                 clear_active_recording_direction()
             self.player_status_flag = False  # Recording complete, allow hardware access
 
-            # Enable buttons for replay and data analysis
-            self.data_btn.setEnabled(True)
+            # Re-evaluate manual analysis independently from recording state.
+            _refresh_manual_analysis_action(self, fallback_enabled=True)
             self.replayer_btn.setEnabled(True)
 
             self._awaiting_ok_ng = True
@@ -2139,80 +2170,68 @@ class SequenceWidgetStreamingOpsMixin:
             if callable(on_directional_recording_completed):
                 on_directional_recording_completed()
 
-            # Motor directional workflow needs left-panel AI results even when the
-            # legacy auto-analysis checkbox is off, so run silently in that case too.
-            analysis_succeeded = True
-            if self._should_run_silent_analysis_after_recording():
-                analysis_succeeded = self.run(show_windows=False)
+            # Recording owns only WAV publication.  Automatic analysis is queued
+            # according to the current test-queue setting and may overlap the next
+            # condition's recording.
+            enqueue_analysis = getattr(
+                self,
+                "_enqueue_automatic_analysis_current_recording",
+                None,
+            )
+            if callable(enqueue_analysis):
+                enqueue_analysis()
 
-            analysis_failed = analysis_succeeded is False
-            if analysis_failed:
-                finalize_failed_analysis = getattr(
+            if manual_product_cycle_was_active:
+                mark_manual_product_complete = getattr(
                     self,
-                    "_finalize_serial_product_condition_analysis_failure",
+                    "_mark_manual_product_condition_recording_completed",
                     None,
                 )
-                failure_finalized = bool(
-                    callable(finalize_failed_analysis)
-                    and finalize_failed_analysis(
-                        "输入校准文件错误，本次分析已停止"
-                    )
+                if callable(mark_manual_product_complete):
+                    mark_manual_product_complete()
+                update_group_count = getattr(
+                    self,
+                    "_update_manual_product_mark_group_count",
+                    None,
                 )
-                if not failure_finalized:
-                    self._awaiting_ok_ng = False
-                    self._sn_clear_on_next_scan = False
-                    self._pending_recent_session_append = False
-            else:
-                if manual_product_cycle_was_active:
-                    mark_manual_product_complete = getattr(
-                        self,
-                        "_mark_manual_product_condition_recording_completed",
-                        None,
-                    )
-                    if callable(mark_manual_product_complete):
-                        mark_manual_product_complete()
-                    update_group_count = getattr(
-                        self,
-                        "_update_manual_product_mark_group_count",
-                        None,
-                    )
-                    if callable(update_group_count):
-                        update_group_count(
-                            getattr(
-                                self,
-                                "_manual_product_condition_group_id",
-                                "",
-                            )
+                if callable(update_group_count):
+                    update_group_count(
+                        getattr(
+                            self,
+                            "_manual_product_condition_group_id",
+                            "",
                         )
+                    )
 
-                finalize_serial_condition = getattr(
-                    self,
-                    "_finalize_serial_product_condition_after_analysis",
-                    None,
-                )
-                if callable(finalize_serial_condition) and not finalize_serial_condition():
-                    return
+            finalize_serial_condition = getattr(
+                self,
+                "_finalize_serial_product_condition_after_analysis",
+                None,
+            )
+            if callable(finalize_serial_condition) and not finalize_serial_condition():
+                return
 
-                advance_manual_product_cycle = getattr(
-                    self,
-                    "_advance_manual_product_condition_cycle_after_recording",
-                    None,
-                )
-                if callable(advance_manual_product_cycle):
-                    advance_manual_product_cycle()
-                serial_condition_completed = getattr(
-                    self,
-                    "_on_serial_product_condition_completed",
-                    None,
-                )
-                if callable(serial_condition_completed):
-                    serial_condition_completed()
+            advance_manual_product_cycle = getattr(
+                self,
+                "_advance_manual_product_condition_cycle_after_recording",
+                None,
+            )
+            if callable(advance_manual_product_cycle):
+                advance_manual_product_cycle()
+            serial_condition_completed = getattr(
+                self,
+                "_on_serial_product_condition_completed",
+                None,
+            )
+            if callable(serial_condition_completed):
+                serial_condition_completed()
             if manual_product_cycle_was_active:
                 self.data_btn.setEnabled(False)
                 self.replayer_btn.setDisabled(True)
 
             # Update player button state
             self._record_workflow_busy = False
+            _refresh_manual_analysis_action(self, fallback_enabled=True)
             self.update_player_btn_is_paused()
             try:
                 self._reset_barcode_commit_dedup()
@@ -2220,21 +2239,16 @@ class SequenceWidgetStreamingOpsMixin:
                 self._last_committed_barcode = None
                 self._last_committed_barcode_time = 0.0
 
-            if analysis_failed:
-                self.default_logger.error(
-                    f"{str(completion_source).capitalize()} recording analysis failed"
-                )
-            else:
-                self.default_logger.info(
-                    f"{str(completion_source).capitalize()} recording completed successfully"
-                )
+            self.default_logger.info(
+                f"{str(completion_source).capitalize()} recording completed successfully"
+            )
 
             drain = getattr(self, "_drain_queued_directional_trigger", None)
             if callable(drain):
                 drain()
             # Only the completed business path authorizes a remote finish.
             # Early returns and caught failures intentionally do not report it.
-            return save_code == error_code.OK and not analysis_failed
+            return save_code == error_code.OK
 
         except Exception as e:
             self.default_logger.error(f"Error in streaming completion: {e}")
@@ -2252,8 +2266,8 @@ class SequenceWidgetStreamingOpsMixin:
             if callable(clear_active_recording_direction):
                 clear_active_recording_direction()
             self.player_status_flag = False  # Clear flag even on error to prevent permanent blocking
-            # Still enable buttons even on error
-            self.data_btn.setEnabled(True)
+            # Restore actions from their actual runtime conditions.
+            _refresh_manual_analysis_action(self, fallback_enabled=True)
             self.replayer_btn.setEnabled(True)
             self._awaiting_ok_ng = False
             self._sn_clear_on_next_scan = False
@@ -2262,6 +2276,7 @@ class SequenceWidgetStreamingOpsMixin:
             if callable(unlock_sn_after_recording):
                 unlock_sn_after_recording()
             self._record_workflow_busy = False
+            _refresh_manual_analysis_action(self, fallback_enabled=True)
             self.update_player_btn_is_paused()
             serial_runtime_error = getattr(self, "_on_serial_product_runtime_error", None)
             if callable(serial_runtime_error):
@@ -2421,11 +2436,11 @@ class SequenceWidgetStreamingOpsMixin:
             unlock_sn_after_recording()
         self.player_status_flag = False
         try:
-            self.data_btn.setEnabled(True)
             self.replayer_btn.setEnabled(True)
         except Exception:
             pass
         self._record_workflow_busy = False
+        _refresh_manual_analysis_action(self, fallback_enabled=True)
         if serial_product_condition_was_executing:
             self._serial_product_condition_executing = False
             self._serial_product_session_started = False

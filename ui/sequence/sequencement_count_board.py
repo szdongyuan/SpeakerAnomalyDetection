@@ -32,6 +32,7 @@ class SequenceCountBoard(QWidget):
         self.mode = str()
         self._test_available = True
         self._test_unavailable_reason = ""
+        self._test_available_notice = ""
         self._mode_change_callbacks = []
 
         self.test_btn = QPushButton("测试")
@@ -248,6 +249,12 @@ class SequenceCountBoard(QWidget):
             QMessageBox.information(self, "提示", self._test_unavailable_reason or "当前配置无法进入测试模式")
             self.on_mark_btn_clicked()
             return
+        if self._test_available_notice:
+            QMessageBox.information(
+                self,
+                "测试结果说明",
+                self._test_available_notice,
+            )
         self.test_btn.setStyleSheet(ui_style_const.count_board_mode_active_style)
         self.mark_btn.setStyleSheet(ui_style_const.count_board_mode_inactive_style)
         self.test_btn.setEnabled(False)
@@ -274,10 +281,19 @@ class SequenceCountBoard(QWidget):
         Control whether test mode can be entered.
         """
         self._test_available = bool(available)
-        self._test_unavailable_reason = str(reason or "")
+        self._test_unavailable_reason = (
+            "" if self._test_available else str(reason or "")
+        )
+        self._test_available_notice = (
+            str(reason or "") if self._test_available else ""
+        )
         try:
             self.test_btn.setEnabled(bool(self._test_available) and self.mode != "test")
-            self.test_btn.setToolTip(self._test_unavailable_reason if not self._test_available else "")
+            self.test_btn.setToolTip(
+                self._test_available_notice
+                if self._test_available
+                else self._test_unavailable_reason
+            )
         except Exception:
             pass
         if (not self._test_available) and self.mode == "test":

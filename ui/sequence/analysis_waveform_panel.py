@@ -233,6 +233,10 @@ class AnalysisWaveformPanel(ChannelPlotWorkspace):
         self.layout().insertWidget(1, meta)
         self.set_conditions(condition_configs)
 
+    @property
+    def channel_layout(self):
+        return dict(self._channel_layout)
+
     def eventFilter(self, watched, event):
         if watched is self.scroll.viewport() and event.type() == QEvent.Resize:
             QTimer.singleShot(0, self._tile_subwindows)

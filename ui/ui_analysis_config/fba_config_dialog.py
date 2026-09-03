@@ -3,6 +3,7 @@ from typing import List, Optional
 
 from PyQt5.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
+from base.core_algorithm.response import parse_custom_bands
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import (
     ComboBox,
@@ -227,48 +228,7 @@ class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
 
     @staticmethod
     def _parse_custom_bands_text(text: str):
-        edges = []
-        for raw in (text or "").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-
-            if "," in line:
-                parts = [part.strip() for part in line.split(",") if part.strip()]
-            else:
-                parts = [
-                    part.strip()
-                    for part in line.replace("\t", " ").split(" ")
-                    if part.strip()
-                ]
-
-            try:
-                label = None
-                if len(parts) == 1 and "-" in parts[0]:
-                    lower, upper = [
-                        part.strip() for part in parts[0].split("-", 1)
-                    ]
-                    f_low, f_high = float(lower), float(upper)
-                elif len(parts) >= 2:
-                    f_low, f_high = float(parts[0]), float(parts[1])
-                    if len(parts) >= 3:
-                        label = " ".join(parts[2:]).strip() or None
-                else:
-                    raise ValueError
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"格式错误: {raw!r}") from exc
-
-            if f_low <= 0 or f_high <= 0:
-                raise ValueError(f"频率必须为正数: {raw!r}")
-            if f_high <= f_low:
-                raise ValueError(f"频段上限必须大于下限: {raw!r}")
-            edges.append((f_low, f_high, label))
-
-        edges.sort(key=lambda item: item[0])
-        for index in range(1, len(edges)):
-            if edges[index][0] < edges[index - 1][1]:
-                raise ValueError("自定义频段不允许重叠，请检查相邻频段边界。")
-        return edges
+        return parse_custom_bands(text)
 
     def _validate_form(self) -> bool:
         if self.f_min_spin.value() >= self.f_max_spin.value():

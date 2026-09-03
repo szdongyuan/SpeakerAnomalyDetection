@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import math
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,15 +14,13 @@ from consts.acoustic_analysis.common_consts import (
     LIMIT_VALUE_SEMANTICS_BOUNDS,
     LIMIT_VALUE_SEMANTICS_OFFSET,
 )
-from ui.ui_analysis_config.manual_limit_segments import (
+from base.analysis_limit_evaluation import (
     ManualLimitValidationError,
+    ThresholdCsvManualError,
     normalize_segments,
+    validate_limit_data_values,
     validate_manual_limit_config,
 )
-
-
-class ThresholdCsvManualError(ValueError):
-    pass
 
 
 _X_HEADER = "x"
@@ -80,42 +78,6 @@ def load_threshold_csv(
     )
 
     return x_values, upper_values, lower_values
-
-
-def validate_limit_data_values(
-    limit_data,
-    *,
-    value_semantics: str = LIMIT_VALUE_SEMANTICS_BOUNDS,
-    source_path: str | None = None,
-) -> None:
-    """Validate parsed threshold values using final-bound or signed-offset semantics."""
-    x_values, upper_values, lower_values = _limit_data_lists(limit_data)
-    if not x_values:
-        raise ThresholdCsvManualError("CSV阈值数据为空")
-    duplicate_counts = Counter(x_values)
-    source_text = f"\n文件: {source_path}" if source_path else ""
-
-    for line_number, (x_value, upper_value, lower_value) in enumerate(
-        zip(x_values, upper_values, lower_values),
-        start=2,
-    ):
-        if _is_missing_number(upper_value) and _is_missing_number(lower_value):
-            raise ThresholdCsvManualError(
-                f"CSV 数据错误:第 {line_number} 行至少需要一个上下限值{source_text}"
-            )
-        if duplicate_counts[x_value] != 1:
-            continue
-        if not _is_missing_number(upper_value) and not _is_missing_number(lower_value) and lower_value > upper_value:
-            error_prefix = (
-                "黄金样本上下框线偏移量配置错误"
-                if value_semantics == LIMIT_VALUE_SEMANTICS_OFFSET
-                else "CSV 上下限配置错误"
-            )
-            raise ThresholdCsvManualError(
-                f"{error_prefix}：下限不能大于上限。\n"
-                f"位置: 第{line_number}条数据, X={x_value}\n"
-                f"lower={lower_value}, upper={upper_value}{source_text}"
-            )
 
 
 def manual_config_from_limit_data(

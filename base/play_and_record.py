@@ -87,6 +87,7 @@ def get_recorded_info(
     name_suffix="",
     use_product_model_dir=False,
     recording_root="",
+    analysis_storage_context=None,
 ):
     """
         Generate recorded information.
@@ -104,6 +105,29 @@ def get_recorded_info(
     recording_time_for_name = now.strftime("%Y-%m-%d-%H-%M-%S")
     mac_address = get_mac_address()
     mac_address = mac_address.replace(":", "") if mac_address else None
+
+    if analysis_storage_context is not None:
+        from base.analysis_artifact_paths import build_wav_path, next_available_path
+
+        effective_product_model = analysis_storage_context.product_model
+        recorded_path = next_available_path(
+            build_wav_path(analysis_storage_context)
+        )
+        os.makedirs(recorded_path.parent, exist_ok=True)
+        recorded_signal_info = {
+            "file_path": str(recorded_path),
+            "product_model": effective_product_model,
+            "record_date": recording_time,
+            "barcode": barcode or None,
+            "labels": "not_labeled",
+            "record_name_suffix": str(name_suffix or ""),
+            "analysis_storage": analysis_storage_context.to_metadata(),
+            "artifact_stem": recorded_path.stem,
+            model_consts.RECORDING_ROOT_CONFIG_KEY: str(
+                analysis_storage_context.result_root_directory
+            ),
+        }
+        return str(recorded_path), recorded_signal_info
 
     effective_product_model = FileOps.resolve_recording_product_model(product_model, use_product_model_dir)
 
