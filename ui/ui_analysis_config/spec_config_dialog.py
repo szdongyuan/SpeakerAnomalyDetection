@@ -25,6 +25,17 @@ from ui.ui_analysis_config.common_widgets import (
 class SpecConfigWindow(SemanticAnalysisConfigDialogBase):
     """Spectrogram configuration window using the shared semantic layout."""
 
+    DEFAULT_CONFIG = {
+        "analysis_channel": 0,
+        "n_fft": 2048,
+        "hop_length": 256,
+        "window_func": "hann",
+        "color_map": "viridis",
+        "freq_scale_type": "linear",
+        "top_limit": 70,
+        "bottom_limit": 50,
+        "custom_limit": False,
+    }
     FFT_SIZES = tuple(2**power for power in range(7, 14))
     HOP_LENGTHS = tuple(2**power for power in range(4, 13))
     WINDOW_FUNCTIONS = ("hann", "hamming", "blackman")
@@ -42,10 +53,8 @@ class SpecConfigWindow(SemanticAnalysisConfigDialogBase):
         super().__init__(disable_close_button=True)
         self.config_manager = config_manager
         self.config_key = model_type
-        self.load_config = self.config_manager.load_config().get(
-            self.config_key,
-            {},
-        )
+        saved_config = self.config_manager.load_config().get(self.config_key, {})
+        self.load_config = {**self.DEFAULT_CONFIG, **saved_config}
         self.show_channel_selector = available_channels is not None
         self.allow_multiple_channels = allow_multiple_channels
         self.available_channels = available_channels

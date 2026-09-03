@@ -48,7 +48,6 @@ SUPPORTED_ANALYSIS_ITEMS = [
     "AI 分析 ",
     "频段能量 (FBA) ",
     "快速傅里叶变换 (FFT) ",
-    "结果导出 (Excel) ",
 ]
 SUPPORTED_ANALYSIS_TYPES = {
     "SPL",
@@ -60,6 +59,15 @@ SUPPORTED_ANALYSIS_TYPES = {
     "FFT",
     "LOUD",
     "Excel",
+}
+MULTI_CHANNEL_ANALYSIS_TYPES = {
+    "SPL",
+    "Spec",
+    "AI",
+    "FBA",
+    "FFT",
+    "LP",
+    "LOUD",
 }
 
 
@@ -308,6 +316,7 @@ class AnalysisModelSelect(ConfigDialogBase):
     def create_select_list_layout(self):
         select_analysis_label = QLabel("测试序列")
         self.auto_analysis_box = QCheckBox("自动分析")
+        self.auto_analysis_box.setChecked(True)
         if self.select_list.config:
             self.auto_analysis_box.setChecked(self.select_list.config[0].auto_analysis)
         self.auto_analysis_box.setLayoutDirection(Qt.RightToLeft)
@@ -733,7 +742,9 @@ class OptionList(QListView):
         available_channels = list(self.mic_channels or [0])
         acquisition_config = getattr(self, "config", ())
         mode = getattr(acquisition_config[0], "mode", None) if acquisition_config else None
-        allow_multiple_channels = mode == "RECORD_ONLY"
+        allow_multiple_channels = (
+            mode == "RECORD_ONLY" and type in MULTI_CHANNEL_ANALYSIS_TYPES
+        )
         restrict_analysis_channel = False
         if type in {"SPL", "Spec", "FBA"}:
             if mode == "RECORD_ONLY":
@@ -866,7 +877,7 @@ class OptionList(QListView):
             i_analysis_list.pop("default_ai", None)
             i_analysis_list.pop("golden_sample_result_path", None)
             sequence_config.default_ai = None
-            sequence_config.auto_analysis = bool(i_analysis_list.pop("auto_analysis", False))
+            sequence_config.auto_analysis = bool(i_analysis_list.pop("auto_analysis", True))
 
             raw_display = i_analysis_list.pop("display_sequence", [])
 
@@ -1356,7 +1367,7 @@ class OptionList(QListView):
         code, data = LoadUiConfig.load_data_from_json(default_config_file)
         if code != 0:
             self.default_logger.error(f"Failed to load the default config file. {data}")
-            if analysis_type not in {"SPL", "FBA", "FFT", "LOUD"}:
+            if analysis_type not in {"SPL", "Spec", "FBA", "FFT", "LOUD"}:
                 return
             data = {}
 
@@ -1365,6 +1376,11 @@ class OptionList(QListView):
             default_of_type = SplConfigWindow.new_item_default_config(
                 default_of_type
             )
+        elif analysis_type == "Spec":
+            default_of_type = {
+                **SpecConfigWindow.DEFAULT_CONFIG,
+                **default_of_type,
+            }
         elif analysis_type == "FBA":
             default_of_type = {
                 **FbaConfigWindow.DEFAULT_CONFIG,
@@ -1379,6 +1395,14 @@ class OptionList(QListView):
             default_of_type = LoudnessConfigWindow.merge_with_defaults(
                 default_of_type
             )
+        if (
+            getattr(self.config[0], "mode", None) == "RECORD_ONLY"
+            and analysis_type in MULTI_CHANNEL_ANALYSIS_TYPES
+        ):
+            selected_channels = OptionList._normalize_channels(self.mic_channels)
+            if selected_channels:
+                default_of_type["analysis_channel"] = selected_channels[0]
+                default_of_type["analysis_channels"] = selected_channels
         default_of_type.pop("golden_sample_checked", None)
         default_of_type.pop("golden_sample_result_path", None)
         self.config[0].analysis_list[list_item_text] = default_of_type

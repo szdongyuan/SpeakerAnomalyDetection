@@ -1003,7 +1003,7 @@ class SequenceWidgetBarcodeOpsMixin:
         Finalize a test-mode run by applying the summarized OK/NG label,
         exporting results, updating DB label, and resetting UI state.
         """
-        if label not in ("OK", "NG"):
+        if label not in ("OK", "NG", "not_labeled"):
             return
         try:
             self.recorded_signal_info["labels"] = label
@@ -1048,7 +1048,7 @@ class SequenceWidgetBarcodeOpsMixin:
 
     def _persist_current_test_audio_label(self, label: str, show_error: bool = True) -> bool:
         """Persist the current test recording label without ending the workflow."""
-        if label not in ("OK", "NG"):
+        if label not in ("OK", "NG", "not_labeled"):
             return False
         if not isinstance(getattr(self, "recorded_signal_info", None), dict):
             return False

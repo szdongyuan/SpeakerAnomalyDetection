@@ -569,11 +569,10 @@ class ProductTestProjectConfigManager(object):
                         f"{test_queue}（{reason}）"
                     )
                     use_warnings.append(warning)
-                    test_mode_errors.append(warning)
         return {
             "can_save": not save_errors,
             "is_usable": not use_errors,
-            "is_test_mode_usable": not use_errors and not test_mode_errors,
+            "is_test_mode_usable": not use_errors,
             "save_errors": save_errors,
             "use_errors": use_errors,
             "use_warnings": use_warnings,

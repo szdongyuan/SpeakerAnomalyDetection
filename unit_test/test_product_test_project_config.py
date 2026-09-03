@@ -398,6 +398,21 @@ def test_queue_catalog_exposes_duration_analysis_and_ai_judgment(tmp_path):
     assert info["can_auto_judge"] is True
 
 
+def test_project_without_threshold_can_run_in_test_mode_as_not_labeled(tmp_path):
+    manager = make_manager(
+        tmp_path,
+        {"基础测试": {"analysis_type": "SPL", "limit_checked": False}},
+    )
+    project = make_project(tmp_path)
+
+    validation = manager.validate_project(project, None)
+
+    assert validation["is_usable"] is True
+    assert validation["is_test_mode_usable"] is True
+    assert validation["test_mode_errors"] == []
+    assert "不能自动输出 OK/NG" in validation["use_warnings"][0]
+
+
 def test_import_rejects_legacy_or_duplicate_project(tmp_path):
     manager = make_manager(tmp_path)
     legacy_path = tmp_path / "legacy.json"

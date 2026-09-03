@@ -1067,7 +1067,7 @@ def test_tcp_finish_waits_for_business_completion_and_snapshots_recipient(
     assert sent.call_count == (0 if manual else 1)
 
 
-@pytest.mark.parametrize("outcome", ["failed", "write_failed", "cancelled", "admission_rejected", "db_failed", "analysis_failed"])
+@pytest.mark.parametrize("outcome", ["failed", "write_failed", "cancelled", "admission_rejected", "db_failed"])
 def test_tcp_finish_is_not_sent_for_unsuccessful_workflows(ui_qapp, service, tmp_path, monkeypatch, outcome):
     host, save, sent = tcp_host(service, tmp_path, monkeypatch)
     if outcome == "failed":
@@ -1082,9 +1082,6 @@ def test_tcp_finish_is_not_sent_for_unsuccessful_workflows(ui_qapp, service, tmp
         pump(ui_qapp, service.closed.is_set)
     elif outcome == "db_failed":
         save.return_value = (1, "database rejected recording")
-    elif outcome == "analysis_failed":
-        host._should_run_silent_analysis_after_recording = lambda: True
-        host.run = mock.Mock(return_value=False)
     host.start_this_play()
     if outcome == "admission_rejected":
         assert host._recording_process_id is None
@@ -1093,7 +1090,7 @@ def test_tcp_finish_is_not_sent_for_unsuccessful_workflows(ui_qapp, service, tmp
         if outcome == "cancelled":
             session.cancel()
         pump(ui_qapp, session.released.is_set)
-        if outcome in ("db_failed", "analysis_failed"):
+        if outcome == "db_failed":
             pump(ui_qapp, lambda: not host._record_workflow_busy)
             save.assert_called_once()
         else:
@@ -1105,6 +1102,21 @@ def test_tcp_finish_is_not_sent_for_unsuccessful_workflows(ui_qapp, service, tmp
             assert "disk write failure" in host._handle_invalid_recording.call_args.args[0]
             host.run.assert_not_called()
     sent.assert_not_called()
+
+
+def test_tcp_finish_does_not_wait_for_background_analysis_result(
+        ui_qapp, service, tmp_path, monkeypatch):
+    host, save, sent = tcp_host(service, tmp_path, monkeypatch)
+    enqueue = mock.Mock(return_value=False)
+    host._enqueue_automatic_analysis_current_recording = enqueue
+
+    host.start_this_play()
+    session = host._recording_process_session
+    pump(ui_qapp, lambda: session.released.is_set() and not host._record_workflow_busy)
+
+    save.assert_called_once()
+    enqueue.assert_called_once_with()
+    sent.assert_called_once_with("127.0.0.1", 12000, "finish")
 
 
 def test_tcp_finish_cannot_use_a_reentrant_new_requests_intent(ui_qapp, service, tmp_path, monkeypatch):

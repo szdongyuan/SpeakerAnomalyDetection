@@ -44,6 +44,47 @@ class TestSequenceToolbarStyle(unittest.TestCase):
                 self.assertEqual(button.accessibleDescription(), expected)
                 self.assertIn(ui_style_const.COLOR_TOOLBAR_BUTTON_BG, button.styleSheet())
 
+    def test_replay_button_is_retained_but_hidden(self):
+        toolbar = SequenceToolsBar()
+
+        self.assertTrue(toolbar.replayer_btn.isHidden())
+        self.assertFalse(toolbar.replayer_btn.isEnabled())
+        self.assertEqual(toolbar.replayer_btn.toolTip(), "重新录制")
+
+    def test_product_fields_follow_action_buttons_before_flexible_space(self):
+        toolbar = SequenceToolsBar()
+        main_layout = toolbar.layout().itemAt(1).layout()
+        serial_button_index = main_layout.indexOf(toolbar.serial_trigger_btn)
+
+        self.assertGreaterEqual(serial_button_index, 0)
+        self.assertIsNotNone(main_layout.itemAt(serial_button_index + 2).layout())
+
+    def test_analysis_button_uses_static_progress_and_terminal_badges(self):
+        toolbar = SequenceToolsBar()
+        button = toolbar.data_btn
+
+        button.set_analyzing(7, 20, "A口 / 0.1")
+        self.assertEqual(button.analysis_state, button.STATE_ANALYZING)
+        self.assertEqual(button.status_badge.text(), "7/20")
+        self.assertFalse(button.status_badge.isHidden())
+        self.assertIn("A口 / 0.1", button.toolTip())
+        self.assertTrue(button.rect().contains(button.status_badge.geometry()))
+
+        button.set_completed("A口 / 0.1")
+        self.assertEqual(button.analysis_state, button.STATE_COMPLETED)
+        self.assertEqual(button.status_badge.text(), "✓")
+        self.assertIn("点击查看", button.toolTip())
+
+        button.set_failed("A口 / 0.1")
+        self.assertEqual(button.analysis_state, button.STATE_FAILED)
+        self.assertEqual(button.status_badge.text(), "!")
+        self.assertIn("查看原因", button.toolTip())
+
+        button.set_idle()
+        self.assertEqual(button.analysis_state, button.STATE_IDLE)
+        self.assertTrue(button.status_badge.isHidden())
+        self.assertEqual(button.toolTip(), "分析")
+
     def test_toolbar_uses_light_blue_container_style(self):
         toolbar = SequenceToolsBar()
 
@@ -250,10 +291,14 @@ class TestSequenceToolbarStyle(unittest.TestCase):
             toolbar.current_round_spinbox.geometry().right(),
             toolbar.lineedit_s_or_n.geometry().left(),
         )
-        self.assertEqual(toolbar.lineedit_s_or_n.width(), 240)
+        self.assertGreaterEqual(toolbar.lineedit_s_or_n.width(), 240)
+        self.assertEqual(
+            toolbar.lineedit_s_or_n.sizePolicy().horizontalPolicy(),
+            QSizePolicy.Expanding,
+        )
         right_gap = toolbar.width() - toolbar.lineedit_s_or_n.geometry().right() - 1
-        self.assertGreaterEqual(right_gap, 20)
-        self.assertLessEqual(right_gap, 60)
+        self.assertGreaterEqual(right_gap, 0)
+        self.assertLessEqual(right_gap, 30)
 
         toolbar.close()
 

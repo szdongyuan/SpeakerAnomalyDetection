@@ -525,6 +525,14 @@ class TestManualProductConditionCycle(unittest.TestCase):
         self.assertEqual(widget.left_panel.final_results[-1], ("待判定", "pending"))
         self.assertEqual(widget.left_panel.stages[-1], ("本轮采集完成", "pending"))
 
+    def test_recording_completion_does_not_replace_active_analysis_stage(self):
+        widget = _DummyManualCycleWidget()
+        widget.on_clicked_player_btn()
+        widget.left_panel.set_current_stage("分析中", tone="running")
+        widget._mark_manual_product_condition_recording_completed()
+
+        self.assertEqual(widget.left_panel.stages[-1], ("分析中", "running"))
+
     def test_recording_completion_does_not_expose_legacy_unlabeled_state(self):
         widget = _DummyManualCycleWidget()
         widget.count_board.mode = "mark"

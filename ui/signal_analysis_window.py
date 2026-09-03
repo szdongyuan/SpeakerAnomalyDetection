@@ -1065,13 +1065,11 @@ class Spl(AnalysisGraphWidget):
         judge_by_overall_spl = (
             limit_checked and limit_metric == "overall_spl"
         )
-        overall_spl = None
-        if show_overall_spl or judge_by_overall_spl:
-            overall_spl = calculate_overall_spl(
-                analysis_signal,
-                reference_pressure,
-                v2pa_factor=self.v2pa_factor,
-            )
+        overall_spl = calculate_overall_spl(
+            analysis_signal,
+            reference_pressure,
+            v2pa_factor=self.v2pa_factor,
+        )
         signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
             analysis_signal,
             reference_pressure,
@@ -1088,6 +1086,8 @@ class Spl(AnalysisGraphWidget):
         if self.analysis_config and self.analysis_config.get("smooth_checked"):
             # NOTE: Do not apply RMS smoothing on dB values (squaring negatives turns silence into ~100 dB).
             signal_spl = smooth(signal_spl, window_size=1102, method="savgol")
+        realtime_upper_limits = None
+        realtime_lower_limits = None
         if limit_checked:
             if judge_by_overall_spl:
                 try:
@@ -1132,7 +1132,15 @@ class Spl(AnalysisGraphWidget):
                         f"SPL 阈值配置无效: {str(exc)[:200]}",
                     )
                     return False
-                self.plot_spl_with_limits(signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list)
+                realtime_upper_limits, realtime_lower_limits = (
+                    self.plot_spl_with_limits(
+                        signal_duration,
+                        signal_spl,
+                        csv_time_list,
+                        csv_upper_list,
+                        csv_lower_list,
+                    )
+                )
         else:
             self.plot_spl(signal_duration, signal_spl)
         apply_plot_view_range(
@@ -1146,9 +1154,18 @@ class Spl(AnalysisGraphWidget):
             "signal_duration": signal_duration.tolist(),
             "recorded_signal": np.asarray(analysis_signal).tolist(),
             "signal_spl": signal_spl.tolist(),
+            "overall_spl": overall_spl,
+            "upper_limits": (
+                np.asarray(realtime_upper_limits, dtype=float).tolist()
+                if realtime_upper_limits is not None
+                else []
+            ),
+            "lower_limits": (
+                np.asarray(realtime_lower_limits, dtype=float).tolist()
+                if realtime_lower_limits is not None
+                else []
+            ),
         }
-        if show_overall_spl or judge_by_overall_spl:
-            self.result["overall_spl"] = overall_spl
         return self.result
 
     def plot_spl_with_limits(self, signal_duration, signal_spl, csv_time_list, csv_upper_list, csv_lower_list):
@@ -1205,6 +1222,7 @@ class Spl(AnalysisGraphWidget):
 
         # === 7. Plot out-of-limit segments using LimitPlotUtils ===
         LimitPlotUtils.plot_out_segments(self.analysis_plot, sig_t, sig_spl, out_mask)
+        return upper_at, lower_at
 
     def plot_spl(self, signal_duration, signal_spl):
         self.analysis_plot.clear()

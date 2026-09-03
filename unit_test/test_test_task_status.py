@@ -48,11 +48,29 @@ def test_recording_title_claims_started_only_after_process_callback(host):
     )
     host._on_process_recording_started(session)
 
-    assert host.left_panel.stage_label.text() == "A口 / 6000 采集中"
+    assert host.left_panel.stage_label.text() == ""
     assert row_text(host) == "采集中"
     assert row_text(host, "q7000") == "待检测"
     assert host.left_panel.port_result_value.text() == "待判定"
     assert host.left_panel.round_result_value.text() == "待判定"
+
+
+def test_next_recording_keeps_previous_automatic_analysis_in_task_title(host):
+    host._manual_product_condition_index = 1
+    host.on_clicked_player_btn()
+    host.left_panel.set_current_stage("分析中", tone="running")
+    host._analysis_has_pending_tasks = Mock(return_value=True)
+    host.default_logger = Mock()
+    host._recording_process_id = "request-2"
+    session = SimpleNamespace(
+        request=SimpleNamespace(request_id="request-2"),
+        worker_pid=1234,
+    )
+
+    host._on_process_recording_started(session)
+
+    assert host.left_panel.stage_label.text() == "分析中"
+    assert row_text(host, "q7000") == "采集中"
 
 
 @pytest.mark.parametrize("mode", ["mark", "test"])
@@ -67,6 +85,18 @@ def test_recorded_condition_waits_for_judgement_without_claiming_five_channels(h
     assert host.left_panel.rows["q6000"]["labels"]["progress"].text() == "通道判定：0/5"
     assert host.left_panel.port_result_value.text() == "待判定"
     assert host.left_panel.round_result_value.text() == "待判定"
+
+
+def test_active_automatic_analysis_is_not_replaced_by_waiting_stage(host):
+    host.count_board.mode = "test"
+    host.on_clicked_player_btn()
+    host._mark_manual_product_condition_recording_completed()
+    host.left_panel.set_current_stage("A口 / 6000 分析中", tone="running")
+    host._analysis_has_pending_tasks = Mock(return_value=True)
+
+    host._advance_manual_product_condition_cycle_after_recording()
+
+    assert host.left_panel.stage_label.text() == "分析中"
 
 
 def test_saved_placeholder_does_not_overwrite_active_recording(host):
@@ -87,7 +117,7 @@ def test_analysis_phase_survives_session_refresh_then_returns_to_result(host, mo
     host._manual_product_group_raw_results = Mock(return_value={"q6000": "not_labeled"})
 
     def analyze(**_kwargs):
-        assert host.left_panel.stage_label.text() == "A口 / 6000 分析中"
+        assert host.left_panel.stage_label.text() == "分析中"
         assert row_text(host) == "分析中"
         host._refresh_manual_product_condition_results_from_group(host._manual_product_condition_group_id)
         assert row_text(host) == "分析中"
@@ -96,7 +126,7 @@ def test_analysis_phase_survives_session_refresh_then_returns_to_result(host, mo
     host._run_analysis_impl = analyze
     assert host.run(show_windows=False) == "analysis-return-value"
     assert row_text(host) == "未判定"
-    assert host.left_panel.stage_label.text() == "本档位分析完成"
+    assert host.left_panel.stage_label.text() == "等待下一档位"
     assert not host._manual_product_analysis_key
 
 
@@ -107,7 +137,7 @@ def test_analysis_failure_is_not_an_ng_judgement_and_can_be_retried(host):
     with pytest.raises(ValueError, match="test failure"):
         host.run(show_windows=False)
     assert row_text(host) == "分析失败"
-    assert host.left_panel.stage_label.text() == "A口 / 6000 分析失败"
+    assert host.left_panel.stage_label.text() == "测试异常"
     assert host.left_panel.port_result_value.text() == "待判定"
     assert host.left_panel.progress_label.text() == "档位进度：0/2"
     assert not host._manual_product_analysis_key
@@ -136,15 +166,14 @@ def test_round_completion_keeps_flow_and_verdict_separate(host, result):
             host._update_manual_product_condition_result_after_analysis(result)
         host._advance_manual_product_condition_cycle_after_recording()
     assert host.left_panel.round_result_value.text() == expected
-    expected_stage = "本轮完成" if result in ("OK", "NG") else "本轮采集完成，待判定"
-    assert host.left_panel.stage_label.text() == expected_stage
+    assert host.left_panel.stage_label.text() == "本轮完成"
     assert host._manual_product_condition_group_id == ""
 
 
 def test_import_preparation_does_not_claim_recording(host):
     host.queue_modes["queue_6000"] = "IMPORT_AUDIO"
     host.on_clicked_player_btn()
-    assert host.left_panel.stage_label.text() == "A口 / 6000 等待导入"
+    assert host.left_panel.stage_label.text() == "等待开始"
     assert row_text(host) == "等待导入"
 
 
@@ -172,6 +201,8 @@ def test_channel_progress_counts_only_real_judgements(host):
 def test_port_summary_uses_verdict_not_status_color(host):
     panel = host.left_panel
     panel.set_condition_result("q6000", "完成", tone="ok")
+    panel.set_condition_result("q7000", "OK", tone="ok")
+    assert panel.progress_label.text() == "档位进度：1/2"
     panel.set_condition_result("q7000", "分析失败", tone="ng")
     assert panel.port_result_value.text() == "待判定"
     assert panel.progress_label.text() == "档位进度：0/2"
