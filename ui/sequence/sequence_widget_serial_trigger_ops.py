@@ -223,8 +223,11 @@ class SequenceWidgetSerialTriggerOpsMixin:
             else str(condition.get("trigger_state") or "").strip()
         )
         executing = bool(getattr(self, "_serial_product_condition_executing", False))
-        workflow_busy = bool(getattr(self, "_record_workflow_busy", False))
-        if workflow_busy and not executing:
+        can_start = getattr(self, "_can_start_recording_workflow", None)
+        admission_blocked = (
+            not can_start() if callable(can_start)
+            else bool(getattr(self, "_record_workflow_busy", False)))
+        if admission_blocked and not executing:
             self.default_logger.info(
                 f"serial_product_frame_ignored_manual_busy frame={received_frame}"
             )
@@ -372,6 +375,12 @@ class SequenceWidgetSerialTriggerOpsMixin:
         )
 
     def _start_serial_product_condition(self, received_frame):
+        can_start = getattr(self, "_can_start_recording_workflow", None)
+        if callable(can_start) and not can_start():
+            self.default_logger.info(
+                f"serial_product_start_rejected_busy frame={received_frame}"
+            )
+            return False
         prepare = getattr(self, "_prepare_next_manual_product_condition_recording", None)
         if not callable(prepare):
             reason = "产品工况运行入口不可用，请检查程序版本或重新打开测试页面。"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
@@ -18,6 +19,331 @@ from PyQt5.QtWidgets import (
 )
 
 from consts import ui_style_const
+from consts.recording_preview_consts import (
+    PLOT_PRESENTATION_COMPLETE,
+    PREVIEW_TIME_MODE_CUMULATIVE,
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+)
+
+
+@dataclass(frozen=True)
+class _ChannelPlotState:
+    data: tuple[np.ndarray, np.ndarray] | None
+    presentation_mode: str
+    x_range: tuple[float, float]
+    x_auto_range: bool | float
+
+
+class ChannelPlotPresentationMixin:
+    """Shared live/final curve projection and opaque rollback state."""
+
+    def _initialize_plot_presentation_lifecycle(self) -> None:
+        self._deferred_view_guard = None
+        self._deferred_view_guard_timer = None
+
+    def _set_curve_data(self, x, y):
+        raise NotImplementedError
+
+    def _set_presentation_mode(self, mode: str) -> None:
+        if mode not in (
+            PLOT_PRESENTATION_COMPLETE,
+            PREVIEW_TIME_MODE_CUMULATIVE,
+            PREVIEW_TIME_MODE_RELATIVE_LATEST,
+        ):
+            raise ValueError(f"unsupported plot presentation mode: {mode!r}")
+        self.presentation_mode = mode
+        self.is_live_preview = mode in (
+            PREVIEW_TIME_MODE_RELATIVE_LATEST,
+            PREVIEW_TIME_MODE_CUMULATIVE,
+        )
+
+    @staticmethod
+    def _restore_auto_range_state(view_box, axis, value) -> None:
+        view_box.enableAutoRange(axis=axis, enable=value)
+        state_index = 0 if axis == pg.ViewBox.XAxis else 1
+        # pyqtgraph normalizes True to 1.0 and schedules a paint-time update.
+        # Keep the opaque snapshot value exact and let only later item changes
+        # request the next auto-range calculation.
+        view_box.state["autoRange"][state_index] = value
+        view_box._autoRangeNeedsUpdate = False
+
+    @classmethod
+    def _restore_axis_view_state(cls, view_box, axis, axis_range, auto_range):
+        range_name = "xRange" if axis == pg.ViewBox.XAxis else "yRange"
+        view_box.setRange(
+            **{
+                range_name: axis_range,
+                "padding": 0,
+                "disableAutoRange": False,
+            }
+        )
+        cls._restore_auto_range_state(view_box, axis, auto_range)
+
+    def _release_deferred_view_guard(self, *_args) -> None:
+        guard = getattr(self, "_deferred_view_guard", None)
+        timer = getattr(self, "_deferred_view_guard_timer", None)
+        self._deferred_view_guard = None
+        self._deferred_view_guard_timer = None
+
+        if timer is not None:
+            try:
+                timer.stop()
+            except RuntimeError:
+                # Parent-driven Qt teardown may already have deleted children.
+                pass
+            try:
+                timer.timeout.disconnect()
+            except (RuntimeError, TypeError):
+                # Qt may already have removed the private timeout connection.
+                pass
+            try:
+                timer.deleteLater()
+            except RuntimeError:
+                # A parent-driven teardown may already have deleted the timer.
+                pass
+
+        if guard is None:
+            return
+        (
+            view_box,
+            handler,
+            plot_item,
+            original_set_range,
+            original_enable_auto_range,
+            _timer,
+        ) = guard
+        try:
+            view_box.sigRangeChanged.disconnect(handler)
+        except (RuntimeError, TypeError):
+            # Qt can destroy or auto-disconnect the ViewBox before its owning
+            # row's final Python-side cleanup reaches this wrapper.
+            pass
+        try:
+            view_box.setRange = original_set_range
+        except RuntimeError:
+            # Restoring a Python override is impossible after C++ deletion.
+            pass
+        try:
+            view_box.enableAutoRange = original_enable_auto_range
+        except RuntimeError:
+            # Restoring a Python override is impossible after C++ deletion.
+            pass
+        if plot_item is not None:
+            try:
+                plot_item.sigPlotChanged.disconnect(
+                    self._release_deferred_view_guard
+                )
+            except (RuntimeError, TypeError):
+                # PlotDataItem follows the same parent-owned Qt lifecycle.
+                pass
+
+    def _install_deferred_view_guard(
+        self,
+        view_box,
+        *,
+        x_view_state=None,
+        y_view_state=None,
+    ) -> None:
+        self._release_deferred_view_guard()
+        restoring_guarded_view_state = False
+        guard = None
+        release_timer = QTimer(self)
+        release_timer.setSingleShot(True)
+
+        def release_if_current():
+            if getattr(self, "_deferred_view_guard", None) is guard:
+                self._release_deferred_view_guard()
+
+        def enforce_view_state(*_args):
+            nonlocal restoring_guarded_view_state
+            if restoring_guarded_view_state:
+                return
+            restoring_guarded_view_state = True
+            try:
+                if x_view_state is not None:
+                    self._restore_axis_view_state(
+                        view_box,
+                        pg.ViewBox.XAxis,
+                        *x_view_state,
+                    )
+                if y_view_state is not None:
+                    self._restore_axis_view_state(
+                        view_box,
+                        pg.ViewBox.YAxis,
+                        *y_view_state,
+                    )
+            finally:
+                restoring_guarded_view_state = False
+            release_timer.start(0)
+
+        plot_item = self.plot_item
+        original_set_range = view_box.setRange
+        original_enable_auto_range = view_box.enableAutoRange
+
+        def release_before_user_range_change(*args, **kwargs):
+            # Presentation updates can queue more than one ViewBox layout pass.
+            # Keep the guard for those internal passes, but remove it before the
+            # next explicit range request so it cannot override user zoom/pan.
+            if kwargs.get("disableAutoRange", True) is not False:
+                self._release_deferred_view_guard()
+            return original_set_range(*args, **kwargs)
+
+        def release_before_user_auto_range_change(*args, **kwargs):
+            # Guard restoration must reinstate its captured auto-range state,
+            # while an explicit caller request takes ownership immediately.
+            if not restoring_guarded_view_state:
+                self._release_deferred_view_guard()
+            return original_enable_auto_range(*args, **kwargs)
+
+        guard = (
+            view_box,
+            enforce_view_state,
+            plot_item,
+            original_set_range,
+            original_enable_auto_range,
+            release_timer,
+        )
+        self._deferred_view_guard = guard
+        self._deferred_view_guard_timer = release_timer
+        view_box.setRange = release_before_user_range_change
+        view_box.enableAutoRange = release_before_user_auto_range_change
+        release_timer.timeout.connect(release_if_current)
+        view_box.sigRangeChanged.connect(enforce_view_state)
+        if plot_item is not None:
+            plot_item.sigPlotChanged.connect(
+                self._release_deferred_view_guard
+            )
+
+        # If no guarded range signal arrives, do not retain an idle connection.
+        release_timer.start(100)
+
+    def closeEvent(self, event) -> None:
+        self._release_deferred_view_guard()
+        super().closeEvent(event)
+
+    def deleteLater(self) -> None:
+        self._release_deferred_view_guard()
+        super().deleteLater()
+
+    @contextmanager
+    def _preserve_y_view_state(self):
+        self._release_deferred_view_guard()
+        view_box = self.plot_widget.getViewBox()
+        y_range = self.plot_widget.viewRange()[1]
+        y_range = (float(y_range[0]), float(y_range[1]))
+        y_auto_range = view_box.state["autoRange"][1]
+        try:
+            yield view_box
+        finally:
+            y_view_state = (y_range, y_auto_range)
+            self._restore_axis_view_state(
+                view_box,
+                pg.ViewBox.YAxis,
+                *y_view_state,
+            )
+            self._install_deferred_view_guard(
+                view_box,
+                y_view_state=y_view_state,
+            )
+
+    def clear_plot(self) -> None:
+        with self._preserve_y_view_state() as view_box:
+            self.plot_widget.clear()
+            self.plot_item = None
+            self._set_presentation_mode(PLOT_PRESENTATION_COMPLETE)
+            view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
+            view_box.updateAutoRange()
+
+    def set_relative_preview_data(self, x, y):
+        with self._preserve_y_view_state() as view_box:
+            updated = self._set_curve_data(x, y)
+            if updated is False:
+                return False
+            view_box.disableAutoRange(axis=pg.ViewBox.XAxis)
+            self.plot_widget.setXRange(-10.0, 0.0, padding=0)
+            self._set_presentation_mode(PREVIEW_TIME_MODE_RELATIVE_LATEST)
+            return updated
+
+    def set_live_data(self, x, y):
+        """Compatibility alias for the relative latest preview."""
+        return self.set_relative_preview_data(x, y)
+
+    def set_cumulative_preview_data(self, x, y):
+        with self._preserve_y_view_state() as view_box:
+            updated = self._set_curve_data(x, y)
+            if updated is False:
+                return False
+            view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
+            view_box.updateAutoRange()
+            self._set_presentation_mode(PREVIEW_TIME_MODE_CUMULATIVE)
+            return updated
+
+    def set_data(self, x, y):
+        with self._preserve_y_view_state() as view_box:
+            updated = self._set_curve_data(x, y)
+            if updated is False:
+                return False
+            self._set_presentation_mode(PLOT_PRESENTATION_COMPLETE)
+            view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
+            view_box.updateAutoRange()
+            return updated
+
+    def snapshot_plot_state(self):
+        """Copy curve and X-view state for an opaque rollback snapshot."""
+        data = None
+        if self.plot_item is not None:
+            x_data, y_data = self.plot_item.getData()
+            data = (
+                np.asarray([]) if x_data is None else np.asarray(x_data).copy(),
+                np.asarray([]) if y_data is None else np.asarray(y_data).copy(),
+            )
+        view_box = self.plot_widget.getViewBox()
+        x_range = self.plot_widget.viewRange()[0]
+        return _ChannelPlotState(
+            data=data,
+            presentation_mode=self.presentation_mode,
+            x_range=(float(x_range[0]), float(x_range[1])),
+            x_auto_range=view_box.state["autoRange"][0],
+        )
+
+    def restore_plot_state(self, state) -> None:
+        """Restore an opaque snapshot without changing the channel identity."""
+        if state is None:
+            self.clear_plot()
+            return
+
+        if not isinstance(state, _ChannelPlotState):
+            x_data, y_data = state
+            self.set_data(x_data, y_data)
+            return
+
+        self._release_deferred_view_guard()
+        if state.data is None:
+            self.plot_widget.clear()
+            self.plot_item = None
+        else:
+            self._set_curve_data(*state.data)
+
+        self._set_presentation_mode(state.presentation_mode)
+        view_box = self.plot_widget.getViewBox()
+        y_range = self.plot_widget.viewRange()[1]
+        y_view_state = (
+            (float(y_range[0]), float(y_range[1])),
+            view_box.state["autoRange"][1],
+        )
+        view_box.disableAutoRange(axis=pg.ViewBox.XAxis)
+        self.plot_widget.setXRange(*state.x_range, padding=0)
+        x_view_state = (state.x_range, state.x_auto_range)
+        self._restore_axis_view_state(
+            view_box,
+            pg.ViewBox.XAxis,
+            *x_view_state,
+        )
+        self._install_deferred_view_guard(
+            view_box,
+            x_view_state=x_view_state,
+            y_view_state=y_view_state,
+        )
 
 
 @dataclass(frozen=True)
@@ -78,13 +404,15 @@ class ChannelPlotTitleBar(QWidget):
         super().mouseReleaseEvent(event)
 
 
-class ChannelPlotSubWindow(QFrame):
+class ChannelPlotSubWindow(ChannelPlotPresentationMixin, QFrame):
     def __init__(self, canvas: "ChannelPlotCanvas", channel_index: int):
         super().__init__(canvas)
+        self._initialize_plot_presentation_lifecycle()
         self._canvas = canvas
         self.channel_index = int(channel_index)
         self.plot_widget = pg.PlotWidget()
         self.plot_item = None
+        self._set_presentation_mode(PLOT_PRESENTATION_COMPLETE)
 
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet(ui_style_const.waveform_frame_style)
@@ -125,36 +453,12 @@ class ChannelPlotSubWindow(QFrame):
     def request_move(self, new_top_left: QPoint) -> bool:
         return self._canvas.try_move(self, new_top_left)
 
-    def clear_plot(self) -> None:
-        self.plot_widget.clear()
-        self.plot_item = None
-
-    def set_data(self, x, y) -> None:
+    def _set_curve_data(self, x, y) -> None:
+        self._release_deferred_view_guard()
         if self.plot_item is None:
             self.plot_item = self.plot_widget.plot(x, y, pen="k")
         else:
             self.plot_item.setData(x, y)
-
-    def snapshot_plot_state(self):
-        """Copy the displayed series so a multi-window update can roll back."""
-        if self.plot_item is None:
-            return None
-        x_data, y_data = self.plot_item.getData()
-        return (
-            np.asarray(x_data).copy(),
-            np.asarray(y_data).copy(),
-        )
-
-    def restore_plot_state(self, state) -> None:
-        """Restore a snapshot without changing the window's channel identity."""
-        if state is None:
-            self.clear_plot()
-            return
-        x_data, y_data = state
-        if self.plot_item is None:
-            self.plot_item = self.plot_widget.plot(x_data, y_data, pen="k")
-        else:
-            self.plot_item.setData(x_data, y_data)
 
 
 class ChannelPlotCanvas(QWidget):
@@ -237,6 +541,7 @@ class ChannelPlotWorkspace(QWidget):
             return
 
         for w in self._subwins:
+            w._release_deferred_view_guard()
             try:
                 w.hide()
                 w.deleteLater()
@@ -285,6 +590,18 @@ class ChannelPlotWorkspace(QWidget):
     def clear_plots(self) -> None:
         for w in self._subwins:
             w.clear_plot()
+
+    def _release_subwindow_plot_guards(self) -> None:
+        for window in self._subwins:
+            window._release_deferred_view_guard()
+
+    def closeEvent(self, event) -> None:
+        self._release_subwindow_plot_guards()
+        super().closeEvent(event)
+
+    def deleteLater(self) -> None:
+        self._release_subwindow_plot_guards()
+        super().deleteLater()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

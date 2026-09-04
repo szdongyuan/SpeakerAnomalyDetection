@@ -48,8 +48,8 @@ class RecordingSnapshotHost(SequenceWidgetAnalysisOpsMixin):
         self.last_play_count = 10
         self.analysis_window = []
         self._analysis_result_summary_window = None
-        self.player_status_flag = True
-        self.clicked_player_flag = True
+        self.player_status_flag = False
+        self.clicked_player_flag = False
         self.streaming_buffer_multi = []
         self.replayer_btn = SimpleNamespace(setDisabled=lambda _value: None)
         self.data_btn = SimpleNamespace(setDisabled=lambda _value: None)
@@ -121,6 +121,21 @@ def test_recording_attempt_captures_once_after_reset_before_process_start(monkey
     assert host._recording_wav_calibration_metadata is snapshots[0]
 
 
+def test_recording_attempt_is_blocked_while_player_is_active(monkeypatch):
+    host = RecordingSnapshotHost()
+    host.player_status_flag = True
+    build = mock.Mock()
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_analysis_ops.build_recording_wav_calibration_metadata",
+        build,
+    )
+
+    host.judge_play_and_record()
+
+    assert host.events == []
+    build.assert_not_called()
+
+
 def test_replay_replaces_snapshot_and_each_attempt_reads_once(monkeypatch):
     host = RecordingSnapshotHost()
     built = []
@@ -138,6 +153,8 @@ def test_replay_replaces_snapshot_and_each_attempt_reads_once(monkeypatch):
     host.judge_play_and_record()
     first = host._recording_wav_calibration_metadata
     host._record_workflow_busy = False
+    host.player_status_flag = False
+    host.clicked_player_flag = False
     host.judge_play_and_record(is_replay=True)
 
     assert len(built) == 2
@@ -1294,7 +1311,8 @@ class StreamingAnalysisHost(
         size = SimpleNamespace(width=lambda: 1600, height=lambda: 900)
         return SimpleNamespace(size=lambda: size)
 
-    def instance_analysis_class(self, key, _item_type, params):
+    def instance_analysis_class(
+            self, key, _item_type, params, *, analysis_config=None):
         instance = RuntimeAnalysis(key, self.events)
         instance.data_struct = self.data_struct
         instance.analysis_config = dict(params)
@@ -1369,13 +1387,13 @@ class StreamingAnalysisHost(
     def _drain_queued_directional_trigger(self):
         self.events.append("drain_trigger")
 
-    def _capture_excel_export_cache(self):
+    def _capture_excel_export_cache(self, *, analysis_config=None):
         return None
 
-    def _maybe_export_excel_results(self):
+    def _maybe_export_excel_results(self, *, analysis_config=None):
         return None
 
-    def _can_output_ok_ng(self):
+    def _can_output_ok_ng(self, *, analysis_config=None):
         return False, ""
 
     def _sync_left_panel_analysis_details(self, *_args):
@@ -1384,7 +1402,8 @@ class StreamingAnalysisHost(
     def _hide_analysis_window(self, _instance):
         return None
 
-    def _capture_current_analysis_report_snapshot(self, session_id=None):
+    def _capture_current_analysis_report_snapshot(
+            self, session_id=None, *, analysis_config=None):
         self.events.append(("report_snapshot", session_id))
 
     def _update_recent_session(self, session_id, **fields):

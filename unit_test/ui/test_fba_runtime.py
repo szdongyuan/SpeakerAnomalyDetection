@@ -123,6 +123,39 @@ def _manual_config(upper_db):
     }
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "nan, 100, NaN lower",
+        "20, nan, NaN upper",
+        "20, inf, positive infinity",
+        "-inf, 20, negative infinity",
+    ],
+)
+def test_fba_custom_band_parsers_reject_non_finite_bounds_consistently(
+    signal_module,
+    text,
+):
+    from ui.sequence.request_scoped_recording_analysis import _parse_custom_bands
+    from ui.ui_analysis_config.analysis_compat import parse_fba_custom_bands_text
+    from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
+
+    parsers = (
+        parse_fba_custom_bands_text,
+        signal_module.FrequencyBandAnalysis._parse_custom_bands_text,
+        FbaConfigWindow._parse_custom_bands_text,
+        _parse_custom_bands,
+    )
+    errors = []
+    for parser in parsers:
+        with pytest.raises(ValueError) as caught:
+            parser(text)
+        errors.append(str(caught.value))
+
+    assert len(set(errors)) == 1
+    assert "有限数" in errors[0]
+
+
 def test_fba_runtime_analyzes_manual_limits_and_updates_judgment(
     signal_module,
     qapp,

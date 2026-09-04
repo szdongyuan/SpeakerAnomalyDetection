@@ -1,9 +1,12 @@
 import json
 import os
 
+import pytest
+
 from base.load_config import LoadUiConfig
 from base.product_test_program_config import ProductTestProgramConfigManager
 from consts import error_code
+from consts.recording_preview_consts import RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
 
 
 def make_manager(tmp_path):
@@ -647,6 +650,50 @@ def test_import_audio_queue_is_available_without_total_time(tmp_path):
         "声压级 (SPL) 1",
         "频谱分析 (Spec) 1",
     ]
+
+
+def test_record_queue_with_invalid_preview_mode_is_unavailable(tmp_path):
+    manager = make_manager(tmp_path)
+    queue_path = os.path.join(os.path.dirname(manager.queue_registry_path), "invalid.json")
+    config = make_queue_config()
+    config[0]["seq1"]["acq"]["detail"][RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] = "broken"
+    assert LoadUiConfig.save_data_to_json(config, queue_path)
+
+    info = manager._load_queue_info(queue_path)
+
+    assert info["available"] is False
+    assert RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY in info["reason"]
+
+
+@pytest.mark.parametrize("invalid_detail", [None, []])
+def test_record_queue_with_non_mapping_detail_is_unavailable(
+    tmp_path, invalid_detail
+):
+    manager = make_manager(tmp_path)
+    queue_path = os.path.join(
+        os.path.dirname(manager.queue_registry_path),
+        "invalid-detail.json",
+    )
+    config = make_queue_config()
+    config[0]["seq1"]["acq"]["detail"] = invalid_detail
+    assert LoadUiConfig.save_data_to_json(config, queue_path)
+
+    info = manager._load_queue_info(queue_path)
+
+    assert info["available"] is False
+    assert info["reason"] == "recording acquisition detail must be a mapping"
+
+
+def test_import_queue_ignores_invalid_recording_preview_field(tmp_path):
+    manager = make_manager(tmp_path)
+    queue_path = os.path.join(os.path.dirname(manager.queue_registry_path), "import.json")
+    config = make_import_queue_config()
+    config[0]["seq1"]["acq"]["detail"][RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] = "broken"
+    assert LoadUiConfig.save_data_to_json(config, queue_path)
+
+    info = manager._load_queue_info(queue_path)
+
+    assert info["available"] is True
 
 
 def test_mixed_import_and_record_queues_are_rejected(tmp_path):

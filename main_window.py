@@ -23,13 +23,22 @@ from ui.sequence.sequence_widget import SequenceWindow
 
 class MainWindow(QMainWindow):
 
-    def __init__(self, *, recording_bridge=None):
+    def __init__(self, *, recording_bridge=None, ve_profile_store=None,
+                 ve_calibration_store=None, discovery_factory=None,
+                 hardware_selection_path=None):
         super().__init__()
         if recording_bridge is None:
             from base.recording_service import RecordingService
             from ui.recording_service_bridge import RecordingServiceBridge
             recording_bridge = RecordingServiceBridge(RecordingService(), self)
         self.recording_bridge = recording_bridge
+        from base.ve3668n_stores import VEInputProfileStore, VECalibrationStore
+        self.ve_profile_store = ve_profile_store if ve_profile_store is not None else VEInputProfileStore()
+        self.ve_calibration_store = ve_calibration_store if ve_calibration_store is not None else VECalibrationStore()
+        self.ve_discovery_factory = discovery_factory
+        self.hardware_selection_path = hardware_selection_path
+        self.ve_discovery = None
+        self._ve_pending_result = None
         QApplication.instance().aboutToQuit.connect(self.recording_bridge.shutdown)
         # set up statusbar object data
         self.user_name = None
@@ -40,14 +49,14 @@ class MainWindow(QMainWindow):
         # independently when the saved device cannot be matched against
         # current hardware: missing mic -> OS default + In1 only
         # (PaError-9998 safety); missing speaker -> OS default + all
-        # channels. Any I/O failure degrades to the same all-defaults
-        # path, so a corrupt file can never block startup.
+        # channels. Explicit VE choices instead remain unavailable until
+        # asynchronous discovery and profile validation confirm the identity.
         (
             self.mic,
             self.speaker,
             self.mic_channels,
             self.speaker_channels,
-        ) = restore_or_default()
+        ) = restore_or_default(path=self.hardware_selection_path)
 
         # set mouse drog date
         self.resize_direction = None
@@ -85,6 +94,115 @@ class MainWindow(QMainWindow):
         self.widget_list_admin = self.widget_list_engineer + [self.user_action_add_account]
 
         self.init_ui()
+        # Discovery starts only after sequence_window exists. Constructor-time
+        # restores deliberately retain unavailable VE choices without probing.
+        self._init_ve_hardware_runtime()
+
+    def _init_ve_hardware_runtime(self):
+        from PyQt5.QtCore import QTimer
+        from ui.ve3668n_hardware_controls import VEDiscoveryBridge
+        self.sequence_window.ve_profile_store = self.ve_profile_store
+        self.sequence_window.ve_calibration_store = self.ve_calibration_store
+        self.ve_discovery = VEDiscoveryBridge(self, discovery_factory=self.ve_discovery_factory)
+        self.ve_discovery.result_ready.connect(self._on_ve_discovery_result)
+        QApplication.instance().aboutToQuit.connect(self._close_ve_discovery)
+        self._hardware_busy_timer = QTimer(self)
+        self._hardware_busy_timer.setInterval(100)
+        self._hardware_busy_timer.timeout.connect(self._update_hardware_busy_state)
+        self._hardware_busy_timer.start()
+        if (self.mic or {}).get("backend") == "vkinging":
+            self.ve_discovery.start()
+
+    def _hardware_busy(self):
+        bridge = getattr(self, "recording_bridge", None)
+        hardware_busy = getattr(bridge, "hardware_busy", None)
+        if hardware_busy is None:
+            hardware_busy = getattr(getattr(bridge, "service", None), "busy", False)
+        return bool(getattr(self.sequence_window, "player_status_flag", False)
+                    or hardware_busy)
+
+    def _calibration_admission_available(self):
+        """Use fast admission only through the sequence's scoped policy.
+
+        Hardware selection remains guarded by ``_hardware_busy``.  Calibration
+        may overlap an eligible result finalizer, but native capture/release and
+        shutdown ownership still make opening a new calibration dialog unsafe.
+        """
+        bridge = getattr(self, "recording_bridge", None)
+        hardware_busy = getattr(bridge, "hardware_busy", None)
+        if hardware_busy is None:
+            return not self._hardware_busy()
+        if hardware_busy:
+            return False
+        can_start = getattr(
+            getattr(self, "sequence_window", None),
+            "_can_start_calibration_workflow",
+            None,
+        )
+        if not callable(can_start):
+            return not self._hardware_busy()
+        return bool(can_start())
+
+    @staticmethod
+    def _ve_signature(mic, channels):
+        if (mic or {}).get("backend") != "vkinging":
+            return None
+        try:
+            from base.ve3668n_input import ve_acquisition_signature
+            config = mic.get("input_config") or {}
+            return ve_acquisition_signature(mic, channels, config.get("sample_rate"))
+        except (TypeError, ValueError):
+            # An unavailable/incomplete restored choice could not have been
+            # newly acquired.  Accepted transitions away from it are handled
+            # conservatively by the caller's old-VE check.
+            return None
+
+    def _on_ve_hardware_release_complete(self, status, diagnostics):
+        if status in ("released", "unchanged"):
+            return
+        detail = "; ".join(str(item) for item in diagnostics if item)[:240]
+        if status == "failed":
+            message = "新硬件设置已保存。旧 VE 资源回收失败，正在强制回收；完成前无法录音。"
+        elif status == "busy":
+            message = "新硬件设置已保存，但 VE 资源正在使用或回收；请等待完成后再录音。"
+        else:
+            message = "新硬件设置已保存；程序正在关闭，VE 资源由关闭流程回收。"
+        if detail:
+            message = f"{message}\n{detail}"
+        QMessageBox.warning(self, "VE 资源回收", message)
+
+    def _update_hardware_busy_state(self):
+        busy = self._hardware_busy()
+        privileged = self.access_lvl in ("Engineer", "Admin")
+        self.hardware_action_selection.setEnabled(not busy and privileged)
+        self.hardware_action_calibration.setEnabled(
+            self._calibration_admission_available() and privileged)
+        if not busy and self._ve_pending_result is not None:
+            event, self._ve_pending_result = self._ve_pending_result, None
+            self._on_ve_discovery_result(event)
+
+    def _on_ve_discovery_result(self, event):
+        if (self.mic or {}).get("backend") != "vkinging":
+            return
+        if self._hardware_busy():
+            self._ve_pending_result = event
+            return
+        from base.hardware_selection import resolve_ve_input
+        self.mic = resolve_ve_input(self.mic, self.mic_channels,
+            event.result.devices if event.handles_released else (),
+            profile_store=self.ve_profile_store, calibration_store=self.ve_calibration_store,
+            diagnostic="; ".join(event.result.diagnostics))
+        self.sequence_window.mic = self.mic
+        self.sequence_window.mic_channels = list(self.mic_channels)
+        self.update_statusbar()
+        self.sequence_window.refresh_channel_windows()
+
+    def _close_ve_discovery(self):
+        self._ve_pending_result = None
+        if self.ve_discovery is not None:
+            self.ve_discovery.close()
+        if hasattr(self, "_hardware_busy_timer"):
+            self._hardware_busy_timer.stop()
 
     def init_ui(self):
         # initialize the window layout
@@ -187,6 +305,9 @@ class MainWindow(QMainWindow):
         main_window = QWidget()
         layout = QVBoxLayout()
         self.sequence_window = SequenceWindow(recording_bridge=self.recording_bridge)
+        if hasattr(self, "ve_profile_store"):
+            self.sequence_window.ve_profile_store = self.ve_profile_store
+            self.sequence_window.ve_calibration_store = self.ve_calibration_store
         menu_bar = self.init_menu()
         title_bar = self.set_title()
         menu_row = self._create_menu_row(menu_bar)
@@ -204,7 +325,8 @@ class MainWindow(QMainWindow):
         self.sequence_window.speaker = self.speaker
         self.sequence_window.mic_channels = self.mic_channels
         self.sequence_window.speaker_channels = self.speaker_channels
-        self.sequence_window.update_v2pa_factor()
+        if (self.mic or {}).get("backend") != "vkinging":
+            self.sequence_window.update_v2pa_factor()
 
     def _expand_sequence_workspace(self):
         """Let the logged-in workspace consume the remaining window height."""
@@ -336,6 +458,7 @@ class MainWindow(QMainWindow):
             dialog.exec()
         finally:
             self.sequence_window._product_test_program_config_dialog_open = False
+            self.sequence_window.update_player_btn_is_paused()
 
     def show_statusbar_layout(self):
         # create status bar, show the user data and device data, and close drag status bar modify window size
@@ -356,6 +479,12 @@ class MainWindow(QMainWindow):
     def update_statusbar(self):
         # update the status bar data
         mic_name = self.mic["name"] if self.mic else "无可用输入设备"
+        if (self.mic or {}).get("backend") == "vkinging":
+            status = "可用" if self.mic.get("available") else "不可用"
+            mic_name = f"VE3668N · {self.mic.get('machine_id')} · {status}"
+            self.device_label.setToolTip(self.mic.get("diagnostic", ""))
+        else:
+            self.device_label.setToolTip("")
         speaker_name = self.speaker["name"] if self.speaker else "无可用输出设备"
         device_txt = "麦克风：{mic}  扬声器：{speaker}".format(mic=mic_name, speaker=speaker_name)
         self.device_label.setText(device_txt)
@@ -413,57 +542,92 @@ class MainWindow(QMainWindow):
 
     def on_hardware_window_init(self):
         # Prevent hardware changes during playback/recording
-        if self.sequence_window.player_status_flag:
+        if self._hardware_busy():
             QMessageBox.warning(self, "提示", "播放或录音进行中，请等待完成后再修改硬件设置")
             return
+        old_was_ve = (self.mic or {}).get("backend") == "vkinging"
+        old_ve_signature = self._ve_signature(self.mic, self.mic_channels)
         # 将当前驱动/设备/通道作为初始值回填到硬件选择窗口
         driver_name = None
         try:
             if self.speaker and self.speaker.get("hostapi") is not None:
                 driver_name = SoundDeviceManager.get_api_info(int(self.speaker.get("hostapi"))).get("name")
-            elif self.mic and self.mic.get("hostapi") is not None:
+            elif self.mic and self.mic.get("backend") != "vkinging" and self.mic.get("hostapi") is not None:
                 driver_name = SoundDeviceManager.get_api_info(int(self.mic.get("hostapi"))).get("name")
         except Exception:
             driver_name = None
 
-        (
-            accepted,
-            self.speaker,
-            self.speaker_channels,
-            self.mic,
-            self.mic_channels,
-        ) = open_hardware_selection_window(
+        options = {}
+        if hasattr(self, "ve_profile_store"):
+            options = dict(profile_store=self.ve_profile_store,
+                calibration_store=self.ve_calibration_store,
+                discovery_factory=self.ve_discovery_factory,
+                selection_path=self.hardware_selection_path, busy_check=self._hardware_busy)
+            self.ve_discovery.cancel()
+            self._ve_pending_result = None
+        accepted, speaker, speaker_channels, mic, mic_channels = open_hardware_selection_window(
             driver=driver_name,
             speaker_device=self.speaker,
             speaker_channels=self.speaker_channels,
             mic_device=self.mic,
             mic_channels=self.mic_channels,
+            **options,
         )
         # Only persist on explicit OK. Cancel must be a strict no-op for
         # disk state, even when the JSON is currently missing/corrupt and
         # the in-memory state differs from what is on disk.
-        if accepted:
-            save_if_changed(
-                self.mic, self.speaker, self.mic_channels, self.speaker_channels
-            )
+        if not accepted:
+            if (self.mic or {}).get("backend") == "vkinging" and not self.mic.get("available"):
+                self.ve_discovery.start()
+            return
+        # VE OK already strictly persisted both profile and selection in the
+        # dialog. Do not route it through the legacy ambiguous False contract.
+        if (mic or {}).get("backend") != "vkinging":
+            save_options = {"path": self.hardware_selection_path} if hasattr(self, "hardware_selection_path") else {}
+            save_if_changed(mic, speaker, mic_channels, speaker_channels, **save_options)
+        self.mic, self.speaker = mic, speaker
+        self.mic_channels, self.speaker_channels = mic_channels, speaker_channels
         self.update_statusbar()
         self.sequence_window.mic = self.mic
         self.sequence_window.speaker = self.speaker
         self.sequence_window.mic_channels = self.mic_channels
         self.sequence_window.speaker_channels = self.speaker_channels
-        self.sequence_window.update_v2pa_factor()
+        if (self.mic or {}).get("backend") != "vkinging":
+            self.sequence_window.update_v2pa_factor()
         self.sequence_window.refresh_channel_windows()
+        new_ve_signature = self._ve_signature(self.mic, self.mic_channels)
+        if (old_was_ve and (
+                (self.mic or {}).get("backend") != "vkinging"
+                or old_ve_signature is None
+                or new_ve_signature is None
+                or old_ve_signature != new_ve_signature)):
+            self.recording_bridge.release_ve(
+                new_ve_signature, self._on_ve_hardware_release_complete)
 
     def on_calibration_window_init(self):
+        if not self._calibration_admission_available():
+            QMessageBox.warning(self, "提示", "录音或校准进行中，请等待完成后再修改校准")
+            return
+        if (self.mic or {}).get("backend") == "vkinging" and not self.mic.get("available"):
+            QMessageBox.warning(self, "VE 输入不可用", self.mic.get("diagnostic", "请在硬件设置中刷新设备"))
+            return
         # calibration the mic and speaker
+        calibration_options = {}
+        if (self.mic or {}).get("backend") == "vkinging":
+            calibration_options = dict(ve_profile_store=self.ve_profile_store,
+                                       ve_calibration_store=self.ve_calibration_store)
         dlg = CalibrationWindow(
             input_device=self.mic,
             input_channels=self.mic_channels,
             recording_bridge=getattr(self, "recording_bridge", None),
+            **calibration_options,
         )
         dlg.speaker = self.speaker
+        if (self.mic or {}).get("backend") == "vkinging":
+            dlg.ve_profile_store = self.ve_profile_store
+            dlg.ve_calibration_store = self.ve_calibration_store
         dlg.exec()
-        if dlg.input_calibration_flag:
+        if dlg.input_calibration_flag and (self.mic or {}).get("backend") != "vkinging":
             self.sequence_window.update_v2pa_factor()
 
     def on_window_close(self):
@@ -519,6 +683,8 @@ class MainWindow(QMainWindow):
                 "还有分析任务未完成，请等待分析结束后再退出。",
             )
             return
+        if hasattr(self, "ve_discovery"):
+            self._close_ve_discovery()
         bridge = getattr(self, "recording_bridge", None)
         if (bridge is not None and not bridge.service.closed.is_set()
                 and not getattr(self, "_recording_shutdown_reported", False)):

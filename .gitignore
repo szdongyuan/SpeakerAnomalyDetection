@@ -23,3 +23,5 @@ docs
 vkinging_daq.py
 record_vkinging_continuous.py
 recordings
+record_vkinging_continuous copy.py
+dist

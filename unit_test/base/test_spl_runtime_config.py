@@ -4,8 +4,10 @@ import pytest
 from base.pre_processing.spl_runtime_config import (
     apply_spl_analysis_time_range,
     calculate_overall_spl,
+    evaluate_spl_limits,
     resolve_directional_additional_correction_db,
     resolve_free_field_distance_correction_db,
+    resolve_spl_limit_data,
     resolve_spl_unit,
 )
 
@@ -195,3 +197,75 @@ def test_spl_analysis_time_range_treats_zero_end_as_recording_end():
 
     assert start_sample == 3
     assert sliced.tolist() == list(range(3, 10))
+
+
+@pytest.mark.parametrize(
+    ("limit_data", "match"),
+    [
+        (([0.0, np.inf], [10.0, 10.0], [np.nan, np.nan]), "X.*finite"),
+        (([0.0, 1.0], [10.0, np.inf], [np.nan, np.nan]), "bound.*finite"),
+        (([0.0, 1.0], [10.0, np.nan], [np.nan, np.nan]), "row 2.*finite"),
+        (([0.0], [10.0, 11.0], [np.nan]), "equal nonzero lengths"),
+        (
+            (
+                np.asarray([[0.0], [1.0]]),
+                np.asarray([[10.0], [10.0]]),
+                np.asarray([[np.nan], [np.nan]]),
+            ),
+            "one-dimensional",
+        ),
+    ],
+)
+def test_csv_curve_limit_resolution_rejects_invalid_persisted_arrays(
+    limit_data, match
+):
+    with pytest.raises(ValueError, match=match):
+        resolve_spl_limit_data(
+            {"limit_mode": "csv", "limit_data": limit_data},
+            np.asarray([0.0]),
+        )
+
+
+def test_curve_judgment_rejects_nonoverlapping_finite_limits():
+    config = {
+        "limit_checked": True,
+        "limit_metric": "curve_y",
+        "limit_mode": "csv",
+        "limit_data": ([10.0, 11.0], [50.0, 50.0], [np.nan, np.nan]),
+    }
+
+    with pytest.raises(ValueError, match="overlap.*analysis result"):
+        evaluate_spl_limits(
+            config,
+            np.asarray([0.0, 1.0]),
+            np.asarray([40.0, 41.0]),
+            None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("spl_values", "upper", "expected_ok", "expected_deviation"),
+    [
+        ([40.0, 41.0], [50.0, 50.0], True, 9.0),
+        ([40.0, 51.5], [50.0, 50.0], False, 1.5),
+    ],
+)
+def test_curve_judgment_keeps_one_sided_overlapping_ok_ng_semantics(
+    spl_values, upper, expected_ok, expected_deviation
+):
+    config = {
+        "limit_checked": True,
+        "limit_metric": "curve_y",
+        "limit_mode": "csv",
+        "limit_data": ([0.0, 1.0], upper, [np.nan, np.nan]),
+    }
+
+    judged_ok, deviation = evaluate_spl_limits(
+        config,
+        np.asarray([0.0, 1.0]),
+        np.asarray(spl_values),
+        None,
+    )
+
+    assert judged_ok is expected_ok
+    assert deviation == pytest.approx(expected_deviation)

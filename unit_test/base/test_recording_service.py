@@ -7,6 +7,7 @@ from pathlib import Path
 import queue
 import threading
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -16,6 +17,13 @@ from base.recording_service import RecordingCallbacks, RecordingService
 from base.recording_result_reader import ResultReader
 from unit_test.base.recording_process_fakes import device_info, generated_audio, known_audio
 from base.recording_process_protocol import RecordingEvent, RecordingRequest
+from consts.recording_preview_consts import (
+    MAIN_RECORDING_LIVE_MAX_POINTS,
+    MAIN_RECORDING_LIVE_WINDOW_SECONDS,
+    PREVIEW_TIME_LOWER_BOUND_TOLERANCE,
+    PREVIEW_TIME_MODE_CUMULATIVE,
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+)
 
 
 def request(tmp_path, **changes):
@@ -44,6 +52,181 @@ def read_trace(tmp_path):
         # Windows replacement can temporarily deny a concurrent observer's open.
         # The eventual assertion retries; this trace is not the recording file.
         return {}
+
+
+def test_fake_trace_io_is_off_audio_producer_and_terminal_flushes_latest_state(
+        tmp_path, monkeypatch):
+    from unit_test.base import recording_process_fakes as fakes
+
+    publish_entered = threading.Event()
+    release_publish = threading.Event()
+    all_chunks_fed = threading.Event()
+    fed = []
+    replace_attempts = []
+    atomic_publish = fakes._atomic_publish_trace
+    real_replace = fakes.os.replace
+
+    def contended_replace(*args, **kwargs):
+        replace_attempts.append(args)
+        if len(replace_attempts) < 3:
+            raise PermissionError("simulated Windows trace reader contention")
+        return real_replace(*args, **kwargs)
+
+    def blocked_publish(*args, **kwargs):
+        publish_entered.set()
+        assert release_publish.wait(3), "test did not release trace publication"
+        return atomic_publish(*args, **kwargs)
+
+    monkeypatch.setattr(fakes, "_atomic_publish_trace", blocked_publish)
+    monkeypatch.setattr(fakes.os, "replace", contended_replace)
+    dependencies = fakes.process_dependencies(
+        trace_dir=str(tmp_path), frames=8, chunk_frames=2, pace_writer=False)
+
+    def consume(*_args):
+        fed.append(1)
+        if len(fed) == 4:
+            all_chunks_fed.set()
+
+    stream = dependencies["backend"].InputStream(channels=3, callback=consume)
+    try:
+        stream.start()
+        assert publish_entered.wait(1)
+        assert all_chunks_fed.wait(1), "trace I/O blocked the simulated audio producer"
+    finally:
+        release_publish.set()
+        stream.stop()
+
+    dependencies["backend"].close_trace()
+    trace = read_trace(tmp_path)
+    assert trace["open_round"] == 1
+    assert trace["fed_chunks"] == 4
+    assert trace["capture_pid"] == os.getpid()
+    assert trace["stop_entered"] is True
+    assert len(replace_attempts) >= 3
+
+
+def test_fake_trace_close_is_terminal_after_publication_error_and_idempotent(
+        tmp_path, monkeypatch):
+    from unit_test.base import recording_process_fakes as fakes
+
+    publisher = fakes._CoalescedTracePublisher(tmp_path)
+    monkeypatch.setattr(
+        fakes, "_atomic_publish_trace",
+        lambda *_args: (_ for _ in ()).throw(OSError("trace disk failed")))
+    publisher.update(terminal=True)
+
+    with pytest.raises(OSError, match="trace disk failed"):
+        publisher.close()
+
+    assert publisher._closed
+    assert not publisher._thread.is_alive()
+    publisher.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        publisher.update(late=True)
+
+
+def test_fake_trace_close_is_bounded_after_publish_timeout(tmp_path, monkeypatch):
+    from unit_test.base import recording_process_fakes as fakes
+
+    entered = threading.Event()
+    release_stall = threading.Event()
+
+    def stalled_publish(trace_dir, trace, cancelled):
+        # The third argument is the supported cooperative cancellation signal.
+        entered.set()
+        while not cancelled.is_set():
+            if release_stall.wait(.005):
+                (trace_dir / "trace.json").write_text(json.dumps(trace))
+                return
+        raise fakes._TracePublicationCancelled("test publication cancelled")
+
+    monkeypatch.setattr(fakes, "_atomic_publish_trace", stalled_publish)
+    publisher = fakes._CoalescedTracePublisher(tmp_path)
+    publisher.update(terminal=True)
+    assert entered.wait(1)
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError, match="did not flush"):
+            publisher.close(timeout=.12)
+        assert time.monotonic() - started <= .2
+        assert publisher._closed
+        assert not publisher._thread.is_alive()
+        assert not (tmp_path / "trace.json").exists()
+        release_stall.set()
+        threading.Event().wait(.03)
+        assert not (tmp_path / "trace.json").exists()
+        publisher.close(timeout=.12)
+    finally:
+        release_stall.set()
+        cancel = getattr(publisher, "_cancel", None)
+        if cancel is not None:
+            cancel.set()
+        publisher._wake.set()
+        publisher._thread.join(1)
+
+
+def test_fake_trace_cancelled_permission_retry_cleans_temporary_file(
+        tmp_path, monkeypatch):
+    from unit_test.base import recording_process_fakes as fakes
+
+    attempts = []
+
+    def denied_replace(*_args):
+        attempts.append(1)
+        raise PermissionError("reader held trace")
+
+    monkeypatch.setattr(fakes.os, "replace", denied_replace)
+    publisher = fakes._CoalescedTracePublisher(tmp_path)
+    publisher.update(terminal=True)
+    started = time.monotonic()
+
+    with pytest.raises(TimeoutError, match="did not flush"):
+        publisher.close(timeout=.12)
+
+    assert time.monotonic() - started <= .2
+    assert attempts
+    assert publisher._closed
+    assert not publisher._thread.is_alive()
+    assert not (tmp_path / "trace.tmp").exists()
+    assert not (tmp_path / "trace.json").exists()
+
+
+def test_fake_trace_terminal_close_publishes_exact_latest_state_and_stops_worker(tmp_path):
+    from unit_test.base import recording_process_fakes as fakes
+
+    publisher = fakes._CoalescedTracePublisher(tmp_path)
+    publisher.update(round=1, stale="old")
+    publisher.flush()
+    publisher.update(round=2, terminal=True)
+    publisher.close()
+
+    assert read_trace(tmp_path) == {"round": 2, "stale": "old", "terminal": True}
+    assert not publisher._thread.is_alive()
+
+
+def test_fake_process_writer_preserves_close_failure_when_trace_flush_also_fails(
+        tmp_path, monkeypatch):
+    from unit_test.base import recording_process_fakes as fakes
+
+    dependencies = fakes.process_dependencies(
+        trace_dir=str(tmp_path), fail_close=True)
+    writer = dependencies["writer_factory"](
+        str(tmp_path / "dual-failure.wav"), 8000, 1)
+    monkeypatch.setattr(
+        fakes, "_atomic_publish_trace",
+        lambda *_args: (_ for _ in ()).throw(OSError("trace cleanup failed")))
+
+    try:
+        with pytest.raises(OSError, match="injected writer close failure") as captured:
+            writer.finalize()
+        assert any("trace cleanup failed" in note
+                   for note in getattr(captured.value, "__notes__", ()))
+    finally:
+        writer.sf_file.close()
+        try:
+            dependencies["backend"].close_trace()
+        except OSError:
+            pass
 
 
 class Events:
@@ -105,7 +288,8 @@ def test_spawn_pid_complete_arrays_and_healthy_reuse(tmp_path, services, streami
 
 
 @pytest.mark.parametrize("pause_seconds", [1.0, 30.0])
-def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_cumulative(tmp_path, services, pause_seconds):
+def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_progress_cumulative(
+        tmp_path, services, pause_seconds):
     service = services(dict(manual=True))
     events = Events()
     session = service.start(request(tmp_path, target_samples=100, trim_samples=0), events.callbacks)
@@ -122,8 +306,10 @@ def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_cumulative(
     session.release_preview(first.sequence)
     second = events.preview.get(timeout=5)
     assert second.sequence == first.sequence + 1 and second.sample_stop >= 7
+    assert second.time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
     assert second.waveforms[0].amplitude.max() == np.float32(.95)
-    assert second.waveforms[0].time[0] == 0
+    assert second.waveforms[0].time[-1] == 0.0
+    assert second.waveforms[0].time[0] >= -MAIN_RECORDING_LIVE_WINDOW_SECONDS
     (tmp_path / "feed-2").touch()
     result = events.results.get(timeout=5)  # No acknowledgement for second preview.
     expected = (known_audio(110) % .5).astype(np.float32)
@@ -136,6 +322,162 @@ def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_cumulative(
     np.testing.assert_array_equal(saved, expected)
     session.accept_result()
     assert session.released.wait(5)
+
+
+def test_spawn_cumulative_request_publishes_cumulative_preview_and_exact_completion(
+        tmp_path, services):
+    service = services(dict(manual=True))
+    events = Events()
+    session = service.start(request(
+        tmp_path, target_samples=9, trim_samples=0,
+        preview_time_mode=PREVIEW_TIME_MODE_CUMULATIVE,
+    ), events.callbacks)
+    events.started.get(timeout=10)
+    (tmp_path / "feed-0").touch()
+    preview = events.preview.get(timeout=5)
+    assert preview.time_mode == PREVIEW_TIME_MODE_CUMULATIVE
+    assert preview.sample_stop == 3
+    for waveform in preview.waveforms:
+        assert waveform.time[0] == 0.0
+        assert waveform.time[-1] > 0.0
+        assert np.all(np.diff(waveform.time) > 0.0)
+    session.release_preview(preview.sequence)
+    (tmp_path / "feed-1").touch()
+    (tmp_path / "feed-2").touch()
+    result = events.results.get(timeout=5)
+    expected = (known_audio(110) % .5).astype(np.float32)
+    expected[5, 0] = .95
+    expected = expected[:9, (0, 2)]
+    np.testing.assert_array_equal(result.multi, expected)
+    np.testing.assert_array_equal(result.mono, expected.mean(axis=1))
+    saved, rate = sf.read(session.request.path, dtype="float32", always_2d=True)
+    assert rate == 100
+    np.testing.assert_array_equal(saved, expected)
+    session.accept_result()
+    assert events.accepted.get(timeout=5) is result
+    assert session.released.wait(5)
+    assert session.state == "completed" and events.failed.empty()
+
+
+@pytest.mark.parametrize("preview_fault", ["construct", "begin", "append", "snapshot"])
+def test_spawn_preview_fault_does_not_change_progress_completion_or_success(
+        tmp_path, services, preview_fault):
+    service = services(dict(manual=True, preview_fault=preview_fault))
+    events = Events()
+    session = service.start(request(
+        tmp_path, target_samples=9, trim_samples=0,
+        preview_time_mode=PREVIEW_TIME_MODE_CUMULATIVE,
+    ), events.callbacks)
+    events.started.get(timeout=10)
+    (tmp_path / "feed-0").touch()
+    eventually(lambda: read_trace(tmp_path).get("preview_fault_observed") == preview_fault)
+    (tmp_path / "feed-1").touch()
+    (tmp_path / "feed-2").touch()
+    result = events.results.get(timeout=5)
+
+    expected = (known_audio(110) % .5).astype(np.float32)
+    expected[5, 0] = .95
+    expected = expected[:9, (0, 2)]
+    trace = eventually(lambda: read_trace(tmp_path).get("written_frames") == 9 and read_trace(tmp_path))
+    assert trace["preview_session_constructions"] == 1
+    assert trace["preview_rolling_window_seconds"] is None
+    assert (result.descriptor.raw_frames, result.descriptor.final_frames) == (9, 9)
+    np.testing.assert_array_equal(result.multi, expected)
+    np.testing.assert_array_equal(result.mono, expected.mean(axis=1))
+    saved, rate = sf.read(session.request.path, dtype="float32", always_2d=True)
+    assert rate == 100
+    np.testing.assert_array_equal(saved, expected)
+    assert events.preview.empty() and events.failed.empty() and events.cancelled.empty()
+    session.accept_result()
+    assert events.accepted.get(timeout=5) is result
+    assert session.released.wait(5)
+    assert session.state == "completed"
+
+
+@pytest.mark.parametrize("signal", ["ack", "stop", "stop_at_deadline", "ack_at_deadline", "timeout"])
+def test_synthetic_writer_wait_is_ack_woken_cancelable_and_bounded(tmp_path, monkeypatch, signal):
+    """Drive the actual fake feeder with deterministic event/clock scheduling.
+
+    The writer notifies while the feeder is waiting. Only waiting on that
+    event can wake at notification time; a stop wait must run to its timeout.
+    No wall-clock sleep or thread scheduling threshold decides this regression.
+    """
+    from unit_test.base import recording_process_fakes as fakes
+
+    state = dict(now=100.0, pending=None, ack=False, stop=False, waits=[])
+
+    class ScheduledEvent:
+        def __init__(self, name):
+            self.name = name
+
+        def is_set(self):
+            return state[self.name]
+
+        def clear(self):
+            state[self.name] = False
+
+        def set(self):
+            state[self.name] = True
+
+        def wait(self, timeout):
+            assert timeout == .005
+            state["waits"].append(self.name)
+            if self.is_set():
+                return True
+            end = state["now"] + timeout
+            pending = state["pending"]
+            if pending is not None and pending[1] <= end:
+                name, at = pending
+                state[name] = True
+                state["pending"] = None
+                if name == self.name:
+                    state["now"] = at
+                    return True
+            state["now"] = end
+            return self.is_set()
+
+    class InlineThread:
+        def __init__(self, *, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    events = iter((ScheduledEvent("ack"), ScheduledEvent("stop")))
+    monkeypatch.setattr(fakes, "threading", SimpleNamespace(
+        Event=lambda: next(events), Lock=threading.Lock, Thread=InlineThread))
+    monkeypatch.setattr(fakes, "time", SimpleNamespace(monotonic=lambda: state["now"]))
+    dependencies = fakes.process_dependencies(trace_dir=str(tmp_path), frames=4, chunk_frames=2)
+    delivered = []
+
+    def consume(chunk, *args):
+        delivered.append(chunk.copy())
+        if signal != "timeout":
+            name = "ack" if signal.startswith("ack") else "stop"
+            delay = 10 if signal.endswith("at_deadline") else .001
+            state["pending"] = (name, state["now"] + delay)
+
+    stream = dependencies["backend"].InputStream(channels=3, callback=consume)
+    stream.start()
+    dependencies["backend"].flush_trace()
+    trace = read_trace(tmp_path)
+    dependencies["backend"].close_trace()
+    if signal == "ack":
+        assert state["now"] == pytest.approx(100.002), "writer acknowledgement did not wake the feeder"
+        assert state["waits"] == ["ack", "ack"]
+        assert trace["fed_chunks"] == 2
+        assert "feeder_error" not in trace
+        np.testing.assert_array_equal(np.concatenate(delivered), generated_audio(0, 4))
+    else:
+        assert trace["fed_chunks"] == 1
+        np.testing.assert_array_equal(delivered[0], generated_audio(0, 2))
+        if signal in ("timeout", "ack_at_deadline"):
+            assert 110 <= state["now"] <= 110.005 + 1e-9
+            assert trace["feeder_error"] == "synthetic writer acknowledgement timed out"
+        else:
+            stopped_at = 110 if signal == "stop_at_deadline" else 100.001
+            assert stopped_at <= state["now"] <= stopped_at + .005 + 1e-9
+            assert "feeder_error" not in trace
 
 
 @pytest.mark.parametrize("pace_writer", [False, True])
@@ -184,7 +526,7 @@ def test_one_active_session_is_registered_before_async_start(tmp_path, services)
 
 
 @pytest.mark.parametrize("channels", [(2,), (2, 0)])
-def test_spawn_accepts_600_seconds_with_bounded_cumulative_previews_and_exact_wav(
+def test_spawn_accepts_600_seconds_with_bounded_rolling_previews_and_exact_wav(
         tmp_path, services, monkeypatch, channels):
     """600 simulated audio seconds at 1000 Hz, not a hardware throughput test."""
     sample_rate, trim, final_frames = 1000, 250, 600000
@@ -203,24 +545,39 @@ def test_spawn_accepts_600_seconds_with_bounded_cumulative_previews_and_exact_wa
     try:
         first = events.preview.get(timeout=10)
         # Withhold the one preview credit until every raw frame is on disk.
-        eventually(lambda: read_trace(tmp_path).get("finalize_waiting_for_release"), timeout=10)
-        trace = read_trace(tmp_path)
+        # Wait on supervisor state while the 300 paced writes and rolling reduction
+        # run; repeatedly opening trace.json can starve the child's atomic replace
+        # on Windows. Once finalizing, poll only the final writer gate at low cadence.
+        eventually(lambda: session.state == "finalizing", timeout=120)
+        trace_deadline = time.monotonic() + 10
+        while True:
+            trace = read_trace(tmp_path)
+            if trace.get("finalize_waiting_for_release"):
+                break
+            if time.monotonic() >= trace_deadline:
+                raise AssertionError("finalization trace did not reach its release gate")
+            threading.Event().wait(.1)
         assert trace["written_frames"] == target
         assert trace["capture_pid"] == trace["writer_pid"] == session.worker_pid != os.getpid()
         assert events.preview.empty()
         assert events.results.empty(), "finalization gate must still own the open WAV"
         session.release_preview(first.sequence)
-        cumulative = events.preview.get(timeout=5)
-        assert cumulative.sequence == first.sequence + 1
-        assert cumulative.channels == channels
-        assert cumulative.sample_stop == final_frames
-        for preview in (first, cumulative):
+        rolling = events.preview.get(timeout=5)
+        assert rolling.sequence == first.sequence + 1
+        assert rolling.channels == channels
+        assert rolling.sample_stop == final_frames
+        for preview in (first, rolling):
+            assert preview.time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
             for waveform in preview.waveforms:
-                assert 0 < len(waveform.time) <= 4000
+                assert 0 < len(waveform.time) <= MAIN_RECORDING_LIVE_MAX_POINTS
                 assert waveform.time.shape == waveform.amplitude.shape
-                assert waveform.time[0] == 0
-                assert waveform.time[-1] == (preview.sample_stop - 1) / sample_rate
-        assert cumulative.waveforms[0].time[-1] == 599.999
+                assert waveform.time[-1] == 0.0
+                assert np.all(waveform.time <= 0.0)
+                assert waveform.time[0] >= (
+                    -MAIN_RECORDING_LIVE_WINDOW_SECONDS - PREVIEW_TIME_LOWER_BOUND_TOLERANCE
+                )
+        assert rolling.waveforms[0].time[-1] == 0.0
+        assert rolling.waveforms[0].time[0] < -9.9
     finally:
         (tmp_path / "release-finalize").touch()
     # Completion must bypass the still-withheld second preview credit.
@@ -349,6 +706,50 @@ def test_reader_timeout_retires_worker_and_isolates_only_old_path(tmp_path, serv
         paused.release.set()
 
 
+def test_trusted_old_reader_preview_ack_cannot_fault_replacement_worker(tmp_path, services):
+    paused = PausedReader()
+
+    def reader_factory(descriptor, completed):
+        if descriptor.request_id == "old":
+            return paused(descriptor, completed)
+        return ResultReader(descriptor, completed)
+
+    service = services(reader_factory=reader_factory, terminate_timeout=.2)
+    old_events = Events()
+    old = service.start(request(tmp_path, request_id="old", path=str(tmp_path / "old.wav")),
+                        old_events.callbacks)
+    try:
+        assert paused.entered.wait(10)
+        old_worker = service._worker
+        old_worker.process.terminate()
+        eventually(lambda: service.worker_pid is None)
+        assert old._trusted_terminal and old.state == "delivering"
+
+        fresh_events = Events()
+        fresh = service.start(request(
+            tmp_path, request_id="fresh", path=str(tmp_path / "fresh.wav"),
+            target_samples=100, trim_samples=0), fresh_events.callbacks)
+        fresh_events.started.get(timeout=10)
+        replacement = service._worker
+        assert replacement.generation > old.generation
+
+        old._preview_pending = 17
+        old.release_preview(17)
+        eventually(lambda: old._preview_pending is None)
+        assert not threading.Event().wait(.3)
+        assert service._worker is replacement and not replacement.retiring
+        assert fresh_events.failed.empty()
+
+        fresh.cancel()
+        fresh_events.cancelled.get(timeout=5)
+        assert fresh.released.wait(5)
+    finally:
+        paused.release.set()
+    old_events.results.get(timeout=5)
+    old.accept_result()
+    assert old.released.wait(5)
+
+
 @pytest.mark.parametrize("stage", ["recording", "finalizing", "delivering"])
 def test_worker_death_before_acceptance_fails_once_and_new_generation(tmp_path, services, stage):
     options = dict(manual=True) if stage == "recording" else dict(hang_finalize=True) if stage == "finalizing" else {}
@@ -362,12 +763,19 @@ def test_worker_death_before_acceptance_fails_once_and_new_generation(tmp_path, 
         events.results.get(timeout=10)
     worker = service._worker
     worker.process.terminate()
-    events.failed.get(timeout=5)
     eventually(lambda: service.worker_pid is None)
-    assert session.released.wait(5)
-    session.accept_result()
-    assert events.failed.empty() and events.accepted.empty()
-    assert session.state == "failed" and not Path(session.request.path).exists()
+    if stage == "delivering":
+        session.accept_result()
+        events.accepted.get(timeout=5)
+        assert session.released.wait(5)
+        assert session.state == "completed" and Path(session.request.path).exists()
+        assert events.failed.empty()
+    else:
+        events.failed.get(timeout=5)
+        assert session.released.wait(5)
+        session.accept_result()
+        assert events.failed.empty() and events.accepted.empty()
+        assert session.state == "failed" and not Path(session.request.path).exists()
     next_events = Events()
     fresh = service.start(request(tmp_path, request_id="next"), next_events.callbacks)
     next_events.started.get(timeout=10)
@@ -462,6 +870,49 @@ def test_duplicate_and_stale_events_cannot_redeliver_or_overwrite(tmp_path, serv
     service._inbox.put(("event", worker, duplicate))
     session.cancel()
     assert session.state == "completed"
+
+
+def test_contradictory_duplicate_terminal_retires_generation_without_rewriting_trusted_session(
+        tmp_path, services):
+    service = services(terminate_timeout=.2)
+    events = Events()
+    session = service.start(request(tmp_path), events.callbacks)
+    result = events.results.get(timeout=10)
+    worker = service._worker
+    contradictory = replace(result.descriptor, warnings=("contradictory duplicate",))
+    service._inbox.put(("event", worker, RecordingEvent(
+        session.generation, session.request.request_id, "completed", contradictory)))
+    eventually(lambda: service.worker_pid is None)
+    assert session.state == "delivering" and session.failure is None
+    session.accept_result()
+    events.accepted.get(timeout=5)
+    assert session.released.wait(5)
+    assert events.failed.empty()
+
+
+def test_malformed_duplicate_terminal_preserves_trusted_reader_through_worker_death(
+        tmp_path, services):
+    service = services(terminate_timeout=.2)
+    events = Events()
+    session = service.start(request(tmp_path), events.callbacks)
+    result = events.results.get(timeout=10)
+    worker = service._worker
+    malformed = RecordingEvent.__new__(RecordingEvent)
+    object.__setattr__(malformed, "generation", session.generation)
+    object.__setattr__(malformed, "request_id", session.request.request_id)
+    object.__setattr__(malformed, "kind", "completed")
+    object.__setattr__(malformed, "payload", replace(result.descriptor, request_id="other"))
+    object.__setattr__(malformed, "version", 1)
+
+    service._inbox.put(("event", worker, malformed))
+    eventually(lambda: service.worker_pid is None)
+
+    assert session._trusted_terminal and session._child_released
+    assert session.state == "delivering" and session.failure is None
+    session.accept_result()
+    events.accepted.get(timeout=5)
+    assert session.released.wait(5)
+    assert events.failed.empty()
 
 
 def test_shutdown_deadline_handles_native_close_hang(tmp_path, services):
@@ -643,8 +1094,9 @@ def test_acceptance_and_release_continuations_have_explicit_order(tmp_path, serv
     def accepted(session, audio):
         order.append("accepted")
         assert not session.released.is_set()
-        with pytest.raises(RuntimeError, match="busy"):
-            service.start(request(tmp_path, request_id="too-early", path=str(tmp_path / "other.wav")))
+        followup.append(service.start(
+            request(tmp_path, request_id="overlap", path=str(tmp_path / "other.wav"))))
+    followup = []
     callbacks = RecordingCallbacks(result_ready=lambda session, audio: offered.set(), accepted=accepted,
                                    released=lambda session: order.append("released"))
     session = service.start(request(tmp_path), callbacks)
@@ -652,6 +1104,9 @@ def test_acceptance_and_release_continuations_have_explicit_order(tmp_path, serv
     session.accept_result()
     assert session.released.wait(5)
     eventually(lambda: order == ["accepted", "released"])
+    assert followup and followup[0].request.request_id == "overlap"
+    followup[0].cancel()
+    assert followup[0].released.wait(5)
     assert not service.diagnostics
 
 
@@ -701,10 +1156,9 @@ def test_repeated_healthy_and_retired_workers_do_not_accumulate_threads(tmp_path
         generations.append(session.generation)
         if index in (1, 3):
             service._worker.process.terminate()
-            events.failed.get(timeout=5)
             eventually(lambda: service.worker_pid is None)
-        else:
-            session.accept_result()
+        session.accept_result()
+        events.accepted.get(timeout=5)
         assert session.released.wait(5)
         eventually(lambda: len(service.threads) <= 4)
     assert generations == [1, 1, 2, 2, 3, 3]
@@ -755,8 +1209,8 @@ def test_dead_worker_between_offer_and_accept_command_cannot_publish_success(tmp
     worker.process.terminate()
     eventually(lambda: not worker.process.is_alive() if service._worker is worker else True)
     session.accept_result()
-    events.failed.get(timeout=5)
-    assert session.released.wait(5) and events.accepted.empty()
+    events.accepted.get(timeout=5)
+    assert session.released.wait(5) and events.failed.empty()
 
 
 def test_worker_and_service_imports_do_not_load_qt_or_hardware():
@@ -815,15 +1269,21 @@ def test_preview_callback_failure_disables_preview_once_but_keeps_audio(tmp_path
 
 
 @pytest.mark.parametrize("failure_at", ["reader_construct", "reader_start", "ipc_control", "ipc_preview"])
-def test_thread_start_ownership_failure_releases_lease_and_reclaims_worker(
+def test_thread_start_ownership_failure_classifies_worker_and_reader_ownership(
     tmp_path, services, monkeypatch, failure_at,
 ):
     message = f"injected {failure_at}: can't start new thread"
+    reader_attempts = 0
     if failure_at == "reader_construct":
         def reader_factory(descriptor, completed):
-            raise RuntimeError(message)
+            nonlocal reader_attempts
+            reader_attempts += 1
+            if reader_attempts == 1:
+                raise RuntimeError(message)
+            return ResultReader(descriptor, completed)
     else:
         reader_factory = ResultReader
+    original_reader_start = ResultReader.start
     if failure_at == "reader_start":
         def fail_reader_start(self):
             raise RuntimeError(message)
@@ -843,9 +1303,24 @@ def test_thread_start_ownership_failure_releases_lease_and_reclaims_worker(
     assert failure.stage == "service" and failure.message == message
     assert session.generation == 1 and session.worker_pid is not None
     assert session.released.wait(3), "no reader started, so no parent file ownership can remain"
-    eventually(lambda: service.worker_pid is None, timeout=3)
     assert not service.is_path_leased(session.request.path)
     assert not Path(session.request.path).parent.exists()
+    if failure_at.startswith("reader_"):
+        assert service.worker_pid == session.worker_pid
+        assert not service._worker.retiring and not service._ownership_uncertain
+        assert service.can_start_recording
+        if failure_at == "reader_start":
+            monkeypatch.setattr(ResultReader, "start", original_reader_start)
+        retry_events = Events()
+        retry = service.start(request(
+            tmp_path, request_id="reader-retry", purpose="calibration", channels=(0,)),
+            retry_events.callbacks)
+        retry_events.results.get(timeout=10)
+        retry.accept_result()
+        assert retry.released.wait(3) and retry.worker_pid == session.worker_pid
+        assert retry_events.failed.empty()
+    else:
+        eventually(lambda: service.worker_pid is None, timeout=3)
     callback = threading.Event()
     service.shutdown(callback.set)
     assert callback.wait(3) and service.closed.wait(3)

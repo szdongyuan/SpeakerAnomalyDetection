@@ -456,13 +456,14 @@ class SequenceWidgetBarcodeOpsMixin:
 
         self.start_this_play("not_labeled")
 
-    def _on_directional_recording_completed(self):
-        direction = self._normalize_trigger_direction(getattr(self, "_current_trigger_direction", ""))
+    def _on_directional_recording_completed(self, *, direction=None, owns_active_presentation=True):
+        direction = self._normalize_trigger_direction(
+            direction if direction is not None else getattr(self, "_current_trigger_direction", ""))
         if not direction:
             return
         if self._is_serial_directional_trigger_enabled():
             self._suppress_barcode_commits_temporarily(1500, reason="directional_recording_completed")
-        if getattr(self, "left_panel", None) is None:
+        if not owns_active_presentation or getattr(self, "left_panel", None) is None:
             return
 
         if direction == "forward":
@@ -550,7 +551,10 @@ class SequenceWidgetBarcodeOpsMixin:
         self._pending_serial_trigger_direction = ""
         if not direction:
             return
-        if getattr(self, "_record_workflow_busy", False):
+        can_start = getattr(self, "_can_start_recording_workflow", None)
+        blocked = (not can_start() if callable(can_start)
+                   else bool(getattr(self, "_record_workflow_busy", False)))
+        if blocked:
             print(f"[serial-trigger][ui] 延迟到期，但当前 busy=True，已忽略: direction={direction}")
             self.default_logger.info(f"串口离散输入延迟触发已忽略，当前正在测试中 (方向={direction})")
             return
@@ -703,7 +707,10 @@ class SequenceWidgetBarcodeOpsMixin:
             except Exception:
                 pass
             return
-        if getattr(self, "_record_workflow_busy", False):
+        can_start = getattr(self, "_can_start_recording_workflow", None)
+        blocked = (not can_start() if callable(can_start)
+                   else bool(getattr(self, "_record_workflow_busy", False)))
+        if blocked:
             try:
                 self.default_logger.info(
                     "[barcode][ui] _commit_barcode drop: 当前正在录音 (busy=True)"
@@ -816,7 +823,9 @@ class SequenceWidgetBarcodeOpsMixin:
 
     def on_sensor_triggered(self):
         """处理光电开关触发信号"""
-        if not getattr(self, "_record_workflow_busy", False):
+        can_start = getattr(self, "_can_start_recording_workflow", None)
+        available = can_start() if callable(can_start) else not getattr(self, "_record_workflow_busy", False)
+        if available:
             self.default_logger.info("光电触发响应: 开始测试")
             self.start_this_play("not_labeled")
         else:
@@ -827,7 +836,9 @@ class SequenceWidgetBarcodeOpsMixin:
         direction = self._normalize_trigger_direction(direction)
         if not direction:
             return
-        if not getattr(self, "_record_workflow_busy", False):
+        can_start = getattr(self, "_can_start_recording_workflow", None)
+        available = can_start() if callable(can_start) else not getattr(self, "_record_workflow_busy", False)
+        if available:
             config = getattr(self, "_serial_trigger_config", {}) or {}
             delay_ms = self._resolve_serial_trigger_delay_ms(config)
             if delay_ms > 0:
@@ -923,9 +934,8 @@ class SequenceWidgetBarcodeOpsMixin:
         if callable(clear_wav_calibration_state):
             clear_wav_calibration_state()
         else:
-            self.data_struct.wav_calibration_metadata = None
-            self.data_struct.wav_calibration_metadata_authoritative = False
-            self.data_struct.wav_calibration_warning_shown = False
+            from base.data_struct.data_deal_struct import DataDealStruct
+            DataDealStruct.clear_wav_calibration_context(self.data_struct)
         self.replayer_btn.setEnabled(False)
         self.data_btn.setEnabled(False)
         self.player_status_flag = False

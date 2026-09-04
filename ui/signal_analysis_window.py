@@ -83,6 +83,11 @@ from ui.ui_analysis_config.manual_limit_segments import (
     limits_from_constant_values,
     limits_from_manual_config,
 )
+from ui.ui_analysis_config.analysis_compat import (
+    interpolate_spl_limit_curves,
+    interpolate_spl_limit_side,
+    parse_fba_custom_bands_text,
+)
 from ui.ui_analysis_config.threshold_csv_manual import (
     validate_limit_data_values,
 )
@@ -120,14 +125,8 @@ def get_class_mapping():
 
 
 def _resolve_golden_baseline_path(path: str):
-    if not path or not isinstance(path, str):
-        return None
-    p = path.replace("\\", "/").strip()
-    if not p:
-        return None
-    if os.path.isabs(p):
-        return p
-    return os.path.join(DEFAULT_DIR, p).replace("\\", "/")
+    from base.golden_baseline_policy import resolve_golden_baseline_path
+    return resolve_golden_baseline_path(path)
 
 
 def _load_golden_baseline_result(analysis_config: dict, title_name: str):
@@ -137,27 +136,8 @@ def _load_golden_baseline_result(analysis_config: dict, title_name: str):
     Expected JSON schema:
       {"items": {"<title_name>": {"type": "...", "result": {...}}}}
     """
-    if not isinstance(analysis_config, dict):
-        return None
-    path = analysis_config.get("golden_sample_result_path")
-    resolved = _resolve_golden_baseline_path(path)
-    if not resolved or (not os.path.exists(resolved)):
-        return None
-    try:
-        with open(resolved, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-    except Exception:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    items = payload.get("items")
-    if not isinstance(items, dict):
-        return None
-    item = items.get(title_name)
-    if not isinstance(item, dict):
-        return None
-    result = item.get("result")
-    return result if isinstance(result, dict) else None
+    from base.golden_baseline_policy import load_golden_baseline_result
+    return load_golden_baseline_result(analysis_config, title_name)
 
 
 def resolve_analysis_channel_signal(data_struct: DataDealStruct, analysis_config: dict, title_name: str, strict: bool = True):
@@ -198,32 +178,9 @@ def _abs_deviation_curve(x_current, y_current, x_base, y_base):
     Compute absolute deviation curve: abs(current - interp(base->current_x)).
     Points outside baseline x-range are set to NaN.
     """
-    x_c = np.asarray(x_current, dtype=float)
-    y_c = np.asarray(y_current, dtype=float)
-    x_b = np.asarray(x_base, dtype=float)
-    y_b = np.asarray(y_base, dtype=float)
-
-    if x_c.size == 0 or y_c.size == 0 or x_b.size == 0 or y_b.size == 0:
-        return y_c
-
-    m = np.isfinite(x_b) & np.isfinite(y_b)
-    x_b = x_b[m]
-    y_b = y_b[m]
-    if x_b.size < 2:
-        return y_c
-
-    sort_idx = np.argsort(x_b)
-    x_b = x_b[sort_idx]
-    y_b = y_b[sort_idx]
-    x_b, uniq_idx = np.unique(x_b, return_index=True)
-    y_b = y_b[uniq_idx]
-    if x_b.size < 2:
-        return y_c
-
-    interp = np.interp(x_c, x_b, y_b)
-    in_range = (x_c >= float(np.min(x_b))) & (x_c <= float(np.max(x_b)))
-    interp = np.where(in_range, interp, np.nan)
-    return (y_c - interp)
+    from base.golden_baseline_policy import golden_deviation_curve
+    return golden_deviation_curve(
+        x_current, y_current, x_base, y_base)
 
 
 def _sorted_finite_positive_x_for_limits(x_values, y_values):
@@ -236,12 +193,18 @@ def _sorted_finite_positive_x_for_limits(x_values, y_values):
     return x_valid
 
 
+def _interpolate_spl_limit_side(target, x_values, y_values):
+    """Interpolate one SPL limit polyline without bridging missing values."""
+    return interpolate_spl_limit_side(target, x_values, y_values)
+
+
 def _interpolate_spl_limit_curves(
     target_x,
     limit_x,
     upper_limits,
     lower_limits,
 ):
+    """Match upper and lower SPL CSV polylines to measured time points."""
     return interpolate_spl_limit_curves(
         target_x,
         limit_x,
@@ -977,16 +940,15 @@ class Spl(AnalysisGraphWidget):
             QMessageBox.warning(self, "提示", str(e))
             return False
         sample_rate = self.data_struct.sample_rate
-        reference_pressure = 20e-6
-        window_size = 1201
-        weighting = self.analysis_config.get("weighting", "Z") if self.analysis_config else "Z"
-        if weighting and weighting.upper() not in ["NONE", "Z"]:
-            recorded_signal = apply_weighting_filter(recorded_signal, sample_rate, weighting=weighting, zero_phase=False)
-        analysis_signal, analysis_start_sample = apply_spl_analysis_time_range(
-            recorded_signal,
-            sample_rate,
-            self.analysis_config,
-        )
+        from base.spl_analysis_service import compute_spl_trace
+        trace = compute_spl_trace(
+            recorded_signal, sample_rate, self.analysis_config,
+            v2pa_factor=self.v2pa_factor,
+            weighting_filter=apply_weighting_filter,
+            spl_calculator=(
+                AudioThdFrequencyResponseAnalysis().spl_calculation),
+            overall_calculator=calculate_overall_spl)
+        analysis_signal = trace.analysis_signal
         config = self.analysis_config or {}
         show_overall_spl = bool(
             config.get(
@@ -1001,27 +963,11 @@ class Spl(AnalysisGraphWidget):
         judge_by_overall_spl = (
             limit_checked and limit_metric == "overall_spl"
         )
-        overall_spl = calculate_overall_spl(
-            analysis_signal,
-            reference_pressure,
-            v2pa_factor=self.v2pa_factor,
-        )
-        signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
-            analysis_signal,
-            reference_pressure,
-            window_size=window_size,
-            v2pa_factor=self.v2pa_factor,
-            trim_edges=True,
-        )
-        start_index = 0 if len(signal_spl) == len(analysis_signal) else window_size // 2
-        signal_duration = (np.arange(len(signal_spl), dtype=float) + float(start_index)) / float(sample_rate)
-        signal_duration = signal_duration + (
-            float(analysis_start_sample) / float(sample_rate)
-        )
-
-        if self.analysis_config and self.analysis_config.get("smooth_checked"):
-            # NOTE: Do not apply RMS smoothing on dB values (squaring negatives turns silence into ~100 dB).
-            signal_spl = smooth(signal_spl, window_size=1102, method="savgol")
+        # Always retain the overall value for result/export consumers; the
+        # display switch controls only the plot title.
+        overall_spl = trace.overall_spl
+        signal_spl = trace.signal_spl
+        signal_duration = trace.signal_duration
         realtime_upper_limits = None
         realtime_lower_limits = None
         if limit_checked:
@@ -1151,7 +1097,8 @@ class Spl(AnalysisGraphWidget):
         )
 
         # === 5. Limit comparison using LimitPlotUtils ===
-        out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(sig_spl, upper_at, lower_at, valid_mask)
+        out_mask, deviation, is_ok = LimitPlotUtils.compare_with_limits(
+            sig_spl, upper_at, lower_at, valid_mask)
 
         # === 6. Save result ===
         self.data_struct.analysis_result_dict[self.title_name] = (is_ok, deviation)
@@ -2064,37 +2011,22 @@ class Spectrogram(QWidget):
             # color_bar_axis.setStyle(tickTextOffset=10)
 
     def calculate_spec(self):
+        from base.spectrogram_analysis_service import compute_spectrogram
         config = self.analysis_config or {}
         recorded_signal = resolve_analysis_channel_signal(
-            self.data_struct,
-            config,
-            self.title_name,
-        )
-        result = SpectrogramAnalyzer().analyze(
-            recorded_signal,
-            fs=self.data_struct.sample_rate,
-            n_fft=int(config.get("n_fft", 2048)),
-            hop_length=int(config.get("hop_length", 256)),
-            window=str(config.get("window_func", "hann") or "hann"),
-            scale=str(config.get("freq_scale_type", "linear") or "linear"),
-            max_time_bins=DEFAULT_MAX_SPEC_TIME_BINS,
-        )
-        times = result.times_s
-        frequencies = result.frequencies_hz
-        values_db = result.values_db
+            self.data_struct, config, self.title_name)
+        sample_rate = self.data_struct.sample_rate
+
+        analysis = compute_spectrogram(
+            recorded_signal, sample_rate, config,
+            v2pa_factor=self.v2pa_factor, channel_count=1)
+        frequencies = analysis.frequency_bins
+        values_db = analysis.spectrogram_db
+        times = analysis.time_s
         color_map = str(config.get("color_map", "viridis") or "viridis")
 
-        if result.scale == "log":
-            target_ticks_hz = [
-                50,
-                100,
-                200,
-                500,
-                1000,
-                2000,
-                5000,
-                10000,
-            ]
+        if analysis.mode == "log":
+            target_ticks_hz = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
             major_ticks = []
             y_min_hz, y_max_hz = frequencies.min(), frequencies.max()
             for frequency in target_ticks_hz:
@@ -2186,6 +2118,8 @@ class Spectrogram(QWidget):
                 (bottom - middle, top + middle)
             )
         self.set_color_font_size()
+        self.result = analysis.as_dict()
+        return self.result
 
 
 class LooseParticle(AnalysisGraphWidget):
@@ -2419,35 +2353,22 @@ class PatternMatch(QWidget):
 
         algorithm_name = self.analysis_config.get("algorithm", "dtw")
         threshold_method = self.analysis_config.get("threshold_strategy")
-
         threshold = 0.9
         if threshold_method == "fixed_threshold":
             threshold = self.analysis_config.get("threshold_value", 0.9)
-
         similarity_metric = self.analysis_config.get("similarity_metric", "euclidean")
-        apply_filter = self.analysis_config.get("apply_filter", False)
-
-        if apply_filter:
-            filter_range_hz = self.analysis_config.get("filter_range_hz")
-            start_freq, end_freq = filter_range_hz
+        if self.analysis_config.get("apply_filter", False):
+            start_freq, end_freq = self.analysis_config.get("filter_range_hz")
             self.target_data = AudioEqualizer.apply_equalizer(
-                self.target_data, self.sample_rate, start_freq=start_freq, end_freq=end_freq
-            )
+                self.target_data, self.sample_rate, start_freq=start_freq, end_freq=end_freq)
             self.pattern_data = AudioEqualizer.apply_equalizer(
-                self.pattern_data, self.sample_rate, start_freq=start_freq, end_freq=end_freq
-            )
+                self.pattern_data, self.sample_rate, start_freq=start_freq, end_freq=end_freq)
         feature_type = self.analysis_config.get("feature_type", "mfcc")
         target_features, pattern_features = self.feature_extraction_handle(
-            self.target_data, self.pattern_data, feature_type
-        )
-
+            self.target_data, self.pattern_data, feature_type)
         result_dict = self.algorithm_handle(
-            algorithm_name,
-            target_features,
-            pattern_features,
-            distance_measure_method=similarity_metric,
-            threshold=threshold,
-        )
+            algorithm_name, target_features, pattern_features,
+            distance_measure_method=similarity_metric, threshold=threshold)
         if result_dict:
             is_match = result_dict["is_match"]
             score = result_dict["score"]
@@ -3480,7 +3401,17 @@ class FrequencyBandAnalysis(AnalysisGraphWidget):
 
     @staticmethod
     def _parse_custom_bands_text(text: str):
-        return parse_custom_bands(text)
+        try:
+            edges = parse_fba_custom_bands_text(text)
+        except ValueError as exc:
+            if str(exc) == "自定义频段不允许重叠，请检查相邻频段边界。":
+                raise ValueError(
+                    "自定义频段不允许重叠，请检查相邻频段边界"
+                ) from exc
+            raise
+        if not edges:
+            raise ValueError("请至少输入一个频段")
+        return edges
 
     def _plot_bar_chart(
         self,

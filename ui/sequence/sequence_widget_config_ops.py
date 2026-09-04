@@ -621,9 +621,8 @@ class SequenceWidgetConfigOpsMixin:
             if callable(clear_wav_calibration_state):
                 clear_wav_calibration_state()
             else:
-                self.data_struct.wav_calibration_metadata = None
-                self.data_struct.wav_calibration_metadata_authoritative = False
-                self.data_struct.wav_calibration_warning_shown = False
+                from base.data_struct.data_deal_struct import DataDealStruct
+                DataDealStruct.clear_wav_calibration_context(self.data_struct)
             self.using_file_combobox.clearFocus()
             if self.lineedit_s_or_n.isEnabled():
                 try:
@@ -660,9 +659,8 @@ class SequenceWidgetConfigOpsMixin:
         if callable(clear_wav_calibration_state):
             clear_wav_calibration_state()
         else:
-            self.data_struct.wav_calibration_metadata = None
-            self.data_struct.wav_calibration_metadata_authoritative = False
-            self.data_struct.wav_calibration_warning_shown = False
+            from base.data_struct.data_deal_struct import DataDealStruct
+            DataDealStruct.clear_wav_calibration_context(self.data_struct)
 
         # 1. 强制清除下拉框焦点
         self.using_file_combobox.clearFocus()
