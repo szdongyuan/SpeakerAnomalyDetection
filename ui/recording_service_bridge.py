@@ -27,9 +27,124 @@ class RecordingServiceBridge(QObject):
         self._delivered = set()
         self._lock = threading.Lock()
         self._shutdown_requested = False
+        self._ve_release_pending = False
+        self._ve_prewarm_pending = False
+        self._ve_prewarm_calls = set()
         self._event.connect(self._deliver, Qt.QueuedConnection)
         self._preview_wakeup.connect(self._deliver_preview, Qt.QueuedConnection)
         self._invoke.connect(self._call, Qt.QueuedConnection)
+
+    @property
+    def hardware_busy(self):
+        """Whether capture/native ownership work makes hardware edits unsafe.
+
+        Broad ``service.busy`` also includes parent-side result processing.  A
+        completed capture must not keep the hardware dialog disabled while its
+        WAV result is being read or accepted.
+        """
+        service = self.service
+        lock = getattr(service, "_lock", None)
+
+        def snapshot():
+            worker = getattr(service, "_worker", None)
+            closed = getattr(service, "closed", None)
+            return bool(
+                self._shutdown_requested
+                or self._ve_release_pending
+                or self._ve_prewarm_pending
+                or getattr(service, "_closing", False)
+                or (closed is not None and closed.is_set())
+                or getattr(service, "_capture_session", None) is not None
+                or getattr(service, "_pending_ve_release", None) is not None
+                or getattr(service, "_ownership_uncertain", False)
+                or (worker is not None and getattr(worker, "retiring", False))
+            )
+
+        if lock is None:
+            return snapshot()
+        with lock:
+            return snapshot()
+
+    def release_ve(self, required_signature, callback=None):
+        """Request native VE synchronization without blocking the Qt thread."""
+        if QThread.currentThread() is not self.thread():
+            raise RuntimeError("Recording bridge VE release must start on its GUI thread")
+        completion_lock = threading.Lock()
+        completed = False
+
+        def complete(status, diagnostics=()):
+            nonlocal completed
+            with completion_lock:
+                if completed:
+                    return
+                completed = True
+            self._ve_release_pending = False
+            if callback is not None:
+                value = (status, tuple(diagnostics))
+                self._invoke.emit(lambda value=value: callback(*value))
+
+        # Establish busy before crossing into the service: its supervisor may
+        # complete on another thread before ``release_ve`` returns.  Completion
+        # is then the only path that clears this call's pending transition, so
+        # a returned ``pending`` can never resurrect already-completed state.
+        self._ve_release_pending = True
+        status = self.service.release_ve(required_signature, complete)
+        if status in ("released", "unchanged", "busy", "closing"):
+            # Immediate service outcomes still cross the same queued Qt
+            # boundary.  The service may also enqueue its callback; ``complete``
+            # makes those two legitimate paths exactly-once.
+            complete(status, ())
+        return status
+
+    def prewarm_ve(self, request, callback):
+        """Start one no-file VE prewarm without blocking the Qt thread."""
+        if QThread.currentThread() is not self.thread():
+            raise RuntimeError("Recording bridge VE prewarm must start on its GUI thread")
+        call_token = object()
+        completion_lock = threading.Lock()
+        completed = False
+
+        def complete(completion):
+            nonlocal completed
+            with completion_lock:
+                if completed:
+                    return
+                completed = True
+            # Clear the bridge-side hardware reservation before queueing user
+            # code so its admission snapshot observes the terminal state.
+            with self._lock:
+                self._ve_prewarm_calls.discard(call_token)
+                self._ve_prewarm_pending = bool(self._ve_prewarm_calls)
+            if callback is not None:
+                def deliver(completion=completion):
+                    try:
+                        callback(completion)
+                    except Exception as error:
+                        # The prewarm consumer is a UI extension boundary just
+                        # like recording event delivery.  A broken consumer
+                        # must not unwind through the queued Qt slot.
+                        logging.getLogger(__name__).exception(
+                            "VE prewarm UI callback failed: %s", error)
+
+                self._invoke.emit(deliver)
+
+        # Reserve before entering the service because test doubles and shutdown
+        # races may complete synchronously before the admission call returns.
+        with self._lock:
+            self._ve_prewarm_calls.add(call_token)
+            self._ve_prewarm_pending = True
+        try:
+            status = self.service.prewarm_ve(request, complete)
+        except Exception:
+            with self._lock:
+                self._ve_prewarm_calls.discard(call_token)
+                self._ve_prewarm_pending = bool(self._ve_prewarm_calls)
+            raise
+        if status != "accepted":
+            with self._lock:
+                self._ve_prewarm_calls.discard(call_token)
+                self._ve_prewarm_pending = bool(self._ve_prewarm_calls)
+        return status
 
     def start(self, request, callbacks):
         if QThread.currentThread() is not self.thread():

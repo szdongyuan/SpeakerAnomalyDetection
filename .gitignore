@@ -23,3 +23,10 @@ docs
 vkinging_daq.py
 record_vkinging_continuous.py
 recordings
+record_vkinging_continuous copy.py
+dist
+1111/
+record_vkinging_continuous copy 2.py
+.gitignore
+record_vkinging_continuous.spec
+build/
