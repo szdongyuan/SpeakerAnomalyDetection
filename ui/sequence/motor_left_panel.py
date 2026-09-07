@@ -30,7 +30,7 @@ class MotorDetectionLeftPanel(QWidget):
 
     @property
     def selected_condition_key(self):
-        return self.ai_result_panel.selected_key
+        return self.ai_result_panel.viewed_key
 
     def _init_ui(self):
         # The two inner sections are normally moved into outer QSplitters
@@ -97,6 +97,9 @@ class MotorDetectionLeftPanel(QWidget):
 
     def set_current_stage(self, stage_text: str, tone: str = "pending"):
         self.ai_result_panel.set_current_stage(stage_text, tone=tone)
+
+    def clear_current_stage(self):
+        self.ai_result_panel.clear_current_stage()
 
     def set_forward_result(self, result_text: str, tone: str = None):
         self.ai_result_panel.set_forward_result(result_text, tone=tone)

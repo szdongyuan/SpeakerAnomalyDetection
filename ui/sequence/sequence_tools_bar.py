@@ -30,6 +30,104 @@ class RefreshBeforePopupComboBox(QComboBox):
         super().showPopup()
 
 
+class AnalysisStatusButton(QPushButton):
+    """Toolbar analysis action with a compact, non-animated status badge."""
+
+    STATE_IDLE = "idle"
+    STATE_ANALYZING = "analyzing"
+    STATE_COMPLETED = "completed"
+    STATE_FAILED = "failed"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._analysis_state = self.STATE_IDLE
+        self._status_badge = QLabel(self)
+        self._status_badge.setObjectName("analysisStatusBadge")
+        self._status_badge.setAlignment(Qt.AlignCenter)
+        self._status_badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._status_badge.hide()
+
+    @property
+    def analysis_state(self):
+        return self._analysis_state
+
+    @property
+    def status_badge(self):
+        return self._status_badge
+
+    def set_idle(self):
+        self._analysis_state = self.STATE_IDLE
+        self._status_badge.hide()
+        self._set_status_tooltip("分析")
+
+    def set_analyzing(self, completed, total, source_label=""):
+        completed = max(0, int(completed))
+        total = max(1, int(total))
+        completed = min(completed, total)
+        source_text = str(source_label or "所选档位").strip()
+        self._analysis_state = self.STATE_ANALYZING
+        self._show_badge(
+            f"{completed}/{total}",
+            ui_style_const.COLOR_PRIMARY,
+            minimum_width=34,
+        )
+        self._set_status_tooltip(
+            f"正在分析 {source_text}：{completed}/{total}"
+        )
+
+    def set_completed(self, source_label=""):
+        source_text = str(source_label or "所选档位").strip()
+        self._analysis_state = self.STATE_COMPLETED
+        self._show_badge("✓", ui_style_const.COLOR_OK, minimum_width=18)
+        self._set_status_tooltip(
+            f"{source_text} 手动分析完成，点击查看"
+        )
+
+    def set_failed(self, source_label=""):
+        source_text = str(source_label or "所选档位").strip()
+        self._analysis_state = self.STATE_FAILED
+        self._show_badge("!", ui_style_const.COLOR_NG, minimum_width=18)
+        self._set_status_tooltip(
+            f"{source_text} 手动分析失败，点击查看原因"
+        )
+
+    def _show_badge(self, text, background_color, *, minimum_width):
+        self._status_badge.setText(text)
+        self._status_badge.setStyleSheet(
+            f"""
+            QLabel#analysisStatusBadge {{
+                color: #FFFFFF;
+                background-color: {background_color};
+                border: none;
+                border-radius: 8px;
+                padding: 0 3px;
+                font-family: {ui_style_const.MAIN_UI_SMALL_FONT_FAMILY};
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            """
+        )
+        width = max(minimum_width, self._status_badge.sizeHint().width())
+        self._status_badge.setFixedSize(width, 18)
+        self._position_status_badge()
+        self._status_badge.show()
+        self._status_badge.raise_()
+
+    def _set_status_tooltip(self, text):
+        self.setToolTip(text)
+        self.setAccessibleDescription(text)
+
+    def _position_status_badge(self):
+        self._status_badge.move(
+            max(2, self.width() - self._status_badge.width() - 3),
+            2,
+        )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_status_badge()
+
+
 class SequenceToolsBar(QWidget):
 
     def __init__(self, parent=None):
@@ -41,7 +139,7 @@ class SequenceToolsBar(QWidget):
         self.replayer_btn = QPushButton()
         self.tcp_btn = QPushButton()
         self.serial_trigger_btn = QPushButton()
-        self.data_btn = QPushButton()
+        self.data_btn = AnalysisStatusButton()
         self.using_file_combobox = RefreshBeforePopupComboBox()
         self.sample_number_lineedit = QLineEdit()
         self.current_round_spinbox = QSpinBox()
@@ -86,7 +184,6 @@ class SequenceToolsBar(QWidget):
 
     def create_mainly_layout(self):
         vertical_line_1 = self._create_separator(QFrame.VLine)
-        vertical_line_2 = self._create_separator(QFrame.VLine)
         vertical_line_3 = self._create_separator(QFrame.VLine)
         vertical_line_4 = self._create_separator(QFrame.VLine)
         vertical_line_5 = self._create_separator(QFrame.VLine)
@@ -100,8 +197,6 @@ class SequenceToolsBar(QWidget):
         layout = QHBoxLayout()
         layout.addWidget(self.player_btn)
         layout.addWidget(vertical_line_1)
-        layout.addWidget(self.replayer_btn)
-        layout.addWidget(vertical_line_2)
         layout.addWidget(self.data_btn)
         layout.addWidget(vertical_line_3)
         layout.addWidget(self.tcp_btn)
@@ -112,8 +207,8 @@ class SequenceToolsBar(QWidget):
         layout.addLayout(using_file_combobox_layout)
         layout.addLayout(sample_number_layout)
         layout.addLayout(current_round_layout)
-        layout.addLayout(barcode_scanner_layout)
-        layout.addStretch(1)
+        layout.addLayout(barcode_scanner_layout, 1)
+        layout.addSpacing(8)
 
         layout.setContentsMargins(5, 0, 5, 0)
 
@@ -135,6 +230,8 @@ class SequenceToolsBar(QWidget):
             QSize(30, 30),
         )
         self.replayer_btn.setDisabled(True)
+        # 当前版本不支持重录；保留按钮对象供既有状态同步代码兼容使用。
+        self.replayer_btn.hide()
 
     def set_data_btn(self):
         self._configure_icon_button(
@@ -252,7 +349,9 @@ class SequenceToolsBar(QWidget):
         self.barcode_scanner_box.setChecked(False)
         self.barcode_scanner_box.setStyleSheet(ui_style_const.toolbar_checkbox_style)
         self.lineedit_s_or_n.setDisabled(True)
-        self.lineedit_s_or_n.setFixedSize(240, 35)
+        self.lineedit_s_or_n.setMinimumWidth(240)
+        self.lineedit_s_or_n.setFixedHeight(35)
+        self.lineedit_s_or_n.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.lineedit_s_or_n.setAlignment(Qt.AlignCenter)
         self.lineedit_s_or_n.setStyleSheet(ui_style_const.toolbar_input_style)
         vertical_line = self._create_separator(QFrame.VLine)

@@ -12,6 +12,10 @@ from PyQt5.QtWidgets import QApplication
 
 from ui.acquisition_config_window import RecordConfigWindow
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
+from consts.recording_preview_consts import (
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
+)
 
 
 ANALYSIS_OPS_PATH = (
@@ -65,12 +69,17 @@ def test_record_config_defaults_to_blocking_and_persists_streaming_choice(qapp):
     assert window.streaming_recording_checkbox.isChecked() is False
     assert window.monitor_checkbox.isChecked() is False
     assert window.monitor_checkbox.isEnabled() is False
+    assert window.preview_time_mode_combo.currentData() == PREVIEW_TIME_MODE_RELATIVE_LATEST
 
     window.streaming_recording_checkbox.setChecked(True)
     assert window.monitor_checkbox.isEnabled() is True
     window.on_click_ok_btn()
 
     assert window.final_data["use_streaming_recording"] is True
+    assert (
+        window.final_data[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY]
+        == PREVIEW_TIME_MODE_RELATIVE_LATEST
+    )
 
 
 @pytest.mark.parametrize(

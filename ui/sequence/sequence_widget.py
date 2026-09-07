@@ -21,11 +21,13 @@ from ui.sequence.sequence_widget_test_metadata_ops import SequenceWidgetTestMeta
 from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
 from ui.sequence.sequence_widget_tcp_ops import SequenceWidgetTcpOpsMixin
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
+from ui.sequence.sequence_widget_analysis_process_ops import (
+    SequenceWidgetAnalysisProcessOpsMixin,
+)
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.sequence.sequence_widget_product_pdf_ops import SequenceWidgetProductPdfOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
-from ui.sequence.multichannel_waveform_session import MultichannelWaveformSession
 
 
 class SequenceWindow(
@@ -34,6 +36,7 @@ class SequenceWindow(
     SequenceWidgetBarcodeOpsMixin,
     SequenceWidgetTcpOpsMixin,
     SequenceWidgetSerialTriggerOpsMixin,
+    SequenceWidgetAnalysisProcessOpsMixin,
     SequenceWidgetAnalysisOpsMixin,
     SequenceWidgetConfigOpsMixin,
     SequenceWidgetProductPdfOpsMixin,
@@ -49,6 +52,9 @@ class SequenceWindow(
         self.recording_bridge = recording_bridge
         self.ve_prewarm_lifetime = ve_prewarm_lifetime
         self._owns_recording_bridge = False
+        if recording_bridge is not None:
+            recording_bridge.analysis_eligibility_provider = (
+                self._unfinished_recording_analysis_identifiers)
         self.data_struct = DataDealStruct()
         self.recorded_path = None
         self.count_board = None
@@ -85,6 +91,7 @@ class SequenceWindow(
         self.init_result_files()
         self.count_board = SequenceCountBoard(self.analysis_config)
         self.product_test_condition_configs = self.load_active_product_test_condition_configs()
+        self.product_test_project_context = self.load_active_product_test_context()
         self.product_test_close_trigger_state = (
             self.load_active_product_test_close_trigger_state()
         )
@@ -96,6 +103,7 @@ class SequenceWindow(
             self.count_board,
             condition_configs=self.product_test_condition_configs,
         )
+        self._initialize_analysis_process_runtime()
         self._init_test_round_metadata()
         self._refresh_test_mode_availability()
         self.player_status_flag = False
@@ -183,9 +191,8 @@ class SequenceWindow(
         self._hid_mode_active_until = 0.0  # 时间戳，在此之前忽略键盘输入
 
         # Streaming state variables
-        self._streaming_waveform_session = MultichannelWaveformSession(
-            max_points=self._WAVEFORM_DISPLAY_MAX_POINTS,
-        )
+        self._streaming_waveform_session = None
+        self._streaming_waveform_time_mode = None
         self._streaming_waveform_generation = 0
         self._streaming_waveform_refresh_scheduled = False
         self._streaming_waveform_pending = False

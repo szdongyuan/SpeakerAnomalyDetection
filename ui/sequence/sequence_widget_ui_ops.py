@@ -10,6 +10,7 @@ from base.recording_channel_selection import (
     RecordingChannelSelectionError,
     canonicalize_recording_input_channels,
 )
+from base.ve3668n_input import validate_physical_channels
 from base.product_test_project_config import (
     PRODUCT_TRIGGER_MODE_MIXED,
     classify_project_trigger_mode,
@@ -121,11 +122,17 @@ class SequenceWidgetUiOpsMixin:
         )
         raw_channels = getattr(self, "mic_channels", [])
         try:
-            channels = canonicalize_recording_input_channels(
-                raw_channels,
-                max_input_channels=maximum,
-            )
-        except RecordingChannelSelectionError as error:
+            if mic and mic.get("backend") == "vkinging":
+                channels = validate_physical_channels(raw_channels)
+                inventory = validate_physical_channels(mic.get("physical_channels"))
+                if any(channel not in inventory for channel in channels):
+                    raise ValueError("selected VE physical channels are unavailable")
+            else:
+                channels = canonicalize_recording_input_channels(
+                    raw_channels,
+                    max_input_channels=maximum,
+                )
+        except (RecordingChannelSelectionError, ValueError) as error:
             self._channel_selection_error = str(error)
             self.default_logger.error(
                 "Invalid recording input channel selection "
@@ -286,7 +293,13 @@ class SequenceWidgetUiOpsMixin:
     def set_member_connect(self):
         self.player_btn.clicked.connect(lambda: self.on_clicked_player_btn())
         self.replayer_btn.clicked.connect(lambda: self.judge_play_and_record(is_replay=True))
-        self.data_btn.clicked.connect(lambda: self.run(show_windows=True))
+        self.data_btn.clicked.connect(
+            self._start_selected_condition_manual_analysis
+        )
+        if getattr(self, "left_panel", None) is not None:
+            self.left_panel.condition_selected.connect(
+                lambda _condition_key: self._refresh_analysis_action_state()
+            )
         self.lineedit_type.editingFinished.connect(lambda: self.lineedit_type_lose_focus(self.lineedit_type))
 
         # 扫码键盘楔入模式：信号交给 BarcodeRouter 处理
@@ -350,9 +363,8 @@ class SequenceWidgetUiOpsMixin:
         if callable(clear_wav_calibration_state):
             clear_wav_calibration_state()
         else:
-            self.data_struct.wav_calibration_metadata = None
-            self.data_struct.wav_calibration_metadata_authoritative = False
-            self.data_struct.wav_calibration_warning_shown = False
+            from base.data_struct.data_deal_struct import DataDealStruct
+            DataDealStruct.clear_wav_calibration_context(self.data_struct)
         clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
         if callable(clear_all_direction_waveforms):
             clear_all_direction_waveforms()
@@ -497,6 +509,35 @@ class SequenceWidgetUiOpsMixin:
         self.player_btn.setIconSize(QSize(35, 35))
         self.player_btn.setDisabled(True)
 
+    def _next_manual_product_condition_display_name(self):
+        sequence_builder = getattr(self, "_product_condition_sequence", None)
+        if callable(sequence_builder):
+            conditions = sequence_builder()
+        else:
+            conditions = [
+                item
+                for item in getattr(self, "product_test_condition_configs", []) or []
+                if isinstance(item, dict)
+            ]
+        if not conditions:
+            return ""
+
+        try:
+            index = int(getattr(self, "_manual_product_condition_index", 0) or 0)
+        except (TypeError, ValueError):
+            index = 0
+        if index < 0 or index >= len(conditions):
+            index = 0
+
+        condition = conditions[index]
+        return str(
+            condition.get("condition_name")
+            or condition.get("name")
+            or condition.get("display_name")
+            or condition.get("key")
+            or ""
+        ).strip()
+
     def update_player_btn_is_paused(self):
         end_metadata = getattr(self, "_end_test_round_metadata", None)
         if (
@@ -517,13 +558,23 @@ class SequenceWidgetUiOpsMixin:
             if trigger_mode == PRODUCT_TRIGGER_MODE_MIXED:
                 tooltip = "所有工况状态码必须全部配置或全部留空"
             elif can_start:
-                tooltip = "开始录制"
+                condition_name = self._next_manual_product_condition_display_name()
+                tooltip = f"开始录制：{condition_name}" if condition_name else "开始录制"
             else:
                 tooltip = "当前配置已配置工况状态码，只能由状态码触发测试"
             self.player_btn.setToolTip(tooltip)
         else:
             can_start = bool(getattr(self, "sequence_config", None))
 
-        can_start = can_start and not getattr(self, "player_status_flag", False)
-        can_start = can_start and not getattr(self, "_record_workflow_busy", False)
+        recording_admission = getattr(self, "_can_start_recording_workflow", None)
+        if callable(recording_admission):
+            can_start = can_start and recording_admission()
+        else:
+            can_start = can_start and not getattr(self, "player_status_flag", False)
+            can_start = can_start and not getattr(self, "_record_workflow_busy", False)
+        can_start = can_start and not getattr(
+            self,
+            "_analysis_round_completion_pending",
+            False,
+        )
         self.player_btn.setDisabled(not can_start)

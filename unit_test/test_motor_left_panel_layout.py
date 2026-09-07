@@ -63,6 +63,15 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         if condition_configs:
             self.assertTrue(panel.set_condition_result(condition_configs[-1]["key"], "NG"))
 
+    def test_left_panel_can_clear_public_task_stage(self):
+        panel = MotorDetectionLeftPanel(QWidget())
+        panel.set_current_stage("分析中", tone="running")
+
+        panel.clear_current_stage()
+
+        self.assertEqual(panel.ai_result_panel.stage_text, "")
+        self.assertEqual(panel.ai_result_panel.stage_label.text(), "")
+
     def test_ai_result_panel_uses_test_task_structure(self):
         panel = MotorAiResultPanel(
             condition_configs=[
@@ -95,7 +104,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertNotIn("工况判定结果", labels)
         self.assertIn("当前端口", labels)
         self.assertIn("档位列表", labels)
-        self.assertIn("当前测试：0.1", labels)
+        self.assertFalse(any(text.startswith("当前查看：") for text in labels))
         self.assertIn("档位进度：0/2", labels)
         self.assertIn("判定汇总", labels)
         self.assertIn("当前轮次", labels)
@@ -110,10 +119,45 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(panel.count_label.text(), "档位进度：0/2")
         self.assertNotIn("index", panel.rows["01"]["labels"])
         self.assertEqual(panel.rows["01"]["labels"]["name"].text(), "0.1")
+        self.assertNotIn("#2F80C9", panel.rows["01"]["button"].styleSheet())
+        self.assertNotIn("#2F80C9", panel.rows["02"]["button"].styleSheet())
         self.assertIn(
             ui_style_const.MAIN_UI_SMALL_FONT_FAMILY,
             panel.stage_label.styleSheet(),
         )
+
+    def test_initial_conditions_are_not_marked_as_user_viewed(self):
+        panel = MotorAiResultPanel(
+            condition_configs=[
+                {"condition_name": "0.1", "key": "01"},
+                {"condition_name": "0.3", "key": "02"},
+            ]
+        )
+
+        self.assertEqual(panel.viewed_key, "")
+        self.assertFalse(hasattr(panel, "current_test_label"))
+        self.assertNotIn("#2F80C9", panel.rows["01"]["button"].styleSheet())
+        self.assertNotIn("#2F80C9", panel.rows["02"]["button"].styleSheet())
+
+    def test_automatic_recording_selection_does_not_become_user_view(self):
+        panel = MotorAiResultPanel(
+            condition_configs=[
+                {"condition_name": "0.1", "key": "01"},
+                {"condition_name": "0.3", "key": "02"},
+            ]
+        )
+
+        panel.set_condition_result("02", "采集中", tone="running")
+
+        self.assertEqual(panel.selected_key, "02")
+        self.assertEqual(panel.viewed_key, "")
+        self.assertFalse(hasattr(panel, "current_test_label"))
+        self.assertIn("#EAF2FB", panel.rows["02"]["button"].styleSheet())
+
+        panel.set_condition_result("02", "待判定", tone="pending")
+
+        self.assertNotIn("#EAF2FB", panel.rows["02"]["button"].styleSheet())
+        self.assertNotIn("#2F80C9", panel.rows["02"]["button"].styleSheet())
         self.assertIn(
             ui_style_const.UI_FONT_FAMILY,
             panel.current_port_combo.styleSheet(),
@@ -213,9 +257,11 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
                         "display_sequence": [
                             "频段能量 (FBA) 1",
                             "快速傅里叶变换 (FFT) 1",
+                            "频谱分析 (Spec) 1",
                         ],
                         "频段能量 (FBA) 1": {"type": "FBA"},
                         "快速傅里叶变换 (FFT) 1": {"type": "FFT"},
+                        "频谱分析 (Spec) 1": {"type": "Spec"},
                     },
                 },
             ]
@@ -234,6 +280,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
             [
                 {"key": "FBA", "header": "1/3倍频程"},
                 {"key": "FFT", "header": "FFT"},
+                {"key": "Spec", "header": "Spec"},
             ],
         )
 
@@ -303,7 +350,9 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
 
         self.assertTrue(panel.rows["01"]["button"].isHidden())
         self.assertFalse(panel.rows["02"]["button"].isHidden())
-        self.assertEqual(panel.current_test_label.text(), "当前测试：0.3")
+        self.assertFalse(hasattr(panel, "current_test_label"))
+        self.assertNotIn("#2F80C9", panel.rows["02"]["button"].styleSheet())
+        self.assertNotIn("#2F80C9", panel.rows["01"]["button"].styleSheet())
         self.assertEqual(panel.port_index_label.text(), "第2/2个")
 
     def test_port_rows_show_gear_names_without_global_sequence_numbers(self):
@@ -361,7 +410,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertIn("background:#FDECEC", panel.round_result_value.styleSheet())
         self.assertEqual(panel.rows["02"]["labels"]["result"].text(), "NG")
         self.assertIn("#D94343", panel.rows["02"]["labels"]["result"].styleSheet())
-        self.assertIn("background:#EAF2FB", panel.rows["01"]["button"].styleSheet())
+        self.assertIn("background:#F4F8FC", panel.rows["01"]["button"].styleSheet())
         self.assertNotIn("background:#FCE8E8", panel.rows["02"]["button"].styleSheet())
 
     def test_channel_results_update_selected_channel_table(self):
@@ -377,10 +426,12 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
                             "声压级 (SPL) 1",
                             "频段能量 (FBA) 1",
                             "快速傅里叶变换 (FFT) 1",
+                            "频谱分析 (Spec) 1",
                         ],
                         "声压级 (SPL) 1": {"type": "SPL"},
                         "频段能量 (FBA) 1": {"type": "FBA"},
                         "快速傅里叶变换 (FFT) 1": {"type": "FFT"},
+                        "频谱分析 (Spec) 1": {"type": "Spec"},
                     },
                 }
             ]
@@ -390,7 +441,15 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertTrue(
             panel.set_condition_channel_results(
                 "01",
-                [{"SPL": "OK", "FFT": "NG", "FBA": "OK", "result": "NG"}],
+                [
+                    {
+                        "SPL": "OK",
+                        "FFT": "NG",
+                        "FBA": "OK",
+                        "Spec": "分析完成",
+                        "result": "NG",
+                    }
+                ],
             )
         )
 
@@ -398,6 +457,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(first_channel["SPL"].text(), "OK")
         self.assertEqual(first_channel["FFT"].text(), "NG")
         self.assertEqual(first_channel["FBA"].text(), "OK")
+        self.assertEqual(first_channel["Spec"].text(), "分析完成")
         self.assertEqual(first_channel["result"].text(), "NG")
         self.assertIn("#D94343", first_channel["FFT"].styleSheet())
 
@@ -459,6 +519,46 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
             [labels["result"].text() for labels in panel.channel_detail_labels],
             ["OK", "NG"],
         )
+
+    def test_recording_highlight_stays_on_recording_row_when_viewing_history(self):
+        panel = MotorAiResultPanel(
+            condition_configs=[
+                {"condition_name": "0.1", "key": "01"},
+                {"condition_name": "0.3", "key": "02"},
+            ]
+        )
+        panel.set_channels([0, 1])
+
+        panel.set_condition_result("02", "采集中", tone="running")
+        combined_style = panel.rows["02"]["button"].styleSheet()
+        panel.select_condition("01")
+        panel.set_condition_result("02", "采集中", tone="running")
+
+        self.assertEqual(panel.selected_key, "01")
+        self.assertIn("#EAF2FB", combined_style)
+        self.assertIn("#2F80C9", combined_style)
+        self.assertIn("background:#E1EFFF", panel.rows["01"]["button"].styleSheet())
+        self.assertIn("border:1px solid #1877C9", panel.rows["01"]["button"].styleSheet())
+        self.assertNotIn("#F3F0F8", panel.rows["01"]["button"].styleSheet())
+        self.assertNotIn("#7A6C9D", panel.rows["01"]["button"].styleSheet())
+        self.assertIn("#EAF2FB", panel.rows["02"]["button"].styleSheet())
+        self.assertIn("#2F80C9", panel.rows["02"]["button"].styleSheet())
+        self.assertNotIn("selection_marker", panel.rows["01"])
+        self.assertNotIn("recording_marker", panel.rows["02"])
+
+    def test_analysis_running_state_does_not_look_like_recording_or_steal_view(self):
+        panel = MotorAiResultPanel(
+            condition_configs=[
+                {"condition_name": "0.1", "key": "01"},
+                {"condition_name": "0.3", "key": "02"},
+            ]
+        )
+        panel.select_condition("01")
+
+        panel.set_condition_result("02", "分析中", tone="running")
+
+        self.assertEqual(panel.selected_key, "01")
+        self.assertIn("#B8C8DA", panel.rows["02"]["button"].styleSheet())
 
     def test_automatic_results_survive_legacy_pending_refresh_per_port(self):
         configs = []
@@ -543,6 +643,44 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(panel.round_result_value.text(), "NG")
         self.assertEqual(panel.get_automatic_round_result(), ("NG", "ng", True))
 
+    def test_round_summary_keeps_failed_analysis_pending_for_retry(self):
+        panel = MotorAiResultPanel(
+            condition_configs=[
+                {"condition_name": "0.1", "key": "01"},
+                {"condition_name": "0.3", "key": "02"},
+            ]
+        )
+
+        panel.set_condition_result("01", "OK", tone="ok")
+        panel.set_condition_result("02", "分析失败", tone="ng")
+
+        self.assertEqual(panel.rows["02"]["analysis_completed"], False)
+        self.assertEqual(panel.progress_label.text(), "档位进度：1/2")
+        self.assertEqual(panel.round_result_value.text(), "待判定")
+        self.assertEqual(
+            panel.get_automatic_round_result(),
+            ("待判定", "pending", False),
+        )
+
+    def test_round_summary_completes_without_judgment_when_no_item_contributes(self):
+        panel = MotorAiResultPanel(
+            condition_configs=[
+                {"condition_name": "0.1", "key": "01"},
+                {"condition_name": "0.3", "key": "02"},
+            ]
+        )
+
+        panel.set_condition_result("01", "未产生判定", tone="pending")
+        panel.set_condition_result("02", "未产生判定", tone="pending")
+
+        self.assertTrue(panel.rows["01"]["analysis_completed"])
+        self.assertTrue(panel.rows["02"]["analysis_completed"])
+        self.assertEqual(panel.round_result_value.text(), "未产生判定")
+        self.assertEqual(
+            panel.get_automatic_round_result(),
+            ("未产生判定", "pending", True),
+        )
+
     def test_current_stage_updates_visible_task_status(self):
         panel = MotorAiResultPanel(
             condition_configs=[
@@ -552,12 +690,70 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         panel.set_channels(list(range(5)))
 
         fixed_width = panel.stage_label.width()
-        panel.set_current_stage("档位1 检测中", tone="running")
+        panel.set_current_stage("分析中", tone="running")
 
-        self.assertEqual(panel.stage_text, "档位1 检测中")
-        self.assertEqual(panel.stage_label.text(), "档位1 检测中")
+        self.assertEqual(panel.stage_text, "分析中")
+        self.assertEqual(panel.stage_label.text(), "分析中")
         self.assertEqual(panel.stage_label.width(), fixed_width)
         self.assertIn("#FFFFFF", panel.stage_label.styleSheet())
+
+        panel.clear_current_stage()
+
+        self.assertEqual(panel.stage_text, "")
+        self.assertEqual(panel.stage_label.text(), "")
+        self.assertEqual(panel.stage_label.toolTip(), "")
+
+    def test_public_task_stage_is_limited_to_approved_statuses(self):
+        panel = MotorAiResultPanel()
+        cases = {
+            "": "等待开始",
+            "等待开始": "等待开始",
+            "等待导入": "等待开始",
+            "A口 / 0.1 等待导入": "等待开始",
+            "采集中": "",
+            "正转检测中": "",
+            "反转检测中": "",
+            "分析中": "分析中",
+            "分析排队": "分析中",
+            "A口 / 0.1 分析中": "分析中",
+            "本轮录音完成，等待分析": "分析中",
+            "正转录音完成，等待分析": "分析中",
+            "反转录音完成，等待分析": "分析中",
+            "等待下一档位": "等待下一档位",
+            "待判定": "等待下一档位",
+            "本档位分析完成": "等待下一档位",
+            "等待正转": "等待下一档位",
+            "等待反转": "等待下一档位",
+            "本轮完成": "本轮完成",
+            "本轮采集完成": "本轮完成",
+            "本轮采集完成，待判定": "本轮完成",
+            "本轮分析完成，未判定": "本轮完成",
+            "循环完成": "本轮完成",
+            "本轮测试已关闭": "本轮完成",
+            "测试异常": "测试异常",
+            "结果不完整": "测试异常",
+            "结果文件保存失败": "测试异常",
+            "A口 / 0.1 分析失败": "测试异常",
+            "分析失败，等待重试": "测试异常",
+            "测试异常，等待工况状态码": "测试异常",
+            "录音异常，循环已作废": "测试异常",
+            "测试完成，PDF报告生成失败": "测试异常",
+            "未注册的新状态": "测试异常",
+        }
+        approved = {
+            "",
+            "等待开始",
+            "分析中",
+            "等待下一档位",
+            "本轮完成",
+            "测试异常",
+        }
+
+        for raw_stage, expected_stage in cases.items():
+            with self.subTest(raw_stage=raw_stage):
+                panel.set_current_stage(raw_stage)
+                self.assertEqual(panel.stage_label.text(), expected_stage)
+                self.assertIn(panel.stage_label.text(), approved)
 
     def test_ai_result_panel_keeps_rows_when_condition_keys_repeat(self):
         panel = MotorAiResultPanel(

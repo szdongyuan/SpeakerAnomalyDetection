@@ -12,6 +12,7 @@ from base.product_test_project_config import (
     iter_test_conditions,
 )
 from consts import error_code
+from consts.recording_preview_consts import RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
 from consts.product_test_project_consts import (
     GROUP_NAME_KEY,
     PROJECT_NAME_KEY,
@@ -396,6 +397,99 @@ def test_queue_catalog_exposes_duration_analysis_and_ai_judgment(tmp_path):
     assert info["duration"] == 600
     assert info["analysis_items"] == ["分析项1"]
     assert info["can_auto_judge"] is True
+
+
+def test_project_without_threshold_can_run_in_test_mode_as_not_labeled(tmp_path):
+    manager = make_manager(
+        tmp_path,
+        {"基础测试": {"analysis_type": "SPL", "limit_checked": False}},
+    )
+    project = make_project(tmp_path)
+
+    validation = manager.validate_project(project, None)
+
+    assert validation["is_usable"] is True
+    assert validation["is_test_mode_usable"] is True
+    assert validation["test_mode_errors"] == []
+    assert "不能自动输出 OK/NG" in validation["use_warnings"][0]
+
+
+def test_project_record_queue_with_invalid_preview_mode_is_unavailable(tmp_path):
+    manager = make_manager(tmp_path)
+    queue_path = tmp_path / "invalid-record.json"
+    queue_data = [{
+        "seq1": {
+            "acq": {
+                "mode": "RECORD_ONLY",
+                "detail": {
+                    "total_time": 1.0,
+                    "sample_rate": 48000,
+                    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: "broken",
+                },
+            },
+            "analysis_list": {
+                "display_sequence": ["分析项1"],
+                "分析项1": {"type": "SPL", "limit_checked": True},
+            },
+        }
+    }]
+    assert LoadUiConfig.save_data_to_json(queue_data, str(queue_path))
+
+    info = manager._load_queue_info(str(queue_path))
+
+    assert info["available"] is False
+    assert RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY in info["reason"]
+
+
+@pytest.mark.parametrize("invalid_detail", [None, []])
+def test_project_record_queue_with_non_mapping_detail_is_unavailable(
+    tmp_path, invalid_detail
+):
+    manager = make_manager(tmp_path)
+    queue_path = tmp_path / "invalid-record-detail.json"
+    queue_data = [{
+        "seq1": {
+            "acq": {
+                "mode": "RECORD_ONLY",
+                "detail": invalid_detail,
+            },
+            "analysis_list": {
+                "display_sequence": ["分析项1"],
+                "分析项1": {"type": "SPL", "limit_checked": True},
+            },
+        }
+    }]
+    assert LoadUiConfig.save_data_to_json(queue_data, str(queue_path))
+
+    info = manager._load_queue_info(str(queue_path))
+
+    assert info["available"] is False
+    assert info["reason"] == "recording acquisition detail must be a mapping"
+
+
+def test_project_import_queue_ignores_invalid_recording_preview_field(tmp_path):
+    manager = make_manager(tmp_path)
+    queue_path = tmp_path / "import.json"
+    queue_data = [{
+        "seq1": {
+            "acq": {
+                "mode": "IMPORT_AUDIO",
+                "detail": {
+                    "sample_rate": 48000,
+                    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: "broken",
+                },
+            },
+            "analysis_list": {
+                "display_sequence": ["分析项1"],
+                "分析项1": {"type": "SPL", "limit_checked": True},
+            },
+        }
+    }]
+    assert LoadUiConfig.save_data_to_json(queue_data, str(queue_path))
+
+    info = manager._load_queue_info(str(queue_path))
+
+    assert info["available"] is True
 
 
 def test_import_rejects_legacy_or_duplicate_project(tmp_path):

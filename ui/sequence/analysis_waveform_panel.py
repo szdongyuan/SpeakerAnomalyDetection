@@ -10,22 +10,28 @@ from PyQt5.QtWidgets import (
 
 from base.channel_layout import load_channel_layout, save_channel_layout
 from consts import ui_style_const
-from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
+from consts.recording_preview_consts import PLOT_PRESENTATION_COMPLETE
+from ui.sequence.channel_plot_workspace import (
+    ChannelPlotPresentationMixin,
+    ChannelPlotWorkspace,
+)
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
 
 
-class AnalysisWaveformRow(QFrame):
+class AnalysisWaveformRow(ChannelPlotPresentationMixin, QFrame):
     """One display-only waveform row for a fixed acquisition channel."""
 
     direction_label_changed = pyqtSignal(str, str)
 
     def __init__(self, canvas, channel_index, direction_label):
         super().__init__(canvas)
+        self._initialize_plot_presentation_lifecycle()
         self.channel_index = int(channel_index)
         channel_label = f'CH{self.channel_index + 1}'
         self.channel_label = str(channel_label or "")
         self.direction_label = str(direction_label or "")
         self.plot_item = None
+        self._set_presentation_mode(PLOT_PRESENTATION_COMPLETE)
 
         self.setObjectName("fiveChannelWaveformRow")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -119,11 +125,8 @@ class AnalysisWaveformRow(QFrame):
         self.plot_widget.setLabel("left", "Amplitude")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.25)
 
-    def clear_plot(self) -> None:
-        self.plot_widget.clear()
-        self.plot_item = None
-
-    def set_data(self, x, y) -> bool:
+    def _set_curve_data(self, x, y) -> bool:
+        self._release_deferred_view_guard()
         x_values = np.asarray(x)
         y_values = np.asarray(y)
         if x_values.ndim != 1 or y_values.ndim != 1 or x_values.shape[0] != y_values.shape[0]:
@@ -133,10 +136,6 @@ class AnalysisWaveformRow(QFrame):
             return False
 
         if self.plot_item is None:
-            self.plot_widget.getViewBox().enableAutoRange(
-                axis=pg.ViewBox.XYAxes,
-                enable=True,
-            )
             self.plot_item = self.plot_widget.plot(
                 x_values,
                 y_values,
@@ -146,21 +145,8 @@ class AnalysisWaveformRow(QFrame):
             self.plot_item.setData(x_values, y_values)
         return True
 
-
     def set_title(self, title):
         self.channel_caption.setText(str(title))
-
-    def snapshot_plot_state(self):
-        if self.plot_item is None:
-            return None
-        x_data, y_data = self.plot_item.getData()
-        return np.asarray(x_data).copy(), np.asarray(y_data).copy()
-
-    def restore_plot_state(self, state):
-        if state is None:
-            self.clear_plot()
-        else:
-            self.set_data(*state)
 
 
 class AnalysisWaveformPanel(ChannelPlotWorkspace):
@@ -233,6 +219,10 @@ class AnalysisWaveformPanel(ChannelPlotWorkspace):
         self.layout().insertWidget(1, meta)
         self.set_conditions(condition_configs)
 
+    @property
+    def channel_layout(self):
+        return dict(self._channel_layout)
+
     def eventFilter(self, watched, event):
         if watched is self.scroll.viewport() and event.type() == QEvent.Resize:
             QTimer.singleShot(0, self._tile_subwindows)
@@ -243,6 +233,7 @@ class AnalysisWaveformPanel(ChannelPlotWorkspace):
         if channels == self._channel_indices and self._subwins:
             return
         for window in self._subwins:
+            window._release_deferred_view_guard()
             window.hide()
             window.deleteLater()
         self.canvas.set_windows([])

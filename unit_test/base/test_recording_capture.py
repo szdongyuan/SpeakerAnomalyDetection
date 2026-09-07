@@ -9,13 +9,25 @@ import pytest
 import soundfile as sf
 
 from base.recording_capture import RecordingCapture, capture_queue_capacity
+from base.rolling_waveform_accumulator import RollingWaveformAccumulator
 from base.recording_process_protocol import (
     RecordingCancelled, RecordingEvent, RecordingFailure, RecordingPreview, RecordingRequest, RecordingResult,
 )
-from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
+from base.streaming_waveform_accumulator import (
+    StreamingWaveformAccumulator,
+    StreamingWaveformSnapshot,
+)
 from base.wav_calibration_metadata import read_wav_calibration_metadata
+from consts.recording_preview_consts import (
+    MAIN_RECORDING_LIVE_MAX_POINTS,
+    MAIN_RECORDING_LIVE_WINDOW_SECONDS,
+    PREVIEW_TIME_LOWER_BOUND_TOLERANCE,
+    PREVIEW_TIME_MODE_CUMULATIVE,
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+)
 from unit_test.base.recording_process_fakes import (
-    ControlledWriter, FakeBackend, FakeStatus, MetadataFileFaults, device_info, known_audio,
+    ControlledMetadataAppender, ControlledWriter, FakeBackend, FakeStatus, MetadataFileFaults,
+    device_info, known_audio,
 )
 
 
@@ -92,6 +104,23 @@ def test_request_is_validated_picklable_snapshot(tmp_path):
             request(tmp_path, **override)
 
 
+def test_request_preview_mode_defaults_validates_and_freezes_source_detail(tmp_path):
+    assert request(tmp_path).preview_time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
+
+    detail = {"recording_preview_time_mode": PREVIEW_TIME_MODE_CUMULATIVE}
+    cumulative = request(tmp_path, preview_time_mode=detail["recording_preview_time_mode"])
+    detail["recording_preview_time_mode"] = PREVIEW_TIME_MODE_RELATIVE_LATEST
+    assert cumulative.preview_time_mode == PREVIEW_TIME_MODE_CUMULATIVE
+    assert pickle.loads(pickle.dumps(cumulative)) == cumulative
+
+    relative = request(tmp_path, preview_time_mode=PREVIEW_TIME_MODE_RELATIVE_LATEST)
+    assert pickle.loads(pickle.dumps(relative)).preview_time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
+
+    for invalid in (None, True, 1, 1.0, "", "CUMULATIVE", "unknown", [], {}):
+        with pytest.raises(ValueError, match="recording_preview_time_mode"):
+            request(tmp_path, preview_time_mode=invalid)
+
+
 def test_queue_capacity_is_explicit_and_saturation_fails(tmp_path, captures):
     assert capture_queue_capacity(100, 2, blocksize=8) == (200, 1600)
     assert capture_queue_capacity(100, 2, blocksize=300) == (300, 2400)
@@ -150,6 +179,21 @@ def test_wav_failures_never_complete(tmp_path, captures, fail_at):
     result = capture.wait(3)
     assert isinstance(result, RecordingFailure)
     assert "injected" in result.message
+
+
+def test_sound_card_finalizer_never_opens_early_capture_slot(tmp_path, captures):
+    finalizer = ControlledMetadataAppender()
+    capture, backend = captures(request(tmp_path), metadata_appender=finalizer)
+    feed_all(backend)
+    try:
+        assert finalizer.entered.wait(3)
+        assert not capture.done.is_set()
+        assert not capture.capture_slot_released.is_set()
+        assert capture.capture_slot is None
+    finally:
+        finalizer.release.set()
+    assert isinstance(capture.wait(3), RecordingResult)
+    assert not capture.capture_slot_released.is_set()
 
 
 def test_missing_or_rejected_metadata_is_warning(tmp_path, captures):
@@ -290,8 +334,24 @@ def test_callback_exception_becomes_diagnostic_failure(tmp_path, captures):
     assert outcome.handles_released and backend.stream.closed
 
 
-def test_preview_is_cumulative_owned_bounded_and_nonblocking(tmp_path, captures):
-    capture, backend = captures(request(tmp_path, sample_rate=10000, target_samples=12000))
+@pytest.mark.parametrize(
+    "preview_time_mode,accumulator_type",
+    [
+        (PREVIEW_TIME_MODE_RELATIVE_LATEST, RollingWaveformAccumulator),
+        (PREVIEW_TIME_MODE_CUMULATIVE, StreamingWaveformAccumulator),
+    ],
+)
+def test_preview_selects_one_owned_bounded_reducer_and_is_nonblocking(
+        tmp_path, captures, preview_time_mode, accumulator_type):
+    capture, backend = captures(
+        request(tmp_path, sample_rate=1000, target_samples=12000,
+                preview_time_mode=preview_time_mode), queue_seconds=20,
+    )
+    assert len(capture._waveforms._accumulators) == len(capture.request.channels)
+    assert all(
+        type(accumulator) is accumulator_type
+        for accumulator in capture._waveforms._accumulators.values()
+    )
     data = known_audio(12000)
     backend.stream.feed(data[:6000])
     deadline = time.monotonic() + 3
@@ -302,16 +362,30 @@ def test_preview_is_cumulative_owned_bounded_and_nonblocking(tmp_path, captures)
             break
         time.sleep(.005)
     assert preview.sample_stop == 5998 and preview.channels == (0, 2)
+    assert preview.time_mode == preview_time_mode
     saved = preview.waveforms[0].amplitude.copy()
     backend.stream.feed(data[6000:])
-    assert isinstance(capture.wait(3), RecordingResult)
+    outcome = capture.wait(3)
+    assert isinstance(outcome, RecordingResult)
     final = capture.snapshot(generation=2, sequence=2)
     assert final.sample_stop == 11998
     for waveform in final.waveforms:
-        assert len(waveform.time) <= 4000
-        assert waveform.time[0] == 0 and waveform.time[-1] == 11997 / 10000
+        assert 0 < len(waveform.time) <= MAIN_RECORDING_LIVE_MAX_POINTS
+        if preview_time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST:
+            assert waveform.time[-1] == 0.0
+            assert np.all(waveform.time <= 0.0)
+            assert waveform.time[0] >= (
+                -MAIN_RECORDING_LIVE_WINDOW_SECONDS - PREVIEW_TIME_LOWER_BOUND_TOLERANCE
+            )
+        else:
+            assert waveform.time[0] == 0.0
+            assert waveform.time[-1] > 0.0
+            assert np.all(np.diff(waveform.time) > 0.0)
         assert not waveform.time.flags.writeable and not waveform.amplitude.flags.writeable
     np.testing.assert_array_equal(preview.waveforms[0].amplitude, saved)
+    saved_audio, sample_rate = sf.read(outcome.path, dtype="float32", always_2d=True)
+    assert sample_rate == 1000 and len(saved_audio) == outcome.final_frames == 11998
+    np.testing.assert_array_equal(saved_audio, data[:12000, (0, 2)][2:])
     # The sender never waits for the consumer's accumulator mutation lock.
     with capture._waveform_lock:
         assert capture.snapshot(generation=2, sequence=3) is None
@@ -334,14 +408,72 @@ def test_preview_protocol_owns_arrays_and_validates_shape_after_pickle():
     amplitude = np.array([.2, .3], dtype=np.float32)
     waveform = StreamingWaveformSnapshot(time_axis, amplitude, 2)
     preview = RecordingPreview("one", 1, 1, 2, (0,), (waveform,))
+    assert preview.time_mode == PREVIEW_TIME_MODE_CUMULATIVE
     amplitude.fill(99)
     np.testing.assert_array_equal(preview.waveforms[0].amplitude, np.array([.2, .3], dtype=np.float32))
     restored = pickle.loads(pickle.dumps(preview))
+    assert restored.time_mode == PREVIEW_TIME_MODE_CUMULATIVE
     assert not restored.waveforms[0].amplitude.flags.writeable
     with pytest.raises(ValueError):
         RecordingPreview("one", 1, 1, 2, (0, 2), (waveform,))
     with pytest.raises(ValueError):
         RecordingEvent(1, "one", "start", payload=object())
+
+
+def test_relative_preview_protocol_preserves_mode_owned_arrays_and_boundary_after_pickle():
+    time_axis = np.array(
+        [-MAIN_RECORDING_LIVE_WINDOW_SECONDS - PREVIEW_TIME_LOWER_BOUND_TOLERANCE, 0.0],
+        dtype=np.float64,
+    )
+    amplitude = np.array([-.25, .75], dtype=np.float32)
+    waveform = StreamingWaveformSnapshot(time_axis, amplitude, 12_000)
+    preview = RecordingPreview(
+        "one", 1, 1, 12_000, (0,), (waveform,), PREVIEW_TIME_MODE_RELATIVE_LATEST,
+    )
+    time_axis.fill(99)
+    amplitude.fill(99)
+    assert preview.time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
+    np.testing.assert_array_equal(
+        preview.waveforms[0].time,
+        np.array([-10.000000000001, 0.0], dtype=np.float64),
+    )
+    restored = pickle.loads(pickle.dumps(preview))
+    assert restored.time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
+    assert not restored.waveforms[0].time.flags.writeable
+    assert not restored.waveforms[0].amplitude.flags.writeable
+
+
+@pytest.mark.parametrize("time_axis,amplitude", [
+    (np.array([-.1, 1e-15], dtype=np.float64), np.ones(2, dtype=np.float32)),
+    (np.array([-.1, .1, 0.0], dtype=np.float64), np.ones(3, dtype=np.float32)),
+    (np.array([-10.0 - 2e-12, 0.0], dtype=np.float64), np.ones(2, dtype=np.float32)),
+    (np.array([float("nan"), 0.0], dtype=np.float64), np.ones(2, dtype=np.float32)),
+    (np.array([-.1, -.1, 0.0], dtype=np.float64), np.ones(3, dtype=np.float32)),
+    (np.array([-.1, 0.0], dtype=np.float32), np.ones(2, dtype=np.float32)),
+    (np.array([-.1, 0.0], dtype=np.float64), np.ones(2, dtype=np.float64)),
+    (np.linspace(-10.0, 0.0, MAIN_RECORDING_LIVE_MAX_POINTS + 1, dtype=np.float64),
+     np.ones(MAIN_RECORDING_LIVE_MAX_POINTS + 1, dtype=np.float32)),
+])
+def test_relative_preview_protocol_rejects_invalid_waveforms(time_axis, amplitude):
+    waveform = StreamingWaveformSnapshot(time_axis, amplitude, 12_000)
+    with pytest.raises(ValueError, match="relative_latest"):
+        RecordingPreview(
+            "one", 1, 1, 12_000, (0,), (waveform,), PREVIEW_TIME_MODE_RELATIVE_LATEST,
+        )
+
+
+def test_relative_preview_protocol_rejects_mode_and_channel_mismatch():
+    waveform = StreamingWaveformSnapshot(
+        np.array([-.1, 0.0], dtype=np.float64),
+        np.ones(2, dtype=np.float32),
+        12_000,
+    )
+    with pytest.raises(ValueError, match="time mode"):
+        RecordingPreview("one", 1, 1, 12_000, (0,), (waveform,), "inferred")
+    with pytest.raises(ValueError, match="counts differ"):
+        RecordingPreview(
+            "one", 1, 1, 12_000, (0, 2), (waveform,), PREVIEW_TIME_MODE_RELATIVE_LATEST,
+        )
 
 
 def test_cancel_during_trim_reports_actual_final_frames(tmp_path, captures):
@@ -521,16 +653,165 @@ def test_failure_cleanup_paths_default_to_no_owned_temporary_files():
     assert outcome.cleanup_paths == ()
 
 
-def test_preview_failure_does_not_invalidate_audio(tmp_path, captures):
-    capture, backend = captures(request(tmp_path))
-    def fail_append(block):
-        raise RuntimeError("injected envelope failure")
-    capture._waveforms.append = fail_append
-    feed_all(backend)
+@pytest.mark.parametrize("preview_time_mode", [
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+    PREVIEW_TIME_MODE_CUMULATIVE,
+])
+def test_preview_append_failure_after_valid_block_does_not_invalidate_audio(
+        tmp_path, captures, preview_time_mode):
+    writer = ControlledWriter()
+    written = []
+    real_write = writer.write_chunk
+    writer.write_chunk = lambda block: (written.append(block.copy()), real_write(block))[1]
+    capture, backend = captures(
+        request(tmp_path, preview_time_mode=preview_time_mode), writer_factory=writer)
+    data = known_audio()
+    real_append = capture._waveforms.append
+    calls = 0
+
+    def fail_second_append(block):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected preview append failure")
+        return real_append(block)
+
+    capture._waveforms.append = fail_second_append
+    for chunk in (data[:2], data[2:5], data[5:]):
+        backend.stream.feed(chunk)
     outcome = capture.wait(3)
     assert isinstance(outcome, RecordingResult)
     assert sum("preview disabled" in warning for warning in outcome.warnings) == 1
     assert capture.snapshot(generation=1, sequence=1) is None
+    assert capture._waveforms is None
+    assert calls == 2
+    np.testing.assert_array_equal(np.concatenate(written), data[:9, (0, 2)])
+    saved, _ = sf.read(outcome.path, dtype="float32", always_2d=True)
+    np.testing.assert_array_equal(saved, data[:9, (0, 2)][2:])
+
+
+def test_preview_serialization_failure_after_valid_waveform_does_not_invalidate_audio(
+        tmp_path, captures, monkeypatch):
+    from base import recording_capture as module
+
+    writer = ControlledWriter()
+    written = []
+    real_write = writer.write_chunk
+    writer.write_chunk = lambda block: (written.append(block.copy()), real_write(block))[1]
+    capture, backend = captures(request(tmp_path), writer_factory=writer)
+    data = known_audio()
+    backend.stream.feed(data[:5])
+    deadline = time.monotonic() + 3
+    valid = None
+    while time.monotonic() < deadline:
+        valid = capture.snapshot(generation=1, sequence=1)
+        if valid is not None and valid.sample_stop == 3:
+            break
+        time.sleep(.005)
+    assert valid is not None and valid.waveforms[0].time[-1] == 0.0
+
+    def fail_preview(*args, **kwargs):
+        raise ValueError("injected preview validation failure")
+
+    monkeypatch.setattr(module, "RecordingPreview", fail_preview)
+    assert capture.snapshot(generation=1, sequence=2) is None
+    backend.stream.feed(data[5:])
+    outcome = capture.wait(3)
+    assert isinstance(outcome, RecordingResult)
+    assert sum("preview disabled" in warning for warning in outcome.warnings) == 1
+    np.testing.assert_array_equal(np.concatenate(written), data[:9, (0, 2)])
+    saved, _ = sf.read(outcome.path, dtype="float32", always_2d=True)
+    np.testing.assert_array_equal(saved, data[:9, (0, 2)][2:])
+
+
+@pytest.mark.parametrize("failure_at", ["construct", "begin", "snapshot"])
+@pytest.mark.parametrize("preview_time_mode", [
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+    PREVIEW_TIME_MODE_CUMULATIVE,
+])
+def test_preview_setup_and_snapshot_faults_do_not_change_capture_result(
+        tmp_path, captures, monkeypatch, failure_at, preview_time_mode):
+    from base import recording_capture as module
+
+    real_session = module.MultichannelWaveformSession
+    constructions = []
+
+    class FaultySession(real_session):
+        def __init__(self, **kwargs):
+            constructions.append(kwargs.copy())
+            if failure_at == "construct":
+                raise RuntimeError("injected preview construction failure")
+            super().__init__(**kwargs)
+
+        def begin(self, **kwargs):
+            if failure_at == "begin":
+                raise RuntimeError("injected preview begin failure")
+            return super().begin(**kwargs)
+
+        def snapshots(self):
+            if failure_at == "snapshot":
+                raise RuntimeError("injected preview snapshot failure")
+            return super().snapshots()
+
+    monkeypatch.setattr(module, "MultichannelWaveformSession", FaultySession)
+    writer = ControlledWriter()
+    written = []
+    real_write = writer.write_chunk
+    writer.write_chunk = lambda block: (written.append(block.copy()), real_write(block))[1]
+    capture, backend = captures(
+        request(tmp_path, preview_time_mode=preview_time_mode), writer_factory=writer)
+    data = known_audio()
+    backend.stream.feed(data[:5])
+    if failure_at == "snapshot":
+        deadline = time.monotonic() + 3
+        while capture.written_frames < 5 and time.monotonic() < deadline:
+            time.sleep(.005)
+        assert capture.snapshot(generation=1, sequence=1) is None
+    backend.stream.feed(data[5:])
+    outcome = capture.wait(3)
+
+    assert isinstance(outcome, RecordingResult)
+    assert constructions == [{
+        "max_points": MAIN_RECORDING_LIVE_MAX_POINTS,
+        "rolling_window_seconds": (
+            MAIN_RECORDING_LIVE_WINDOW_SECONDS
+            if preview_time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST else None
+        ),
+    }]
+    assert capture._waveforms is None
+    assert capture.snapshot(generation=1, sequence=2) is None
+    assert (capture.raw_frames, capture.written_frames) == (9, 9)
+    assert (outcome.raw_frames, outcome.final_frames) == (9, 7)
+    assert sum("preview disabled" in warning for warning in outcome.warnings) == 1
+    np.testing.assert_array_equal(np.concatenate(written), data[:9, (0, 2)])
+    saved, rate = sf.read(outcome.path, dtype="float32", always_2d=True)
+    assert rate == 100
+    np.testing.assert_array_equal(saved, data[:9, (0, 2)][2:])
+
+
+@pytest.mark.parametrize("preview_time_mode", [
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+    PREVIEW_TIME_MODE_CUMULATIVE,
+])
+def test_non_live_capture_does_not_construct_preview_and_keeps_full_audio(
+        tmp_path, captures, monkeypatch, preview_time_mode):
+    from base import recording_capture as module
+
+    def forbidden_session(*args, **kwargs):
+        pytest.fail("non-live capture must not construct a preview session")
+
+    monkeypatch.setattr(module, "MultichannelWaveformSession", forbidden_session)
+    capture, backend = captures(request(
+        tmp_path, streaming=False, monitor={"enabled": False},
+        preview_time_mode=preview_time_mode,
+    ))
+    assert capture._waveforms is None
+    data = feed_all(backend)
+    outcome = capture.wait(3)
+    assert isinstance(outcome, RecordingResult)
+    assert capture.snapshot(generation=1, sequence=1) is None
+    saved, _ = sf.read(outcome.path, dtype="float32", always_2d=True)
+    np.testing.assert_array_equal(saved, data[:9, (0, 2)][2:])
 
 
 @pytest.mark.parametrize("sizes,mute,fade", [((2, 3, 7), 3, 4), ((3, 3, 6), 3, 4), ((4, 8), 0, 4)])

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 import os
 import re
 import sys
@@ -21,7 +22,12 @@ from base.data_struct.data_deal_struct import DataDealStruct
 from base.data_struct.sequence_data import SequenceData
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
+from base.recording_preview_config import resolve_recording_preview_time_mode
 from consts import model_consts, ui_style_const
+from consts.recording_preview_consts import (
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
+)
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
 from ui.acquisition_config_window import (
@@ -48,7 +54,6 @@ SUPPORTED_ANALYSIS_ITEMS = [
     "AI 分析 ",
     "频段能量 (FBA) ",
     "快速傅里叶变换 (FFT) ",
-    "结果导出 (Excel) ",
 ]
 SUPPORTED_ANALYSIS_TYPES = {
     "SPL",
@@ -61,6 +66,26 @@ SUPPORTED_ANALYSIS_TYPES = {
     "LOUD",
     "Excel",
 }
+MULTI_CHANNEL_ANALYSIS_TYPES = {
+    "SPL",
+    "Spec",
+    "AI",
+    "FBA",
+    "FFT",
+    "LP",
+    "LOUD",
+}
+
+
+def _recording_preview_validation_error(config_data):
+    for item in config_data:
+        if item.mode != "RECORD_ONLY":
+            continue
+        try:
+            resolve_recording_preview_time_mode(item.detail)
+        except ValueError as exc:
+            return str(exc)
+    return None
 
 
 class AnalysisModelSelect(ConfigDialogBase):
@@ -136,6 +161,12 @@ class AnalysisModelSelect(ConfigDialogBase):
 
     def _persist_current_config_silently(self) -> None:
         if not self._can_persist_current_config():
+            return
+        validation_error = _recording_preview_validation_error(
+            self.select_list.config
+        )
+        if validation_error:
+            self.default_logger.warning(validation_error)
             return
         save_config = self.format_config_data(self.select_list.config)
         if not save_config:
@@ -308,6 +339,7 @@ class AnalysisModelSelect(ConfigDialogBase):
     def create_select_list_layout(self):
         select_analysis_label = QLabel("测试序列")
         self.auto_analysis_box = QCheckBox("自动分析")
+        self.auto_analysis_box.setChecked(True)
         if self.select_list.config:
             self.auto_analysis_box.setChecked(self.select_list.config[0].auto_analysis)
         self.auto_analysis_box.setLayoutDirection(Qt.RightToLeft)
@@ -440,6 +472,12 @@ class AnalysisModelSelect(ConfigDialogBase):
         return save_config
 
     def save_btn_clicked(self):
+        validation_error = _recording_preview_validation_error(
+            self.select_list.config
+        )
+        if validation_error:
+            QMessageBox.warning(self, "警告", validation_error)
+            return
         save_config = self.format_config_data(self.select_list.config)
         if not save_config:
             QMessageBox.warning(self, "警告", "没有配置测试内容")
@@ -467,6 +505,12 @@ class AnalysisModelSelect(ConfigDialogBase):
             LoadUiConfig.append_sequence_config_registry_entry(file_path)
 
     def ok_btn_clicked(self):
+        validation_error = _recording_preview_validation_error(
+            self.select_list.config
+        )
+        if validation_error:
+            QMessageBox.warning(self, "警告", validation_error)
+            return
         save_config = self.format_config_data(self.select_list.config)
 
         if not save_config:
@@ -733,7 +777,9 @@ class OptionList(QListView):
         available_channels = list(self.mic_channels or [0])
         acquisition_config = getattr(self, "config", ())
         mode = getattr(acquisition_config[0], "mode", None) if acquisition_config else None
-        allow_multiple_channels = mode == "RECORD_ONLY"
+        allow_multiple_channels = (
+            mode == "RECORD_ONLY" and type in MULTI_CHANNEL_ANALYSIS_TYPES
+        )
         restrict_analysis_channel = False
         if type in {"SPL", "Spec", "FBA"}:
             if mode == "RECORD_ONLY":
@@ -834,10 +880,25 @@ class OptionList(QListView):
                     "monitor_output_channel": 0,
                     "monitor_gain_db": 0.0,
                     "use_streaming_recording": False,
+                    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: PREVIEW_TIME_MODE_RELATIVE_LATEST,
                     model_consts.RECORDING_ROOT_CONFIG_KEY: "",
                 }
             else:
                 if sequence_config.mode == "RECORD_ONLY":
+                    try:
+                        preview_time_mode = resolve_recording_preview_time_mode(
+                            sequence_config.detail
+                        )
+                    except ValueError as exc:
+                        if not isinstance(sequence_config.detail, Mapping):
+                            self.default_logger.error(
+                                f"Failed to load the default config file. {exc}"
+                            )
+                            self.clear_option_list()
+                            return
+                        preview_time_mode = sequence_config.detail.get(
+                            RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
+                        )
                     sequence_config.detail = {
                         "total_time": float(sequence_config.detail.get("total_time", 4.0)),
                         "sample_rate": int(sequence_config.detail.get("sample_rate", 44100)),
@@ -847,6 +908,7 @@ class OptionList(QListView):
                         "use_streaming_recording": bool(
                             sequence_config.detail.get("use_streaming_recording", False)
                         ),
+                        RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: preview_time_mode,
                         model_consts.RECORDING_ROOT_CONFIG_KEY: str(
                             sequence_config.detail.get(
                                 model_consts.RECORDING_ROOT_CONFIG_KEY,
@@ -866,7 +928,7 @@ class OptionList(QListView):
             i_analysis_list.pop("default_ai", None)
             i_analysis_list.pop("golden_sample_result_path", None)
             sequence_config.default_ai = None
-            sequence_config.auto_analysis = bool(i_analysis_list.pop("auto_analysis", False))
+            sequence_config.auto_analysis = bool(i_analysis_list.pop("auto_analysis", True))
 
             raw_display = i_analysis_list.pop("display_sequence", [])
 
@@ -1312,6 +1374,7 @@ class OptionList(QListView):
                 "monitor_output_channel": 0,
                 "monitor_gain_db": 0.0,
                 "use_streaming_recording": False,
+                RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: PREVIEW_TIME_MODE_RELATIVE_LATEST,
                 model_consts.RECORDING_ROOT_CONFIG_KEY: "",
             }
             self.signal_len = seq_item.detail.get(
@@ -1356,7 +1419,7 @@ class OptionList(QListView):
         code, data = LoadUiConfig.load_data_from_json(default_config_file)
         if code != 0:
             self.default_logger.error(f"Failed to load the default config file. {data}")
-            if analysis_type not in {"SPL", "FBA", "FFT", "LOUD"}:
+            if analysis_type not in {"SPL", "Spec", "FBA", "FFT", "LOUD"}:
                 return
             data = {}
 
@@ -1365,6 +1428,11 @@ class OptionList(QListView):
             default_of_type = SplConfigWindow.new_item_default_config(
                 default_of_type
             )
+        elif analysis_type == "Spec":
+            default_of_type = {
+                **SpecConfigWindow.DEFAULT_CONFIG,
+                **default_of_type,
+            }
         elif analysis_type == "FBA":
             default_of_type = {
                 **FbaConfigWindow.DEFAULT_CONFIG,
@@ -1379,6 +1447,14 @@ class OptionList(QListView):
             default_of_type = LoudnessConfigWindow.merge_with_defaults(
                 default_of_type
             )
+        if (
+            getattr(self.config[0], "mode", None) == "RECORD_ONLY"
+            and analysis_type in MULTI_CHANNEL_ANALYSIS_TYPES
+        ):
+            selected_channels = OptionList._normalize_channels(self.mic_channels)
+            if selected_channels:
+                default_of_type["analysis_channel"] = selected_channels[0]
+                default_of_type["analysis_channels"] = selected_channels
         default_of_type.pop("golden_sample_checked", None)
         default_of_type.pop("golden_sample_result_path", None)
         self.config[0].analysis_list[list_item_text] = default_of_type

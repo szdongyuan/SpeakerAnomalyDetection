@@ -48,8 +48,8 @@ class RecordingSnapshotHost(SequenceWidgetAnalysisOpsMixin):
         self.last_play_count = 10
         self.analysis_window = []
         self._analysis_result_summary_window = None
-        self.player_status_flag = True
-        self.clicked_player_flag = True
+        self.player_status_flag = False
+        self.clicked_player_flag = False
         self.streaming_buffer_multi = []
         self.replayer_btn = SimpleNamespace(setDisabled=lambda _value: None)
         self.data_btn = SimpleNamespace(setDisabled=lambda _value: None)
@@ -121,6 +121,21 @@ def test_recording_attempt_captures_once_after_reset_before_process_start(monkey
     assert host._recording_wav_calibration_metadata is snapshots[0]
 
 
+def test_recording_attempt_is_blocked_while_player_is_active(monkeypatch):
+    host = RecordingSnapshotHost()
+    host.player_status_flag = True
+    build = mock.Mock()
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_analysis_ops.build_recording_wav_calibration_metadata",
+        build,
+    )
+
+    host.judge_play_and_record()
+
+    assert host.events == []
+    build.assert_not_called()
+
+
 def test_replay_replaces_snapshot_and_each_attempt_reads_once(monkeypatch):
     host = RecordingSnapshotHost()
     built = []
@@ -138,6 +153,8 @@ def test_replay_replaces_snapshot_and_each_attempt_reads_once(monkeypatch):
     host.judge_play_and_record()
     first = host._recording_wav_calibration_metadata
     host._record_workflow_busy = False
+    host.player_status_flag = False
+    host.clicked_player_flag = False
     host.judge_play_and_record(is_replay=True)
 
     assert len(built) == 2
@@ -313,6 +330,18 @@ def build_sequence(
         created.append(instance)
         return instance
 
+    def get_class_mapping():
+        return {
+            "AI": make_analysis,
+            "FFT": make_analysis,
+            "LOUD": make_analysis,
+            "SPL": make_analysis,
+            "Spec": make_spec,
+            "FBA": make_fba,
+            "LP": make_analysis,
+            "RSC": make_rsc,
+        }
+
     loader = mock.Mock(
         side_effect=loader_error,
         return_value={} if factor_map is None else factor_map,
@@ -344,16 +373,6 @@ def build_sequence(
             "instance_analysis_class",
         ],
         {
-            "get_class_mapping": lambda: {
-                "AI": make_analysis,
-                "FFT": make_analysis,
-                "LOUD": make_analysis,
-                "SPL": make_analysis,
-                "Spec": make_spec,
-                "FBA": make_fba,
-                "LP": make_analysis,
-                "RSC": make_rsc,
-            },
             "load_mic_channel_v2pa_factors": loader,
             "MicCalibrationFormatError": MicCalibrationFormatError,
             "MicCalibrationIOError": MicCalibrationIOError,
@@ -372,6 +391,7 @@ def build_sequence(
         },
     )
     sequence = cls()
+    sequence._get_legacy_analysis_class_mapping = get_class_mapping
     sequence.mic = DEVICE
     sequence.v2pa_factor = legacy_factor
     sequence._active_input_channels = list(active_input_channels or [0])
@@ -716,9 +736,10 @@ def test_real_spl_runtime_reads_distinct_recorded_columns_and_judges_each_channe
             "constant_upper_value": 70.0,
         })],
     )
-    monkeypatch.setitem(
-        sequence.instance_analysis_class.__func__.__globals__,
-        "get_class_mapping", lambda: {"SPL": Spl},
+    monkeypatch.setattr(
+        sequence,
+        "_get_legacy_analysis_class_mapping",
+        lambda: {"SPL": Spl},
     )
     sequence.data_struct.store_wave_data_multi = np.column_stack([
         np.full(2401, 0.2), np.full(2401, 0.01),
@@ -769,9 +790,10 @@ def test_real_imported_spl_overall_judgment_uses_one_wav_column_and_file_calibra
             "show_overall_spl": False,
         })],
     )
-    monkeypatch.setitem(
-        sequence.instance_analysis_class.__func__.__globals__,
-        "get_class_mapping", lambda: {"SPL": Spl},
+    monkeypatch.setattr(
+        sequence,
+        "_get_legacy_analysis_class_mapping",
+        lambda: {"SPL": Spl},
     )
     sequence.data_struct.store_wave_data_multi = np.column_stack([
         np.full(2401, 0.2), np.full(2401, 0.01),
@@ -1289,7 +1311,8 @@ class StreamingAnalysisHost(
         size = SimpleNamespace(width=lambda: 1600, height=lambda: 900)
         return SimpleNamespace(size=lambda: size)
 
-    def instance_analysis_class(self, key, _item_type, params):
+    def instance_analysis_class(
+            self, key, _item_type, params, *, analysis_config=None):
         instance = RuntimeAnalysis(key, self.events)
         instance.data_struct = self.data_struct
         instance.analysis_config = dict(params)
@@ -1364,13 +1387,13 @@ class StreamingAnalysisHost(
     def _drain_queued_directional_trigger(self):
         self.events.append("drain_trigger")
 
-    def _capture_excel_export_cache(self):
+    def _capture_excel_export_cache(self, *, analysis_config=None):
         return None
 
-    def _maybe_export_excel_results(self):
+    def _maybe_export_excel_results(self, *, analysis_config=None):
         return None
 
-    def _can_output_ok_ng(self):
+    def _can_output_ok_ng(self, *, analysis_config=None):
         return False, ""
 
     def _sync_left_panel_analysis_details(self, *_args):
@@ -1379,7 +1402,8 @@ class StreamingAnalysisHost(
     def _hide_analysis_window(self, _instance):
         return None
 
-    def _capture_current_analysis_report_snapshot(self, session_id=None):
+    def _capture_current_analysis_report_snapshot(
+            self, session_id=None, *, analysis_config=None):
         self.events.append(("report_snapshot", session_id))
 
     def _update_recent_session(self, session_id, **fields):
@@ -1418,61 +1442,20 @@ def run_streaming_completion(host, factor_loader):
     return critical
 
 
-@pytest.mark.parametrize(
-    "error",
-    [MicCalibrationFormatError("corrupt"), MicCalibrationIOError("denied")],
-)
-def test_streaming_completion_stops_automation_and_reports_calibration_failure(error):
+def test_streaming_completion_queues_analysis_and_advances_recording_workflow():
     host = StreamingAnalysisHost()
-    loader = mock.Mock(side_effect=error)
+    loader = mock.Mock(
+        side_effect=AssertionError("recording completion must not run analysis")
+    )
+    enqueue = mock.Mock(return_value=True)
+    host._enqueue_automatic_analysis_current_recording = enqueue
 
     critical = run_streaming_completion(host, loader)
 
-    loader.assert_called_once_with(DEVICE)
-    critical.assert_called_once()
-    assert "finalize_condition" not in host.events
-    assert "advance_condition" not in host.events
-    assert "condition_completed" not in host.events
-    assert host._manual_product_condition_completed_keys == set()
-    assert host.count_updates == 0
-    assert host._serial_product_condition_executing is False
-    assert host._serial_product_session_started is False
-    assert host._serial_product_waiting_for_close is False
-    assert host._serial_product_pending_close_frame == ""
-    assert host._queued_directional_trigger == ""
-    assert host._pending_serial_trigger_direction == ""
-    assert host._active_product_condition_key == ""
-    assert host._awaiting_ok_ng is False
-    assert host._sn_clear_on_next_scan is False
-    assert host._pending_recent_session_append is False
-    assert host.report_updates[0][0] == "session-1"
-    assert host.report_updates[0][1]["analysis_report_state"] == "failed"
-    assert str(error) in host.report_updates[0][1]["analysis_report_items"][0]["error"]
-    assert host._record_workflow_busy is False
-    assert host.events[-2:] == ["ui_cleanup", "drain_trigger"]
-    assert not any(
-        "recording completed successfully" in call.args[0]
-        for call in host.default_logger.info.call_args_list
-    )
-
-    host.on_serial_full_frame_received(
-        {"raw_hex": "AAAA", "product_full_frame": True}
-    )
-
-    assert host.started == ["condition-1"]
-    assert host._serial_product_condition_executing is True
-    assert host.report_updates[0][1]["analysis_report_state"] == "failed"
-
-
-def test_streaming_completion_success_still_advances_automatic_workflow():
-    host = StreamingAnalysisHost()
-    loader = mock.Mock(return_value={0: 2.5})
-
-    critical = run_streaming_completion(host, loader)
-
-    loader.assert_called_once_with(DEVICE)
+    loader.assert_not_called()
     critical.assert_not_called()
-    assert "calculate" in host.events
+    enqueue.assert_called_once_with()
+    assert "calculate" not in host.events
     assert "finalize_condition" in host.events
     assert "advance_condition" in host.events
     assert "condition_completed" in host.events
@@ -1480,7 +1463,7 @@ def test_streaming_completion_success_still_advances_automatic_workflow():
     assert host.count_updates == 1
     assert host._serial_product_condition_executing is False
     assert host._serial_product_session_started is False
-    assert ("report_snapshot", "session-1") in host.events
+    assert ("report_snapshot", "session-1") not in host.events
     assert host._record_workflow_busy is False
     assert host.events[-2:] == ["ui_cleanup", "drain_trigger"]
     assert any(

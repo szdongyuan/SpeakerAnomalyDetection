@@ -7,7 +7,7 @@ class SequenceData:
         self._display_sequence = []
         self._data = []
         self._default_ai = None
-        self._auto_analysis = False
+        self._auto_analysis = True
 
         self._acq = {"name": self._name, "mode": self._mode, "detail": self._detail}
         self._analysis_list = {

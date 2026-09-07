@@ -2,6 +2,8 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from consts import error_code
 from ui.sequence import sequence_widget_config_ops as config_ops_module
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
@@ -34,6 +36,7 @@ def _load_main_window_method(method_name, globals_dict):
 
 def test_main_window_connects_program_changes_before_opening_dialog():
     events = []
+    refresh_states = []
 
     class FakeSignal:
         def __init__(self):
@@ -47,17 +50,35 @@ def test_main_window_connects_program_changes_before_opening_dialog():
         def __init__(self, manager, queue_editor, parent):
             assert manager is None
             assert queue_editor is parent._open_analysis_model_select
+            self.queue_editor = queue_editor
             self.programs_changed = FakeSignal()
 
         def exec(self):
             events.append("opened")
+            self.queue_editor("queue.json")
             self.programs_changed.callback()
 
     sequence_window = SimpleNamespace(
-        on_product_test_program_updated=lambda: events.append("refreshed")
+        _product_test_program_config_dialog_open=False,
+        button_enabled=True,
+        on_product_test_program_updated=lambda: events.append("refreshed"),
     )
+
+    def refresh_button():
+        refresh_states.append(
+            sequence_window._product_test_program_config_dialog_open
+        )
+        sequence_window.button_enabled = (
+            not sequence_window._product_test_program_config_dialog_open
+        )
+
+    sequence_window.update_player_btn_is_paused = refresh_button
+
+    def refresh_nested_queue(_path):
+        refresh_button()
+
     window = SimpleNamespace(
-        _open_analysis_model_select=lambda _path: None,
+        _open_analysis_model_select=refresh_nested_queue,
         sequence_window=sequence_window,
     )
     on_product_test_program_config = _load_main_window_method(
@@ -68,6 +89,50 @@ def test_main_window_connects_program_changes_before_opening_dialog():
     on_product_test_program_config(window)
 
     assert events == ["connected", "opened", "refreshed"]
+    assert refresh_states == [True, False]
+    assert sequence_window._product_test_program_config_dialog_open is False
+    assert sequence_window.button_enabled is True
+
+
+def test_main_window_refreshes_button_after_exceptional_dialog_exit():
+    refresh_states = []
+
+    class FakeSignal:
+        def connect(self, _callback):
+            return None
+
+    class FakeDialog:
+        def __init__(self, _manager, _queue_editor, _parent):
+            self.programs_changed = FakeSignal()
+
+        def exec(self):
+            raise RuntimeError("dialog failed")
+
+    sequence_window = SimpleNamespace(
+        _product_test_program_config_dialog_open=False,
+        on_product_test_program_updated=lambda: None,
+    )
+
+    def refresh_button():
+        refresh_states.append(
+            sequence_window._product_test_program_config_dialog_open
+        )
+
+    sequence_window.update_player_btn_is_paused = refresh_button
+    window = SimpleNamespace(
+        _open_analysis_model_select=lambda _path: None,
+        sequence_window=sequence_window,
+    )
+    on_product_test_program_config = _load_main_window_method(
+        "on_product_test_program_config",
+        {"ProductTestProjectConfigDialog": FakeDialog},
+    )
+
+    with pytest.raises(RuntimeError, match="dialog failed"):
+        on_product_test_program_config(window)
+
+    assert sequence_window._product_test_program_config_dialog_open is False
+    assert refresh_states == [False]
 
 
 def test_main_window_shuts_down_product_pdf_exporter_before_exit():
@@ -100,6 +165,64 @@ def test_product_program_update_refreshes_selector_and_runtime_conditions():
     SequenceWidgetConfigOpsMixin.on_product_test_program_updated(sequence_window)
 
     assert events == ["selector", ("conditions", True), "play_button"]
+
+
+def test_active_project_context_exposes_result_storage_identity():
+    class _Manager:
+        def load_project(self, file_name):
+            assert file_name == "motor.json"
+            return error_code.OK, {
+                "project_name": "电机耐久测试",
+                "result_root_directory": "D:/results",
+            }
+
+    host = SimpleNamespace(
+        _get_product_program_manager=lambda: _Manager(),
+        _get_active_product_program_path=lambda: "D:/projects/motor.json",
+    )
+
+    context = SequenceWidgetConfigOpsMixin.load_active_product_test_context(host)
+
+    assert context == {
+        "project_name": "电机耐久测试",
+        "result_root_directory": "D:/results",
+        "active_file": "motor.json",
+    }
+
+
+def test_no_threshold_program_is_usable_with_not_labeled_notice():
+    class _Manager:
+        def load_registry(self):
+            return {"active_file": "motor.json"}
+
+        def load_project(self, file_name):
+            assert file_name == "motor.json"
+            return error_code.OK, {"project_name": "P"}
+
+        def validate_project(self, _program, file_name):
+            assert file_name == "motor.json"
+            return {
+                "is_usable": True,
+                "is_test_mode_usable": True,
+                "use_errors": [],
+                "use_warnings": ["A口/6000rpm未配置自动判定规则"],
+            }
+
+    host = SimpleNamespace(
+        product_program_manager=_Manager(),
+        active_product_program_file="motor.json",
+    )
+    host._get_product_program_manager = lambda: host.product_program_manager
+
+    available, notice = (
+        SequenceWidgetConfigOpsMixin._active_product_program_test_mode_availability(
+            host
+        )
+    )
+
+    assert available is True
+    assert "not_labeled" in notice
+    assert "A口/6000rpm" in notice
 
 
 class _ComboBoxStub:

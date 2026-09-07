@@ -17,9 +17,7 @@ class DataDealStruct(object):
 
             self.store_wave_data = None
             self.store_wave_data_multi = None
-            self.wav_calibration_metadata = None
-            self.wav_calibration_metadata_authoritative = False
-            self.wav_calibration_warning_shown = False
+            self.clear_wav_calibration_context()
             self.split_repeat_data = None
             self.stimulus_data = None
             self.stimulus_info = None
@@ -39,9 +37,7 @@ class DataDealStruct(object):
     def clear_data(self):
         self.store_wave_data = None
         self.store_wave_data_multi = None
-        self.wav_calibration_metadata = None
-        self.wav_calibration_metadata_authoritative = False
-        self.wav_calibration_warning_shown = False
+        self.clear_wav_calibration_context()
         self.split_repeat_data = None
         # self.stimulus_data = None
         self.fft_result = None
@@ -50,6 +46,14 @@ class DataDealStruct(object):
         # self.hd_flag = 0
         # self.fr_flag = 0
         # self.ai_flag = 0
+
+    def clear_wav_calibration_context(self):
+        """Clear provenance only when its associated audio is replaced/cleared."""
+        self.wav_calibration_metadata = None
+        self.wav_calibration_metadata_authoritative = False
+        self.wav_calibration_warning_shown = False
+        self.wav_calibration_declared_backend = None
+        self.wav_calibration_read_status = None
 
     def add_stft_or_fft_count(self, text):
         if text in ["频响 (FR) ", "谐波失真 (HD) ", "FR", "HD"]:

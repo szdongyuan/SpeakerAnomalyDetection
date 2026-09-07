@@ -1,9 +1,9 @@
 import copy
 import os
+import shutil
 import threading
 from datetime import datetime
 
-import librosa
 import numpy as np
 from PyQt5.QtCore import QSize
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox
@@ -18,13 +18,17 @@ from base.excel_result_exporter import (
     resolve_excel_spool_dir,
 )
 from base.load_config import LoadUiConfig
+from base.analysis_artifact_paths import AnalysisStorageContext
 from base.product_test_project_config import (
     classify_project_trigger_mode,
     is_manual_project_play_allowed,
 )
+from base.product_test_pdf_report import export_product_test_pdf
 from base.recording_calibration_snapshot import (
     build_recording_wav_calibration_metadata,
 )
+from base.recording_process_protocol import FrozenConfig
+from base.ve3668n_input import resolve_effective_input_rate, validate_device_snapshot
 
 from base.play_and_record import (
     get_recorded_info,
@@ -52,7 +56,6 @@ from base.wav_channel_mapping import resolve_wav_plot_channels
 
 from consts.running_consts import DEFAULT_DIR
 
-from ui.signal_analysis_window import AnalysisResultSummaryWindow, get_class_mapping
 from ui.sequence.analysis_channel_preflight import (
     MULTI_CHANNEL_ANALYSIS_TYPES,
     REQUIRED_CHANNEL_ANALYSIS_TYPES,
@@ -76,6 +79,13 @@ class SequenceWidgetAnalysisOpsMixin(
     SequenceWidgetProductConditionResultOpsMixin
 ):
     _RECENT_SESSION_WAITING_TEXT = "等待测试完成"
+
+    @staticmethod
+    def _get_legacy_analysis_class_mapping():
+        """Load the legacy Qt analysis module only for the legacy analysis path."""
+        from ui.signal_analysis_window import get_class_mapping
+
+        return get_class_mapping()
 
     @classmethod
     def _format_recent_session_result_label(cls, result_label):
@@ -242,6 +252,41 @@ class SequenceWidgetAnalysisOpsMixin(
         safe_name = self._safe_record_name_suffix(name)
         return f"_{safe_name}" if safe_name else ""
 
+    def _create_analysis_storage_context(self):
+        if not self._get_active_product_condition_key():
+            return None
+
+        project_context = dict(
+            getattr(self, "product_test_project_context", {}) or {}
+        )
+        test_metadata = dict(getattr(self, "_test_round_metadata", {}) or {})
+        condition = dict(
+            getattr(self, "_active_product_condition_config", {}) or {}
+        )
+        required_values = (
+            project_context.get("result_root_directory"),
+            project_context.get("project_name"),
+            self.lineedit_type.text().strip(),
+            test_metadata.get("sample_number"),
+            condition.get("group_name"),
+            condition.get("condition_name"),
+        )
+        if not all(str(value or "").strip() for value in required_values):
+            return None
+        return AnalysisStorageContext(
+            result_root_directory=project_context.get(
+                "result_root_directory", ""
+            ),
+            project_name=project_context.get("project_name", ""),
+            product_model=self.lineedit_type.text().strip(),
+            sample_number=test_metadata.get("sample_number", ""),
+            test_round=test_metadata.get("test_round", 0),
+            port_name=condition.get("group_name", ""),
+            condition_name=condition.get("condition_name", ""),
+            recording_started_at=datetime.now(),
+            serial_number=self.lineedit_s_or_n.text().strip(),
+        )
+
     def _reset_manual_product_condition_cycle(self, clear_waveforms=False) -> None:
         ended_direct_import = False
         if clear_waveforms:
@@ -272,6 +317,14 @@ class SequenceWidgetAnalysisOpsMixin(
         self._waveform_display_override_direction = ""
         self._current_cycle_recorded_count = None
         self._serial_product_waiting_for_close = False
+        self._analysis_round_completion_pending = False
+        unlock_round_config = getattr(
+            self,
+            "_unlock_analysis_round_config",
+            None,
+        )
+        if callable(unlock_round_config):
+            unlock_round_config()
         if clear_waveforms and not ended_direct_import:
             clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
             if callable(clear_all_direction_waveforms):
@@ -296,7 +349,13 @@ class SequenceWidgetAnalysisOpsMixin(
     def _set_product_condition_round_pending(self) -> None:
         self._reset_product_condition_display_state()
 
-    def _set_active_product_condition_stage(self, stage_text, tone="running"):
+    def _set_active_product_condition_stage(
+        self,
+        stage_text,
+        tone="running",
+        *,
+        update_task_stage=True,
+    ):
         key = self._get_active_product_condition_key()
         left_panel = getattr(self, "left_panel", None)
         if not key or left_panel is None:
@@ -308,7 +367,8 @@ class SequenceWidgetAnalysisOpsMixin(
             or condition.get("name")
             or key
         )
-        left_panel.set_current_stage(f"{name} {stage_text}", tone=tone)
+        if update_task_stage:
+            left_panel.set_current_stage(f"{name} {stage_text}", tone=tone)
         left_panel.set_condition_result(key, stage_text, tone=tone)
         workspace = getattr(self, "channel_workspace", None)
         set_context = getattr(workspace, "set_condition_context", None)
@@ -383,7 +443,6 @@ class SequenceWidgetAnalysisOpsMixin(
             left_panel.set_condition_result(key, result_text, tone=tone)
         else:
             left_panel.set_condition_result(key, "待判定", tone="pending")
-        left_panel.set_current_stage("本档位采集完成", tone="pending")
 
         condition_keys = [
             self._product_condition_runtime_key(item, index)
@@ -515,7 +574,7 @@ class SequenceWidgetAnalysisOpsMixin(
 
     def _update_manual_product_condition_result_after_analysis(self, label: str):
         key = self._get_active_product_condition_key()
-        if not key or label not in ("OK", "NG"):
+        if not key or label not in ("OK", "NG", "not_labeled"):
             return None
 
         results = dict(getattr(self, "_manual_product_condition_results", {}) or {})
@@ -524,7 +583,8 @@ class SequenceWidgetAnalysisOpsMixin(
 
         left_panel = getattr(self, "left_panel", None)
         if left_panel is not None:
-            left_panel.set_condition_result(key, label, tone=("ok" if label == "OK" else "ng"))
+            tone = "ok" if label == "OK" else "ng" if label == "NG" else "pending"
+            left_panel.set_condition_result(key, label, tone=tone)
 
         channel_workspace = getattr(self, "channel_workspace", None)
         if channel_workspace is not None and hasattr(channel_workspace, "set_condition_result"):
@@ -535,13 +595,533 @@ class SequenceWidgetAnalysisOpsMixin(
             for index, item in enumerate(self._product_condition_sequence())
             if self._product_condition_runtime_key(item, index)
         ]
-        complete = bool(condition_keys) and all(results.get(condition_key) in ("OK", "NG") for condition_key in condition_keys)
+        complete = bool(condition_keys) and all(
+            results.get(condition_key) in ("OK", "NG", "not_labeled")
+            for condition_key in condition_keys
+        )
         if not complete:
             if left_panel is not None:
                 left_panel.set_final_result("检测中", tone="running")
             return None
 
         return self._refresh_current_manual_product_final_from_group(stage_text="本轮完成")
+
+    def _run_request_scoped_recording_analysis(
+            self, *, context, request, recorded_mono, recorded_multi, sample_rate):
+        """Run only an analysis executor that accepts immutable request inputs.
+
+        The legacy ``run()`` implementation owns presentation widgets and the
+        host ``data_struct``.  Calling it for detached A while B is active would
+        overwrite B, so the default path delegates to the pure request analyzer;
+        an entry-frozen executor remains an explicit extension boundary.
+        """
+        executor = getattr(context, "analysis_executor", None)
+        if not callable(executor):
+            from ui.sequence.request_scoped_recording_analysis import (
+                analyze_recording_request,
+            )
+            executor = analyze_recording_request
+        config_snapshot = dict(context.recent_session_config_snapshot or {})
+        config_snapshot["count_mode"] = str(context.count_mode or "")
+        config_snapshot["stimulus_info"] = dict(context.stimulus_info or {})
+        config_snapshot["stimulus_signal"] = context.stimulus_signal
+        return executor(
+            request=request,
+            recorded_mono=recorded_mono,
+            recorded_multi=recorded_multi,
+            sample_rate=sample_rate,
+            config_snapshot=config_snapshot,
+            recorded_signal_info=dict(context.recorded_signal_info or {}),
+        )
+
+    def _complete_request_scoped_recording_cycle(
+            self, *, context, request, recorded_mono, recorded_multi, sample_rate,
+            directional_cycle_active, count_mode):
+        """Describe A's cycle completion without advancing B's live cycle."""
+        return {
+            "request_id": request.request_id,
+            "session_id": context.recent_session_id,
+            "condition_key": context.direction,
+            "directional_cycle_active": bool(directional_cycle_active),
+            "count_mode": str(count_mode or ""),
+        }
+
+    def _complete_request_scoped_product_recording(
+            self, *, context, request, recorded_mono, recorded_multi, sample_rate):
+        """Complete the persisted A product condition in A-owned state only.
+
+        Active product indexes, buttons, serial latches and OK/NG presentation
+        belong to B once B has started.  The detached completion therefore
+        records the exact frozen condition/group outcome on its context and
+        recent-session row; a later active workflow may project that record.
+        """
+        condition_key = str(
+            context.product_condition_key or context.direction or "").strip()
+        if not condition_key:
+            raise RuntimeError("request-scoped product condition is unavailable")
+        condition_keys = tuple(context.product_condition_keys or ())
+        result = {
+            "request_id": request.request_id,
+            "session_id": context.recent_session_id,
+            "group_id": str(context.product_group_id or ""),
+            "condition_key": condition_key,
+            "condition_keys": condition_keys,
+            "completed_condition_keys": (condition_key,),
+            "serial_driven": bool(context.serial_product_condition_executing),
+            "analysis_label": str(context.analysis_label or "not_labeled"),
+        }
+        session_id = str(context.recent_session_id or "")
+        records = context.publication_recent_sessions_snapshot
+        if not context.publication_owner_snapshot_frozen:
+            records = copy.deepcopy(
+                getattr(self, "recent_test_session_by_id", {}) or {})
+        if session_id and isinstance(records, dict):
+            session_record = records.get(session_id)
+            if isinstance(session_record, dict):
+                session_record.update({
+                    "request_id": request.request_id,
+                    "group_id": result["group_id"],
+                    "condition_key": condition_key,
+                    "product_group_id": result["group_id"],
+                    "product_condition_key": condition_key,
+                    "product_recording_state": "completed",
+                    "product_completed_condition_keys": (condition_key,),
+                    "product_analysis_label": result["analysis_label"],
+                    "serial_product_condition_completed": result["serial_driven"],
+                })
+                context.pending_ui_session_record = copy.deepcopy(session_record)
+        return result
+
+    def _request_scoped_active_group_keys(self):
+        contexts = getattr(self, "_recording_process_contexts", None)
+        if not isinstance(contexts, dict):
+            return set()
+        return {
+            str(context.publication_group_id or context.product_group_id)
+            for context in contexts.values()
+            if str(context.publication_group_id or context.product_group_id)
+        }
+
+    def _publish_request_scoped_recording_business(self, context):
+        """Publish A-owned durable effects with per-effect retry idempotency."""
+        request_id = context.request.request_id
+        from ui.sequence.request_scoped_registry import (
+            as_ordered_registry, touch_terminal,
+        )
+        publications = as_ordered_registry(
+            getattr(self, "_recording_business_publications", None))
+        self._recording_business_publications = publications
+        prior = publications.get(request_id)
+        if isinstance(prior, dict):
+            if prior.get("state") == "completed":
+                return dict(prior.get("result") or {})
+            if prior.get("state") == "publishing":
+                raise RuntimeError("request-scoped business publication is reentrant")
+        publications[request_id] = {"state": "publishing"}
+
+        committed = context.business_effect_ledger
+        attempted = context.business_effect_attempts
+
+        def publish_effect(effect_key, publisher):
+            if effect_key in committed:
+                return committed[effect_key]
+            generation = int(getattr(
+                context, "publication_executor_generation", -1))
+            lock = getattr(self, "_request_scoped_durable_effect_lock", None)
+            if lock is None:
+                lock = threading.RLock()
+                self._request_scoped_durable_effect_lock = lock
+            with lock:
+                if (generation >= 0
+                        and not self._request_scoped_generation_is_current(generation)):
+                    raise RuntimeError(
+                        "request-scoped durable publication invalidated by close")
+                attempted[effect_key] = attempted.get(effect_key, 0) + 1
+                value = publisher()
+            # Commit only after the publisher returned success.  A raised
+            # exception leaves this exact effect retryable without replaying
+            # any earlier effects from the same request.
+            committed[effect_key] = value
+            return value
+
+        result = {}
+        label = str(
+            context.analysis_label
+            or context.recorded_signal_info.get("labels")
+            or "not_labeled")
+        product_group = None
+        group_key = str(
+            context.publication_group_id
+            or context.product_group_id
+            or request_id)
+        if (context.manual_product_cycle_active
+                or (context.product_report_config.get("enabled", False)
+                    and context.product_group_id)):
+            from ui.sequence.request_scoped_registry import (
+                as_ordered_registry, trim_group_registry,
+            )
+            group_publications = as_ordered_registry(getattr(
+                self, "_request_scoped_product_group_publications", None))
+            self._request_scoped_product_group_publications = group_publications
+            expected = tuple(str(key) for key in (
+                context.product_condition_keys
+                or ((context.product_condition_key or context.direction),))
+                if str(key))
+            product_group = group_publications.setdefault(group_key, {
+                "expected": expected, "members": {}, "effects": {},
+                "attempts": {}, "counted": False,
+                "report_terminal": False, "terminal": False,
+            })
+            group_publications.move_to_end(group_key)
+            if not product_group.get("expected") and expected:
+                product_group["expected"] = expected
+            trim_group_registry(
+                group_publications,
+                protected_keys=(self._request_scoped_active_group_keys()
+                                | {group_key}))
+        try:
+            session_id = str(context.recent_session_id or "")
+            session_record = None
+            # This method runs on the bounded background publisher. Never
+            # iterate or mutate the GUI-owned recent-session dictionary here.
+            records = context.publication_recent_sessions_snapshot
+            if not context.publication_owner_snapshot_frozen:
+                # Compatibility for direct synchronous callers that predate
+                # request submission. Production publication always freezes
+                # on the owner thread before it reaches this method.
+                records = copy.deepcopy(
+                    getattr(self, "recent_test_session_by_id", {}) or {})
+            if session_id and isinstance(records, dict):
+                session_record = records.get(session_id)
+            if isinstance(session_record, dict):
+                def update_session_state():
+                    session_record.update({
+                        "recording_cycle_advanced": bool(
+                            context.directional_cycle_active
+                            or context.manual_product_cycle_active
+                            or context.serial_product_condition_executing),
+                        "serial_condition_finalized": bool(
+                            context.serial_product_condition_executing),
+                        "analysis_report_state": (
+                            "completed" if context.analysis_required else "not_required"),
+                        "analysis_result_dict": dict(context.analysis_result_dict or {}),
+                        "analysis_diagnostics": tuple(context.analysis_diagnostics or ()),
+                    })
+                    return True
+                publish_effect(
+                    f"state:session:{session_id}", update_session_state)
+                context.pending_ui_session_record = copy.deepcopy(session_record)
+
+            if context.count_mode in ("mark", "test"):
+                should_count = True
+                count_label = label
+                cycle = None
+                if context.directional_cycle_active:
+                    cycle_key = str(
+                        context.publication_group_id
+                        or context.product_group_id
+                        or request_id)
+                    from ui.sequence.request_scoped_registry import (
+                        as_ordered_registry, trim_group_registry,
+                    )
+                    cycle_publications = as_ordered_registry(getattr(
+                        self, "_request_scoped_mark_cycle_publications", None))
+                    self._request_scoped_mark_cycle_publications = cycle_publications
+                    direction = str(context.direction or "").lower()
+                    def update_cycle_state():
+                        value = cycle_publications.setdefault(
+                            cycle_key, {"labels": {}, "counted": False,
+                                        "terminal": False})
+                        cycle_publications.move_to_end(cycle_key)
+                        if direction in ("forward", "reverse"):
+                            value["labels"][direction] = label
+                        return value
+                    cycle = publish_effect(
+                        f"state:directional:{cycle_key}:{direction or request_id}",
+                        update_cycle_state)
+                    trim_group_registry(
+                        cycle_publications,
+                        protected_keys=(self._request_scoped_active_group_keys()
+                                        | {cycle_key}))
+                    forward = cycle["labels"].get("forward")
+                    reverse = cycle["labels"].get("reverse")
+                    should_count = (
+                        not cycle.get("counted")
+                        and forward in ("OK", "NG", "not_labeled")
+                        and reverse in ("OK", "NG", "not_labeled"))
+                    if should_count:
+                        count_label = (
+                            "NG" if "NG" in (forward, reverse) else
+                            ("OK" if forward == reverse == "OK" else "not_labeled"))
+                elif context.manual_product_cycle_active:
+                    condition_key = str(
+                        context.product_condition_key
+                        or context.direction or "").strip()
+                    expected = tuple(str(key) for key in (
+                        context.product_condition_keys or (condition_key,))
+                        if str(key))
+                    if not product_group.get("expected") and expected:
+                        product_group["expected"] = expected
+
+                    # A placeholder row is not a sibling contribution.  The
+                    # callback that owns the condition may contribute only
+                    # after all three persistent completion stages are final.
+                    explicit_completed = (
+                        isinstance(session_record, dict)
+                        and str(session_record.get(
+                            "product_recording_state") or "") == "completed"
+                        and str(session_record.get(
+                            "analysis_report_state") or "")
+                        in ("completed", "not_required")
+                        and str(session_record.get(
+                            "business_completion_state") or "") == "completed")
+                    members = product_group["members"]
+                    if explicit_completed and condition_key:
+                        previous = members.get(condition_key)
+                        group_terminal = bool(
+                            product_group.get("counted")
+                            or product_group.get("report_terminal"))
+                        if previous is None:
+                            members[condition_key] = {
+                                "request_id": request_id, "label": label,
+                                "state": "completed",
+                                "revision": int(context.sequence or 0),
+                            }
+                        elif (not group_terminal
+                              and previous.get("request_id") != request_id):
+                            # Explicit later re-recordings replace the prior
+                            # condition member. Replaying the same request is
+                            # idempotent and cannot mutate the ledger.
+                            members[condition_key] = {
+                                "request_id": request_id, "label": label,
+                                "state": "completed",
+                                "revision": max(
+                                    int(previous.get("revision", 0)) + 1,
+                                    int(context.sequence or 0)),
+                            }
+                    expected_set = set(product_group.get("expected") or ())
+                    should_count = (
+                        not product_group.get("counted")
+                        and bool(expected_set)
+                        and expected_set.issubset(members))
+                    if should_count:
+                        final_labels = [
+                            str(members[key].get("label") or "not_labeled")
+                            for key in product_group["expected"]]
+                        count_label = (
+                            "NG" if "NG" in final_labels else
+                            ("OK" if final_labels
+                             and all(value == "OK" for value in final_labels)
+                             else "not_labeled"))
+                if should_count:
+                    group_key = str(
+                        context.publication_group_id
+                        or context.product_group_id
+                        or request_id)
+                    from ui.sequence import request_scoped_count_publisher as counts
+                    if product_group is None:
+                        count_effect = publish_effect
+                    else:
+                        group_committed = product_group["effects"]
+                        group_attempted = product_group["attempts"]
+
+                        def count_effect(effect_key, publisher):
+                            def publish_group_effect():
+                                if effect_key in group_committed:
+                                    return group_committed[effect_key]
+                                group_attempted[effect_key] = (
+                                    group_attempted.get(effect_key, 0) + 1)
+                                value = publisher()
+                                group_committed[effect_key] = value
+                                return value
+                            return publish_effect(
+                                f"group-guard:{request_id}:{effect_key}",
+                                publish_group_effect)
+
+                    if context.count_mode == "mark":
+                        count_effect(
+                            f"count:mark:{group_key}:mark-file",
+                            lambda: counts.increment_mark_result(count_label))
+                    count_effect(
+                        f"count:{context.count_mode}:{group_key}:shared",
+                        lambda: counts.increment_shared_result(count_label))
+                    context.count_visual_refresh = context.count_mode
+                    if cycle is not None:
+                        def mark_cycle_counted():
+                            cycle["counted"] = True
+                            cycle["terminal"] = True
+                            trim_group_registry(
+                                cycle_publications,
+                                protected_keys=self._request_scoped_active_group_keys())
+                            return True
+                        publish_effect(
+                            f"state:directional:{group_key}:counted",
+                            mark_cycle_counted)
+                    if product_group is not None:
+                        product_group["counted"] = True
+                    result[f"{context.count_mode}_count_label"] = count_label
+
+            config_snapshot = context.recent_session_config_snapshot or {}
+            analysis_config = config_snapshot.get("analysis_config", {})
+            excel_keys = []
+            for config_key, excel_config in analysis_config.items():
+                if (not isinstance(excel_config, dict)
+                        or excel_config.get("type") != "Excel"):
+                    continue
+                def export_excel(excel_config=excel_config):
+                    exporter = (
+                        export_analysis_to_csv_spool
+                        if bool(excel_config.get("fast_mode", True))
+                        else export_analysis_to_excel)
+                    export_result = exporter(
+                        excel_config, sn=str(context.barcode or ""),
+                        date_text=datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+                        analysis_items_data=dict(context.analysis_items_data or {}),
+                        analysis_config=analysis_config,
+                        analysis_result_dict=dict(context.analysis_result_dict or {}))
+                    if not export_result.ok:
+                        raise RuntimeError(
+                            "request-scoped Excel publication failed: "
+                            f"{export_result.message}")
+                    return str(config_key)
+                export_result = publish_effect(
+                    f"excel:{request_id}:{config_key}", export_excel)
+                excel_keys.append(export_result)
+            if excel_keys:
+                result["excel"] = tuple(excel_keys)
+
+            if (context.product_report_config.get("enabled", False)
+                    and context.product_group_id):
+                expected = tuple(context.product_condition_keys or ())
+                grouped_records = {}
+                if isinstance(records, dict):
+                    for record in records.values():
+                        if not isinstance(record, dict):
+                            continue
+                        group_id = str(record.get("group_id")
+                                       or record.get("product_group_id") or "")
+                        if group_id != str(context.product_group_id):
+                            continue
+                        condition_key = str(record.get("condition_key")
+                                            or record.get("product_condition_key") or "")
+                        if condition_key:
+                            member = ((product_group or {}).get("members") or {}).get(
+                                condition_key)
+                            record_request = str(record.get("request_id") or "")
+                            if (member is None or not record_request
+                                    or record_request == str(member.get("request_id") or "")):
+                                grouped_records[condition_key] = record
+                if not expected:
+                    expected = tuple(grouped_records)
+                missing = [
+                    key for key in expected
+                    if (key not in grouped_records
+                        or str(grouped_records[key].get(
+                            "product_recording_state") or "") != "completed"
+                        or str(grouped_records[key].get(
+                            "analysis_report_state") or "")
+                        not in ("completed", "not_required"))]
+                if missing:
+                    # A group PDF is deferred, not failed, until every expected
+                    # condition has an explicit completed recording/analysis row.
+                    missing = []
+                    expected = ()
+                condition_rows = []
+                labels = []
+                for condition_key in expected:
+                    record = grouped_records[condition_key]
+                    info = dict(record.get("recorded_signal_info") or {})
+                    record_label = str(info.get("labels")
+                                       or record.get("result_label") or "not_labeled")
+                    labels.append(record_label)
+                    condition_rows.append({
+                        "key": condition_key,
+                        "name": condition_key,
+                        "result": record_label,
+                        "recorded_path": str(record.get("recorded_path") or ""),
+                        "record_time": str(record.get("time_text") or ""),
+                        "sample_rate": record.get("sample_rate") or "-",
+                        "analysis_state": str(record.get("analysis_report_state") or ""),
+                        "analysis_items": list(record.get("analysis_report_items") or []),
+                        "analysis_results": [
+                            {"name": str(name),
+                             "status": ("-" if value[0] is None else
+                                        ("OK" if value[0] else "NG")),
+                             "deviation": str(value[1])}
+                            for name, value in dict(
+                                record.get("analysis_result_dict") or {}).items()
+                            if isinstance(value, (tuple, list)) and len(value) >= 2
+                        ],
+                    })
+                overall = ("NG" if "NG" in labels else
+                           ("not_labeled" if "not_labeled" in labels else "OK"))
+                report_data = {
+                    "group_id": str(context.product_group_id),
+                    "product_model": str(
+                        next((record.get("product_model") for record in grouped_records.values()
+                              if record.get("product_model")), "")),
+                    "barcode": str(context.barcode or ""),
+                    "created_at": str(next((record.get("created_at")
+                                             for record in grouped_records.values()
+                                             if record.get("created_at")), "")),
+                    "test_time": str(next((record.get("time_text")
+                                            for record in grouped_records.values()
+                                            if record.get("time_text")), "")),
+                    "overall_result": overall,
+                    "conditions": condition_rows,
+                }
+                if expected:
+                    group_committed = product_group["effects"]
+                    group_attempted = product_group["attempts"]
+
+                    def report_effect(effect_key, publisher):
+                        def publish_group_effect():
+                            if effect_key in group_committed:
+                                return group_committed[effect_key]
+                            group_attempted[effect_key] = (
+                                group_attempted.get(effect_key, 0) + 1)
+                            value = publisher()
+                            group_committed[effect_key] = value
+                            return value
+                        return publish_effect(
+                            f"group-guard:{request_id}:{effect_key}",
+                            publish_group_effect)
+
+                    def export_report():
+                        report_result = export_product_test_pdf(
+                            dict(context.product_report_config), report_data)
+                        if not report_result.ok:
+                            raise RuntimeError(
+                                "request-scoped product report failed: "
+                                f"{report_result.message}")
+                        return report_result.file_path
+                    result["product_report"] = report_effect(
+                        f"product-report:{context.product_group_id}",
+                        export_report)
+                    product_group["report_terminal"] = True
+
+            if product_group is not None:
+                needs_count = context.count_mode in ("mark", "test")
+                needs_report = bool(
+                    context.product_report_config.get("enabled", False)
+                    and context.product_group_id)
+                product_group["terminal"] = bool(
+                    (not needs_count or product_group.get("counted"))
+                    and (not needs_report or product_group.get("report_terminal")))
+                from ui.sequence.request_scoped_registry import trim_group_registry
+                trim_group_registry(
+                    self._request_scoped_product_group_publications,
+                    protected_keys=self._request_scoped_active_group_keys())
+
+            touch_terminal(publications, request_id, {
+                "state": "completed", "result": dict(result)})
+            context.business_effects_result = dict(result)
+            context.business_effects_published = True
+            return result
+        except Exception as error:
+            touch_terminal(publications, request_id, {
+                "state": "failed", "error": str(error)})
+            raise
 
     def _current_analysis_detail_condition_key(self) -> str:
         get_active_product_condition_key = getattr(self, "_get_active_product_condition_key", None)
@@ -1021,7 +1601,17 @@ class SequenceWidgetAnalysisOpsMixin(
         return self._update_manual_product_mark_group_count(session_record.get("group_id"))
 
     def _prepare_next_manual_product_condition_recording(self):
-        if getattr(self, "_record_workflow_busy", False) or getattr(self, "player_status_flag", False):
+        can_start = getattr(self, "_can_start_recording_workflow", None)
+        if callable(can_start):
+            if not can_start():
+                return None
+        elif (getattr(self, "_record_workflow_busy", False)
+              or getattr(self, "player_status_flag", False)):
+            return None
+        if getattr(self, "_analysis_round_completion_pending", False):
+            self.default_logger.info(
+                "next_round_blocked: waiting for background analysis"
+            )
             return None
         validate_metadata = getattr(self, "_validate_test_round_metadata", None)
         if callable(validate_metadata) and not validate_metadata():
@@ -1069,6 +1659,14 @@ class SequenceWidgetAnalysisOpsMixin(
             QMessageBox.warning(self, "提示", message or "当前工况测试队列配置不可用。")
             return None
 
+        validate_analysis_channels = getattr(
+            self,
+            "_validate_automatic_analysis_channels_before_recording",
+            None,
+        )
+        if callable(validate_analysis_channels) and not validate_analysis_channels():
+            return None
+
         begin_metadata = getattr(self, "_begin_test_round_metadata", None)
         if callable(begin_metadata) and not begin_metadata():
             return None
@@ -1084,6 +1682,13 @@ class SequenceWidgetAnalysisOpsMixin(
             if callable(clear_all_direction_waveforms):
                 clear_all_direction_waveforms()
             self._set_product_condition_round_pending()
+            lock_round_config = getattr(
+                self,
+                "_lock_analysis_round_config",
+                None,
+            )
+            if callable(lock_round_config):
+                lock_round_config()
         else:
             self._current_cycle_recorded_count = group_id
 
@@ -1162,27 +1767,43 @@ class SequenceWidgetAnalysisOpsMixin(
                         else "本轮分析完成，未判定"
                     )
                     stage_tone = round_tone
-            left_panel.set_current_stage(stage, tone=stage_tone)
+            has_pending_analysis = getattr(
+                self,
+                "_analysis_has_pending_tasks",
+                None,
+            )
+            if not (
+                callable(has_pending_analysis)
+                and has_pending_analysis()
+            ):
+                left_panel.set_current_stage(stage, tone=stage_tone)
 
         if all_conditions_completed:
             close_trigger_state = str(
                 getattr(self, "product_test_close_trigger_state", "") or ""
             ).strip()
-            if serial_driven and close_trigger_state:
+            defer_round = getattr(
+                self,
+                "_defer_round_completion_for_analysis",
+                None,
+            )
+            if callable(defer_round) and defer_round():
+                self._analysis_deferred_serial_close = bool(
+                    serial_driven and close_trigger_state
+                )
+            elif serial_driven and close_trigger_state:
                 self._serial_product_waiting_for_close = True
-                left_panel = getattr(self, "left_panel", None)
-                if left_panel is not None and hasattr(
-                    left_panel,
-                    "set_current_stage",
-                ):
-                    left_panel.set_current_stage(
-                        "全部工况完成，等待关闭测试",
-                        tone="ok",
-                    )
             else:
                 self._manual_product_condition_group_id = ""
                 self._current_cycle_recorded_count = None
                 round_completed = True
+                unlock_round_config = getattr(
+                    self,
+                    "_unlock_analysis_round_config",
+                    None,
+                )
+                if callable(unlock_round_config):
+                    unlock_round_config()
         self._active_product_condition_key = ""
         self._active_product_condition_config = None
         self._waveform_display_override_direction = ""
@@ -1315,13 +1936,16 @@ class SequenceWidgetAnalysisOpsMixin(
         self._record_workflow_busy = True
         try:
             try:
-                audio_multi, target_sample_rate = self._decode_audio_file(
-                    file_path,
-                    mono=False,
-                )
                 diagnostic = inspect_wav_calibration_metadata(
                     file_path,
                     logger=self.default_logger,
+                )
+                decode_options = {}
+                if (getattr(diagnostic, "declared_backend", None) == "vkinging"
+                        and diagnostic.status is WavCalibrationMetadataReadStatus.VALID):
+                    decode_options["sample_rate"] = diagnostic.metadata["acquisition"]["sample_rate"]
+                audio_multi, target_sample_rate = self._decode_audio_file(
+                    file_path, mono=False, **decode_options,
                 )
                 column_count = self._audio_column_count(audio_multi)
                 channel_mapping = resolve_wav_plot_channels(
@@ -1331,13 +1955,32 @@ class SequenceWidgetAnalysisOpsMixin(
                 presentation_mutated = True
                 self._clear_imported_wav_calibration_state()
                 self.data_struct.wav_calibration_metadata_authoritative = True
-                self.recorded_path = file_path
-                self.recorded_signal_info = {
-                    "file_path": file_path,
-                    "barcode": None,
-                    "labels": "not_labeled",
-                    "source_type": "imported",
-                }
+                if product_condition_key:
+                    storage_context = self._create_analysis_storage_context()
+                    self.recorded_path, self.recorded_signal_info = get_recorded_info(
+                        self.lineedit_type.text(),
+                        self._generate_recording_token(),
+                        self.lineedit_s_or_n.text(),
+                        "not_labeled",
+                        name_suffix=self._resolve_recording_name_suffix(),
+                        use_product_model_dir=True,
+                        analysis_storage_context=storage_context,
+                    )
+                    shutil.copy2(file_path, self.recorded_path)
+                    self.recorded_signal_info.update(
+                        {
+                            "source_type": "imported",
+                            "source_file_path": os.path.abspath(file_path),
+                        }
+                    )
+                else:
+                    self.recorded_path = file_path
+                    self.recorded_signal_info = {
+                        "file_path": file_path,
+                        "barcode": None,
+                        "labels": "not_labeled",
+                        "source_type": "imported",
+                    }
                 attach_metadata = getattr(self, "_attach_test_round_metadata", None)
                 if callable(attach_metadata):
                     attach_metadata(self.recorded_signal_info)
@@ -1356,6 +1999,14 @@ class SequenceWidgetAnalysisOpsMixin(
                     is WavCalibrationMetadataReadStatus.VALID
                     else None
                 )
+                self.data_struct.wav_calibration_declared_backend = getattr(diagnostic, "declared_backend", None)
+                self.data_struct.wav_calibration_read_status = diagnostic.status
+                if (getattr(diagnostic, "declared_backend", None) == "vkinging"
+                        or previous_presentation.get("wav_calibration_declared_backend") == "vkinging"):
+                    self._clear_replaced_ve_analysis_results()
+                refresh_hints = getattr(self, "_refresh_wav_voltage_tooltips", None)
+                if callable(refresh_hints):
+                    refresh_hints()
                 self._waveform_presentation_owner = "direct_import"
             except Exception as exc:
                 if product_condition_key:
@@ -1390,6 +2041,34 @@ class SequenceWidgetAnalysisOpsMixin(
                         "提示",
                         f"音频分析失败: {exc}",
                     )
+                    return False
+                ve_skips = {
+                    **getattr(self, "_ve_channel_skips", {}),
+                    **getattr(self, "_ve_calibration_skips", {}),
+                }
+                if ve_skips:
+                    # The WAV and any valid sibling results were accepted. Do not
+                    # abort their presentation or complete the product condition.
+                    reason = "声压分析未执行：\n" + "\n".join(
+                        f"{key}：{skip.reason}" for key, skip in ve_skips.items())
+                    if product_condition_key:
+                        results = dict(getattr(self, "_manual_product_condition_results", {}) or {})
+                        results.pop(product_condition_key, None)
+                        self._manual_product_condition_results = results
+                        completed_keys = set(getattr(self, "_manual_product_condition_completed_keys", set()) or set())
+                        completed_keys.discard(product_condition_key)
+                        self._manual_product_condition_completed_keys = completed_keys
+                        self._capture_imported_product_condition_record()
+                        left_panel = getattr(self, "left_panel", None)
+                        if left_panel is not None:
+                            left_panel.set_condition_result(product_condition_key, "未完成", tone="pending")
+                            set_stage = getattr(left_panel, "set_current_stage", None)
+                            if callable(set_stage):
+                                set_stage(reason, tone="pending")
+                            set_final = getattr(left_panel, "set_final_result", None)
+                            if callable(set_final):
+                                set_final("待判定", tone="pending")
+                    QMessageBox.warning(self, "声压分析未完成", reason)
                     return False
                 if analysis_succeeded is False:
                     if product_condition_key:
@@ -1435,6 +2114,12 @@ class SequenceWidgetAnalysisOpsMixin(
             "wav_calibration_metadata": copy.deepcopy(
                 getattr(self.data_struct, "wav_calibration_metadata", None)
             ),
+            "wav_calibration_declared_backend": getattr(self.data_struct, "wav_calibration_declared_backend", None),
+            "wav_calibration_read_status": getattr(
+                getattr(self.data_struct, "wav_calibration_read_status", None), "value", None),
+            "ve_calibration_skips": dict(getattr(self, "_ve_calibration_skips", {})),
+            "ve_channel_skips": dict(getattr(self, "_ve_channel_skips", {})),
+            "ve_analysis_decisions": dict(getattr(self, "_ve_analysis_decisions", {})),
             "wav_calibration_metadata_authoritative": bool(
                 getattr(
                     self.data_struct,
@@ -1553,6 +2238,12 @@ class SequenceWidgetAnalysisOpsMixin(
         self.data_struct.wav_calibration_metadata_authoritative = snapshot[
             "wav_calibration_metadata_authoritative"
         ]
+        self.data_struct.wav_calibration_declared_backend = snapshot.get("wav_calibration_declared_backend")
+        status = snapshot.get("wav_calibration_read_status")
+        self.data_struct.wav_calibration_read_status = WavCalibrationMetadataReadStatus(status) if status else None
+        self._ve_calibration_skips = dict(snapshot.get("ve_calibration_skips", {}))
+        self._ve_channel_skips = dict(snapshot.get("ve_channel_skips", {}))
+        self._ve_analysis_decisions = dict(snapshot.get("ve_analysis_decisions", {}))
         self.data_struct.wav_calibration_warning_shown = snapshot[
             "wav_calibration_warning_shown"
         ]
@@ -1582,15 +2273,57 @@ class SequenceWidgetAnalysisOpsMixin(
                 snapshot["sample_rate"],
                 channel_mapping=mapping,
             )
+        refresh_hints = getattr(self, "_refresh_wav_voltage_tooltips", None)
+        if callable(refresh_hints):
+            refresh_hints()
 
     def _clear_imported_wav_calibration_state(self) -> None:
-        self.data_struct.wav_calibration_metadata = None
-        self.data_struct.wav_calibration_metadata_authoritative = False
-        self.data_struct.wav_calibration_warning_shown = False
+        from base.data_struct.data_deal_struct import DataDealStruct
+        DataDealStruct.clear_wav_calibration_context(self.data_struct)
         self._analysis_preflight_warning_shown = False
         self._analysis_preflight_skips = {}
         self._analysis_channel_local_columns = {}
         self._imported_wav_channel_v2pa_factors = {}
+        self._ve_analysis_decisions = {}
+        self._ve_calibration_skips = {}
+        self._ve_channel_skips = {}
+
+    def _refresh_wav_voltage_tooltips(self):
+        """Hints belong to displayed audio, not to the current hardware picker."""
+        workspace = getattr(self, "channel_workspace", None)
+        windows = getattr(workspace, "all_subwindows", None)
+        clear = getattr(self, "_clear_recording_voltage_tooltips", None)
+        if not callable(windows) or not callable(clear):
+            return
+        windows = list(windows())
+        clear(windows)
+        data = self.data_struct
+        metadata = getattr(data, "wav_calibration_metadata", None)
+        if not metadata or metadata.get("backend") != "vkinging":
+            return
+        from base.wav_calibration_metadata import WavCalibrationMetadataReadResult
+        from ui.sequence.ve3668n_analysis_policy import verified_recorded_channels
+        source = WavCalibrationMetadataReadResult(
+            getattr(data, "wav_calibration_read_status", None), metadata, "vkinging")
+        mapping = verified_recorded_channels(source)
+        set_hints = getattr(self, "_set_recording_voltage_tooltips", None)
+        if (mapping is not None and len(windows) == len(mapping) and callable(set_hints)
+                and all(callable(getattr(window, "toolTip", None)) for window in windows)):
+            set_hints(windows, {"recorded_channels": sorted(
+                metadata["recorded_channels"], key=lambda item: item["wav_channel_index"])})
+
+    def _clear_replaced_ve_analysis_results(self):
+        """A newly accepted voltage file/recording cannot inherit old pressure results."""
+        results = getattr(self.data_struct, "analysis_result_dict", None)
+        if isinstance(results, dict):
+            results.clear()
+        self._excel_export_cache = {}
+        self._excel_exported_record_id = None
+        close = getattr(self, "_close_analysis_windows", None)
+        if callable(close):
+            close()
+        self.analysis_window = []
+        self._analysis_result_summary_window = None
 
     def _decode_audio_file(
         self,
@@ -1610,6 +2343,8 @@ class SequenceWidgetAnalysisOpsMixin(
                 else {}
             )
             target_sample_rate = acq_detail.get("sample_rate", 44100)
+
+        import librosa
 
         audio_data, _ = librosa.load(
             file_path,
@@ -1748,18 +2483,18 @@ class SequenceWidgetAnalysisOpsMixin(
                 None,
             )
         import_audio_mode = self._is_import_audio_mode()
+        replaced_ve = getattr(self.data_struct, "wav_calibration_declared_backend", None) == "vkinging"
+        diagnostic = inspect_wav_calibration_metadata(file_path, logger=getattr(self, "default_logger", None))
+        ve_file = getattr(diagnostic, "declared_backend", None) == "vkinging"
+        if ve_file and diagnostic.status is WavCalibrationMetadataReadStatus.VALID:
+            sample_rate = diagnostic.metadata["acquisition"]["sample_rate"]
         audio_data, target_sample_rate = self._decode_audio_file(
             file_path,
             sample_rate=sample_rate,
             mono=False,
         )
-        diagnostic = None
         channel_mapping = None
-        if import_audio_mode or presentation_owner is not None:
-            diagnostic = inspect_wav_calibration_metadata(
-                file_path,
-                logger=self.default_logger,
-            )
+        if import_audio_mode or presentation_owner is not None or ve_file:
             channel_mapping = resolve_wav_plot_channels(
                 diagnostic,
                 column_count=self._audio_column_count(audio_data),
@@ -1776,7 +2511,7 @@ class SequenceWidgetAnalysisOpsMixin(
                 self._active_input_channels = list(channel_mapping)
         finally:
             self._pending_wav_plot_channel_mapping = None
-        if diagnostic is not None:
+        if import_audio_mode or presentation_owner is not None or ve_file:
             self.data_struct.wav_calibration_metadata = (
                 diagnostic.metadata
                 if diagnostic.status
@@ -1784,6 +2519,13 @@ class SequenceWidgetAnalysisOpsMixin(
                 else None
             )
             self.data_struct.wav_calibration_metadata_authoritative = True
+            self.data_struct.wav_calibration_declared_backend = getattr(diagnostic, "declared_backend", None)
+            self.data_struct.wav_calibration_read_status = diagnostic.status
+        if ve_file or replaced_ve:
+            self._clear_replaced_ve_analysis_results()
+        refresh_hints = getattr(self, "_refresh_wav_voltage_tooltips", None)
+        if callable(refresh_hints):
+            refresh_hints()
         if presentation_owner is not None:
             self._waveform_presentation_owner = presentation_owner
 
@@ -1808,7 +2550,9 @@ class SequenceWidgetAnalysisOpsMixin(
             if report_items:
                 report_state = (
                     "failed"
-                    if any(item.get("state") == "failed" for item in report_items)
+                    if (getattr(self, "_ve_calibration_skips", {})
+                        or getattr(self, "_ve_channel_skips", {})
+                        or any(item.get("state") == "failed" for item in report_items))
                     else "completed"
                 )
 
@@ -1818,6 +2562,9 @@ class SequenceWidgetAnalysisOpsMixin(
             )
             or "not_labeled"
         )
+        if (getattr(self, "_ve_calibration_skips", {})
+                or getattr(self, "_ve_channel_skips", {})):
+            result_label = "not_labeled"
         now_dt = datetime.now()
         lineedit_type = getattr(self, "lineedit_type", None)
         product_model = (
@@ -2217,7 +2964,8 @@ class SequenceWidgetAnalysisOpsMixin(
             if callable(try_export_pdf):
                 try_export_pdf(group_id)
 
-    def _capture_current_analysis_report_snapshot(self, session_id=None):
+    def _capture_current_analysis_report_snapshot(
+            self, session_id=None, *, analysis_config=None):
         report_config = getattr(self, "product_test_pdf_report_config", {}) or {}
         if not isinstance(report_config, dict) or not report_config.get("enabled", False):
             return
@@ -2229,13 +2977,16 @@ class SequenceWidgetAnalysisOpsMixin(
         try:
             report_items = build_analysis_report_items(
                 list(getattr(self, "analysis_window", []) or []),
-                getattr(self, "analysis_config", {}) or {},
+                (analysis_config if isinstance(analysis_config, dict)
+                 else (getattr(self, "analysis_config", {}) or {})),
                 getattr(self.data_struct, "analysis_result_dict", {}) or {},
                 getattr(self, "_analysis_preflight_skips", {}) or {},
             )
             if not report_items:
                 report_state = "not_required"
-            elif any(item.get("state") == "failed" for item in report_items):
+            elif (getattr(self, "_ve_calibration_skips", {})
+                  or getattr(self, "_ve_channel_skips", {})
+                  or any(item.get("state") == "failed" for item in report_items)):
                 report_state = "failed"
             else:
                 report_state = "completed"
@@ -2281,20 +3032,36 @@ class SequenceWidgetAnalysisOpsMixin(
             ),
         )
 
-    def _update_current_recent_session_result(self, result_label: str):
-        session_id = getattr(self, "_current_recent_session_id", None)
+    def _update_current_recent_session_result(
+        self, result_label: str, *, session_id=None, recorded_path=None,
+        recorded_signal_info=None, sample_rate=None, analysis_result_dict=None,
+        config_snapshot=None, business_completion_state=None,
+        business_completion_error=None,
+    ):
+        session_id = session_id or getattr(self, "_current_recent_session_id", None)
         if not session_id:
             return
+        signal_info = (self.recorded_signal_info if recorded_signal_info is None
+                       else recorded_signal_info)
         update_fields = {
             "result_label": self._format_recent_session_result_label(result_label),
-            "recorded_path": self.recorded_path,
-            "recorded_signal_info": dict(self.recorded_signal_info or {}),
-            "analysis_result_dict": dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
-            "sample_rate": self.data_struct.sample_rate,
+            "recorded_path": self.recorded_path if recorded_path is None else recorded_path,
+            "recorded_signal_info": dict(signal_info or {}),
+            "analysis_result_dict": dict(
+                (getattr(self.data_struct, "analysis_result_dict", {})
+                 if analysis_result_dict is None else analysis_result_dict) or {}),
+            "sample_rate": self.data_struct.sample_rate if sample_rate is None else sample_rate,
         }
-        config_snapshot = self._build_recent_session_config_snapshot()
+        if config_snapshot is None:
+            config_snapshot = self._build_recent_session_config_snapshot()
         if config_snapshot:
             update_fields["config_snapshot"] = config_snapshot
+        if business_completion_state is not None:
+            update_fields["business_completion_state"] = str(
+                business_completion_state or "")
+        if business_completion_error is not None:
+            update_fields["business_completion_error"] = str(
+                business_completion_error or "")
         self._update_recent_session(session_id, **update_fields)
 
     def _clear_recent_session_history(self, reset_panel=True):
@@ -2460,6 +3227,11 @@ class SequenceWidgetAnalysisOpsMixin(
         previous_wav_calibration_metadata = copy.deepcopy(
             getattr(self.data_struct, "wav_calibration_metadata", None)
         )
+        previous_declared_backend = getattr(self.data_struct, "wav_calibration_declared_backend", None)
+        previous_read_status = getattr(self.data_struct, "wav_calibration_read_status", None)
+        previous_ve_skips = dict(getattr(self, "_ve_calibration_skips", {}))
+        previous_ve_channel_skips = dict(getattr(self, "_ve_channel_skips", {}))
+        previous_ve_decisions = dict(getattr(self, "_ve_analysis_decisions", {}))
         previous_wav_calibration_metadata_authoritative = bool(
             getattr(
                 self.data_struct,
@@ -2553,6 +3325,11 @@ class SequenceWidgetAnalysisOpsMixin(
             self.data_struct.wav_calibration_metadata = (
                 previous_wav_calibration_metadata
             )
+            self.data_struct.wav_calibration_declared_backend = previous_declared_backend
+            self.data_struct.wav_calibration_read_status = previous_read_status
+            self._ve_calibration_skips = previous_ve_skips
+            self._ve_channel_skips = previous_ve_channel_skips
+            self._ve_analysis_decisions = previous_ve_decisions
             self.data_struct.wav_calibration_metadata_authoritative = (
                 previous_wav_calibration_metadata_authoritative
             )
@@ -2613,6 +3390,9 @@ class SequenceWidgetAnalysisOpsMixin(
                     else:
                         self._clear_plot_area()
 
+        refresh_hints = getattr(self, "_refresh_wav_voltage_tooltips", None)
+        if callable(refresh_hints):
+            refresh_hints()
         self.data_btn.setEnabled(True)
         # Viewing a historical record already runs analysis once with visible windows.
         # Triggering a second silent run here clears those window references immediately.
@@ -2621,9 +3401,11 @@ class SequenceWidgetAnalysisOpsMixin(
         cancel_pending_serial_trigger = getattr(self, "_cancel_pending_serial_trigger_delay", None)
         if callable(cancel_pending_serial_trigger):
             cancel_pending_serial_trigger()
-        if getattr(self, "_record_workflow_busy", False):
+        can_start = getattr(self, "_can_start_recording_workflow", None)
+        if callable(can_start) and not can_start():
             return
-        if getattr(self, "player_status_flag", False):
+        if not callable(can_start) and (getattr(self, "_record_workflow_busy", False)
+                                        or getattr(self, "player_status_flag", False)):
             return
         if self.checked_work_status_message():
             cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
@@ -2674,6 +3456,23 @@ class SequenceWidgetAnalysisOpsMixin(
         validate_metadata = getattr(self, "_validate_test_round_metadata", None)
         if callable(validate_metadata) and not validate_metadata():
             return True
+        if self._get_active_product_condition_key():
+            if not self.lineedit_type.text().strip():
+                QMessageBox.warning(self, "测试信息未填写完整", "请先填写型号，再开始测试。")
+                self.lineedit_type.setFocus()
+                return True
+            project_context = dict(
+                getattr(self, "product_test_project_context", {}) or {}
+            )
+            if not project_context.get("project_name") or not project_context.get(
+                "result_root_directory"
+            ):
+                QMessageBox.warning(
+                    self,
+                    "产品测试配置不可用",
+                    "当前产品测试项目缺少项目名称或结果根目录。",
+                )
+                return True
         if not self.sequence_config:
             QMessageBox.warning(
                 self,
@@ -2688,10 +3487,68 @@ class SequenceWidgetAnalysisOpsMixin(
             QMessageBox.warning(self, "提示", "未找到麦克风，请在硬件中设置")
             return True
 
+        if not self._validate_automatic_analysis_channels_before_recording():
+            return True
+
         validate_barcode = getattr(self, "_validate_current_barcode_before_recording", None)
         if callable(validate_barcode) and not validate_barcode():
             return True
 
+        return False
+
+    def _validate_automatic_analysis_channels_before_recording(self) -> bool:
+        analysis_config = getattr(self, "analysis_config", {}) or {}
+        if not isinstance(analysis_config, dict) or not bool(
+            analysis_config.get("auto_analysis", True)
+        ):
+            return True
+
+        recording_channels = tuple(
+            getattr(self, "_configured_input_channels", ()) or ()
+        )
+        if not recording_channels:
+            return True
+
+        preflight = preflight_analysis_channels(
+            analysis_config,
+            active_input_channels=recording_channels,
+        )
+        if not preflight.skipped:
+            return True
+
+        missing_by_item = {}
+        for skipped in preflight.skipped:
+            item_name = skipped.config_key or skipped.item_key
+            channels = missing_by_item.setdefault(item_name, [])
+            channel_name = f"CH{skipped.requested_channel + 1}"
+            if channel_name not in channels:
+                channels.append(channel_name)
+
+        recording_text = "、".join(
+            f"CH{channel + 1}" for channel in recording_channels
+        )
+        missing_lines = [
+            f"{item_name}：{'、'.join(channels)}"
+            for item_name, channels in missing_by_item.items()
+        ]
+        message = (
+            f"当前录音通道：{recording_text}\n"
+            "以下自动分析项配置了不存在的通道：\n"
+            + "\n".join(missing_lines)
+            + "\n\n请修改分析通道或录音通道配置后再开始录制。"
+        )
+        QMessageBox.warning(
+            self,
+            "分析通道配置不匹配",
+            message,
+        )
+        logger = getattr(self, "default_logger", None)
+        if logger is not None:
+            logger.warning(
+                "recording_analysis_channel_preflight_rejected "
+                f"recording_channels={recording_channels} "
+                f"missing={missing_by_item}"
+            )
         return False
 
     def reset_work_pram(self, label, count=None):
@@ -2703,6 +3560,38 @@ class SequenceWidgetAnalysisOpsMixin(
         if callable(begin_hardware_presentation):
             begin_hardware_presentation()
         self.data_struct.clear_data()
+        clear_source = getattr(self, "_clear_imported_wav_calibration_state", None)
+        if callable(clear_source):
+            clear_source()
+        self._recording_ve_device = None
+        acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
+        # Product settings own new soundcard acquisitions, not the displayed
+        # recording/file fs. Partial legacy callers have only data_struct;
+        # retain their rate before VE first replaces it, on this window only.
+        product_sample_rate = acq_detail.get(
+            "sample_rate", getattr(self, "_recording_product_sample_rate", self.data_struct.sample_rate))
+        recording_device = self.mic
+        if recording_device and recording_device.get("backend") == "vkinging":
+            profiles = getattr(self, "ve_profile_store", None)
+            calibrations = getattr(self, "ve_calibration_store", None)
+            if profiles is None or calibrations is None:
+                raise ValueError("VE recording requires the shared profile and calibration stores")
+            recording_device = validate_device_snapshot({
+                **recording_device,
+                "input_config": profiles.load(recording_device, calibrations),
+            })
+            if not recording_device["available"]:
+                raise ValueError("VE 输入设备不可用，请检查连接并在硬件设置中刷新")
+            if self._resolve_recording_acq_detail().get("monitor_playback", False):
+                raise ValueError("VE 不支持实时监听，请在采集配置中关闭监听后重试")
+            self._recording_ve_device = FrozenConfig.snapshot(recording_device)
+            # clear_data intentionally retains fs. Resolve before LoadUiConfig
+            # computes any frame counts, and retain this profile for the run.
+            self._recording_product_sample_rate = product_sample_rate
+            self.data_struct.sample_rate = resolve_effective_input_rate(
+                recording_device, product_sample_rate)
+        else:
+            self.data_struct.sample_rate = product_sample_rate
         self._excel_export_cache = None
         self._excel_exported_record_id = None
 
@@ -2714,10 +3603,10 @@ class SequenceWidgetAnalysisOpsMixin(
 
         name_suffix = self._resolve_recording_name_suffix()
         use_product_model_dir = bool(self._get_active_product_condition_key())
-        acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         recording_root = str(
             acq_detail.get(model_consts.RECORDING_ROOT_CONFIG_KEY, "") or ""
         ).strip()
+        storage_context = self._create_analysis_storage_context()
         self.recorded_path, self.recorded_signal_info = get_recorded_info(
             self.lineedit_type.text(),
             recording_token,
@@ -2726,6 +3615,7 @@ class SequenceWidgetAnalysisOpsMixin(
             name_suffix=name_suffix,
             use_product_model_dir=use_product_model_dir,
             recording_root=recording_root,
+            analysis_storage_context=storage_context,
         )
         attach_metadata = getattr(self, "_attach_test_round_metadata", None)
         if callable(attach_metadata):
@@ -2772,7 +3662,8 @@ class SequenceWidgetAnalysisOpsMixin(
             )
 
         # Add device information for streaming mode
-        recorded_dict["device"] = self.mic
+        recorded_dict["device"] = (
+            self._recording_ve_device if self._recording_ve_device is not None else self.mic)
 
         # The UI refresh owns normalization. Recording consumes one immutable
         # tuple snapshot and only converts to lists at existing API boundaries.
@@ -2878,6 +3769,15 @@ class SequenceWidgetAnalysisOpsMixin(
 
     def _capture_recording_wav_calibration_metadata(self):
         self._recording_wav_calibration_metadata = None
+        device = getattr(self, "_recording_ve_device", None)
+        if device is not None or (self.mic and self.mic.get("backend") == "vkinging"):
+            if device is None:
+                raise ValueError("VE recording requires a frozen input profile before metadata")
+            snapshot = build_recording_wav_calibration_metadata(
+                self._recording_input_channels, device,
+                ve_calibration_store=getattr(self, "ve_calibration_store", None))
+            self._recording_wav_calibration_metadata = FrozenConfig.snapshot(snapshot)
+            return self._recording_wav_calibration_metadata
         try:
             run_channels = getattr(self, "_recording_input_channels", None)
             if run_channels is None:
@@ -2896,6 +3796,8 @@ class SequenceWidgetAnalysisOpsMixin(
         return snapshot
 
     def _cleanup_failed_recording_initialization(self, reason):
+        self._recording_ve_device = None
+        self._recording_wav_calibration_metadata = None
         workflow_token = getattr(self, "_recording_workflow_token", None)
 
         def superseded():
@@ -2947,10 +3849,19 @@ class SequenceWidgetAnalysisOpsMixin(
         return superseded()
 
     def judge_play_and_record(self, label="not_labeled", is_replay=False, *, tcp_completion_address=None):
-        if getattr(self, "_record_workflow_busy", False):
+        config_snapshot_builder = getattr(
+            self, "_recording_admission_config_snapshot", None)
+        config_snapshot = (
+            config_snapshot_builder() if callable(config_snapshot_builder) else None)
+        can_start = getattr(self, "_can_start_recording_workflow", None)
+        if callable(can_start) and not can_start(config_snapshot):
+            return
+        if not callable(can_start) and getattr(self, "_record_workflow_busy", False):
             return
         bridge = getattr(self, "recording_bridge", None)
-        if bridge is not None and bridge.service.busy:
+        if (bridge is not None
+                and not getattr(bridge.service, "can_start_recording",
+                                not getattr(bridge.service, "busy", False))):
             cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
             if callable(cancel_metadata):
                 cancel_metadata()
@@ -2989,6 +3900,7 @@ class SequenceWidgetAnalysisOpsMixin(
                 self._analysis_result_summary_window = None
 
         self._record_workflow_busy = True
+        self._pending_recording_config_snapshot = config_snapshot
         self._recording_workflow_token = object()
         self._recording_wav_calibration_metadata = None
         is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
@@ -3006,9 +3918,14 @@ class SequenceWidgetAnalysisOpsMixin(
 
         if not presentation_transitioned:
             self._clear_plot_area()
-        # CRITICAL: Clean up any existing streaming resources before starting new recording
-        # This prevents device conflicts and freezing when replay is clicked multiple times
-        self._cleanup_streaming_resources()
+        prepare_streaming = getattr(
+            self, "_prepare_streaming_resources_for_new_capture", None)
+        if callable(prepare_streaming):
+            prepare_streaming()
+        else:
+            # Compatibility for isolated legacy hosts. Production uses the
+            # presentation-only transition above so an older finalizer remains owned.
+            self._cleanup_streaming_resources()
 
         self.update_player_btn_is_playing()
 
@@ -3023,10 +3940,19 @@ class SequenceWidgetAnalysisOpsMixin(
 
         self.player_status_flag = True
 
-        # Disable replay and data buttons during recording/playback
-        # They will be re-enabled in _on_streaming_complete()
+        # Replay stays unavailable during capture. Manual analysis may still use
+        # a different condition whose WAV was already finalized.
         self.replayer_btn.setDisabled(True)
-        self.data_btn.setDisabled(True)
+        refresh_analysis_action = getattr(
+            self,
+            "_refresh_analysis_action_state",
+            None,
+        )
+        if callable(refresh_analysis_action):
+            refresh_analysis_action()
+        else:
+            # Standalone mixin hosts retain the legacy recording-time behavior.
+            self.data_btn.setDisabled(True)
 
         QApplication.processEvents()
 
@@ -3049,13 +3975,21 @@ class SequenceWidgetAnalysisOpsMixin(
         try:
             self._capture_recording_wav_calibration_metadata()
         except Exception as error:
+            # Snapshot module boundary: restore UI admission state even for an
+            # unexpected builder fault, then re-raise programming errors. Only
+            # expected VE store/schema errors become actionable UI failures.
             self._recording_wav_calibration_metadata = None
             self.default_logger.error(
                 f"recording_calibration_snapshot_unexpected_error: {error}"
             )
-            self._cleanup_failed_recording_initialization(
+            handled = self._cleanup_failed_recording_initialization(
                 f"初始化录音失败: 无法创建录音校准快照: {error}"
             )
+            if (isinstance(error, (ValueError, OSError))
+                    and self.mic and self.mic.get("backend") == "vkinging"):
+                if not handled:
+                    QMessageBox.warning(self, "提示", f"无法创建 VE 录音校准快照: {error}")
+                return
             raise
 
         try:
@@ -3079,6 +4013,7 @@ class SequenceWidgetAnalysisOpsMixin(
         *,
         report_session_id=None,
         capture_product_report=True,
+        analysis_config_override=None,
     ):
         target_session_id = ""
         if capture_product_report and not self._is_import_audio_mode():
@@ -3097,6 +4032,7 @@ class SequenceWidgetAnalysisOpsMixin(
             result = self._run_analysis_impl(
                 show_windows=show_windows,
                 report_session_id=target_session_id,
+                analysis_config_override=analysis_config_override,
             )
         except Exception as exc:
             self._capture_analysis_report_failure(target_session_id, exc)
@@ -3116,17 +4052,20 @@ class SequenceWidgetAnalysisOpsMixin(
         self._missing_mic_calibration_channels = []
         self._missing_mic_calibration_channel_set = set()
 
-    def _live_batch_requires_mic_calibration(self, item_sort_list=None):
+    def _live_batch_requires_mic_calibration(
+            self, item_sort_list=None, analysis_config=None):
         if self._is_import_audio_mode():
             return False
-        class_mapping = get_class_mapping()
+        config_root = (analysis_config if isinstance(analysis_config, dict)
+                       else (self.analysis_config or {}))
+        class_mapping = self._get_legacy_analysis_class_mapping()
         if item_sort_list is None:
-            item_sort_list = (self.analysis_config or {}).get(
+            item_sort_list = config_root.get(
                 "display_sequence",
                 [],
             )
         for key in item_sort_list:
-            key_config = self.analysis_config.get(key)
+            key_config = config_root.get(key)
             if not isinstance(key_config, dict):
                 continue
             item_type = key_config.get("type")
@@ -3135,11 +4074,30 @@ class SequenceWidgetAnalysisOpsMixin(
         return False
 
     def _prepare_live_mic_calibration_batch(self):
+        data = getattr(self, "data_struct", None)
+        metadata = getattr(data, "wav_calibration_metadata", None)
+        if (getattr(data, "wav_calibration_declared_backend", None) == "vkinging"
+                or (metadata and metadata.get("backend") == "vkinging")):
+            # No current-registry fallback for a frozen voltage recording.
+            self._live_mic_channel_v2pa_factors = {}
+            return
         self._live_mic_channel_v2pa_factors = load_mic_channel_v2pa_factors(
             getattr(self, "mic", None)
         )
 
     def _resolve_live_mic_channel_v2pa_factor(self, raw_channel):
+        data = getattr(self, "data_struct", None)
+        metadata = getattr(data, "wav_calibration_metadata", None)
+        if (getattr(data, "wav_calibration_declared_backend", None) == "vkinging"
+                or (metadata and metadata.get("backend") == "vkinging")):
+            from base.wav_calibration_metadata import WavCalibrationMetadataReadResult
+            from ui.sequence.ve3668n_analysis_policy import verified_recorded_channels
+            source = WavCalibrationMetadataReadResult(
+                getattr(data, "wav_calibration_read_status", None), metadata, "vkinging")
+            channels = verified_recorded_channels(source)
+            if channels is None or raw_channel not in channels:
+                raise ValueError("VE calibration source invalid or physical channel absent")
+            return resolve_wav_channel_v2pa_factor(source, channels.index(raw_channel)).factor
         factor = getattr(
             self,
             "_live_mic_channel_v2pa_factors",
@@ -3220,7 +4178,10 @@ class SequenceWidgetAnalysisOpsMixin(
         )
         self._analysis_preflight_warning_shown = True
 
-    def _prepare_imported_wav_calibration_batch(self, item_sort_list):
+    def _prepare_imported_wav_calibration_batch(
+            self, item_sort_list, analysis_config=None):
+        config_root = (analysis_config if isinstance(analysis_config, dict)
+                       else (self.analysis_config or {}))
         self._imported_wav_channel_v2pa_factors = {}
         fallback_used = False
         metadata = getattr(
@@ -3234,7 +4195,7 @@ class SequenceWidgetAnalysisOpsMixin(
             {},
         )
         for key in item_sort_list:
-            key_config = self.analysis_config.get(key)
+            key_config = config_root.get(key)
             if not isinstance(key_config, dict):
                 continue
             if key_config.get("type") not in REQUIRED_CHANNEL_ANALYSIS_TYPES:
@@ -3262,7 +4223,76 @@ class SequenceWidgetAnalysisOpsMixin(
         )
         self.data_struct.wav_calibration_warning_shown = True
 
-    def _run_analysis_impl(self, show_windows=True, *, report_session_id=None):
+    def _prepare_ve_analysis_batch(
+            self, preflight, item_sort_list, class_mapping,
+            analysis_config=None):
+        config_root = (analysis_config if isinstance(analysis_config, dict)
+                       else (self.analysis_config or {}))
+        from base.wav_calibration_metadata import WavCalibrationMetadataReadResult
+        from ui.sequence.analysis_channel_preflight import AnalysisChannelSkip
+        from ui.sequence.ve3668n_analysis_policy import resolve_ve_analysis, verified_recorded_channels
+
+        # Keep all selected pressure-channel rejections, including configurations
+        # already removed from item_sort_list by the legacy channel preflight.
+        self._ve_channel_skips = {
+            skip.item_key: skip for skip in preflight.skipped
+            if skip.item_type != "RSC" and class_mapping.get(skip.item_type) is not None
+        }
+        data = self.data_struct
+        source = WavCalibrationMetadataReadResult(
+            getattr(data, "wav_calibration_read_status", None),
+            getattr(data, "wav_calibration_metadata", None),
+            getattr(data, "wav_calibration_declared_backend", None),
+        )
+        column_count = self._audio_column_count(data.store_wave_data_multi)
+        imported = self._is_import_audio_mode()
+        available = (tuple(range(column_count)) if imported
+                     else (verified_recorded_channels(source) or ()))
+        executable = []
+        for key in item_sort_list:
+            config = config_root.get(key)
+            if not isinstance(config, dict):
+                continue
+            item_type = config.get("type")
+            if item_type == "RSC" or class_mapping.get(item_type) is None:
+                executable.append(key)
+                continue
+            raw_channels = (normalize_analysis_channels(config)
+                            if not imported and item_type in MULTI_CHANNEL_ANALYSIS_TYPES
+                            and "analysis_channels" in config
+                            else [normalize_analysis_channel(config)])
+            allowed = False
+            for raw_channel in raw_channels:
+                runtime_key = f"{key}--通道{raw_channel + 1}" if len(raw_channels) > 1 else key
+                if runtime_key in self._analysis_preflight_skips:
+                    continue
+                if runtime_key in preflight.local_channels:
+                    column = preflight.local_channels[runtime_key]
+                else:
+                    column = available.index(raw_channel) if raw_channel in available else -1
+                # These consumers read the all-recorded-column mono signal.
+                columns = tuple(range(column_count)) if item_type in ("PD", "ED", "PM") else (column,)
+                decision = resolve_ve_analysis(source, columns, column_count=column_count)
+                self._ve_analysis_decisions[runtime_key] = decision
+                if decision.allowed:
+                    self._analysis_channel_local_columns[runtime_key] = max(column, 0)
+                    allowed = True
+                else:
+                    skip = AnalysisChannelSkip(
+                        str(runtime_key), item_type, raw_channel, available,
+                        decision.diagnostic, config_key=str(key))
+                    self._ve_calibration_skips[runtime_key] = skip
+                    self._analysis_preflight_skips[runtime_key] = skip
+            if allowed:
+                executable.append(key)
+        if self._ve_calibration_skips:
+            QMessageBox.warning(self, "声压分析需要校准", "\n".join(
+                f"{key}：{skip.reason}" for key, skip in self._ve_calibration_skips.items()))
+        return executable
+
+    def _run_analysis_impl(
+            self, show_windows=True, *, report_session_id=None,
+            analysis_config_override=None):
         """
         Executes the analysis tasks and optionally displays the analysis windows.
 
@@ -3276,8 +4306,14 @@ class SequenceWidgetAnalysisOpsMixin(
         self._analysis_preflight_warning_shown = False
         self._imported_wav_channel_v2pa_factors = {}
         self.data_struct.wav_calibration_warning_shown = False
+        self._ve_analysis_decisions = {}
+        self._ve_calibration_skips = {}
+        self._ve_channel_skips = {}
 
-        configured_items = (self.analysis_config or {}).get(
+        analysis_config = (analysis_config_override
+                           if isinstance(analysis_config_override, dict)
+                           else (self.analysis_config or {}))
+        configured_items = analysis_config.get(
             "display_sequence",
             [],
         )
@@ -3299,13 +4335,20 @@ class SequenceWidgetAnalysisOpsMixin(
                 imported_channel_count = len(
                     getattr(self, "_active_input_channels", None) or [0]
                 )
+        metadata = getattr(self.data_struct, "wav_calibration_metadata", None)
+        ve_source = (getattr(self.data_struct, "wav_calibration_declared_backend", None) == "vkinging"
+                     or (metadata is not None and metadata.get("backend") == "vkinging"))
+        source_channels = getattr(self, "_active_input_channels", (0,))
+        if ve_source:
+            from base.wav_calibration_metadata import WavCalibrationMetadataReadResult
+            from ui.sequence.ve3668n_analysis_policy import verified_recorded_channels
+            verified_channels = verified_recorded_channels(WavCalibrationMetadataReadResult(
+                getattr(self.data_struct, "wav_calibration_read_status", None), metadata, "vkinging"))
+            if verified_channels is not None:
+                source_channels = verified_channels
         preflight = preflight_analysis_channels(
-            self.analysis_config,
-            active_input_channels=getattr(
-                self,
-                "_active_input_channels",
-                (0,),
-            ),
+            analysis_config,
+            active_input_channels=source_channels,
             imported_channel_count=imported_channel_count,
         )
         self._analysis_channel_local_columns = dict(preflight.local_channels)
@@ -3331,18 +4374,28 @@ class SequenceWidgetAnalysisOpsMixin(
                 self._analysis_result_summary_window = None
 
         self._reset_live_mic_calibration_batch()
-        class_mapping = get_class_mapping()
+        class_mapping = self._get_legacy_analysis_class_mapping()
+        if ve_source:
+            self._excel_export_cache = {}
+            self._excel_exported_record_id = None
+            item_sort_list = self._prepare_ve_analysis_batch(
+                preflight, item_sort_list, class_mapping,
+                analysis_config=analysis_config)
         has_executable_item = any(
-            isinstance(self.analysis_config.get(key), dict)
-            and class_mapping.get(self.analysis_config[key].get("type")) is not None
+            isinstance(analysis_config.get(key), dict)
+            and class_mapping.get(analysis_config[key].get("type")) is not None
             for key in item_sort_list
         )
-        if preflight.skipped and not has_executable_item:
+        # An empty selection is the existing successful no-op, not an unavailable
+        # requested analysis. It must not fail an otherwise valid voltage capture.
+        if (preflight.skipped or (ve_source and configured_items)) and not has_executable_item:
             if report_session_id:
-                self._capture_current_analysis_report_snapshot(report_session_id)
+                self._capture_current_analysis_report_snapshot(
+                    report_session_id, analysis_config=analysis_config)
             return False
 
-        if self._live_batch_requires_mic_calibration(item_sort_list):
+        if not ve_source and self._live_batch_requires_mic_calibration(
+                item_sort_list, analysis_config=analysis_config):
             try:
                 self._prepare_live_mic_calibration_batch()
             except (MicCalibrationFormatError, MicCalibrationIOError) as error:
@@ -3354,21 +4407,27 @@ class SequenceWidgetAnalysisOpsMixin(
                     )
                 return False
 
-        if self._is_import_audio_mode():
+        if not ve_source and self._is_import_audio_mode():
             fallback_used = self._prepare_imported_wav_calibration_batch(
-                item_sort_list
+                item_sort_list, analysis_config=analysis_config
             )
             self._show_imported_wav_calibration_warning(fallback_used)
 
         width = int((self.screen().size().width() - 400) / 3)
         height = int((self.screen().size().height() - 400) / 3)
-        if self.analysis_config:
+        if analysis_config:
             for key in item_sort_list:
-                key_config = self.analysis_config.get(key)
+                key_config = analysis_config.get(key)
                 if not isinstance(key_config, dict):
                     continue
+                key_config = dict(key_config)
+                golden_path = analysis_config.get("golden_sample_result_path")
+                if golden_path:
+                    key_config["golden_sample_result_path"] = golden_path
                 item_type = key_config.get("type")
-                self.instance_analysis_class(key, item_type, key_config)
+                self.instance_analysis_class(
+                    key, item_type, key_config,
+                    analysis_config=analysis_config)
             self._show_missing_mic_channel_calibration_warning()
             for instance in self.analysis_window:
                 instance_key = getattr(instance, "_sequence_runtime_key", None)
@@ -3405,7 +4464,7 @@ class SequenceWidgetAnalysisOpsMixin(
                         instance.calculate_thd()
                     elif hasattr(instance, "calculate_ai_scores"):
                         instance.calculate_ai_scores(
-                            self.count_board.mode, self.analysis_config, self.sequence_config[0]["seq1"]["acq"]["mode"]
+                            self.count_board.mode, analysis_config, self.sequence_config[0]["seq1"]["acq"]["mode"]
                         )
                     elif hasattr(instance, "calculate_spec"):
                         instance.calculate_spec()
@@ -3469,18 +4528,21 @@ class SequenceWidgetAnalysisOpsMixin(
                     self._hide_analysis_window(instance)
 
             # Cache last analysis results for Excel export (export happens on OK/NG / test finalization)
-            self._capture_excel_export_cache()
+            self._capture_excel_export_cache(analysis_config=analysis_config)
             # Mark mode previously only exported on OK/NG click; now export immediately after analysis
             # so results are always saved to CSV (spool) regardless of whether OK/NG is clicked.
-            self._maybe_export_excel_results()
-            can_output, _reason = self._can_output_ok_ng()
-            ai_runtime_state = extract_ai_runtime_state(self.analysis_window, self.analysis_config)
+            product_outcome = None
+            self._maybe_export_excel_results(analysis_config=analysis_config)
+            can_output, _reason = self._can_output_ok_ng(
+                analysis_config=analysis_config)
+            ai_runtime_state = extract_ai_runtime_state(
+                self.analysis_window, analysis_config)
             has_ai_analysis = bool(ai_runtime_state.get("has_ai_analysis", False))
             ai_scores = ai_runtime_state.get("scores") or {"ok_score": None, "ng_score": None}
             self._sync_left_panel_analysis_details(ai_runtime_state)
             cycle_final_label = None
-            label = None
-            if can_output:
+            label = product_outcome.label if product_outcome is not None else None
+            if can_output and product_outcome is None:
                 _passed, label = self._summarize_ok_ng()
                 update_ai_cycle_result = getattr(self, "_update_ai_cycle_result_after_analysis", None)
                 if (
@@ -3492,13 +4554,34 @@ class SequenceWidgetAnalysisOpsMixin(
                         label,
                         ai_scores=ai_scores,
                     )
+            elif (
+                product_outcome is not None
+                and product_outcome.judgment_status == "judged"
+                and has_ai_analysis
+                and label in ("OK", "NG")
+            ):
+                update_ai_cycle_result = getattr(
+                    self,
+                    "_update_ai_cycle_result_after_analysis",
+                    None,
+                )
+                if callable(update_ai_cycle_result):
+                    cycle_final_label = update_ai_cycle_result(
+                        label,
+                        ai_scores=ai_scores,
+                    )
             import_audio_mode = self._is_import_audio_mode()
             if self.count_board.mode == "test":
                 # Test mode: decide label from analysis_result_dict summary and auto-finalize.
-                if not can_output:
+                if not can_output and product_outcome is None:
                     QMessageBox.warning(self, "提示", "当前配置无法产出 OK/NG 汇总结果，无法执行测试模式自动判定。")
                 else:
                     auto_label = label
+                    supported_auto_labels = (
+                        ("OK", "NG", "not_labeled")
+                        if product_outcome is not None
+                        else ("OK", "NG")
+                    )
                     is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
                     directional_cycle_active = (
                         callable(is_directional_cycle_active) and is_directional_cycle_active()
@@ -3521,8 +4604,11 @@ class SequenceWidgetAnalysisOpsMixin(
                             self._update_current_recent_session_result(auto_label)
                     if directional_cycle_active:
                         auto_label = cycle_final_label
-                    if manual_product_cycle_active and auto_label in ("OK", "NG"):
-                        if not import_audio_mode:
+                    if (
+                        manual_product_cycle_active
+                        and auto_label in supported_auto_labels
+                    ):
+                        if not import_audio_mode or product_outcome is not None:
                             persist_current_test_audio_label = getattr(
                                 self,
                                 "_persist_current_test_audio_label",
@@ -3548,7 +4634,7 @@ class SequenceWidgetAnalysisOpsMixin(
                             else None
                         )
                         auto_label = product_cycle_final_label
-                    if auto_label not in ("OK", "NG"):
+                    if auto_label not in supported_auto_labels:
                         auto_label = None
                     if auto_label is None:
                         # Directional cycle should only be counted/finalized after the reverse leg
@@ -3581,7 +4667,8 @@ class SequenceWidgetAnalysisOpsMixin(
             # Show summary window at the end (also in test mode), only if dict is not empty
             self._maybe_show_analysis_result_summary(width, height)
         if report_session_id:
-            self._capture_current_analysis_report_snapshot(report_session_id)
+            self._capture_current_analysis_report_snapshot(
+                report_session_id, analysis_config=analysis_config)
         current_mode = str(getattr(self.count_board, "mode", "") or "")
         if (
             not self._is_import_audio_mode()
@@ -3656,6 +4743,9 @@ class SequenceWidgetAnalysisOpsMixin(
         )
 
     def _maybe_show_analysis_result_summary(self, width: int, height: int):
+        if (getattr(self, "_ve_calibration_skips", {})
+                or getattr(self, "_ve_channel_skips", {})):
+            return
         result_dict = getattr(self.data_struct, "analysis_result_dict", None)
         if not isinstance(result_dict, dict) or len(result_dict) == 0:
             return
@@ -3670,6 +4760,8 @@ class SequenceWidgetAnalysisOpsMixin(
             judged_result_dict[name] = (ok, deviation)
         if len(judged_result_dict) == 0:
             return
+
+        from ui.signal_analysis_window import AnalysisResultSummaryWindow
 
         # Create or reuse summary window
         if self._analysis_result_summary_window is None:
@@ -3707,7 +4799,7 @@ class SequenceWidgetAnalysisOpsMixin(
         except Exception:
             pass
 
-    def _capture_excel_export_cache(self):
+    def _capture_excel_export_cache(self, *, analysis_config=None):
         """
         Cache current analysis results for later Excel export.
 
@@ -3729,12 +4821,14 @@ class SequenceWidgetAnalysisOpsMixin(
             if isinstance(self.recorded_signal_info, dict):
                 sn = self.recorded_signal_info.get("barcode") or ""
 
+            config_root = (analysis_config if isinstance(analysis_config, dict)
+                           else (self.analysis_config or {}))
             analysis_items_data = {}
             for inst in self.analysis_window or []:
                 key = getattr(inst, "_sequence_analysis_key", None)
                 if not key:
                     continue
-                cfg = self.analysis_config.get(key)
+                cfg = config_root.get(key)
                 if not isinstance(cfg, dict):
                     continue
                 t = cfg.get("type")
@@ -3758,9 +4852,12 @@ class SequenceWidgetAnalysisOpsMixin(
             self._excel_export_cache = {
                 "record_id": record_id,
                 "sn": sn,
+                "sample_number": (self.recorded_signal_info or {}).get("sample_number"),
+                "test_round": (self.recorded_signal_info or {}).get("test_round"),
                 "date_text": date_text,
                 "analysis_items_data": analysis_items_data,
                 "analysis_result_dict": dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
+                "analysis_config": copy.deepcopy(config_root),
             }
         except Exception as e:
             self.default_logger.error(f"capture_excel_export_cache_error: {e}")
@@ -3828,14 +4925,16 @@ class SequenceWidgetAnalysisOpsMixin(
             with self._excel_spool_build_lock:
                 self._excel_spool_build_in_progress = False
 
-    def _maybe_export_excel_results(self):
+    def _maybe_export_excel_results(self, *, analysis_config=None):
         """
         Export selected analysis items to Excel, if the global Excel analysis item exists in config.
         Shows retry dialog on failure allowing user to close open files and retry.
         """
         # Find Excel exporter config(s)
+        config_root = (analysis_config if isinstance(analysis_config, dict)
+                       else (self.analysis_config or {}))
         excel_cfg_list = []
-        for k, v in (self.analysis_config or {}).items():
+        for k, v in config_root.items():
             if not isinstance(v, dict):
                 continue
             if v.get("type") == "Excel":
@@ -3880,7 +4979,7 @@ class SequenceWidgetAnalysisOpsMixin(
                         sn=sn,
                         date_text=date_text,
                         analysis_items_data=analysis_items_data,
-                        analysis_config=self.analysis_config,
+                        analysis_config=config_root,
                         analysis_result_dict=analysis_result_dict,
                     )
                 else:
@@ -3889,7 +4988,7 @@ class SequenceWidgetAnalysisOpsMixin(
                         sn=sn,
                         date_text=date_text,
                         analysis_items_data=analysis_items_data,
-                        analysis_config=self.analysis_config,
+                        analysis_config=config_root,
                         analysis_result_dict=analysis_result_dict,
                     )
                 if ret.ok:
@@ -3948,9 +5047,10 @@ class SequenceWidgetAnalysisOpsMixin(
             else:
                 break
 
-    def instance_analysis_class(self, key, type, params):
+    def instance_analysis_class(
+            self, key, type, params, *, analysis_config=None):
         """Expand recorded channels without duplicating the saved analysis item."""
-        cls_map = get_class_mapping().get(type)
+        cls_map = self._get_legacy_analysis_class_mapping().get(type)
         if cls_map is None:
             return
         config = params if isinstance(params, dict) else {}
@@ -4024,7 +5124,20 @@ class SequenceWidgetAnalysisOpsMixin(
                 "raw_channel": raw_channel,
                 "active_input_channels": list(active_input_channels),
             }
-            if import_audio and type in REQUIRED_CHANNEL_ANALYSIS_TYPES:
+            ve_decision = getattr(self, "_ve_analysis_decisions", {}).get(window_key)
+            if ve_decision is not None:
+                class_instance.v2pa_factor = ve_decision.factors[0]
+                if type in ("Spec", "PD", "ED"):
+                    from ui.sequence.ve3668n_analysis_policy import VEPressureSignalView
+                    class_instance.data_struct = VEPressureSignalView(self.data_struct, ve_decision)
+                    class_instance.v2pa_factor = 1.0
+                    # Source columns and runtime identity above stay unchanged;
+                    # the converted per-instance signal has one local column.
+                    mapped_channel = 0
+                # AI/FR/HD/RB/PM retain their existing (non-Pa) input semantics.
+                # Admission is shared with the existing calibration batch; do
+                # not introduce a new model/template input normalization here.
+            elif import_audio and type in REQUIRED_CHANNEL_ANALYSIS_TYPES:
                 class_instance.v2pa_factor = getattr(
                     self, "_imported_wav_channel_v2pa_factors", {}
                 ).get(str(key), 1.0)
@@ -4037,8 +5150,11 @@ class SequenceWidgetAnalysisOpsMixin(
                 )
             runtime_params = dict(config)
             runtime_params["analysis_channel"] = mapped_channel
-            if isinstance(getattr(self, "analysis_config", None), dict):
-                golden_path = self.analysis_config.get("golden_sample_result_path")
+            config_root = (analysis_config if isinstance(analysis_config, dict)
+                           else getattr(self, "analysis_config", None))
+            if ("golden_sample_result_path" not in runtime_params
+                    and isinstance(config_root, dict)):
+                golden_path = config_root.get("golden_sample_result_path")
                 if golden_path:
                     runtime_params["golden_sample_result_path"] = golden_path
             class_instance.analysis_config = runtime_params

@@ -7,6 +7,8 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel
 from PyQt5.QtWidgets import QHBoxLayout
 
+from base.analysis_limit_evaluation import compare_with_limits
+
 
 def custom_log_tick_strings(values, scale, spacing):
     estrings = ["%0.1g" % x for x in 10 ** np.array(values).astype(float) * np.array(scale)]
@@ -313,39 +315,12 @@ class LimitPlotUtils:
             deviation: Deviation value (max exceedance if out, min margin if ok)
             is_ok: Whether all points are within limits
         """
-        n = len(plot_y)
-        if valid_mask is None:
-            valid_mask = np.ones(n, dtype=bool)
-
-        u_ok = np.isfinite(upper_limits)
-        l_ok = np.isfinite(lower_limits)
-
-        # Check out-of-limit
-        out_mask = valid_mask & (
-            (u_ok & (plot_y > upper_limits)) |
-            (l_ok & (plot_y < lower_limits))
+        return compare_with_limits(
+            plot_y,
+            upper_limits,
+            lower_limits,
+            valid_mask=valid_mask,
         )
-
-        # Calculate deviation
-        deviation = 0.0
-        is_ok = True
-        if np.any(out_mask):
-            is_ok = False
-            dev_upper = np.where(out_mask & u_ok, plot_y - upper_limits, 0.0)
-            dev_lower = np.where(out_mask & l_ok, lower_limits - plot_y, 0.0)
-            deviation = float(np.nanmax(np.maximum(dev_upper, dev_lower)))
-        else:
-            # Calculate minimum margin when within limits
-            in_range = valid_mask & np.isfinite(plot_y)
-            if np.any(in_range):
-                margin_u = np.where(u_ok[in_range], upper_limits[in_range] - plot_y[in_range], np.inf)
-                margin_l = np.where(l_ok[in_range], plot_y[in_range] - lower_limits[in_range], np.inf)
-                margins = np.minimum(margin_u, margin_l)
-                margins = margins[np.isfinite(margins)]
-                if margins.size > 0:
-                    deviation = float(np.min(margins))
-
-        return out_mask, round(deviation, 2), is_ok
 
     @staticmethod
     def plot_out_segments(

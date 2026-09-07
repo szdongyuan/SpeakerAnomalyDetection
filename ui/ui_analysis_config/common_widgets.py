@@ -6,10 +6,11 @@ from functools import partial
 from string import Template
 from typing import Any, Callable
 
-from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QGridLayout,
     QHBoxLayout,
     QLayout,
     QPushButton,
@@ -850,90 +851,10 @@ class ChannelSelectorWidget(QWidget):
         })
 
 
-class _CheckableChannelComboBox(ComboBox):
-    """Keep the popup open while selecting at least one physical channel."""
-
-    selectionChanged = pyqtSignal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._keep_popup_open = False
-        self.setEditable(True)
-        self.lineEdit().setReadOnly(True)
-        self.view().installEventFilter(self)
-        self.view().viewport().installEventFilter(self)
-        # QComboBox may replace the summary even when its current index is unchanged.
-        self.lineEdit().textChanged.connect(self._sync_display_text)
-
-    def add_checkable_item(self, text: str, channel: int) -> None:
-        self.addItem(text, channel)
-        item = self.model().item(self.count() - 1, 0)
-        item.setFlags(item.flags() | Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
-        item.setData(Qt.Unchecked, Qt.CheckStateRole)
-
-    def selected_data(self) -> list[int]:
-        return sorted(
-            int(self.itemData(row))
-            for row in range(self.count())
-            if self.model().item(row, 0).data(Qt.CheckStateRole) == Qt.Checked
-        )
-
-    def set_selected_data(self, channels) -> None:
-        available = {int(self.itemData(row)) for row in range(self.count())}
-        requested = available.intersection(channels)
-        if not requested:
-            requested = set(self.selected_data()[:1]) or {int(self.itemData(0))}
-        for row in range(self.count()):
-            self.model().item(row, 0).setData(
-                Qt.Checked if int(self.itemData(row)) in requested else Qt.Unchecked,
-                Qt.CheckStateRole,
-            )
-        self._sync_display_text()
-
-    def _sync_display_text(self) -> None:
-        text = "、".join(f"In{ch + 1}" for ch in self.selected_data())
-        self.lineEdit().setText(text)
-        self.lineEdit().setToolTip(text)
-        self.lineEdit().setCursorPosition(0)
-
-    def eventFilter(self, watched, event):
-        if watched is self.view().viewport() and event.type() == QEvent.MouseButtonRelease:
-            index = self.view().indexAt(event.pos())
-            self._toggle_index(index)
-            self._keep_popup_open = True
-            QTimer.singleShot(0, self._allow_popup_close)
-            return True
-        if (
-            watched is self.view()
-            and event.type() == QEvent.KeyPress
-            and event.key() == Qt.Key_Space
-        ):
-            self._toggle_index(self.view().currentIndex())
-            return True
-        return super().eventFilter(watched, event)
-
-    def _toggle_index(self, index) -> None:
-        if not index.isValid():
-            return
-        item = self.model().itemFromIndex(index)
-        checked = item.data(Qt.CheckStateRole) == Qt.Checked
-        if checked and len(self.selected_data()) == 1:
-            return
-        item.setData(Qt.Unchecked if checked else Qt.Checked, Qt.CheckStateRole)
-        self._sync_display_text()
-        self.selectionChanged.emit()
-
-    def _allow_popup_close(self) -> None:
-        self._keep_popup_open = False
-
-    def hidePopup(self) -> None:
-        if not self._keep_popup_open:
-            super().hidePopup()
-            self._sync_display_text()
-
-
 class MultiChannelSelectorWidget(QWidget):
-    """Recorded input selection; imported-audio widgets remain single-select."""
+    """Direct recorded-input selection; imported audio remains single-select."""
+
+    CHANNELS_PER_ROW = 8
 
     def __init__(self, cfg=None, available_channels=None, parent=None):
         super().__init__(parent)
@@ -942,31 +863,72 @@ class MultiChannelSelectorWidget(QWidget):
         })
         config = dict(cfg or {})
         if "analysis_channels" not in config and "analysis_channel" not in config:
-            config["analysis_channel"] = self.available_channels[0]
-        selected = normalize_analysis_channels(config)
-        self.combo_box = _CheckableChannelComboBox(self)
-        self.combo_box.setMinimumWidth(220)
-        for channel in sorted(set(self.available_channels).union(selected)):
-            label = f"In{channel + 1}"
-            if channel not in self.available_channels:
-                label += "（未录制）"
-            self.combo_box.add_checkable_item(label, channel)
-        self.combo_box.set_selected_data(selected)
-        self.combo_box.setToolTip("各通道共用参数和阈值；未录制通道将在分析时单独提示。")
+            selected = list(self.available_channels)
+        else:
+            selected = [
+                channel
+                for channel in normalize_analysis_channels(config)
+                if channel in self.available_channels
+            ]
+            if not selected:
+                selected = list(self.available_channels)
+        self._updating_selection = False
+        self.channel_checkboxes: dict[int, CheckBox] = {}
+        self.channel_grid = QGridLayout()
+        self.channel_grid.setContentsMargins(0, 0, 0, 0)
+        self.channel_grid.setHorizontalSpacing(18)
+        self.channel_grid.setVerticalSpacing(6)
+        for index, channel in enumerate(self.available_channels):
+            checkbox = CheckBox(f"In{channel + 1}", self)
+            checkbox.setChecked(channel in selected)
+            checkbox.toggled.connect(partial(self._on_channel_toggled, channel))
+            self.channel_checkboxes[channel] = checkbox
+            self.channel_grid.addWidget(
+                checkbox,
+                index // self.CHANNELS_PER_ROW,
+                index % self.CHANNELS_PER_ROW,
+            )
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(Label("通道:"))
-        layout.addWidget(self.combo_box)
+        layout.addWidget(Label("通道:"), 0, Qt.AlignTop)
+        layout.addLayout(self.channel_grid)
         layout.addStretch()
+        self.setToolTip("各通道共用参数和阈值；至少选择一个通道。")
 
     def current_channel(self) -> int:
         return self.selected_channels()[0]
 
     def selected_channels(self) -> list[int]:
-        return self.combo_box.selected_data()
+        return sorted(
+            channel
+            for channel, checkbox in self.channel_checkboxes.items()
+            if checkbox.isChecked()
+        )
 
     def set_selected_channels(self, channels) -> None:
-        self.combo_box.set_selected_data(channels)
+        requested = set(
+            normalize_analysis_channels({"analysis_channels": list(channels or [])})
+        ).intersection(self.channel_checkboxes)
+        if not requested:
+            requested = set(self.selected_channels()[:1]) or {
+                next(iter(self.channel_checkboxes))
+            }
+
+        self._updating_selection = True
+        try:
+            for channel, checkbox in self.channel_checkboxes.items():
+                checkbox.setChecked(channel in requested)
+        finally:
+            self._updating_selection = False
+
+    def _on_channel_toggled(self, channel: int, checked: bool) -> None:
+        if self._updating_selection or checked or self.selected_channels():
+            return
+        self._updating_selection = True
+        try:
+            self.channel_checkboxes[channel].setChecked(True)
+        finally:
+            self._updating_selection = False
 
     @staticmethod
     def normalized_config(cfg: dict[str, Any] | None) -> dict[str, Any]:

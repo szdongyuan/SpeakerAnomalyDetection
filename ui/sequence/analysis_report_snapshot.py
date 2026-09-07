@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+from pathlib import Path
 import time
 from typing import Any
 
@@ -22,6 +23,131 @@ _REPORT_PLOT_LAYOUT_SIZE = (1000, 600)
 _REPORT_PLOT_EXPORT_WIDTH = 1000
 _REPORT_PLOT_SLOW_SECONDS = 0.5
 _LOGGER = logging.getLogger(__name__)
+
+
+def build_analysis_report_items_from_task_result(task_result, analysis_config):
+    """Build the existing PDF snapshot shape from a headless worker result."""
+    config = analysis_config if isinstance(analysis_config, dict) else {}
+    counts = {}
+    for item in task_result.instance_results:
+        counts[item.config_key] = counts.get(item.config_key, 0) + 1
+
+    report_items = []
+    for item in task_result.instance_results:
+        item_config = config.get(item.config_key, {})
+        if not isinstance(item_config, dict):
+            item_config = {}
+        metrics = item.metrics.to_dict()
+        if item.execution_status != "分析完成":
+            state = "failed"
+            status = "分析失败"
+        elif item.contributes_to_final:
+            state = "completed"
+            status = item.judgement or "未产生判定"
+        elif item.analysis_type == "Spec":
+            state = "completed"
+            status = "仅图表分析"
+        else:
+            state = "completed"
+            status = "未启用判定"
+        measurement, unit = _process_result_measurement(item.analysis_type, metrics)
+        lower_limit, upper_limit = _process_result_limits(
+            item.analysis_type,
+            metrics,
+            item_config,
+        )
+        images = []
+        image_errors = []
+        csv_paths = []
+        artifact_errors = []
+        for artifact in item.artifacts:
+            if artifact.kind == "图片" and artifact.status == "已保存":
+                try:
+                    png_data = Path(artifact.path).read_bytes()
+                except OSError as error:
+                    image_errors.append(str(error))
+                else:
+                    images.append(
+                        {
+                            "caption": f"{item.config_key} - CH{item.raw_channel + 1}",
+                            "png_data": png_data,
+                        }
+                    )
+            elif artifact.kind.startswith("CSV:") and artifact.status == "已保存":
+                csv_paths.append(artifact.path)
+            elif artifact.status == "保存失败":
+                artifact_errors.append(
+                    f"{artifact.kind}保存失败："
+                    f"{artifact.error_message or '未知错误'}"
+                )
+        report_name = (
+            item.runtime_key if counts.get(item.config_key, 0) > 1 else item.config_key
+        )
+        report_items.append(
+            {
+                "name": report_name,
+                "item_key": item.config_key,
+                "runtime_key": item.runtime_key,
+                "channel_key": f"In{item.raw_channel + 1}",
+                "type": item.analysis_type,
+                "state": state,
+                "status": status,
+                "deviation": "-",
+                "measurement": measurement,
+                "lower_limit": lower_limit,
+                "upper_limit": upper_limit,
+                "unit": unit,
+                "error": "；".join(
+                    value
+                    for value in (item.error_message, *artifact_errors)
+                    if value
+                ),
+                "image_errors": image_errors,
+                "images": images,
+                "csv_summary": "；".join(csv_paths),
+            }
+        )
+    return report_items
+
+
+def _process_result_measurement(analysis_type, metrics):
+    if analysis_type == "SPL":
+        return _format_measurement(metrics.get("overall_spl")), str(
+            metrics.get("unit") or "dB"
+        )
+    if analysis_type == "FBA":
+        weighting = str(metrics.get("weighting") or "Z")
+        unit = "dB" if weighting == "Z" else f"dB({weighting})"
+        return _format_measurement(metrics.get("overall_weighted_db")), unit
+    if analysis_type == "FFT":
+        weighting = str(metrics.get("weighting") or "Z")
+        unit = (
+            "dB"
+            if metrics.get("display_mode") == "delta"
+            else ("dB SPL" if weighting == "Z" else f"dB({weighting}) SPL")
+        )
+        return _format_measurement(metrics.get("peak_value")), unit
+    if analysis_type == "AI":
+        return _format_measurement(metrics.get("model_output_value")), "-"
+    if analysis_type == "Spec":
+        return "-", "dB"
+    return "-", "-"
+
+
+def _process_result_limits(analysis_type, metrics, config):
+    if analysis_type == "SPL" and str(
+        config.get("limit_metric", "curve_y") or "curve_y"
+    ).lower() == "overall_spl":
+        return (
+            _format_measurement(metrics.get("overall_lower_limit")),
+            _format_measurement(metrics.get("overall_upper_limit")),
+        )
+    if not config.get("limit_checked", False):
+        return "-", "-"
+    return (
+        _configured_limit_value(config, "lower", {}),
+        _configured_limit_value(config, "upper", {}),
+    )
 
 
 def _format_deviation(value: Any) -> str:
@@ -463,6 +589,13 @@ def build_analysis_report_items(
             )
             else item_key
         )
+        raw_channel = getattr(instance, "_analysis_raw_channel", None)
+        channel_key = ""
+        if raw_channel is not None:
+            try:
+                channel_key = f"In{int(raw_channel) + 1}"
+            except (TypeError, ValueError):
+                channel_key = str(raw_channel)
 
         state = str(
             getattr(instance, "_product_report_analysis_state", "completed")
@@ -504,6 +637,9 @@ def build_analysis_report_items(
         report_items.append(
             {
                 "name": report_name,
+                "item_key": item_key,
+                "runtime_key": runtime_key,
+                "channel_key": channel_key,
                 "type": str(item_config.get("type") or ""),
                 "state": state,
                 "status": status,
@@ -534,6 +670,9 @@ def build_analysis_report_items(
         report_items.append(
             {
                 "name": item_key,
+                "item_key": item_key,
+                "runtime_key": item_key,
+                "channel_key": "",
                 "type": item_type,
                 "state": "skipped",
                 "reason": reason,

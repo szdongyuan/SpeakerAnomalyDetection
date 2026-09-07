@@ -22,13 +22,49 @@ from ui.sequence.motor_panel_common import MotorSectionCard
 class MotorAiResultPanel(QWidget):
     condition_selected = pyqtSignal(str)
 
-    DETAIL_LABEL_ORDER = ("SPL", "响度", "AI分析", "FBA", "FFT")
+    DETAIL_LABEL_ORDER = ("SPL", "响度", "AI分析", "FBA", "FFT", "Spec")
     ANALYSIS_COLUMN_HEADERS = {
         "SPL": "SPL判定",
         "响度": "响度判定",
         "AI分析": "AI判定",
         "FBA": "1/3倍频程",
         "FFT": "FFT",
+        "Spec": "Spec",
+    }
+    PUBLIC_STAGE_TEXTS = {
+        "等待开始",
+        "分析中",
+        "等待下一档位",
+        "本轮完成",
+        "测试异常",
+    }
+    PUBLIC_STAGE_ALIASES = {
+        "等待导入": "等待开始",
+        "分析排队": "分析中",
+        "本轮录音完成，等待分析": "分析中",
+        "正转录音完成，等待分析": "分析中",
+        "反转录音完成，等待分析": "分析中",
+        "待判定": "等待下一档位",
+        "本档位分析完成": "等待下一档位",
+        "等待正转": "等待下一档位",
+        "等待反转": "等待下一档位",
+        "本轮采集完成": "本轮完成",
+        "本轮采集完成，待判定": "本轮完成",
+        "本轮分析完成，未判定": "本轮完成",
+        "循环完成": "本轮完成",
+        "本轮测试已关闭": "本轮完成",
+        "结果不完整": "测试异常",
+        "结果文件保存失败": "测试异常",
+        "分析失败": "测试异常",
+        "分析失败，等待重试": "测试异常",
+        "测试异常，等待工况状态码": "测试异常",
+        "录音异常，循环已作废": "测试异常",
+        "测试完成，PDF报告生成失败": "测试异常",
+    }
+    PUBLIC_STAGE_BLANK_ALIASES = {
+        "采集中",
+        "正转检测中",
+        "反转检测中",
     }
 
     def __init__(self, parent=None, condition_configs=None):
@@ -36,6 +72,7 @@ class MotorAiResultPanel(QWidget):
         self.conditions = []
         self.rows = {}
         self.selected_key = ""
+        self.viewed_key = ""
         self.stage_text = ""
         self.current_round = None
         self.current_port = ""
@@ -122,9 +159,6 @@ class MotorAiResultPanel(QWidget):
         meta_layout.setSpacing(8)
         self.round_list_label = QLabel("档位列表")
         self.round_list_label.setStyleSheet(self._small_text_style("#1F2937", bold=True))
-        self.current_test_label = QLabel("当前测试：--")
-        self.current_test_label.setAlignment(Qt.AlignCenter)
-        self.current_test_label.setStyleSheet(self._small_text_style("#64748B"))
         self.progress_label = QLabel("档位进度：0/0")
         self.progress_label.setObjectName("testTaskCountLabel")
         self.progress_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -132,7 +166,6 @@ class MotorAiResultPanel(QWidget):
         self.count_label = self.progress_label
         meta_layout.addWidget(self.round_list_label)
         meta_layout.addStretch(1)
-        meta_layout.addWidget(self.current_test_label)
         meta_layout.addWidget(self.progress_label)
         layout.addWidget(meta_row)
 
@@ -243,6 +276,7 @@ class MotorAiResultPanel(QWidget):
 
         self._clear_layout(self.rows_layout)
         self.rows = {}
+        self.viewed_key = ""
         self._detail_owner_key = ""
         try:
             self.detail_frame.setVisible(False)
@@ -297,7 +331,11 @@ class MotorAiResultPanel(QWidget):
         self._populate_ports()
         self._set_default_condition_results()
         if self.conditions:
-            self.select_condition(self.conditions[0]["key"], show_detail=False)
+            self.select_condition(
+                self.conditions[0]["key"],
+                show_detail=False,
+                user_view=False,
+            )
         else:
             self._rebuild_channel_table("")
         self._refresh_port_view()
@@ -328,10 +366,21 @@ class MotorAiResultPanel(QWidget):
 
     def reset(self):
         self._set_default_condition_results()
+        self.viewed_key = ""
         if self.conditions:
-            self.select_condition(self.conditions[0]["key"], show_detail=False)
+            self.select_condition(
+                self.conditions[0]["key"],
+                show_detail=False,
+                user_view=False,
+            )
 
-    def select_condition(self, key, *, show_detail: bool = False):
+    def select_condition(
+        self,
+        key,
+        *,
+        show_detail: bool = False,
+        user_view: bool = True,
+    ):
         if key not in self.rows:
             return
         row_group = str(self.rows[key].get("group") or "")
@@ -340,8 +389,9 @@ class MotorAiResultPanel(QWidget):
             if port_index >= 0:
                 self.current_port_combo.setCurrentIndex(port_index)
         self.selected_key = key
-        for row_key, row in self.rows.items():
-            row["button"].setStyleSheet(self._row_style(row["tone"], selected=(row_key == key)))
+        if user_view:
+            self.viewed_key = key
+        self._refresh_row_styles()
         self._rebuild_channel_table(key)
         self._render_channel_results(key)
         self._update_task_meta()
@@ -376,12 +426,40 @@ class MotorAiResultPanel(QWidget):
         self._detail_owner_key = key
 
     def set_current_stage(self, stage_text: str, tone: str = "pending"):
-        self.stage_text = str(stage_text or "")
-        display_text = self.stage_text.strip() or "等待开始"
-        display_tone = tone if self.stage_text.strip() else "pending"
+        raw_stage = str(stage_text or "").strip()
+        if raw_stage in self.PUBLIC_STAGE_BLANK_ALIASES:
+            self.clear_current_stage()
+            return
+        if not raw_stage:
+            display_text = "等待开始"
+        elif raw_stage in self.PUBLIC_STAGE_TEXTS:
+            display_text = raw_stage
+        elif raw_stage.endswith(" 等待导入"):
+            display_text = "等待开始"
+        elif raw_stage.endswith(" 分析中"):
+            display_text = "分析中"
+        elif raw_stage.endswith(" 分析失败"):
+            display_text = "测试异常"
+        else:
+            display_text = self.PUBLIC_STAGE_ALIASES.get(raw_stage, "测试异常")
+        self.stage_text = display_text
+        if display_text in ("等待开始", "等待下一档位"):
+            display_tone = "pending"
+        elif display_text == "分析中":
+            display_tone = "running"
+        elif display_text == "测试异常":
+            display_tone = "ng"
+        else:
+            display_tone = tone
         self.stage_label.setText(display_text)
         self.stage_label.setToolTip(display_text)
         self.stage_label.setStyleSheet(self._header_status_style(display_tone))
+
+    def clear_current_stage(self):
+        self.stage_text = ""
+        self.stage_label.clear()
+        self.stage_label.setToolTip("")
+        self.stage_label.setStyleSheet(self._header_status_style("pending"))
 
     def set_condition_result(self, condition, result_text: str, tone: str = None):
         key = self._resolve_key(condition)
@@ -392,6 +470,9 @@ class MotorAiResultPanel(QWidget):
         result = str(result_text or "--")
         tone = tone or self._guess_tone(result)
         row = self.rows[key]
+        previous_result = str(row.get("result") or "")
+        auto_select_stage = result in ("准备采集", "采集中", "等待导入")
+        should_auto_select = auto_select_stage and result != previous_result
         if result in ("待判定", "未标记") and row.get("analysis_completed"):
             result, tone = self._summarize_channel_results(row.get("channel_results"))
         elif result == "未标记":
@@ -403,14 +484,21 @@ class MotorAiResultPanel(QWidget):
             row["completed_channels"] = 0
             row["analysis_completed"] = False
             row["channel_results"] = []
-        elif result.strip().upper() in ("OK", "NG") or result == "未判定":
+        elif result == "分析失败":
+            row["analysis_completed"] = False
+        elif result.strip().upper() in ("OK", "NG") or result in (
+            "未判定",
+            "未产生判定",
+            "结果不完整",
+        ):
             row["analysis_completed"] = True
-        if tone == "running":
+        if should_auto_select:
             row_group = str(row.get("group") or "")
             port_index = self.current_port_combo.findData(row_group)
             if port_index >= 0:
                 self.current_port_combo.setCurrentIndex(port_index)
             self.selected_key = key
+            self.viewed_key = ""
             self._rebuild_channel_table(key)
             if detail_was_visible and previous_detail_owner != key:
                 self._show_detail_under_row(key)
@@ -421,7 +509,7 @@ class MotorAiResultPanel(QWidget):
         self._update_task_meta()
         self._update_port_summary()
         self._update_round_summary()
-        if tone == "running":
+        if should_auto_select:
             self.condition_selected.emit(self.selected_key)
         return True
 
@@ -518,13 +606,15 @@ class MotorAiResultPanel(QWidget):
             str(row.get("result") or "").strip().upper()
             for row in completed_rows
         ]
+        if "结果不完整" in completed_results:
+            return "结果不完整", "ng", True
         if "NG" in completed_results:
             return "NG", "ng", True
         if len(completed_rows) != len(rows):
             return "待判定", "pending", False
         if completed_results and all(result == "OK" for result in completed_results):
             return "OK", "ok", True
-        return "未判定", "pending", True
+        return "未产生判定", "pending", True
 
     def _update_round_summary(self):
         text, tone, resolved = self.get_automatic_round_result()
@@ -600,6 +690,8 @@ class MotorAiResultPanel(QWidget):
         if self._detail_owner_key and self._detail_owner_key not in visible_keys:
             self.detail_frame.setVisible(False)
             self._detail_owner_key = ""
+        if self.viewed_key not in visible_keys:
+            self.viewed_key = ""
         if self.selected_key not in visible_keys:
             self.selected_key = visible_keys[0] if visible_keys else ""
             if self.selected_key:
@@ -621,19 +713,20 @@ class MotorAiResultPanel(QWidget):
 
     def _refresh_row_styles(self):
         for key, row in self.rows.items():
+            selected = key == self.viewed_key
+            recording = str(row.get("result") or "") == "采集中"
             row["button"].setStyleSheet(
-                self._row_style(row["tone"], selected=(key == self.selected_key))
+                self._row_style(
+                    row["tone"],
+                    selected=selected,
+                    recording=recording,
+                )
             )
 
     def _update_task_meta(self):
         self.round_list_label.setText(
             f"第{self.current_round}轮档位列表" if self.current_round else "档位列表"
         )
-        if self.selected_key in self.rows:
-            current_name = str(self.rows[self.selected_key].get("short_name") or "--")
-        else:
-            current_name = "--"
-        self.current_test_label.setText(f"当前测试：{current_name}")
         port_rows = [
             row
             for row in self.rows.values()
@@ -929,6 +1022,8 @@ class MotorAiResultPanel(QWidget):
             return "FBA"
         if normalized_type in ("FFT",):
             return "FFT"
+        if normalized_type in ("Spec",):
+            return "Spec"
         if normalized_type in ("AI",):
             return "AI分析"
         if normalized_type in ("LOUD", "Loudness", "PRB") or "响度" in name or "loud" in lowered_name:
@@ -1000,15 +1095,24 @@ class MotorAiResultPanel(QWidget):
         return "未判定", "pending"
 
     @staticmethod
-    def _row_style(tone, selected=False):
-        bg = "#EAF2FB" if selected else "#F4F8FC"
-        border = "#2F80C9" if selected else "#B8C8DA"
+    def _row_style(tone, selected=False, recording=False):
+        if recording:
+            bg, border = "#EAF2FB", "#2F80C9"
+            hover_bg, hover_border = "#E3EEF9", "#286EAE"
+        elif selected:
+            bg, border = "#E1EFFF", "#1877C9"
+            hover_bg, hover_border = "#D7E9FC", "#1269B2"
+        else:
+            bg, border = "#F4F8FC", "#B8C8DA"
+            hover_bg, hover_border = "#EDF4FC", "#6FA8DC"
         return (
             "QPushButton {"
             f"background:{bg}; color:#1F2937; border:1px solid {border}; border-radius:5px;"
             "padding:0;"
             "}"
-            "QPushButton:hover { background:#EDF4FC; border-color:#6FA8DC; }"
+            "QPushButton:hover {"
+            f"background:{hover_bg}; border-color:{hover_border};"
+            "}"
         )
 
     @staticmethod

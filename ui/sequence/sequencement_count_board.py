@@ -32,6 +32,7 @@ class SequenceCountBoard(QWidget):
         self.mode = str()
         self._test_available = True
         self._test_unavailable_reason = ""
+        self._test_available_notice = ""
         self._mode_change_callbacks = []
 
         self.test_btn = QPushButton("测试")
@@ -248,6 +249,12 @@ class SequenceCountBoard(QWidget):
             QMessageBox.information(self, "提示", self._test_unavailable_reason or "当前配置无法进入测试模式")
             self.on_mark_btn_clicked()
             return
+        if self._test_available_notice:
+            QMessageBox.information(
+                self,
+                "测试结果说明",
+                self._test_available_notice,
+            )
         self.test_btn.setStyleSheet(ui_style_const.count_board_mode_active_style)
         self.mark_btn.setStyleSheet(ui_style_const.count_board_mode_inactive_style)
         self.test_btn.setEnabled(False)
@@ -274,10 +281,19 @@ class SequenceCountBoard(QWidget):
         Control whether test mode can be entered.
         """
         self._test_available = bool(available)
-        self._test_unavailable_reason = str(reason or "")
+        self._test_unavailable_reason = (
+            "" if self._test_available else str(reason or "")
+        )
+        self._test_available_notice = (
+            str(reason or "") if self._test_available else ""
+        )
         try:
             self.test_btn.setEnabled(bool(self._test_available) and self.mode != "test")
-            self.test_btn.setToolTip(self._test_unavailable_reason if not self._test_available else "")
+            self.test_btn.setToolTip(
+                self._test_available_notice
+                if self._test_available
+                else self._test_unavailable_reason
+            )
         except Exception:
             pass
         if (not self._test_available) and self.mode == "test":
@@ -415,50 +431,31 @@ class SequenceCountBoard(QWidget):
         if normalized not in ("OK", "NG", "not_labeled"):
             self.set_test_text()
             return
-
-        total, ok, ng, not_labels = self._read_shared_result_counts()
-        if normalized == "OK":
-            ok += 1
-        elif normalized == "NG":
-            ng += 1
-        elif normalized == "not_labeled":
-            not_labels += 1
-        total += 1
-        self._write_shared_result_counts(total, ok, ng, not_labels)
+        from ui.sequence.request_scoped_count_publisher import (
+            increment_shared_result,
+        )
+        current_time = datetime.now().strftime("%Y-%m-%d")
+        increment_shared_result(
+            normalized,
+            path=DEFAULT_DIR + f"log/test_result_log/{current_time}.dat")
 
     def set_mark_result_file(self, params):
         # Backward-compatible alias for historical callers.
         self.append_mark_result_file(params)
 
     def append_mark_result_file(self, params):
-        mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-        datatime = datetime.now().strftime("%Y-%m-%d")
-        with open(mark_result_path, "r") as f:
-            data = json.load(f)
-
-        total = int(data.get("total", 0) or 0)
-        ok = int(data.get("ok", 0) or 0)
-        ng = int(data.get("ng", 0) or 0)
-        not_labels = int(data.get("not_labels", 0) or 0)
-
         normalized = self._normalize_mark_label(params)
-        total += 1
-        if normalized == "OK":
-            ok += 1
-        elif normalized == "NG":
-            ng += 1
-        else:
-            not_labels += 1
-
-        data["total"] = total
-        data["ng"] = ng
-        data["ok"] = ok
-        data["not_labels"] = not_labels
-        data["datatime"] = datatime
-        with open(mark_result_path, "w") as f:
-            json.dump(data, f, indent=4)
         if normalized in ("OK", "NG", "not_labeled"):
-            self.set_test_result_file(normalized)
+            from ui.sequence.request_scoped_count_publisher import (
+                increment_mark_result, increment_shared_result,
+            )
+            current_time = datetime.now().strftime("%Y-%m-%d")
+            increment_mark_result(
+                normalized,
+                path=DEFAULT_DIR + "ui/ui_config/mark_result.json")
+            increment_shared_result(
+                normalized,
+                path=DEFAULT_DIR + f"log/test_result_log/{current_time}.dat")
         else:
             self.set_test_text()
 
@@ -479,40 +476,16 @@ class SequenceCountBoard(QWidget):
         if old_normalized == new_normalized:
             return
 
-        mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-        with open(mark_result_path, "r") as f:
-            data = json.load(f)
-
-        total = int(data.get("total", 0) or 0)
-        ok = int(data.get("ok", 0) or 0)
-        ng = int(data.get("ng", 0) or 0)
-        not_labels = int(data.get("not_labels", 0) or 0)
-
-        if old_normalized == "OK":
-            ok = max(0, ok - 1)
-        elif old_normalized == "NG":
-            ng = max(0, ng - 1)
-        elif old_normalized == "not_labeled":
-            not_labels = max(0, not_labels - 1)
-
-        if new_normalized == "OK":
-            ok += 1
-        elif new_normalized == "NG":
-            ng += 1
-        elif new_normalized == "not_labeled":
-            not_labels += 1
-
-        # Mark-mode total represents session count, so relabeling should not
-        # increase/decrease total; only category buckets migrate.
-        total = max(0, max(total, ok + ng + not_labels))
-        data["total"] = total
-        data["ok"] = ok
-        data["ng"] = ng
-        data["not_labels"] = not_labels
-        data["datatime"] = datetime.now().strftime("%Y-%m-%d")
-        with open(mark_result_path, "w") as f:
-            json.dump(data, f, indent=4)
-        self.update_shared_result_file_on_relabel(old_normalized, new_normalized)
+        from ui.sequence.request_scoped_count_publisher import (
+            relabel_mark_result, relabel_shared_result,
+        )
+        current_time = datetime.now().strftime("%Y-%m-%d")
+        relabel_mark_result(
+            old_normalized, new_normalized,
+            path=DEFAULT_DIR + "ui/ui_config/mark_result.json")
+        relabel_shared_result(
+            old_normalized, new_normalized,
+            path=DEFAULT_DIR + f"log/test_result_log/{current_time}.dat")
         self.set_mark_text()
 
     def update_shared_result_file_on_relabel(self, old_label: str, new_label: str):
@@ -522,28 +495,14 @@ class SequenceCountBoard(QWidget):
             self.set_test_text()
             return
 
-        total, ok, ng, not_labels = self._read_shared_result_counts()
-        old_tracked = old_normalized in ("OK", "NG", "not_labeled")
-        new_tracked = new_normalized in ("OK", "NG", "not_labeled")
-        if old_normalized == "OK":
-            ok = max(0, ok - 1)
-        elif old_normalized == "NG":
-            ng = max(0, ng - 1)
-        elif old_normalized == "not_labeled":
-            not_labels = max(0, not_labels - 1)
-
-        if new_normalized == "OK":
-            ok += 1
-        elif new_normalized == "NG":
-            ng += 1
-        elif new_normalized == "not_labeled":
-            not_labels += 1
-
-        if not old_tracked and new_tracked:
-            total += 1
-        elif old_tracked and not new_tracked:
-            total = max(0, total - 1)
-
-        self._write_shared_result_counts(total, ok, ng, not_labels)
+        if (old_normalized in ("OK", "NG", "not_labeled")
+                and new_normalized in ("OK", "NG", "not_labeled")):
+            from ui.sequence.request_scoped_count_publisher import (
+                relabel_shared_result,
+            )
+            current_time = datetime.now().strftime("%Y-%m-%d")
+            relabel_shared_result(
+                old_normalized, new_normalized,
+                path=DEFAULT_DIR + f"log/test_result_log/{current_time}.dat")
         self.set_test_text()
 

@@ -174,10 +174,12 @@ def test_fba_fixed_value_threshold_layout_is_not_clipped(qapp):
 
 def test_custom_band_parser_accepts_labels_and_rejects_overlap():
     assert FbaConfigWindow._parse_custom_bands_text(
-        "20, 200, Low\n200 1000 Mid"
+        "# allowed comment\n\n1000\t2000\tHigh Band\n"
+        "20-200\n200 1000 Mid"
     ) == [
-        (20.0, 200.0, "Low"),
+        (20.0, 200.0, None),
         (200.0, 1000.0, "Mid"),
+        (1000.0, 2000.0, "High Band"),
     ]
 
     with pytest.raises(ValueError, match="不允许重叠"):

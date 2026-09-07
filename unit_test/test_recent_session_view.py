@@ -27,6 +27,13 @@ if "concurrent_log_handler" not in sys.modules:
     sys.modules["concurrent_log_handler"] = concurrent_log_handler
 
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
+from consts.recording_preview_consts import (
+    MAIN_RECORDING_LIVE_MAX_POINTS,
+    PREVIEW_TIME_MODE_CUMULATIVE,
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+)
+from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
+from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 
 
 class _DummyButton:
@@ -187,6 +194,45 @@ class _DummySequenceWidget(SequenceWidgetAnalysisOpsMixin):
         self.clear_plot_calls += 1
 
 
+class _RecentProjectionWidget(_DummySequenceWidget, SequenceWidgetStreamingOpsMixin):
+    plot_waveform_to_workspace = (
+        SequenceWidgetStreamingOpsMixin.plot_waveform_to_workspace
+    )
+
+    def __init__(self, preview_mode):
+        super().__init__()
+        self.channel_workspace = ChannelPlotWorkspace()
+        self.channel_workspace.set_channels((0,))
+        window = self.channel_workspace.all_subwindows()[0]
+        time_axis = np.array([-1.0, 0.0], dtype=np.float64)
+        amplitude = np.array([1.0, 2.0], dtype=np.float32)
+        if preview_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST:
+            window.set_live_data(time_axis, amplitude)
+        else:
+            window.set_cumulative_preview_data(-time_axis[::-1], amplitude)
+        self.projection_during_load = None
+
+    def _load_audio_file_to_data_struct(self, file_path: str, sample_rate=None):
+        samples = MAIN_RECORDING_LIVE_MAX_POINTS * 3
+        self.loaded_audio.append((file_path, sample_rate))
+        self.data_struct.store_wave_data = np.arange(samples, dtype=np.float32)
+        self.data_struct.store_wave_data_multi = self.data_struct.store_wave_data[:, None]
+        self.data_struct.sample_rate = sample_rate or 48_000
+        self.data_struct.audio_lenth = samples
+        self.data_struct.analysis_result_dict = {"viewed": (True, 0.0)}
+        self.plot_waveform_to_workspace(
+            self.data_struct.store_wave_data_multi,
+            self.data_struct.sample_rate,
+        )
+        window = self.channel_workspace.all_subwindows()[0]
+        x_data, y_data = window.plot_item.getData()
+        self.projection_during_load = (
+            window.presentation_mode,
+            np.asarray(x_data).copy(),
+            np.asarray(y_data).copy(),
+        )
+
+
 class TestRecentSessionView(unittest.TestCase):
     def test_silent_run_hides_analysis_windows_even_if_analysis_shows_itself(self):
         app = QApplication.instance() or QApplication([])
@@ -254,6 +300,24 @@ class TestRecentSessionView(unittest.TestCase):
         self.assertEqual(widget.analysis_config, original_analysis_config)
         self.assertEqual(widget.sequence_config, original_sequence_config)
         self.assertEqual(widget.using_config_path, original_using_config_path)
+
+    def test_recent_view_exits_either_retained_preview_and_uses_generic_cap(self):
+        app = QApplication.instance() or QApplication([])
+        for preview_mode in (
+            PREVIEW_TIME_MODE_RELATIVE_LATEST,
+            PREVIEW_TIME_MODE_CUMULATIVE,
+        ):
+            widget = _RecentProjectionWidget(preview_mode)
+            try:
+                widget._show_recent_session_analysis_by_id("recent_1")
+                presentation_mode, time_axis, amplitude = widget.projection_during_load
+                self.assertEqual(presentation_mode, "complete")
+                self.assertLessEqual(len(time_axis), MAIN_RECORDING_LIVE_MAX_POINTS)
+                self.assertEqual(len(time_axis), len(amplitude))
+            finally:
+                widget.channel_workspace.close()
+                widget.channel_workspace.deleteLater()
+                app.processEvents()
 
 
 class _FailingAnalysisWidget(SequenceWidgetAnalysisOpsMixin):

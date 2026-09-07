@@ -284,8 +284,8 @@ class TestRecentSessionLabelUpdate(unittest.TestCase):
         changed = widget._change_recent_session_result_by_id("recent_1", "not_labeled")
 
         self.assertTrue(changed)
-        self.assertIn(("01", "未标记", "pending"), widget.left_panel.condition_results)
-        self.assertEqual(widget.left_panel.final_results[-1], ("未标记", "pending"))
+        self.assertIn(("01", "待判定", "pending"), widget.left_panel.condition_results)
+        self.assertEqual(widget.left_panel.final_results[-1], ("待判定", "pending"))
 
     def test_recent_session_group_id_uses_current_run_token(self):
         widget = _DummySequenceWidget()
