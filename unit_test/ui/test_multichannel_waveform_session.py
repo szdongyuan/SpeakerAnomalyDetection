@@ -5,6 +5,11 @@ import time
 import numpy as np
 import pytest
 
+from base.rolling_waveform_accumulator import RollingWaveformAccumulator
+from consts.recording_preview_consts import (
+    MAIN_RECORDING_LIVE_MAX_POINTS,
+    MAIN_RECORDING_LIVE_WINDOW_SECONDS,
+)
 from ui.sequence.multichannel_waveform_session import MultichannelWaveformSession
 
 
@@ -130,6 +135,49 @@ def test_600_second_multichannel_projection_is_bounded_and_retains_no_raw_histor
         assert accumulator.raw_view().size == 0
     assert not hasattr(session, "streaming_buffer_multi")
     assert not hasattr(session, "_chunks")
+
+
+def test_session_explicitly_opts_into_bounded_rolling_channel_envelopes():
+    sample_rate = 1_000
+    trim = 137
+    display_samples = sample_rate * 12 + 431
+    session = MultichannelWaveformSession(
+        max_points=MAIN_RECORDING_LIVE_MAX_POINTS,
+        rolling_window_seconds=MAIN_RECORDING_LIVE_WINDOW_SECONDS,
+    )
+    session.begin(
+        channels=(0, 2),
+        sample_rate=sample_rate,
+        startup_trim_samples=trim,
+    )
+
+    total = display_samples + trim
+    multi = np.zeros((total, 2), dtype=np.float32)
+    multi[trim + display_samples - 750, 0] = -7.0
+    multi[trim + display_samples - 700, 0] = 11.0
+    multi[trim + display_samples - 650, 1] = -70.0
+    multi[trim + display_samples - 600, 1] = 110.0
+    for start in range(0, total, 1_013):
+        session.append(multi[start : start + 1_013])
+
+    snapshots = session.snapshots()
+    assert tuple(snapshots) == (0, 2)
+    for snapshot in snapshots.values():
+        assert snapshot.sample_stop == display_samples
+        assert snapshot.time[-1] == 0.0
+        assert np.all(snapshot.time >= -MAIN_RECORDING_LIVE_WINDOW_SECONDS)
+        assert len(snapshot.time) <= MAIN_RECORDING_LIVE_MAX_POINTS
+    assert np.min(snapshots[0].amplitude) == -7.0
+    assert np.max(snapshots[0].amplitude) == 11.0
+    assert np.min(snapshots[2].amplitude) == -70.0
+    assert np.max(snapshots[2].amplitude) == 110.0
+
+    bucket_count = (MAIN_RECORDING_LIVE_MAX_POINTS - 2) // 2
+    for accumulator in session._accumulators.values():
+        assert isinstance(accumulator, RollingWaveformAccumulator)
+        assert accumulator.retained_bucket_count <= bucket_count + 2
+        assert not hasattr(accumulator, "_raw")
+        assert not hasattr(accumulator, "_chunks")
 
 
 def test_append_before_begin_fails_without_implicit_channel_state():

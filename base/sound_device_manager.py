@@ -25,6 +25,11 @@ class SoundDeviceManager(object):
         sd.default.device = (mic_id, speaker_id)
 
     @staticmethod
+    def change_default_output_device(speaker_id):
+        """Set only ordinary output, without reading/resolving the input default."""
+        sd.default.device[1] = speaker_id
+
+    @staticmethod
     def get_api_info(api_index=None):
         return sd.query_hostapis(api_index)
 

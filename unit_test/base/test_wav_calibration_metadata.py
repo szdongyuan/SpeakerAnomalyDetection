@@ -652,6 +652,188 @@ def test_structured_append_safe_rejection_preserves_legacy_bool_api(tmp_path):
     assert wav_calibration_metadata.append_wav_calibration_metadata(path, _metadata(_channel())) is True
 
 
+def test_diagnostic_reader_close_failure_transfers_uncertain_ownership(tmp_path, monkeypatch):
+    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults, wav_metadata
+    path = tmp_path / "reader-owned.wav"
+    wavfile.write(path, 44100, np.array([[8.25, 2.5]], dtype=np.float32))
+    assert wav_calibration_metadata.append_wav_calibration_metadata(path, wav_metadata())
+    faults = MetadataOwnershipFaults(path, readback_open=1, close_failures=("readback",))
+    faults.install(monkeypatch)
+    try:
+        result = wav_calibration_metadata.inspect_wav_calibration_metadata(path)
+        assert result.status is wav_calibration_metadata.WavCalibrationMetadataReadStatus.INVALID
+        assert result.metadata is None and result.declared_backend == "vkinging"
+        assert not faults.files[0].wrapped.closed and faults.files[0].close_attempts == 1
+        assert not result.handles_released
+        assert result.retained_handles == ((str(path), faults.files[0]),)
+        assert "SECONDARY-READBACK-CLOSE-ERROR" in result.close_errors[0]
+    finally:
+        faults.release_all()
+
+
+def test_metadata_ownership_fields_keep_legacy_positional_and_false_only_results(tmp_path):
+    status = wav_calibration_metadata.WavCalibrationMetadataReadStatus
+    read = wav_calibration_metadata.WavCalibrationMetadataReadResult(status.INVALID, None, "vkinging")
+    assert read.status is status.INVALID and read.metadata is None and read.declared_backend == "vkinging"
+    assert read.handles_released and read.primary_error is None
+    assert read.retained_handles == read.close_errors == ()
+    append = wav_calibration_metadata.WavCalibrationMetadataAppendResult(False, True)
+    assert append.primary_error is None and append.close_errors == append.retained_handles == ()
+    path = tmp_path / "false-only.wav"
+    _write_wav(path)
+    result = wav_calibration_metadata.append_wav_calibration_metadata_result(path, None)
+    assert result == append
+    absent = wav_calibration_metadata.inspect_wav_calibration_metadata(path)
+    assert absent == wav_calibration_metadata.WavCalibrationMetadataReadResult(status.ABSENT, None)
+
+
+@pytest.mark.parametrize("processing,close_stages,first,close_order", [
+    ("temporary", (), "PRIMARY-WRITE-ERROR", ()),
+    ("temporary", ("temporary",), "PRIMARY-WRITE-ERROR", ("temporary",)),
+    ("temporary", ("source",), "PRIMARY-WRITE-ERROR", ("source",)),
+    ("temporary", ("source", "temporary"), "PRIMARY-WRITE-ERROR", ("temporary", "source")),
+    ("source", ("source",), "PRIMARY-SOURCE-READ-ERROR", ("source",)),
+    ("validation", ("validation",), "PRIMARY-VALIDATION-READ-ERROR", ("validation",)),
+    ("validation", (), "PRIMARY-VALIDATION-READ-ERROR", ()),
+    (None, ("source", "temporary"), "SECONDARY-TEMPORARY-CLOSE-ERROR", ("temporary", "source")),
+    (None, ("source",), "SECONDARY-SOURCE-CLOSE-ERROR", ("source",)),
+])
+def test_append_first_fault_survives_nested_close_failures(
+    tmp_path, monkeypatch, processing, close_stages, first, close_order,
+):
+    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    path = tmp_path / "first-fault.wav"
+    _write_wav(path)
+    original = path.read_bytes()
+    logger = Mock()
+    faults = MetadataOwnershipFaults(path, processing_failure=processing, close_failures=close_stages)
+    faults.install(monkeypatch)
+    try:
+        result = wav_calibration_metadata.append_wav_calibration_metadata_result(path, _metadata(_channel()), logger)
+        assert not result.appended and result.handles_released is (not close_stages)
+        assert any(first in call.args[0] for call in logger.warning.call_args_list)
+        assert first in result.primary_error
+        expected = tuple(next(item for item in faults.files if item.stage == stage) for stage in close_order)
+        assert result.retained_handles == tuple((item.name, item) for item in expected)
+        assert len(result.close_errors) == len(expected)
+        for detail, stage in zip(result.close_errors, close_order):
+            assert f"SECONDARY-{stage.upper()}-CLOSE-ERROR" in detail
+        assert all(not item.wrapped.closed for item in expected)
+        assert all(item.close_attempts == 1 for item in faults.files)
+        assert all(item.wrapped.closed is (item.stage not in close_stages) for item in faults.files)
+        assert all(os.path.exists(temporary) is bool(close_stages) for temporary in faults.temporary_paths)
+        assert path.read_bytes() == original
+    finally:
+        faults.release_all()
+
+
+@pytest.mark.parametrize("after_backend", [False, True])
+@pytest.mark.parametrize("close_fails", [False, True])
+@pytest.mark.parametrize("error_type", [OSError, ValueError, RuntimeError, MemoryError])
+def test_reader_first_fault_keeps_provenance_and_close_diagnostics(
+    tmp_path, monkeypatch, after_backend, close_fails, error_type,
+):
+    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults, wav_metadata
+    path = tmp_path / "reader-first-fault.wav"
+    wavfile.write(path, 44100, np.array([[8.25, 2.5]], dtype=np.float32))
+    assert wav_calibration_metadata.append_wav_calibration_metadata(path, wav_metadata())
+    logger = Mock()
+    faults = MetadataOwnershipFaults(path, readback_open=1, processing_failure="readback",
+                                     close_failures=("readback",) if close_fails else (),
+                                     read_after_backend=after_backend, processing_error_type=error_type)
+    faults.install(monkeypatch)
+    try:
+        result = wav_calibration_metadata.inspect_wav_calibration_metadata(path, logger)
+        assert result.status is wav_calibration_metadata.WavCalibrationMetadataReadStatus.INVALID
+        assert result.metadata is None and result.declared_backend == ("vkinging" if after_backend else None)
+        assert result.handles_released is not close_fails
+        assert any("PRIMARY-READBACK-READ-ERROR" in call.args[0] for call in logger.warning.call_args_list)
+        assert result.primary_error == "PRIMARY-READBACK-READ-ERROR"
+        assert faults.files[0].wrapped.closed is not close_fails
+        assert faults.files[0].close_attempts == 1
+        assert bool(result.retained_handles) is close_fails
+        assert len(result.close_errors) == int(close_fails)
+        if close_fails:
+            assert "SECONDARY-READBACK-CLOSE-ERROR" in result.close_errors[0]
+    finally:
+        faults.release_all()
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+@pytest.mark.parametrize("error_type", [OSError, ValueError, RuntimeError, MemoryError])
+def test_legacy_bool_append_logs_primary_write_failure(tmp_path, monkeypatch, close_fails, error_type):
+    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    path = tmp_path / "legacy-write.wav"
+    _write_wav(path)
+    faults = MetadataOwnershipFaults(path, processing_failure="temporary",
+                                     close_failures=("temporary",) if close_fails else (),
+                                     processing_error_type=error_type)
+    faults.install(monkeypatch)
+    logger = Mock()
+    try:
+        assert wav_calibration_metadata.append_wav_calibration_metadata(path, _metadata(_channel()), logger) is False
+        assert any("PRIMARY-WRITE-ERROR" in call.args[0] for call in logger.warning.call_args_list)
+    finally:
+        faults.release_all()
+
+
+@pytest.mark.parametrize("error_type", [ValueError, RuntimeError, MemoryError])
+@pytest.mark.parametrize("stage", ["source", "temporary", "validation"])
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_append_ordinary_exception_preserves_first_error_and_local_ownership(
+    tmp_path, monkeypatch, error_type, stage, close_fails,
+):
+    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    path = tmp_path / "ordinary-append.wav"
+    _write_wav(path)
+    original = path.read_bytes()
+    close_order = (("temporary", "source") if stage == "temporary" else (stage,)) if close_fails else ()
+    faults = MetadataOwnershipFaults(path, processing_failure=stage,
+                                     close_failures=close_order, processing_error_type=error_type)
+    faults.install(monkeypatch)
+    logger = Mock()
+    first = "PRIMARY-WRITE-ERROR" if stage == "temporary" else f"PRIMARY-{stage.upper()}-READ-ERROR"
+    try:
+        result = wav_calibration_metadata.append_wav_calibration_metadata_result(path, _metadata(_channel()), logger)
+        assert result.appended is False and result.handles_released is not close_fails
+        assert result.primary_error == first
+        assert any(first in call.args[0] for call in logger.warning.call_args_list)
+        expected = tuple(next(item for item in faults.files if item.stage == name) for name in close_order)
+        assert result.retained_handles == tuple((item.name, item) for item in expected)
+        assert len(result.close_errors) == len(expected)
+        for detail, name in zip(result.close_errors, close_order):
+            assert f"SECONDARY-{name.upper()}-CLOSE-ERROR" in detail
+            assert any(detail in call.args[0] for call in logger.warning.call_args_list)
+        assert all(item.wrapped.closed is (item.stage not in close_order) for item in faults.files)
+        assert all(item.close_attempts == 1 for item in faults.files)
+        assert result.cleanup_paths == (tuple(faults.temporary_paths) if close_fails else ())
+        assert path.read_bytes() == original
+    finally:
+        faults.release_all()
+
+
+@pytest.mark.parametrize("stage", ["temporary", "validation", "readback"])
+def test_metadata_file_boundary_does_not_normalize_base_exception(tmp_path, monkeypatch, stage):
+    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    class ControlFlow(BaseException):
+        pass
+    path = tmp_path / "control-flow.wav"
+    _write_wav(path)
+    faults = MetadataOwnershipFaults(path, readback_open=1 if stage == "readback" else None,
+                                     processing_failure=stage, processing_error_type=ControlFlow)
+    faults.install(monkeypatch)
+    try:
+        with pytest.raises(ControlFlow, match="PRIMARY-"):
+            if stage == "readback":
+                wav_calibration_metadata.inspect_wav_calibration_metadata(path)
+            else:
+                wav_calibration_metadata.append_wav_calibration_metadata_result(path, _metadata(_channel()))
+        assert faults.files and all(item.wrapped.closed for item in faults.files)
+        assert all(item.close_attempts == 1 for item in faults.files)
+    finally:
+        faults.release_all()
+
+
 @pytest.mark.parametrize("stage", ["source", "temporary", "validation"])
 def test_legacy_append_close_failure_still_returns_false(tmp_path, monkeypatch, stage):
     from unit_test.base.recording_process_fakes import MetadataFileFaults
