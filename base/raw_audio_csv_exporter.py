@@ -56,7 +56,6 @@ def export_raw_audio_csv(
                 writer = csv.writer(csv_file, lineterminator="\n")
                 writer.writerow(
                     [
-                        "sample_index",
                         "time_s",
                         *(f"CH{channel + 1}" for channel in channels),
                     ]
@@ -73,7 +72,6 @@ def export_raw_audio_csv(
                         break
                     writer.writerows(
                         [
-                            str(sample_index + offset),
                             f"{(sample_index + offset) / source.samplerate:.9f}",
                             *(f"{float(value):.9g}" for value in row),
                         ]

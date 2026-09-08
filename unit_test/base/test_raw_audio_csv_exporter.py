@@ -32,14 +32,14 @@ def test_export_raw_audio_csv_preserves_physical_channels_and_samples(tmp_path):
     assert csv_path.read_bytes().startswith(b"\xef\xbb\xbf")
     with csv_path.open(encoding="utf-8-sig", newline="") as csv_file:
         rows = list(csv.reader(csv_file))
-    assert rows[0] == ["sample_index", "time_s", "CH1", "CH3"]
-    assert [row[:2] for row in rows[1:]] == [
-        ["0", "0.000000000"],
-        ["1", "0.250000000"],
-        ["2", "0.500000000"],
+    assert rows[0] == ["time_s", "CH1", "CH3"]
+    assert [row[0] for row in rows[1:]] == [
+        "0.000000000",
+        "0.250000000",
+        "0.500000000",
     ]
     np.testing.assert_allclose(
-        np.asarray([[float(value) for value in row[2:]] for row in rows[1:]]),
+        np.asarray([[float(value) for value in row[1:]] for row in rows[1:]]),
         samples,
         rtol=0,
         atol=1e-8,
