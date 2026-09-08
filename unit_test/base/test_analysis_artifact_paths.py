@@ -8,6 +8,7 @@ from base.analysis_artifact_paths import (
     build_channel_image_path,
     build_csv_path,
     build_pdf_path,
+    build_raw_audio_csv_path,
     build_recording_stem,
     build_wav_path,
     format_channel_name,
@@ -40,9 +41,10 @@ def test_storage_paths_share_one_stem_without_label_directories(tmp_path):
     wav_path = build_wav_path(context)
     image_path = build_channel_image_path(context, stem, "声压级", 2)
     csv_path = build_csv_path(context, stem, "声压级", "实时声压级")
+    raw_csv_path = build_raw_audio_csv_path(context, stem)
 
     assert wav_path == (
-        tmp_path / "项目A" / "型号01" / "样本001" / "wav" / f"{stem}.wav"
+        tmp_path / "项目A" / "型号01" / "样本001" / "audio" / "wav" / f"{stem}.wav"
     )
     assert image_path == (
         tmp_path
@@ -62,6 +64,16 @@ def test_storage_paths_share_one_stem_without_label_directories(tmp_path):
         / stem
         / "声压级_实时声压级.csv"
     )
+    assert raw_csv_path == (
+        tmp_path
+        / "项目A"
+        / "型号01"
+        / "样本001"
+        / "audio"
+        / "raw_csv"
+        / f"{stem}.csv"
+    )
+    assert not raw_csv_path.parent.exists()
     assert not ({"OK", "NG", "not_labeled"} & set(wav_path.parts))
 
 

@@ -8,6 +8,7 @@ from base.load_config import LoadUiConfig
 from consts import error_code
 from consts.product_test_project_consts import (
     CONDITION_NAME_KEY,
+    EXPORT_RAW_AUDIO_CSV_KEY,
     GROUP_NAME_KEY,
     INVALID_PROJECT_NAME_CHARS,
     LIMIT_RULE_ANALYSIS_TYPES,
@@ -188,6 +189,10 @@ class ProductTestProjectValidator(object):
         elif not ntpath.isabs(result_root_value.strip()):
             errors.append("测试结果根目录必须是绝对路径")
 
+        export_raw_audio_csv = project_data.get(EXPORT_RAW_AUDIO_CSV_KEY, False)
+        if type(export_raw_audio_csv) is not bool:
+            errors.append("原始音频 CSV 保存配置必须是布尔值")
+
         groups = project_data.get(TEST_GROUPS_KEY)
         if not isinstance(groups, list):
             errors.append("test_groups 必须是列表")
@@ -320,6 +325,7 @@ class ProductTestProjectConfigManager(object):
         return {
             PROJECT_NAME_KEY: "",
             RESULT_ROOT_DIRECTORY_KEY: "",
+            EXPORT_RAW_AUDIO_CSV_KEY: False,
             TEST_GROUPS_KEY: [
                 {
                     GROUP_NAME_KEY: "新端口1",
@@ -675,6 +681,9 @@ class ProductTestProjectConfigManager(object):
                 project_data.get(PROJECT_NAME_KEY, "")
             ),
             RESULT_ROOT_DIRECTORY_KEY: ntpath.normpath(result_root),
+            EXPORT_RAW_AUDIO_CSV_KEY: (
+                project_data.get(EXPORT_RAW_AUDIO_CSV_KEY, False) is True
+            ),
             TEST_GROUPS_KEY: test_groups,
         }
 

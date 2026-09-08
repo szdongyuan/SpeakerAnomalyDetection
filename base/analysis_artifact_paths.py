@@ -16,7 +16,7 @@ import re
 
 
 ARTIFACT_DIRECTORY_NAMES = {
-    "wav": "wav",
+    "wav": "audio/wav",
     "images": "images",
     "csv": "csv",
 }
@@ -224,6 +224,14 @@ def build_channel_image_path(
 def build_wav_csv_directory(context, wav_stem):
     directory_name = sanitize_path_component(wav_stem, max_length=220)
     path = get_artifact_directory(context, "csv") / directory_name
+    _validate_containment(path, context.result_root_directory)
+    return path
+
+
+def build_raw_audio_csv_path(context, wav_stem):
+    """Return the raw-sample CSV path associated with a finalized WAV."""
+    filename = sanitize_path_component(wav_stem, max_length=220)
+    path = get_sample_directory(context) / "audio" / "raw_csv" / f"{filename}.csv"
     _validate_containment(path, context.result_root_directory)
     return path
 

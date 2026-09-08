@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from consts import error_code
+from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
 from ui.sequence import sequence_widget_config_ops as config_ops_module
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 
@@ -109,6 +110,7 @@ def test_active_project_context_exposes_result_storage_identity():
             return error_code.OK, {
                 "project_name": "电机耐久测试",
                 "result_root_directory": "D:/results",
+                EXPORT_RAW_AUDIO_CSV_KEY: True,
             }
 
     host = SimpleNamespace(
@@ -121,6 +123,7 @@ def test_active_project_context_exposes_result_storage_identity():
     assert context == {
         "project_name": "电机耐久测试",
         "result_root_directory": "D:/results",
+        EXPORT_RAW_AUDIO_CSV_KEY: True,
         "active_file": "motor.json",
     }
 
