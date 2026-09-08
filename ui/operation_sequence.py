@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 import os
 import re
 import sys
@@ -21,7 +22,12 @@ from base.data_struct.data_deal_struct import DataDealStruct
 from base.data_struct.sequence_data import SequenceData
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
+from base.recording_preview_config import resolve_recording_preview_time_mode
 from consts import model_consts, ui_style_const
+from consts.recording_preview_consts import (
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
+)
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
 from ui.acquisition_config_window import (
@@ -69,6 +75,17 @@ MULTI_CHANNEL_ANALYSIS_TYPES = {
     "LP",
     "LOUD",
 }
+
+
+def _recording_preview_validation_error(config_data):
+    for item in config_data:
+        if item.mode != "RECORD_ONLY":
+            continue
+        try:
+            resolve_recording_preview_time_mode(item.detail)
+        except ValueError as exc:
+            return str(exc)
+    return None
 
 
 class AnalysisModelSelect(ConfigDialogBase):
@@ -144,6 +161,12 @@ class AnalysisModelSelect(ConfigDialogBase):
 
     def _persist_current_config_silently(self) -> None:
         if not self._can_persist_current_config():
+            return
+        validation_error = _recording_preview_validation_error(
+            self.select_list.config
+        )
+        if validation_error:
+            self.default_logger.warning(validation_error)
             return
         save_config = self.format_config_data(self.select_list.config)
         if not save_config:
@@ -449,6 +472,12 @@ class AnalysisModelSelect(ConfigDialogBase):
         return save_config
 
     def save_btn_clicked(self):
+        validation_error = _recording_preview_validation_error(
+            self.select_list.config
+        )
+        if validation_error:
+            QMessageBox.warning(self, "警告", validation_error)
+            return
         save_config = self.format_config_data(self.select_list.config)
         if not save_config:
             QMessageBox.warning(self, "警告", "没有配置测试内容")
@@ -476,6 +505,12 @@ class AnalysisModelSelect(ConfigDialogBase):
             LoadUiConfig.append_sequence_config_registry_entry(file_path)
 
     def ok_btn_clicked(self):
+        validation_error = _recording_preview_validation_error(
+            self.select_list.config
+        )
+        if validation_error:
+            QMessageBox.warning(self, "警告", validation_error)
+            return
         save_config = self.format_config_data(self.select_list.config)
 
         if not save_config:
@@ -845,10 +880,25 @@ class OptionList(QListView):
                     "monitor_output_channel": 0,
                     "monitor_gain_db": 0.0,
                     "use_streaming_recording": False,
+                    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: PREVIEW_TIME_MODE_RELATIVE_LATEST,
                     model_consts.RECORDING_ROOT_CONFIG_KEY: "",
                 }
             else:
                 if sequence_config.mode == "RECORD_ONLY":
+                    try:
+                        preview_time_mode = resolve_recording_preview_time_mode(
+                            sequence_config.detail
+                        )
+                    except ValueError as exc:
+                        if not isinstance(sequence_config.detail, Mapping):
+                            self.default_logger.error(
+                                f"Failed to load the default config file. {exc}"
+                            )
+                            self.clear_option_list()
+                            return
+                        preview_time_mode = sequence_config.detail.get(
+                            RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
+                        )
                     sequence_config.detail = {
                         "total_time": float(sequence_config.detail.get("total_time", 4.0)),
                         "sample_rate": int(sequence_config.detail.get("sample_rate", 44100)),
@@ -858,6 +908,7 @@ class OptionList(QListView):
                         "use_streaming_recording": bool(
                             sequence_config.detail.get("use_streaming_recording", False)
                         ),
+                        RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: preview_time_mode,
                         model_consts.RECORDING_ROOT_CONFIG_KEY: str(
                             sequence_config.detail.get(
                                 model_consts.RECORDING_ROOT_CONFIG_KEY,
@@ -1323,6 +1374,7 @@ class OptionList(QListView):
                 "monitor_output_channel": 0,
                 "monitor_gain_db": 0.0,
                 "use_streaming_recording": False,
+                RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: PREVIEW_TIME_MODE_RELATIVE_LATEST,
                 model_consts.RECORDING_ROOT_CONFIG_KEY: "",
             }
             self.signal_len = seq_item.detail.get(

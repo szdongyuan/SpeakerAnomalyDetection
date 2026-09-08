@@ -28,7 +28,6 @@ from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMi
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.sequence.sequence_widget_product_pdf_ops import SequenceWidgetProductPdfOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
-from ui.sequence.multichannel_waveform_session import MultichannelWaveformSession
 
 
 class SequenceWindow(
@@ -47,11 +46,15 @@ class SequenceWindow(
     tcp_server = None
     _active_instance_ref = None
 
-    def __init__(self, *, recording_bridge=None):
+    def __init__(self, *, recording_bridge=None, ve_prewarm_lifetime=None):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
         super().__init__()
         self.recording_bridge = recording_bridge
+        self.ve_prewarm_lifetime = ve_prewarm_lifetime
         self._owns_recording_bridge = False
+        if recording_bridge is not None:
+            recording_bridge.analysis_eligibility_provider = (
+                self._unfinished_recording_analysis_identifiers)
         self.data_struct = DataDealStruct()
         self.recorded_path = None
         self.count_board = None
@@ -188,9 +191,8 @@ class SequenceWindow(
         self._hid_mode_active_until = 0.0  # 时间戳，在此之前忽略键盘输入
 
         # Streaming state variables
-        self._streaming_waveform_session = MultichannelWaveformSession(
-            max_points=self._WAVEFORM_DISPLAY_MAX_POINTS,
-        )
+        self._streaming_waveform_session = None
+        self._streaming_waveform_time_mode = None
         self._streaming_waveform_generation = 0
         self._streaming_waveform_refresh_scheduled = False
         self._streaming_waveform_pending = False

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from base.recording_channel_selection import RecordingChannelSelectionError
+from consts.recording_preview_consts import PREVIEW_TIME_MODE_CUMULATIVE
 from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
@@ -52,9 +53,12 @@ class _ProjectionWindow:
         self.channel_index = channel
         self.calls = []
         self.current_data = None
+        self.is_live_preview = False
+        self.x_range = (0.0, 1.0)
+        self.x_auto_range = True
         self.fail_next_set = False
 
-    def set_data(self, time_axis, amplitude):
+    def _replace_data(self, time_axis, amplitude):
         if self.fail_next_set:
             self.fail_next_set = False
             raise RuntimeError("second channel Qt failure")
@@ -65,17 +69,34 @@ class _ProjectionWindow:
         self.current_data = current_data
         self.calls.append(current_data)
 
+    def set_live_data(self, time_axis, amplitude):
+        self._replace_data(time_axis, amplitude)
+        self.is_live_preview = True
+        self.x_range = (-10.0, 0.0)
+        self.x_auto_range = False
+
+    def set_data(self, time_axis, amplitude):
+        self._replace_data(time_axis, amplitude)
+        self.is_live_preview = False
+        self.x_auto_range = True
+        time_values = np.asarray(time_axis)
+        if time_values.size:
+            self.x_range = (float(time_values[0]), float(time_values[-1]))
+
     def snapshot_plot_state(self):
-        if self.current_data is None:
-            return None
-        return tuple(value.copy() for value in self.current_data)
+        data = (
+            None
+            if self.current_data is None
+            else tuple(value.copy() for value in self.current_data)
+        )
+        return data, self.is_live_preview, self.x_range, self.x_auto_range
 
     def restore_plot_state(self, state):
-        self.current_data = (
-            None
-            if state is None
-            else tuple(value.copy() for value in state)
-        )
+        data, live_preview, x_range, x_auto_range = state
+        self.current_data = None if data is None else tuple(value.copy() for value in data)
+        self.is_live_preview = live_preview
+        self.x_range = x_range
+        self.x_auto_range = x_auto_range
 
 
 class _ProjectionWorkspace:
@@ -571,6 +592,50 @@ def test_final_projection_draws_each_wav_column_to_its_physical_channel_window()
     )
 
 
+def test_waveform_display_preparation_separates_generic_and_recording_final_caps():
+    waveform = np.sin(np.arange(120_003, dtype=np.float32) / 13.0)
+    waveform[24_001] = -9.0
+    waveform[96_002] = 8.0
+
+    generic_time, generic_waveform = (
+        SequenceWidgetStreamingOpsMixin._prepare_waveform_display_data(
+            waveform,
+            1_000,
+        )
+    )
+    final_time, final_waveform = (
+        SequenceWidgetStreamingOpsMixin._prepare_waveform_display_data(
+            waveform,
+            1_000,
+            max_points=48_000,
+        )
+    )
+
+    assert len(generic_waveform) <= 4_000
+    assert 4_000 < len(final_waveform) <= 48_000
+    assert generic_time[[0, -1]].tolist() == [0.0, 120.002]
+    assert final_time[[0, -1]].tolist() == [0.0, 120.002]
+    assert -9.0 in generic_waveform and 8.0 in generic_waveform
+    assert -9.0 in final_waveform and 8.0 in final_waveform
+    assert np.all(np.diff(generic_time) > 0)
+    assert np.all(np.diff(final_time) > 0)
+
+
+@pytest.mark.parametrize(
+    "max_points",
+    [True, False, np.bool_(True), 3, 4.0, "48000"],
+)
+def test_waveform_display_preparation_rejects_invalid_explicit_caps(max_points):
+    waveform = np.arange(10, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="max_points must be an integer >= 4"):
+        SequenceWidgetStreamingOpsMixin._prepare_waveform_display_data(
+            waveform,
+            1,
+            max_points=max_points,
+        )
+
+
 def test_final_projection_rebuilds_only_for_a_different_explicit_mapping():
     host = _ProjectionHost((0,))
     recorded = np.asarray([[1.0, 10.0], [2.0, 20.0]], dtype=np.float32)
@@ -585,25 +650,21 @@ def test_final_projection_rebuilds_only_for_a_different_explicit_mapping():
     assert host._active_input_channels == [0, 2]
 
 
-@pytest.mark.parametrize("has_live_projection", [False, True])
-def test_final_projection_rolls_back_every_window_when_second_channel_fails(
-    has_live_projection,
-):
+def test_final_projection_rolls_back_every_live_window_when_second_channel_fails():
     host = _ProjectionHost((0, 2))
     windows = host.channel_workspace.all_subwindows()
     live_data = [
         (
-            np.asarray([0.0, 0.5]),
+            np.asarray([-0.5, 0.0]),
             np.asarray([1.0, 2.0], dtype=np.float32),
         ),
         (
-            np.asarray([0.0, 0.5]),
+            np.asarray([-0.5, 0.0]),
             np.asarray([10.0, 20.0], dtype=np.float32),
         ),
     ]
-    if has_live_projection:
-        for window, (time_axis, amplitude) in zip(windows, live_data):
-            window.set_data(time_axis, amplitude)
+    for window, (time_axis, amplitude) in zip(windows, live_data):
+        window.set_live_data(time_axis, amplitude)
     before = [window.snapshot_plot_state() for window in windows]
     windows[1].fail_next_set = True
     recorded = np.asarray(
@@ -620,11 +681,13 @@ def test_final_projection_rolls_back_every_window_when_second_channel_fails(
 
     after = [window.snapshot_plot_state() for window in windows]
     for before_state, after_state in zip(before, after):
-        if before_state is None:
-            assert after_state is None
-        else:
-            np.testing.assert_array_equal(after_state[0], before_state[0])
-            np.testing.assert_array_equal(after_state[1], before_state[1])
+        before_data, before_live, before_range, before_auto = before_state
+        after_data, after_live, after_range, after_auto = after_state
+        np.testing.assert_array_equal(after_data[0], before_data[0])
+        np.testing.assert_array_equal(after_data[1], before_data[1])
+        assert after_live is before_live is True
+        assert after_range == before_range == (-10.0, 0.0)
+        assert after_auto is before_auto is False
 
 
 def test_final_projection_restores_real_qt_windows_after_second_channel_failure(
@@ -636,13 +699,13 @@ def test_final_projection_restores_real_qt_windows_after_second_channel_failure(
     workspace.set_channels((0, 2))
     host.channel_workspace = workspace
     windows = workspace.all_subwindows()
-    live_time = np.asarray([0.0, 0.5])
+    live_time = np.asarray([-0.5, 0.0])
     live_columns = (
         np.asarray([1.0, 2.0], dtype=np.float32),
         np.asarray([10.0, 20.0], dtype=np.float32),
     )
     for window, live_column in zip(windows, live_columns):
-        window.set_data(live_time, live_column)
+        window.set_live_data(live_time, live_column)
     monkeypatch.setattr(
         windows[1],
         "set_data",
@@ -660,6 +723,63 @@ def test_final_projection_restores_real_qt_windows_after_second_channel_failure(
         restored_time, restored_column = window.plot_item.getData()
         np.testing.assert_array_equal(restored_time, live_time)
         np.testing.assert_array_equal(restored_column, live_column)
+        assert window.is_live_preview is True
+        assert window.plot_widget.viewRange()[0] == pytest.approx([-10.0, 0.0])
+        assert window.plot_widget.getViewBox().state["autoRange"][0] is False
+    workspace.close()
+    workspace.deleteLater()
+    ui_qapp.processEvents()
+
+
+def test_final_projection_restores_real_cumulative_preview_after_second_channel_failure(
+    ui_qapp,
+    monkeypatch,
+):
+    host = _ProjectionHost((0, 2))
+    workspace = ChannelPlotWorkspace()
+    workspace.set_channels((0, 2))
+    host.channel_workspace = workspace
+    windows = workspace.all_subwindows()
+    cumulative_time = np.asarray([0.0, 4.0])
+    cumulative_columns = (
+        np.asarray([1.0, 2.0], dtype=np.float32),
+        np.asarray([10.0, 20.0], dtype=np.float32),
+    )
+    for window, cumulative_column in zip(windows, cumulative_columns):
+        window.set_cumulative_preview_data(cumulative_time, cumulative_column)
+    before_ranges = [tuple(window.plot_widget.viewRange()[0]) for window in windows]
+    before_auto_ranges = [
+        window.plot_widget.getViewBox().state["autoRange"][0]
+        for window in windows
+    ]
+    monkeypatch.setattr(
+        windows[1],
+        "set_data",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("Qt setData failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="Qt setData failed"):
+        host.plot_waveform_to_workspace(
+            np.asarray([[3.0, 30.0], [4.0, 40.0]], dtype=np.float32),
+            2.0,
+            channel_mapping=(0, 2),
+        )
+
+    for index, (window, cumulative_column) in enumerate(
+        zip(windows, cumulative_columns)
+    ):
+        restored_time, restored_column = window.plot_item.getData()
+        np.testing.assert_array_equal(restored_time, cumulative_time)
+        np.testing.assert_array_equal(restored_column, cumulative_column)
+        assert window.presentation_mode == PREVIEW_TIME_MODE_CUMULATIVE
+        assert window.is_live_preview is True
+        assert window.plot_widget.viewRange()[0] == pytest.approx(
+            before_ranges[index]
+        )
+        assert (
+            window.plot_widget.getViewBox().state["autoRange"][0]
+            == before_auto_ranges[index]
+        )
     workspace.close()
     workspace.deleteLater()
     ui_qapp.processEvents()
