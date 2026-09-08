@@ -10,6 +10,7 @@ REGISTRY_FILE_KEY = "file"
 # Project schema
 PROJECT_NAME_KEY = "project_name"
 RESULT_ROOT_DIRECTORY_KEY = "result_root_directory"
+EXPORT_RAW_AUDIO_CSV_KEY = "export_raw_audio_csv"
 TEST_GROUPS_KEY = "test_groups"
 GROUP_NAME_KEY = "group_name"
 TEST_CONDITIONS_KEY = "test_conditions"

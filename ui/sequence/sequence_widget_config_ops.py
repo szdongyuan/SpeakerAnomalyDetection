@@ -9,6 +9,7 @@ from base.load_config import LoadUiConfig
 from base.product_test_project_config import ProductTestProjectConfigManager
 from consts import error_code
 from consts.product_test_project_consts import (
+    EXPORT_RAW_AUDIO_CSV_KEY,
     PROJECT_NAME_KEY,
     RESULT_ROOT_DIRECTORY_KEY,
 )
@@ -71,6 +72,9 @@ class SequenceWidgetConfigOpsMixin:
             "result_root_directory": str(
                 project_data.get(RESULT_ROOT_DIRECTORY_KEY, "") or ""
             ).strip(),
+            EXPORT_RAW_AUDIO_CSV_KEY: (
+                project_data.get(EXPORT_RAW_AUDIO_CSV_KEY, False) is True
+            ),
             "active_file": active_file,
         }
 

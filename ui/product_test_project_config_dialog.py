@@ -6,6 +6,7 @@ from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialogButtonBox,
@@ -18,6 +19,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSpinBox,
     QTableWidget,
@@ -33,6 +35,7 @@ from base.product_test_project_config import (
 from consts import error_code, ui_style_const
 from consts.product_test_project_consts import (
     CONDITION_NAME_KEY,
+    EXPORT_RAW_AUDIO_CSV_KEY,
     GROUP_NAME_KEY,
     PROJECT_NAME_KEY,
     REGISTRY_ACTIVE_FILE_KEY,
@@ -394,6 +397,12 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self.condition_table = QTableWidget(0, 6)
         self.result_root_input = QLineEdit()
         self.select_result_root_btn = QPushButton("选择")
+        self.raw_audio_save_group = QButtonGroup(self)
+        self.wav_only_radio = QRadioButton("仅 WAV")
+        self.wav_and_csv_radio = QRadioButton("WAV + CSV")
+        self.raw_audio_save_group.addButton(self.wav_only_radio)
+        self.raw_audio_save_group.addButton(self.wav_and_csv_radio)
+        self.wav_only_radio.setChecked(True)
         self.new_project_btn = QPushButton("新建配置")
         self.import_project_btn = QPushButton("导入配置")
         self.save_as_btn = QPushButton("另存为配置")
@@ -478,6 +487,15 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         result_root_layout.addWidget(self.result_root_input, 1)
         result_root_layout.addWidget(self.select_result_root_btn)
         result_layout.addRow("保存目录：", result_root_row)
+
+        raw_audio_save_row = QWidget()
+        raw_audio_save_layout = QHBoxLayout(raw_audio_save_row)
+        raw_audio_save_layout.setContentsMargins(0, 0, 0, 0)
+        raw_audio_save_layout.setSpacing(20)
+        raw_audio_save_layout.addWidget(self.wav_only_radio)
+        raw_audio_save_layout.addWidget(self.wav_and_csv_radio)
+        raw_audio_save_layout.addStretch()
+        result_layout.addRow("原始音频保存：", raw_audio_save_row)
 
         for button in (
             self.add_condition_btn,
@@ -671,6 +689,8 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self.delete_condition_btn.clicked.connect(self._delete_selected_condition)
         self.copy_conditions_btn.clicked.connect(self._show_copy_conditions_dialog)
         self.select_result_root_btn.clicked.connect(self._select_result_root)
+        self.wav_only_radio.toggled.connect(self._on_project_field_changed)
+        self.wav_and_csv_radio.toggled.connect(self._on_project_field_changed)
         self.new_project_btn.clicked.connect(self._new_project)
         self.import_project_btn.clicked.connect(self._import_project)
         self.save_as_btn.clicked.connect(self._save_project_as)
@@ -724,6 +744,11 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self.result_root_input.setText(
             str(self.project_data.get(RESULT_ROOT_DIRECTORY_KEY, "") or "")
         )
+        export_raw_audio_csv = (
+            self.project_data.get(EXPORT_RAW_AUDIO_CSV_KEY, False) is True
+        )
+        self.wav_and_csv_radio.setChecked(export_raw_audio_csv)
+        self.wav_only_radio.setChecked(not export_raw_audio_csv)
         groups = self.project_data.get(TEST_GROUPS_KEY, [])
         self.port_count_spinbox.setValue(max(1, len(groups)))
         self._rebuild_port_tabs()
@@ -833,6 +858,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         project_data = copy.deepcopy(self.project_data)
         project_data[PROJECT_NAME_KEY] = self.project_name_input.text().strip()
         project_data[RESULT_ROOT_DIRECTORY_KEY] = self.result_root_input.text().strip()
+        project_data[EXPORT_RAW_AUDIO_CSV_KEY] = self.wav_and_csv_radio.isChecked()
         return project_data
 
     def _append_condition_row(self, condition):

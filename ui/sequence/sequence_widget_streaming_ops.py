@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 from datetime import datetime
 
 import numpy as np
@@ -7,6 +8,10 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QDialog, QLabel, QSplitter
 
 from base.play_and_record import resolve_startup_trim_samples
+from base.analysis_artifact_paths import (
+    build_raw_audio_csv_path,
+    storage_context_from_metadata,
+)
 from base.recording_settings import (
     merge_audio_validation_thresholds,
     validate_recorded_audio,
@@ -20,6 +25,7 @@ from base.file_ops import FileOps
 from base.load_config import LoadUiConfig
 from base.playback_controller import PlaybackController
 from base.recording_management import RecordingManager
+from base.raw_audio_csv_exporter import export_raw_audio_csv
 from base.save_data import ensure_test_result_file, save_audio_simple
 from base.soundcard_calibration_manager import (
     MicCalibrationFormatError,
@@ -28,6 +34,7 @@ from base.soundcard_calibration_manager import (
 )
 from base.wav_calibration_metadata import append_wav_calibration_metadata
 from consts import error_code, model_consts
+from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
 from consts.running_consts import DEFAULT_DIR
 from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
@@ -1297,6 +1304,8 @@ class SequenceWidgetStreamingOpsMixin:
         """
         failures: list[tuple[str, str]] = []
 
+        self._wait_for_raw_audio_csv_exports()
+
         try:
             self._excel_spool_build_timer.stop()
         except Exception:
@@ -1938,6 +1947,91 @@ class SequenceWidgetStreamingOpsMixin:
                     boundary_name="channel-selection",
                 )
 
+    def _schedule_raw_audio_csv_export(self, raw_channels) -> bool:
+        project_context = dict(
+            getattr(self, "product_test_project_context", {}) or {}
+        )
+        if project_context.get(EXPORT_RAW_AUDIO_CSV_KEY, False) is not True:
+            return False
+
+        wav_path = str(getattr(self, "recorded_path", "") or "")
+        try:
+            storage_metadata = dict(
+                (getattr(self, "recorded_signal_info", {}) or {}).get(
+                    "analysis_storage", {}
+                )
+            )
+            storage_context = storage_context_from_metadata(storage_metadata)
+            csv_path = build_raw_audio_csv_path(
+                storage_context,
+                os.path.splitext(os.path.basename(wav_path))[0],
+            )
+            channels = tuple(int(channel) for channel in raw_channels)
+        except (TypeError, ValueError, OSError) as error:
+            self._on_raw_audio_csv_export_failed(wav_path, str(error))
+            return False
+
+        def _worker():
+            try:
+                export_raw_audio_csv(wav_path, csv_path, channels)
+            except Exception as error:
+                self.raw_audio_csv_export_failed.emit(wav_path, str(error))
+            else:
+                self.raw_audio_csv_export_succeeded.emit(str(csv_path))
+            finally:
+                with self._raw_audio_csv_export_lock:
+                    self._raw_audio_csv_export_threads.discard(thread)
+
+        thread = threading.Thread(
+            target=_worker,
+            name=f"raw-audio-csv-{os.path.basename(wav_path)}",
+            daemon=False,
+        )
+        with self._raw_audio_csv_export_lock:
+            self._raw_audio_csv_export_threads.add(thread)
+        try:
+            thread.start()
+        except RuntimeError as error:
+            with self._raw_audio_csv_export_lock:
+                self._raw_audio_csv_export_threads.discard(thread)
+            self._on_raw_audio_csv_export_failed(wav_path, str(error))
+            return False
+        return True
+
+    def _wait_for_raw_audio_csv_exports(self) -> None:
+        lock = getattr(self, "_raw_audio_csv_export_lock", None)
+        if lock is None:
+            return
+        while True:
+            with lock:
+                active_threads = tuple(
+                    thread
+                    for thread in self._raw_audio_csv_export_threads
+                    if thread is not threading.current_thread()
+                )
+            if not active_threads:
+                break
+            for thread in active_threads:
+                thread.join()
+        QApplication.processEvents()
+
+    def _on_raw_audio_csv_export_succeeded(self, csv_path) -> None:
+        self.default_logger.info(
+            f"raw_audio_csv_export_succeeded path={csv_path}"
+        )
+
+    def _on_raw_audio_csv_export_failed(self, wav_path, error_message) -> None:
+        self.default_logger.error(
+            "raw_audio_csv_export_failed "
+            f"wav_path={wav_path} error={error_message}"
+        )
+        QMessageBox.warning(
+            self,
+            "原始音频 CSV 保存失败",
+            "WAV 已保存，但原始 CSV 保存失败。\n"
+            f"{error_message}",
+        )
+
     def _on_streaming_complete(
         self,
         recorded_mono=None,
@@ -2077,6 +2171,7 @@ class SequenceWidgetStreamingOpsMixin:
                 self._append_recording_wav_calibration_metadata()
 
             self.recorded_signal_info["sample_rate"] = sample_rate
+            self._schedule_raw_audio_csv_export(run_channels)
             condition_key = (
                 self._recording_process_direction if prefinalized
                 else self._resolve_active_recording_waveform_direction(fallback="")

@@ -2,7 +2,7 @@ import os
 import threading
 import weakref
 
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QWidget
 
 from base.data_struct.data_deal_struct import DataDealStruct
@@ -46,6 +46,8 @@ class SequenceWindow(
 ):
     tcp_server = None
     _active_instance_ref = None
+    raw_audio_csv_export_succeeded = pyqtSignal(str)
+    raw_audio_csv_export_failed = pyqtSignal(str, str)
 
     def __init__(self, *, recording_bridge=None):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
@@ -84,6 +86,8 @@ class SequenceWindow(
         self._excel_spool_build_pending_cfgs = []
         self._excel_spool_build_lock = threading.Lock()
         self._excel_spool_build_thread = None
+        self._raw_audio_csv_export_lock = threading.Lock()
+        self._raw_audio_csv_export_threads = set()
 
         self.init_result_files()
         self.count_board = SequenceCountBoard(self.analysis_config)
@@ -96,6 +100,12 @@ class SequenceWindow(
         self._product_pdf_report_states = {}
         self._product_pdf_report_paths = {}
         self.default_logger = LogManager.set_log_handler("core")
+        self.raw_audio_csv_export_succeeded.connect(
+            self._on_raw_audio_csv_export_succeeded
+        )
+        self.raw_audio_csv_export_failed.connect(
+            self._on_raw_audio_csv_export_failed
+        )
         self.left_panel = MotorDetectionLeftPanel(
             self.count_board,
             condition_configs=self.product_test_condition_configs,

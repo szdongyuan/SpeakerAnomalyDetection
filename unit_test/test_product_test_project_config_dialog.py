@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import QApplication, QComboBox, QLabel, QMessageBox
 from base.load_config import LoadUiConfig
 from base.product_test_project_config import ProductTestProjectConfigManager
 from consts import ui_style_const
+from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
 from ui.product_test_project_config_dialog import (
     ProductTestProjectConfigDialog,
 )
@@ -141,6 +142,11 @@ def test_dialog_uses_project_port_condition_layout(app, tmp_path):
     assert dialog.delete_condition_btn.text() == "删除工况"
     assert dialog.delete_project_btn.text() == "删除配置"
     assert dialog.delete_project_btn.isEnabled()
+    assert dialog.wav_only_radio.text() == "仅 WAV"
+    assert dialog.wav_and_csv_radio.text() == "WAV + CSV"
+    assert dialog.wav_only_radio.parentWidget() is dialog.wav_and_csv_radio.parentWidget()
+    assert dialog.wav_only_radio.isChecked()
+    assert not dialog.wav_and_csv_radio.isChecked()
     assert not hasattr(dialog, "status_label")
     assert dialog.delete_project_btn.objectName() != "productProjectDangerButton"
     assert "#D4E1F2" in dialog.styleSheet()
@@ -165,6 +171,24 @@ def test_dialog_uses_project_port_condition_layout(app, tmp_path):
         label.text() != "按项目名称建立目录"
         for label in dialog.findChildren(QLabel)
     )
+    close_dialog(dialog)
+
+
+def test_raw_audio_save_choice_round_trips_through_project_json(app, tmp_path):
+    manager = make_manager(tmp_path)
+    file_name = prepare_project(manager, tmp_path)
+    dialog = ProductTestProjectConfigDialog(manager)
+
+    dialog.wav_and_csv_radio.setChecked(True)
+    project = dialog.collect_project()
+    assert project[EXPORT_RAW_AUDIO_CSV_KEY] is True
+    success, saved_file_name = manager.save_project(file_name, project)
+    assert success is True
+    assert saved_file_name == file_name
+
+    load_code, saved = manager.load_project(file_name)
+    assert load_code == 0
+    assert saved[EXPORT_RAW_AUDIO_CSV_KEY] is True
     close_dialog(dialog)
 
 

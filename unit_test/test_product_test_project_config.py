@@ -13,6 +13,7 @@ from base.product_test_project_config import (
 )
 from consts import error_code
 from consts.product_test_project_consts import (
+    EXPORT_RAW_AUDIO_CSV_KEY,
     GROUP_NAME_KEY,
     PROJECT_NAME_KEY,
     RESULT_ROOT_DIRECTORY_KEY,
@@ -141,8 +142,10 @@ def test_default_project_contains_only_new_schema_fields():
     assert set(project) == {
         PROJECT_NAME_KEY,
         RESULT_ROOT_DIRECTORY_KEY,
+        EXPORT_RAW_AUDIO_CSV_KEY,
         TEST_GROUPS_KEY,
     }
+    assert project[EXPORT_RAW_AUDIO_CSV_KEY] is False
     assert "name" not in project
     assert "sub_configs" not in project
     assert "config_version" not in project
@@ -166,8 +169,10 @@ def test_save_project_keeps_more_than_twenty_conditions_and_writes_registry(
     assert set(saved) == {
         PROJECT_NAME_KEY,
         RESULT_ROOT_DIRECTORY_KEY,
+        EXPORT_RAW_AUDIO_CSV_KEY,
         TEST_GROUPS_KEY,
     }
+    assert saved[EXPORT_RAW_AUDIO_CSV_KEY] is False
     assert os.path.isdir(tmp_path / "results" / "PB-A01充电宝")
     assert manager.load_registry() == {
         "active_file": file_name,
@@ -189,6 +194,12 @@ def test_save_project_keeps_more_than_twenty_conditions_and_writes_registry(
                 {RESULT_ROOT_DIRECTORY_KEY: "relative/results"}
             ),
             "测试结果根目录必须是绝对路径",
+        ),
+        (
+            lambda project: project.update(
+                {EXPORT_RAW_AUDIO_CSV_KEY: "true"}
+            ),
+            "原始音频 CSV 保存配置必须是布尔值",
         ),
         (
             lambda project: project[TEST_GROUPS_KEY][1].update(
