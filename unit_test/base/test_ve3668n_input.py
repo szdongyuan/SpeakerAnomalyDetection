@@ -28,12 +28,17 @@ def test_ve_acquisition_signature_is_exact_hashable_and_ordered():
 
 def test_ve_acquisition_signature_ignores_request_and_software_metadata(tmp_path):
     from base.ve3668n_input import ve_acquisition_signature
-    from unit_test.base.ve3668n_fakes import capture_request
+    from unit_test.base.ve3668n_fakes import capture_request, wav_metadata
 
+    metadata = wav_metadata(sample_rate=51200)
+    metadata["acquisition"]["machine_id"] = "test-machine-1"
     first = capture_request(tmp_path / "first.wav", target_samples=512,
-                            calibration_metadata={"annotation": "first"})
+                            calibration_metadata=metadata)
+    changed_metadata = wav_metadata(sample_rate=51200)
+    changed_metadata["acquisition"]["machine_id"] = "test-machine-1"
+    changed_metadata["recorded_channels"][0]["v2pa_factor"] = 123.0
     second = capture_request(tmp_path / "second.wav", target_samples=1024,
-                             calibration_metadata={"annotation": "second"})
+                             calibration_metadata=changed_metadata)
 
     assert ve_acquisition_signature(first.device, first.channels, first.sample_rate) == (
         ve_acquisition_signature(second.device, second.channels, second.sample_rate)
@@ -168,29 +173,162 @@ def test_config_requires_a_mapping(value):
         validate_input_config(value)
 
 
+@pytest.mark.parametrize("before", [44100, 48000, 51200])
+@pytest.mark.parametrize("after", [44100, 48000, 51200])
+def test_capture_snapshot_changes_but_calibration_fingerprint_does_not(before, after):
+    from base.ve3668n_input import calibration_fingerprint, validate_device_snapshot
+
+    first = validate_device_snapshot(device_info(input_config=input_config(before)))
+    second = validate_device_snapshot(device_info(input_config=input_config(after)))
+    assert (first != second) is (before != after)
+    assert (first["input_config"] != second["input_config"]) is (before != after)
+    assert first["input_config"]["sample_rate"] == before
+    assert second["input_config"]["sample_rate"] == after
+    expected = {
+        "backend": "vkinging", "model": "VE3668N",
+        "machine_id": "test-machine-1", "physical_channel": 7,
+        "input_mode": "IEPE", "unit": "V", "range_min": -10.0, "range_max": 10.0,
+    }
+    assert calibration_fingerprint(first, 7, first["input_config"]) == expected
+    assert calibration_fingerprint(second, 7, second["input_config"]) == expected
+
+
+@pytest.mark.parametrize("field, value", [
+    ("input_mode", "VOLTAGE"), ("unit", "Pa"),
+    ("range_min", -5.0), ("range_max", 5.0),
+])
+def test_future_conditions_change_fingerprint_but_cannot_be_acquired(field, value):
+    from base.ve3668n_input import (
+        calibration_fingerprint, validate_calibration_conditions,
+        validate_device_snapshot, validate_input_config,
+    )
+
+    original = device_info()
+    changed_config = input_config(**{field: value})
+    changed = device_info(input_config=changed_config)
+    assert validate_calibration_conditions(changed_config)[field] == value
+    assert calibration_fingerprint(changed, 7, changed_config) != (
+        calibration_fingerprint(original, 7, original["input_config"])
+    )
+    with pytest.raises(ValueError, match=field):
+        validate_input_config(changed_config)
+    with pytest.raises(ValueError, match=field):
+        validate_device_snapshot(changed)
+
+
+def test_device_and_physical_channel_are_part_of_calibration_identity():
+    from base.ve3668n_input import calibration_fingerprint
+
+    first = device_info()
+    other_device = device_info(machine_id="test-machine-2")
+    expected = calibration_fingerprint(first, 7, first["input_config"])
+    assert calibration_fingerprint(other_device, 7, other_device["input_config"]) != expected
+    assert calibration_fingerprint(first, 1, first["input_config"]) != expected
+
+
+@pytest.mark.parametrize("overrides", [
+    {"name": "Dev9"}, {"address": "192.0.2.2"}, {"address": ""},
+    {"physical_channels": [1, 7]}, {"physical_channels": [1]}, {"available": False},
+])
+def test_routing_display_and_selection_do_not_change_calibration_identity(overrides):
+    from base.ve3668n_input import calibration_fingerprint
+
+    first = device_info()
+    changed = device_info(**overrides)
+    assert calibration_fingerprint(first, 7, first["input_config"]) == (
+        calibration_fingerprint(changed, 7, changed["input_config"])
+    )
+
+
+@pytest.mark.parametrize("rate", [None, True, 44100.0, "48000", 1, 96000, 102400])
+def test_invalid_rate_is_not_a_calibration_applicability_condition(rate):
+    from base.ve3668n_input import calibration_fingerprint, validate_input_config
+
+    first = device_info()
+    invalid = device_info(input_config=input_config(rate))
+    assert calibration_fingerprint(first, 7, first["input_config"]) == (
+        calibration_fingerprint(invalid, 7, invalid["input_config"])
+    )
+    with pytest.raises(ValueError, match="sample_rate"):
+        validate_input_config(invalid["input_config"])
+
+
+@pytest.mark.parametrize("field, value", [
+    ("input_mode", None), ("input_mode", ""), ("input_mode", " \t"),
+    ("unit", True), ("unit", ""), ("unit", " \t"),
+    ("range_min", "-10"), ("range_max", "10"),
+    ("range_min", False), ("range_max", True),
+    ("range_min", float("nan")), ("range_min", -float("inf")),
+    ("range_max", float("inf")), ("range_max", None),
+    ("range_min", 10.0), ("range_max", -11.0), ("range_max", 10 ** 400),
+])
+def test_calibration_conditions_require_well_formed_structure(field, value):
+    from base.ve3668n_input import calibration_fingerprint, validate_calibration_conditions
+
+    config = input_config(**{field: value})
+    with pytest.raises(ValueError, match="input_mode|unit|range"):
+        validate_calibration_conditions(config)
+    with pytest.raises(ValueError, match="input_mode|unit|range"):
+        calibration_fingerprint(device_info(), 7, config)
+
+
+@pytest.mark.parametrize("field", ["sensitivity", "unknown", "index", "hostapi"])
+@pytest.mark.parametrize("level", ["device", "device_config", "config_argument"])
+def test_fingerprint_boundary_also_rejects_injected_fields(field, level):
+    from base.ve3668n_input import calibration_fingerprint
+
+    device = device_info()
+    config = input_config()
+    target = {"device": device, "device_config": device["input_config"],
+              "config_argument": config}[level]
+    target[field] = 1000.0
+    with pytest.raises(ValueError, match=field):
+        calibration_fingerprint(device, 7, config)
+
+
+@pytest.mark.parametrize("model", ["VE3668N", "ve3668n", " \tVe3668n\r\n"])
+def test_identity_is_normalized_without_using_routing_names(model):
+    from base.ve3668n_input import (
+        calibration_fingerprint, normalize_machine_id, normalize_model,
+        validate_device_snapshot,
+    )
+
+    device = device_info(model=model, machine_id=" \tStable-Id-1\r\n")
+    snapshot = validate_device_snapshot(device)
+    assert snapshot["model"] == normalize_model(model) == "VE3668N"
+    assert snapshot["machine_id"] == normalize_machine_id(device["machine_id"]) == "Stable-Id-1"
+    expected = calibration_fingerprint(device_info(machine_id="Stable-Id-1"), 7, input_config())
+    assert calibration_fingerprint(device, 7, device["input_config"]) == expected
+    assert calibration_fingerprint(device_info(machine_id="stable-id-1"), 7, input_config()) != expected
+
+
 @pytest.mark.parametrize("model", [
     None, True, 3668, "", " \t", "VE3668", "VE3668N-plus", "prefix-VE3668N",
     "VE3668N VE3668N", "VE 3668N", "VE3668N\nother",
 ])
 def test_model_matching_is_full_not_substring(model):
-    from base.ve3668n_input import normalize_model, validate_device_snapshot
+    from base.ve3668n_input import calibration_fingerprint, normalize_model, validate_device_snapshot
 
     device = device_info(model=model)
     with pytest.raises(ValueError, match="model"):
         normalize_model(model)
     with pytest.raises(ValueError, match="model"):
         validate_device_snapshot(device)
+    with pytest.raises(ValueError, match="model"):
+        calibration_fingerprint(device, 7, device["input_config"])
 
 
 @pytest.mark.parametrize("machine_id", [None, True, 1, "", " \t\r\n"])
 def test_missing_stable_identity_is_not_replaced_with_name_or_address(machine_id):
-    from base.ve3668n_input import normalize_machine_id, validate_device_snapshot
+    from base.ve3668n_input import calibration_fingerprint, normalize_machine_id, validate_device_snapshot
 
     device = device_info(machine_id=machine_id)
     with pytest.raises(ValueError, match="machine_id"):
         normalize_machine_id(machine_id)
     with pytest.raises(ValueError, match="machine_id"):
         validate_device_snapshot(device)
+    with pytest.raises(ValueError, match="machine_id"):
+        calibration_fingerprint(device, 7, device["input_config"])
 
 
 @pytest.mark.parametrize("channels", [(7, 1), [7, 1], (0,), list(range(8)), range(8)])
@@ -208,21 +346,25 @@ def test_physical_channels_keep_order_and_physical_capacity(channels):
     [7, True], [1.0], ["1"], [[1]], "7,1", {7, 1}, {7: 1}, 7,
 ])
 def test_physical_channels_reject_duplicates_invalid_indices_and_unordered_data(channels):
-    from base.ve3668n_input import validate_device_snapshot, validate_physical_channels
+    from base.ve3668n_input import calibration_fingerprint, validate_device_snapshot, validate_physical_channels
 
     with pytest.raises(ValueError, match="physical_channel"):
         validate_physical_channels(channels)
     device = device_info(physical_channels=channels)
     with pytest.raises(ValueError, match="physical_channel"):
         validate_device_snapshot(device)
+    with pytest.raises(ValueError, match="physical_channel"):
+        calibration_fingerprint(device, 7, device["input_config"])
 
 
 @pytest.mark.parametrize("channel", [None, True, False, -1, 8, 1.0, "1", [1]])
 def test_fingerprint_rejects_invalid_single_physical_channel(channel):
-    from base.ve3668n_input import validate_physical_channel
+    from base.ve3668n_input import calibration_fingerprint, validate_physical_channel
 
     with pytest.raises(ValueError, match="physical_channel"):
         validate_physical_channel(channel)
+    with pytest.raises(ValueError, match="physical_channel"):
+        calibration_fingerprint(device_info(), channel, input_config())
 
 
 @pytest.mark.parametrize("field, value", [
@@ -235,11 +377,13 @@ def test_fingerprint_rejects_invalid_single_physical_channel(channel):
     ("available", None), ("available", 1), ("available", "true"),
 ])
 def test_device_snapshot_fields_are_validated(field, value):
-    from base.ve3668n_input import validate_device_snapshot
+    from base.ve3668n_input import calibration_fingerprint, validate_device_snapshot
 
     device = device_info(**{field: value})
     with pytest.raises(ValueError, match=field):
         validate_device_snapshot(device)
+    with pytest.raises(ValueError, match=field):
+        calibration_fingerprint(device, 7, device["input_config"])
 
 
 @pytest.mark.parametrize("address", [None, "", "192.0.2.1"])
@@ -256,20 +400,24 @@ def test_unavailable_snapshot_and_optional_address_are_preserved(address):
     "max_input_channels", "available", "input_config",
 ])
 def test_device_snapshot_requires_all_fields(field):
-    from base.ve3668n_input import validate_device_snapshot
+    from base.ve3668n_input import calibration_fingerprint, validate_device_snapshot
 
     device = device_info()
     del device[field]
     with pytest.raises(ValueError, match=field):
         validate_device_snapshot(device)
+    with pytest.raises(ValueError, match=field):
+        calibration_fingerprint(device, 7, input_config())
 
 
 @pytest.mark.parametrize("value", [None, [], (), "", 1])
 def test_device_snapshot_requires_a_mapping(value):
-    from base.ve3668n_input import validate_device_snapshot
+    from base.ve3668n_input import calibration_fingerprint, validate_device_snapshot
 
     with pytest.raises(ValueError, match="device"):
         validate_device_snapshot(value)
+    with pytest.raises(ValueError, match="device"):
+        calibration_fingerprint(value, 7, input_config())
 
 
 @pytest.mark.parametrize("rate", [22050, 44100, 96000, 102400, 44100.0, "96000", None])
@@ -339,8 +487,8 @@ def test_rate_resolution_cannot_bypass_ve_acquisition_validation(overrides, fiel
 def test_all_contract_boundaries_accept_existing_mapping_snapshots(mapping_kind):
     from base.recording_process_protocol import FrozenConfig
     from base.ve3668n_input import (
-        resolve_effective_input_rate,
-        validate_device_snapshot, validate_input_config,
+        calibration_fingerprint, resolve_effective_input_rate,
+        validate_calibration_conditions, validate_device_snapshot, validate_input_config,
     )
 
     wrap = {"dict": dict, "user_dict": UserDict, "proxy": MappingProxyType,
@@ -353,14 +501,20 @@ def test_all_contract_boundaries_accept_existing_mapping_snapshots(mapping_kind)
     assert validate_device_snapshot(source) == expected
     assert validate_input_config(source["input_config"]) == input_config()
     assert resolve_effective_input_rate(source, 96000) == 51200
+    assert calibration_fingerprint(source, 7, source["input_config"]) == (
+        calibration_fingerprint(expected, 7, expected["input_config"])
+    )
+    assert validate_calibration_conditions(source["input_config"]) == {
+        "input_mode": "IEPE", "unit": "V", "range_min": -10.0, "range_max": 10.0,
+    }
     assert resolve_effective_input_rate(wrap({"backend": "sounddevice"}), 96000) == 96000
     assert resolve_effective_input_rate(wrap({"index": 7}), 102400) == 102400
 
 
 def test_normalized_snapshots_are_independent_without_mutating_the_caller():
     from base.ve3668n_input import (
-        resolve_effective_input_rate,
-        validate_device_snapshot, validate_input_config,
+        calibration_fingerprint, resolve_effective_input_rate,
+        validate_calibration_conditions, validate_device_snapshot, validate_input_config,
     )
 
     source = device_info(model=" ve3668n ", machine_id=" test-machine-1 ",
@@ -368,6 +522,8 @@ def test_normalized_snapshots_are_independent_without_mutating_the_caller():
     before = deepcopy(source)
     snapshot = validate_device_snapshot(source)
     config = validate_input_config(source["input_config"])
+    conditions = validate_calibration_conditions(source["input_config"])
+    fingerprint = calibration_fingerprint(source, 7, source["input_config"])
     assert resolve_effective_input_rate(source, 96000) == 51200
     assert source == before
     assert snapshot["name"] == "Dev1"
@@ -376,6 +532,8 @@ def test_normalized_snapshots_are_independent_without_mutating_the_caller():
 
     snapshot["input_config"]["sample_rate"] = 44100
     config["input_mode"] = "changed"
+    conditions["unit"] = "changed"
+    fingerprint["machine_id"] = "changed"
     assert source == before
 
     source["input_config"]["unit"] = "Pa"
@@ -385,17 +543,21 @@ def test_normalized_snapshots_are_independent_without_mutating_the_caller():
     assert snapshot["physical_channels"] == (7, 1)
     assert snapshot["machine_id"] == "test-machine-1"
     assert config["unit"] == "V"
+    assert fingerprint["unit"] == "V"
 
 
 def test_snapshots_freeze_and_round_trip_through_json_and_pickle():
     from base.recording_process_protocol import FrozenConfig
     from base.ve3668n_input import (
+        calibration_fingerprint, validate_calibration_conditions,
         validate_device_snapshot, validate_input_config,
     )
 
     snapshot = validate_device_snapshot(device_info())
     values = (
         snapshot, validate_input_config(snapshot["input_config"]),
+        validate_calibration_conditions(snapshot["input_config"]),
+        calibration_fingerprint(snapshot, 7, snapshot["input_config"]),
     )
     for value in values:
         frozen = FrozenConfig.snapshot(value)

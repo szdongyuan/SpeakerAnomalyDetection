@@ -1,6 +1,9 @@
+from collections.abc import Mapping
 from numbers import Integral
 
 from base.soundcard_calibration_manager import load_mic_channel_calibrations
+from base.ve3668n_wav_metadata import build_ve_recording_metadata
+from consts.ve3668n_consts import VE_BACKEND
 
 
 def _normalize_input_channels(input_channels):
@@ -26,8 +29,14 @@ def build_recording_wav_calibration_metadata(
     input_channels,
     input_device=None,
     calibration_path=None,
+    *,
+    ve_calibration_store=None,
 ):
     """Build one WAV-local snapshot from the current physical-channel registry."""
+    if isinstance(input_device, Mapping) and input_device.get("backend") == VE_BACKEND:
+        return build_ve_recording_metadata(
+            input_device, input_channels, input_device.get("input_config"), ve_calibration_store,
+        )
     normalized_channels = _normalize_input_channels(input_channels)
     calibrations = load_mic_channel_calibrations(input_device, calibration_path)
 

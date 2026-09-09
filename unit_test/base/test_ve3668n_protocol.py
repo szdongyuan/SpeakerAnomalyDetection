@@ -4,7 +4,7 @@ import pickle
 import pytest
 
 from unit_test.base.recording_process_fakes import device_info as legacy_device
-from unit_test.base.ve3668n_fakes import capture_request, device_info, input_config
+from unit_test.base.ve3668n_fakes import capture_request, device_info, input_config, wav_metadata
 
 
 @pytest.mark.parametrize("rate", [44100, 48000, 51200])
@@ -83,6 +83,74 @@ def test_ve_selected_channels_must_be_an_ordered_sequence(tmp_path, channels):
 def test_ve_rejects_monitoring_before_output_device_validation(tmp_path, monitor):
     with pytest.raises(ValueError, match="monitor"):
         capture_request(tmp_path / "bad.wav", monitor=monitor)
+
+
+@pytest.mark.parametrize("metadata", [None, {}, {"recorded_channels": []}])
+def test_main_requires_ve_v1_snapshot(tmp_path, metadata):
+    with pytest.raises(ValueError, match="metadata"):
+        capture_request(tmp_path / "bad.wav", calibration_metadata=metadata)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("model", "OTHER"), ("machine_id", "other"), ("input_mode", "voltage"),
+    ("unit", "g"), ("range_min", -1), ("range_max", 1), ("sample_rate", 48000),
+])
+def test_main_acquisition_metadata_must_match_device_and_current_rate(tmp_path, field, value):
+    payload = wav_metadata(sample_rate=51200)
+    payload["acquisition"]["machine_id"] = "test-machine-1"
+    payload["acquisition"][field] = value
+    with pytest.raises(ValueError):
+        capture_request(tmp_path / "bad.wav", calibration_metadata=payload)
+
+
+@pytest.mark.parametrize("change", ["physical", "wav_index", "bool_index", "extra", "version"])
+def test_main_metadata_has_exact_channel_order_and_closed_schema(tmp_path, change):
+    payload = wav_metadata(sample_rate=51200)
+    payload["acquisition"]["machine_id"] = "test-machine-1"
+    if change == "physical":
+        payload["recorded_channels"][0]["physical_input_channel"] = 0
+    elif change == "wav_index":
+        payload["recorded_channels"].reverse()
+    elif change == "bool_index":
+        payload["recorded_channels"][0]["wav_channel_index"] = False
+    elif change == "extra":
+        payload["sensitivity"] = 1000
+    else:
+        payload["schema_version"] = 2
+    with pytest.raises(ValueError):
+        capture_request(tmp_path / "bad.wav", calibration_metadata=payload)
+
+
+def test_measured_provenance_rate_can_differ_and_mutations_cannot_leak(tmp_path):
+    device = device_info(input_config=input_config(44100))
+    payload = wav_metadata(sample_rate=44100)
+    payload["acquisition"]["machine_id"] = device["machine_id"]
+    req = capture_request(tmp_path / "v.wav", device=device, sample_rate=44100,
+                          calibration_metadata=payload)
+    device["input_config"]["sample_rate"] = 48000
+    payload["recorded_channels"][0]["v2pa_factor"] = 99
+    assert req.calibration_metadata["recorded_channels"][0]["v2pa_factor"] == 10
+    assert req.calibration_metadata["recorded_channels"][0]["calibration"]["sample_rate"] == 51200
+    assert req.sample_rate == 44100
+
+
+@pytest.mark.parametrize("rate", [44100, 48000, 51200])
+def test_calibration_requires_no_existing_metadata(tmp_path, rate):
+    req = capture_request(tmp_path / "c.wav", purpose="calibration", channels=(7,),
+                          sample_rate=rate, target_samples=rate * 10, trim_samples=0,
+                          streaming=True, calibration_metadata=None)
+    assert not req.effective_streaming
+    assert req.target_samples == 10 * rate
+
+
+@pytest.mark.parametrize("change", [{"channels": (7, 1)}, {"target_samples": 511999},
+                                      {"target_samples": 512001}, {"trim_samples": 1}])
+def test_calibration_exact_ten_seconds_one_channel_no_trim(tmp_path, change):
+    values = dict(purpose="calibration", channels=(7,), target_samples=512000,
+                  trim_samples=0, calibration_metadata=None)
+    values.update(change)
+    with pytest.raises(ValueError):
+        capture_request(tmp_path / "bad.wav", **values)
 
 
 def test_progress_event_is_typed_frozen_and_spawn_serializable():

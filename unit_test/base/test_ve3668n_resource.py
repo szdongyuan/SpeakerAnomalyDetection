@@ -26,6 +26,7 @@ from unit_test.base.ve3668n_fakes import (
     capture_request,
     device_info,
     discovery_record,
+    wav_metadata,
 )
 
 
@@ -51,10 +52,19 @@ def controller_for(sdk_factory, fatals=None, **options):
     return controller, fatals
 
 
+def _main_metadata(device, channels, rate):
+    metadata = wav_metadata(tuple("none" for _ in channels), rate, physical_channels=channels)
+    metadata["acquisition"]["machine_id"] = device["machine_id"]
+    return metadata
+
+
 def stream(controller, tmp_path, name="A", *, target=4, callback=None, **request_options):
+    metadata = _main_metadata(request_options.get("device", device_info()),
+                              request_options.get("channels", (7, 1)),
+                              request_options.get("sample_rate", 51200))
     request = capture_request(
         tmp_path / f"{name}.wav", request_id=name, target_samples=target,
-        trim_samples=0, calibration_metadata=None, **request_options,
+        trim_samples=0, calibration_metadata=metadata, **request_options,
     )
     blocks = []
     failures = []
@@ -139,7 +149,7 @@ def test_all_nonempty_ordered_channel_permutations_share_the_same_slot_release_p
             channels=channel_order,
             target_samples=4,
             trim_samples=0,
-            calibration_metadata=None,
+            calibration_metadata=_main_metadata(device, channel_order, 51200),
         )
         capture = RecordingCapture(
             request,

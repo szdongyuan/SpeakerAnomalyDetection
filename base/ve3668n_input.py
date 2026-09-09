@@ -5,6 +5,7 @@ ones). Returned dictionaries own their data; channel sequences become tuples.
 These values can be frozen or serialized without importing the recording layer.
 """
 from collections.abc import Mapping, Sequence
+import math
 
 from consts.ve3668n_consts import (
     VE_BACKEND,
@@ -36,6 +37,18 @@ def _nonempty_text(value, name):
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a nonempty string")
     return value.strip()
+
+
+def _finite_range(value, name):
+    if type(value) not in (int, float):
+        raise ValueError(f"{name} must be a finite number")
+    try:
+        result = float(value)
+    except OverflowError as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be a finite number")
+    return result
 
 
 def validate_sample_rate(value):
@@ -147,6 +160,44 @@ def ve_acquisition_signature(device, channels, sample_rate):
     if not set(selected).issubset(snapshot["physical_channels"]):
         raise ValueError("selected input channels are unavailable")
     return VE_BACKEND, snapshot["machine_id"], selected, rate
+
+
+def validate_calibration_conditions(config):
+    """Extract structural conditions, NOT permission to acquire.
+
+    The full closed input_config schema is required, but sample_rate is ignored.
+    Future nonempty modes/units and finite ordered ranges must remain observable
+    for sticky invalidation, even when the saved rate is invalid. Acquisition
+    callers must instead use validate_input_config or validate_device_snapshot.
+    """
+    _require_fields(config, VE_INPUT_CONFIG_FIELDS, "input_config")
+    result = {
+        "input_mode": _nonempty_text(config["input_mode"], "input_mode"),
+        "unit": _nonempty_text(config["unit"], "unit"),
+        "range_min": _finite_range(config["range_min"], "range_min"),
+        "range_max": _finite_range(config["range_max"], "range_max"),
+    }
+    if result["range_min"] >= result["range_max"]:
+        raise ValueError("range_min must be less than range_max")
+    return result
+
+
+def calibration_fingerprint(device, physical_channel, config):
+    """Return per-channel applicability, not a capture configuration.
+
+    Routing/display names, selected-channel order, availability and sample_rate
+    do not identify a calibration. Config conditions are structurally validated
+    without enabling unsupported acquisitions.
+    """
+    identity = _validate_device_fields(device)
+    validate_calibration_conditions(device["input_config"])
+    conditions = validate_calibration_conditions(config)
+    return {
+        "backend": VE_BACKEND, "model": VE_MODEL,
+        "machine_id": identity["machine_id"],
+        "physical_channel": validate_physical_channel(physical_channel),
+        **conditions,
+    }
 
 
 def resolve_effective_input_rate(device, product_rate):

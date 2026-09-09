@@ -1,9 +1,10 @@
 from cgi import print_arguments
 import sys
 from dataclasses import dataclass
+from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import (
@@ -23,6 +24,9 @@ from PyQt5.QtWidgets import (
 )
 
 from base.sound_device_manager import SoundDeviceManager
+from base.hardware_selection import is_ve_input, save_ve_selection, restore_or_default, save_if_changed
+from base.ve3668n_stores import VEInputProfileStore, VECalibrationStore
+from ui.ve3668n_hardware_controls import VE3668NHardwareControls
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
@@ -217,7 +221,7 @@ class HardwareSelectionModel:
     def __init__(self, initial_state: Optional[HardwareSelectionState] = None):
         self.sdm = SoundDeviceManager()
         self.devices_by_api: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
-        self.state = initial_state or HardwareSelectionState()
+        self.state = deepcopy(initial_state) if initial_state else HardwareSelectionState()
 
     def refresh(self) -> None:
         self.sdm.refresh_available_device()
@@ -232,9 +236,10 @@ class HardwareSelectionModel:
         self.state.api_name = api_name
         # 切换驱动后，清空选择（由 Controller 负责尝试恢复）
         self.state.speaker_device = None
-        self.state.mic_device = None
         self.state.speaker_channels = []
-        self.state.mic_channels = []
+        if not (self.state.mic_device or {}).get("backend") == "vkinging":
+            self.state.mic_device = None
+            self.state.mic_channels = []
 
     def speaker_devices(self) -> List[Dict[str, Any]]:
         if not self.state.api_name or self.state.api_name not in self.devices_by_api:
@@ -250,6 +255,8 @@ class HardwareSelectionModel:
     def channels_for_device(device: Optional[Dict[str, Any]], kind: str) -> List[int]:
         if not device:
             return []
+        if kind == "mic" and device.get("backend") == "vkinging":
+            return list(device.get("physical_channels") or [])
         if kind == "speaker":
             n = int(device.get("max_output_channels") or 0)
         else:
@@ -343,9 +350,24 @@ class HardwareSelectionController:
     Controller：绑定信号，驱动 Model 与 View 的同步。
     """
 
-    def __init__(self, model: HardwareSelectionModel, view: HardwareSelectionView):
+    def __init__(self, model: HardwareSelectionModel, view: HardwareSelectionView, *,
+                 profile_store=None, calibration_store=None, discovery_factory=None,
+                 busy_check=None, selection_path=None):
         self.model = model
         self.view = view
+        self.selection_path = selection_path
+        self.busy_check = busy_check or (lambda: False)
+        self._rendering_channels = False
+        self.profile_store = profile_store if profile_store is not None else VEInputProfileStore()
+        self.calibration_store = calibration_store if calibration_store is not None else VECalibrationStore()
+        self.view.ve_controls = VE3668NHardwareControls(view,
+            profile_store=self.profile_store, calibration_store=self.calibration_store,
+            initial_device=model.state.mic_device, initial_channels=model.state.mic_channels,
+            discovery_factory=discovery_factory, busy_check=self.busy_check)
+        view.layout().insertWidget(1, self.view.ve_controls)
+        view.finished.connect(self.view.ve_controls.close_discovery)
+        view.destroyed.connect(self.view.ve_controls.discovery.close)
+        self._soundcard_state = deepcopy(model.state) if not is_ve_input(model.state.mic_device) else None
         self._initial_state = HardwareSelectionState(
             speaker_device=model.state.speaker_device,
             speaker_channels=list(model.state.speaker_channels),
@@ -356,11 +378,19 @@ class HardwareSelectionController:
 
         self._bind_signals()
         self.refresh_and_render(try_restore=True)
+        self._busy_timer = QTimer(view)
+        self._busy_timer.setInterval(100)
+        self._busy_timer.timeout.connect(self._update_busy_state)
+        view.finished.connect(self._busy_timer.stop)
+        self._busy_timer.start()
+        self._update_busy_state()
 
     @staticmethod
-    def _device_key(device: Optional[Dict[str, Any]]) -> Optional[Tuple[str, int]]:
+    def _device_key(device: Optional[Dict[str, Any]]) -> Optional[Tuple[str, Any]]:
         if not device:
             return None
+        if is_ve_input(device):
+            return "vkinging", device.get("machine_id")
         return device.get("name"), int(device.get("hostapi") or -1)
 
     def _bind_signals(self) -> None:
@@ -371,8 +401,14 @@ class HardwareSelectionController:
         self.view.mic_device_table.checked_payload_changed.connect(self._on_mic_device_checked)
 
         self.view.ok_btn.clicked.connect(self._on_ok_clicked)
+        self.view.ve_controls.backend_changed.connect(self._on_backend_changed)
+        self.view.ve_controls.input_changed.connect(self._on_ve_input_changed)
+        self.view.ve_controls.busy_edit_rejected.connect(self._update_busy_state)
+        self.view.mic_channel_table.model().itemChanged.connect(self._on_channel_changed)
 
     def refresh_and_render(self, try_restore: bool) -> None:
+        if self.busy_check():
+            return
         last_state = HardwareSelectionState(
             speaker_device=self.model.state.speaker_device,
             speaker_channels=list(self.model.state.speaker_channels),
@@ -399,6 +435,7 @@ class HardwareSelectionController:
 
         if try_restore:
             self._try_restore_selection(last_state)
+        self.view.ve_controls.refresh()
 
     def _render_devices(self) -> None:
         speaker_opts = [(d.get("name", ""), d) for d in self.model.speaker_devices()]
@@ -407,7 +444,10 @@ class HardwareSelectionController:
         self.view.mic_device_table.set_options(mic_opts)
 
         # 清空麦克风通道（等设备勾选后再填充）
-        self.view.mic_channel_table.set_options([])
+        if is_ve_input(self.model.state.mic_device):
+            self._render_ve_channels()
+        else:
+            self.view.mic_channel_table.set_options([])
 
     def _try_restore_selection(self, last_state: HardwareSelectionState) -> None:
         # 恢复驱动
@@ -423,11 +463,11 @@ class HardwareSelectionController:
             )
 
         last_m_key = self._device_key(last_state.mic_device)
-        if last_m_key:
+        if last_m_key and not is_ve_input(last_state.mic_device):
             self.view.mic_device_table.set_checked_by_predicate(lambda p: self._device_key(p) == last_m_key)
 
         # 恢复麦克风通道（在设备恢复后，通道表已刷新，这里再勾选）
-        if last_state.mic_channels:
+        if last_state.mic_channels and not is_ve_input(last_state.mic_device):
             self._restore_channels(self.view.mic_channel_table, last_state.mic_channels)
 
     @staticmethod
@@ -444,15 +484,23 @@ class HardwareSelectionController:
                 item.setCheckState(Qt.Checked)
 
     def _on_api_changed(self, api_name: str) -> None:
+        if self._reject_busy_edit():
+            return
         self.model.set_api(api_name)
         self._render_devices()
 
     def _on_speaker_device_checked(self, payload: object) -> None:
+        if self._reject_busy_edit():
+            return
         self.model.state.speaker_device = payload if isinstance(payload, dict) else None
         # 不再提供扬声器通道选择，保持为空兼容返回结构
         self.model.state.speaker_channels = []
 
     def _on_mic_device_checked(self, payload: object) -> None:
+        if self._reject_busy_edit():
+            return
+        if self.view.ve_controls.backend_combo.currentData() == "vkinging":
+            return
         self.model.state.mic_device = payload if isinstance(payload, dict) else None
         channels = self.model.channels_for_device(self.model.state.mic_device, "mic")
         self.model.state.mic_channels = []
@@ -460,8 +508,38 @@ class HardwareSelectionController:
         self.view.mic_channel_table.set_options([(f"In{i + 1}", i) for i in channels])
 
     def _on_ok_clicked(self) -> None:
+        if self.busy_check():
+            self._update_busy_state()
+            QMessageBox.warning(self.view, "提示", "录音或校准进行中，请等待完成后再修改硬件设置")
+            return
         speaker = self.model.state.speaker_device
         mic = self.model.state.mic_device
+
+        if self.view.ve_controls.backend_combo.currentData() == "vkinging":
+            channels = list(self.model.state.mic_channels)
+            legacy = self._soundcard_state
+            legacy_selection = None if legacy is None else {
+                "api_name": legacy.api_name,
+                "mic_name": (legacy.mic_device or {}).get("name"),
+                "mic_channels": list(legacy.mic_channels),
+                "speaker_name": (legacy.speaker_device or {}).get("name"),
+                "speaker_channels": list(legacy.speaker_channels),
+            }
+            try:
+                committed = save_ve_selection(mic, speaker, channels, [],
+                    profile_store=self.profile_store, calibration_store=self.calibration_store,
+                    path=self.selection_path, api_name=self.model.state.api_name,
+                    legacy_soundcard_selection=legacy_selection)
+            except (ValueError, OSError) as exc:
+                self.view.ve_controls.diagnostic_label.setText(f"未保存：{exc}")
+                QMessageBox.warning(self.view, "VE 硬件未保存", str(exc))
+                return
+            if speaker is not None:
+                SoundDeviceManager.change_default_output_device(int(speaker["index"]))
+            self.model.state.mic_device = committed
+            self.model.state.mic_channels = list(channels)
+            self.view.accept()
+            return
 
         mic_channels = sorted(int(x) for x in self.view.mic_channel_table.checked_payloads())
 
@@ -474,9 +552,111 @@ class HardwareSelectionController:
 
         mic_idx = int(mic.get("index")) if mic else -1
         speaker_idx = int(speaker.get("index")) if speaker else -1
+        if is_ve_input(self._initial_state.mic_device):
+            try:
+                save_if_changed(mic, speaker, mic_channels, [], path=self.selection_path, strict=True)
+            except OSError as exc:
+                QMessageBox.warning(self.view, "硬件未保存", str(exc))
+                return
         SoundDeviceManager.change_default_device(mic_idx, speaker_idx)
 
         self.view.accept()
+
+    def _render_ve_channels(self):
+        channels = self.view.ve_controls.inventory
+        self._rendering_channels = True
+        try:
+            self.view.mic_channel_table.set_options([(f"AIN{i + 1}", i) for i in channels])
+            selected = {value for value in self.model.state.mic_channels if type(value) is int}
+            for row in range(self.view.mic_channel_table.model().rowCount()):
+                item = self.view.mic_channel_table.model().item(row)
+                if item.data(Qt.UserRole) in selected:
+                    item.setCheckState(Qt.Checked)
+        finally:
+            self._rendering_channels = False
+        self.view.mic_device_table.setEnabled(False)
+
+    def _on_channel_changed(self, item):
+        if self._rendering_channels or self._reject_busy_edit():
+            return
+        if not is_ve_input(self.model.state.mic_device):
+            self.model.state.mic_channels = sorted(self.view.mic_channel_table.checked_payloads())
+            return
+        channel = item.data(Qt.UserRole)
+        selected = self.model.state.mic_channels
+        if item.checkState() == Qt.Checked and channel not in selected:
+            selected.append(channel)
+        elif item.checkState() != Qt.Checked and channel in selected:
+            selected.remove(channel)
+        self.view.ve_controls.selected_channels = list(selected)
+
+    def _reject_busy_edit(self):
+        if not self.busy_check():
+            return False
+        state = self.model.state
+        combo = self.view.driver_combo
+        previous = combo.blockSignals(True)
+        try:
+            combo.setCurrentIndex(combo.findText(state.api_name or ""))
+        finally:
+            combo.blockSignals(previous)
+        for table, device in ((self.view.speaker_device_table, state.speaker_device),
+                              (self.view.mic_device_table, state.mic_device)):
+            previous = table.blockSignals(True)
+            try:
+                table.set_checked_by_predicate(lambda value: self._device_key(value) == self._device_key(device))
+            finally:
+                table.blockSignals(previous)
+        self._rendering_channels = True
+        try:
+            model = self.view.mic_channel_table.model()
+            for row in range(model.rowCount()):
+                item = model.item(row)
+                item.setCheckState(Qt.Checked if item.data(Qt.UserRole) in state.mic_channels else Qt.Unchecked)
+        finally:
+            self._rendering_channels = False
+        self._update_busy_state()
+        return True
+
+    def _update_busy_state(self):
+        busy = bool(self.busy_check())
+        self.view.ve_controls.set_busy(busy)
+        for widget in (self.view.driver_combo, self.view.speaker_device_table,
+                       self.view.mic_channel_table, self.view.refresh_btn, self.view.ok_btn):
+            widget.setEnabled(not busy)
+        self.view.mic_device_table.setEnabled(
+            not busy and self.view.ve_controls.backend_combo.currentData() != "vkinging")
+
+    def _on_ve_input_changed(self, device):
+        if self.view.ve_controls.backend_combo.currentData() != "vkinging":
+            return
+        self.model.state.mic_channels = list(self.view.ve_controls.selected_channels)
+        self.model.state.mic_device = device
+        self._render_ve_channels()
+
+    def _on_backend_changed(self, backend):
+        if self.busy_check():
+            return
+        if backend == "vkinging":
+            self._soundcard_state = deepcopy(self.model.state)
+            self._soundcard_state.mic_channels = sorted(self.view.mic_channel_table.checked_payloads())
+            self._on_ve_input_changed(self.view.ve_controls.selected_device)
+            self.view.ve_controls.refresh()
+        else:
+            self.view.ve_controls.cancel_discovery()
+            if self._soundcard_state is None:
+                mic, speaker, channels, speaker_channels = restore_or_default(
+                    path=self.selection_path, soundcard_only=True, apply_defaults=False)
+                device, bucket = (mic, "input") if mic else (speaker, "output")
+                api_name = next((name for name, devices in self.model.devices_by_api.items()
+                    if any(self._device_key(item) == self._device_key(device)
+                           for item in devices.get(bucket, []))), None)
+                self.model.state = HardwareSelectionState(mic_device=mic, mic_channels=channels,
+                    speaker_device=speaker, speaker_channels=speaker_channels, api_name=api_name)
+            else:
+                self.model.state = deepcopy(self._soundcard_state)
+            self.view.mic_device_table.setEnabled(True)
+            self.refresh_and_render(try_restore=True)
 
     def on_exec(self):
         result = self.view.on_exec()
@@ -538,6 +718,8 @@ def open_hardware_selection_window(
     speaker_channels: Optional[Iterable[Any]] = None,
     mic_device: Optional[Dict[str, Any]] = None,
     mic_channels: Optional[Iterable[Any]] = None,
+    *, profile_store=None, calibration_store=None, discovery_factory=None,
+    busy_check=None, selection_path=None,
 ):
     """
     打开硬件选择窗口，并支持根据传入参数进行初始化回填：
@@ -551,12 +733,18 @@ def open_hardware_selection_window(
         speaker_device=speaker_device,
         speaker_channels=_normalize_channel_indices(speaker_channels),
         mic_device=mic_device,
-        mic_channels=_normalize_channel_indices(mic_channels),
+        mic_channels=list(mic_channels or []) if is_ve_input(mic_device) else _normalize_channel_indices(mic_channels),
         api_name=driver,
     )
 
     model = HardwareSelectionModel(initial_state=initial_state)
     view = HardwareSelectionView()
-    controller = HardwareSelectionController(model, view)
-    result = controller.on_exec()
-    return result
+    controller = HardwareSelectionController(model, view, profile_store=profile_store,
+        calibration_store=calibration_store, discovery_factory=discovery_factory,
+        busy_check=busy_check, selection_path=selection_path)
+    try:
+        return controller.on_exec()
+    finally:
+        view.ve_controls.close_discovery()
+        controller._busy_timer.stop()
+        view.deleteLater()
