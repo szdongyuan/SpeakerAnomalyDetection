@@ -6,9 +6,11 @@ non-GUI owners/tests. No callbacks, queues or raw audio are sent through IPC her
 """
 from collections import deque
 from contextlib import contextmanager
+from dataclasses import dataclass
 import logging
 import math
 import os
+import sys
 import tempfile
 import threading
 
@@ -25,6 +27,7 @@ from base.wav_calibration_metadata import (
     WavCalibrationMetadataAppendResult,
     append_wav_calibration_metadata_result,
 )
+from consts.ve3668n_consts import VE_BACKEND
 
 
 def capture_queue_capacity(sample_rate, channels, *, blocksize=2048, seconds=2.0):
@@ -56,13 +59,37 @@ def sounddevice_backend():
     return sounddevice
 
 
+@dataclass(frozen=True)
+class CaptureSlotState:
+    """Request-local proof that VE capture and WAV writing have ended."""
+
+    target_reached_at: float
+    raw_frames: int
+    adapter_released: bool
+    writer_released: bool
+
+    def __post_init__(self):
+        if (type(self.target_reached_at) not in (int, float)
+                or not math.isfinite(self.target_reached_at)
+                or self.target_reached_at < 0):
+            raise ValueError("target_reached_at must be a finite nonnegative time")
+        if type(self.raw_frames) is not int or self.raw_frames <= 0:
+            raise ValueError("raw_frames must be a positive integer")
+        if type(self.adapter_released) is not bool or type(self.writer_released) is not bool:
+            raise ValueError("capture-slot release flags must be booleans")
+
+
 class RecordingCapture:
     def __init__(self, request: RecordingRequest, *, backend=None,
+                 ve_stream_factory=None,
                  writer_factory=StreamingWavWriter,
                  metadata_appender=append_wav_calibration_metadata_result,
                  blocksize=2048, queue_seconds=2.0):
         self.request = request
         self._backend = backend
+        self._is_ve = request.device.get("backend") == VE_BACKEND
+        self._ve_stream_factory = ve_stream_factory
+        self._native_stream = None
         self._writer_factory = writer_factory
         self._metadata_appender = metadata_appender
         self._blocksize = blocksize
@@ -70,6 +97,8 @@ class RecordingCapture:
             request.sample_rate, len(request.channels), blocksize=blocksize, seconds=queue_seconds)
         self.started = threading.Event()
         self.done = threading.Event()
+        self.capture_slot_released = threading.Event()
+        self.capture_slot = None
         self._wake = threading.Event()
         self._cancelled = threading.Event()
         self._stop_requested = threading.Event()
@@ -85,28 +114,57 @@ class RecordingCapture:
         self._thread = None
         self._stream = None
         self._writer = None
+        self._stream_close_attempted = False
+        self._writer_close_attempted = False
+        self._adapter_released = False
+        self._writer_released = False
         self._handles_released = True
         self._unreleased_finalization_handles = []
         self._owned_temporary_paths = set()
         self._stage = "starting"
         self._warnings = []
         self._status_warning = None
-        self._preview_enabled = request.effective_streaming
-        self._waveforms = MultichannelWaveformSession(max_points=4000)
+        self._logger = logging.getLogger(__name__)
         self._effective_trim = request.trim_samples if request.purpose == "main" else 0
         # For a known overlarge trim, finalization retains all audio too.
         if self._effective_trim >= request.target_samples:
             self._effective_trim = 0
-        self._waveforms.begin(channels=request.channels, sample_rate=request.sample_rate,
-                              startup_trim_samples=self._effective_trim)
+        self._preview_enabled = request.effective_streaming
+        self._waveforms = None
+        if self._preview_enabled:
+            try:
+                self._waveforms = MultichannelWaveformSession(max_points=4000)
+                self._waveforms.begin(
+                    channels=request.channels,
+                    sample_rate=request.sample_rate,
+                    startup_trim_samples=self._effective_trim,
+                )
+            except Exception as exc:
+                # Preview setup is optional and cannot own authoritative capture.
+                self._disable_preview(exc)
         self._monitor_emitted = 0
         self._monitor_gain = 10 ** (float(request.monitor.get("gain_db", 0.0)) / 20.0)
-        self._logger = logging.getLogger(__name__)
 
     @property
     def queued_frames(self):
         with self._queue_lock:
             return self._queued_frames
+
+    @property
+    def started_at(self):
+        """Native start time, not worker-poll time; None for legacy capture."""
+        return self._native_stream.started_at if self._native_stream is not None else None
+
+    def progress_snapshot(self):
+        """Keep final native progress after the active stream has been closed."""
+        if self._native_stream is None:
+            return None
+        snapshot = self._native_stream.progress_snapshot
+        return snapshot() if callable(snapshot) else snapshot
+
+    @property
+    def native_diagnostics(self):
+        return self._native_stream.diagnostics if self._native_stream is not None else ()
 
     def start(self):
         if self._thread is not None:
@@ -125,23 +183,31 @@ class RecordingCapture:
         return self.outcome
 
     def snapshot(self, *, generation, sequence):
-        """Copy only the bounded cumulative envelope; skip a busy consumer."""
-        if not self._preview_enabled or not self._waveform_lock.acquire(blocking=False):
+        """Copy only the selected bounded envelope; skip a busy consumer."""
+        if (not self._preview_enabled or self._waveforms is None
+                or not self._waveform_lock.acquire(blocking=False)):
             return None
         try:
             snapshots = tuple(self._waveforms.snapshots().values())
+            return RecordingPreview(
+                self.request.request_id,
+                generation,
+                sequence,
+                snapshots[0].sample_stop,
+                self.request.channels,
+                snapshots,
+            )
         except Exception as exc:
             # Presentation boundary: reducer/snapshot faults disable preview only.
             self._disable_preview(exc)
             return None
         finally:
             self._waveform_lock.release()
-        return RecordingPreview(self.request.request_id, generation, sequence,
-                                snapshots[0].sample_stop, self.request.channels, snapshots)
 
     def _disable_preview(self, exc):
         if self._preview_enabled:
             self._preview_enabled = False
+            self._waveforms = None
             self._warnings.append(f"preview disabled: {exc}")
             self._logger.exception("Preview failed for %s", self.request.request_id)
 
@@ -156,12 +222,14 @@ class RecordingCapture:
         if self._stop_requested.is_set():
             return None
         if getattr(status, "input_overflow", False):
-            self._fail("capture", f"input overflow on device {self.request.device['index']}")
+            identity = self.request.device["machine_id"] if self._is_ve else self.request.device["index"]
+            self._fail("capture", f"input overflow on device {identity}")
             return None
         if status and self._status_warning is None:
             self._status_warning = str(status)
         if (not isinstance(indata, np.ndarray) or indata.ndim != 2 or indata.shape[0] != frames
-                or indata.shape[1] <= max(self.request.channels) or frames <= 0):
+                or indata.shape[1] <= max(self.request.channels) or frames <= 0
+                or (self._is_ve and type(frames) is not int)):
             self._fail("capture", "driver input shape does not match frame/channel contract")
             return None
         with self._queue_lock:
@@ -174,7 +242,13 @@ class RecordingCapture:
                 self._wake.set()
                 return None
             # Driver memory is borrowed. Never queue a view of it.
-            owned = np.array(indata[:accepted, self.request.channels], dtype=np.float32, order="C", copy=True)
+            with np.errstate(over="ignore", invalid="ignore"):
+                owned = np.array(indata[:accepted, self.request.channels], dtype=np.float32, order="C", copy=True)
+            if self._is_ve and not np.isfinite(owned).all():
+                self._failure = ("capture", "driver returned non-finite float32 voltage samples")
+                self._stop_requested.set()
+                self._wake.set()
+                return None
             self._blocks.append(owned)
             self._queued_frames += accepted
             self.raw_frames += accepted
@@ -228,6 +302,20 @@ class RecordingCapture:
     def _open(self):
         req = self.request
         self._stage = "device"
+        if self._is_ve:
+            from base.ve3668n_capture import Ve3668nInputStream
+
+            self._stage = "open_wav"
+            self._writer = self._writer_factory(req.path, sample_rate=req.sample_rate, channels=len(req.channels))
+            self._stage = "device"
+            factory = self._ve_stream_factory or Ve3668nInputStream
+            self._stream = self._native_stream = factory(
+                request=req, callback=self._input_callback, fail=self._fail,
+                stop_event=self._stop_requested,
+            )
+            if not self._cancelled.is_set() and self._stream.start():
+                self.started.set()
+            return
         if self._backend is None:
             self._backend = sounddevice_backend()
         self._validate_device(req.device, req.channels, "input")
@@ -267,7 +355,7 @@ class RecordingCapture:
         self._writer.write_chunk(block)
         self.written_frames += len(block)
         self._final_frames = self.written_frames
-        if self._preview_enabled:
+        if self._preview_enabled and self._waveforms is not None:
             with self._waveform_lock:
                 try:
                     self._waveforms.append(block)
@@ -276,31 +364,83 @@ class RecordingCapture:
                     self._disable_preview(exc)
 
     def _close_stream(self):
-        stream, self._stream = self._stream, None
-        if stream is None:
+        stream = self._stream
+        if stream is None or self._stream_close_attempted:
             return
-        for operation in (stream.stop, stream.close):
+        self._stream_close_attempted = True
+        released = True
+        operations = [stream.stop]
+        if not self._is_ve:
+            operations.append(stream.close)
+        for operation in operations:
             try:
                 operation()
             except Exception as exc:
                 # Native backend cleanup can raise arbitrary backend exceptions;
                 # still attempt close after stop fails, and forbid successful delivery.
                 self._handles_released = False
+                released = False
                 self._logger.exception("Stream cleanup failed for %s", self.request.request_id)
                 self._fail("close_stream", str(exc))
+        if self._is_ve:
+            if stream.handles_released:
+                try:
+                    stream.close()
+                except Exception as exc:
+                    released = False
+                    self._handles_released = False
+                    self._logger.exception("Stream cleanup failed for %s", self.request.request_id)
+                    self._fail("close_stream", str(exc))
+            else:
+                released = False
+                self._handles_released = False
+                self._fail("close_stream", "VE native handles are not released: " + "; ".join(stream.diagnostics))
+            for diagnostic in stream.diagnostics:
+                self._logger.warning("VE capture %s: %s", self.request.request_id, diagnostic)
+            self._adapter_released = released and stream.handles_released
+        if released:
+            self._stream = None
 
     def _close_writer(self):
-        writer, self._writer = self._writer, None
-        if writer is None:
+        writer = self._writer
+        if writer is None or self._writer_close_attempted:
             return
+        self._writer_close_attempted = True
         try:
             writer.finalize()
         except Exception as exc:
             # Writer boundary: normalize a failed close once; handle release is
             # unknown and the worker owner must retire the process before reuse.
             self._handles_released = False
+            self._unreleased_finalization_handles.append((self.request.path, writer))
             self._logger.exception("WAV close failed for %s", self.request.request_id)
             self._fail("close_wav", str(exc))
+            return
+        self._writer_released = True
+        self._writer = None
+
+    def _publish_capture_slot(self):
+        if (not self._is_ve or self.capture_slot_released.is_set()
+                or not self._adapter_released or not self._writer_released
+                or self.raw_frames != self.request.target_samples
+                or self.queued_frames != 0):
+            return
+        progress = self.progress_snapshot()
+        if (progress is None or progress.frames != self.raw_frames
+                or progress.last_frame_at is None):
+            return
+        self.capture_slot = CaptureSlotState(
+            target_reached_at=progress.last_frame_at,
+            raw_frames=self.raw_frames,
+            adapter_released=True,
+            writer_released=True,
+        )
+        self.capture_slot_released.set()
+
+    def _discard_failed_blocks(self):
+        with self._queue_lock:
+            self._blocks.clear()
+            self._queued_frames = 0
 
     def _run(self):
         try:
@@ -322,6 +462,7 @@ class RecordingCapture:
                     break
                 self._consume(block)
             self._close_writer()
+            self._publish_capture_slot()
             if self._failure is None:
                 self._finish_audio()
         except Exception as exc:
@@ -333,7 +474,10 @@ class RecordingCapture:
         finally:
             self._stop_requested.set()
             self._close_stream()
+            if self._failure is not None:
+                self._discard_failed_blocks()
             self._close_writer()
+            self._publish_capture_slot()
             if self._failure is not None:
                 stage, message = self._failure
                 self.outcome = RecordingFailure(self.request.request_id, stage, self.request.path,
@@ -361,6 +505,11 @@ class RecordingCapture:
                     or source.channels != len(req.channels) or len(source) != self.raw_frames):
                 raise ValueError("saved WAV shape, rate or float32 format differs from request")
             audio = source.read(dtype="float32", always_2d=True)
+            if self._is_ve:
+                if audio.shape != (self.raw_frames, len(req.channels)):
+                    raise ValueError("saved WAV frame/channel shape differs from request")
+                if not np.isfinite(audio).all():
+                    raise ValueError("saved WAV contains non-finite voltage samples")
         if self._effective_trim:
             audio = audio[self._effective_trim:]
             self._stage = "trim"
@@ -373,7 +522,8 @@ class RecordingCapture:
             return
         if req.purpose == "main":
             self._stage = "validation"
-            ok, reason, detail = validate_recorded_audio(audio, req.validation_thresholds.to_dict())
+            quality_audio = audio / 10.0 if self._is_ve else audio
+            ok, reason, detail = validate_recorded_audio(quality_audio, req.validation_thresholds.to_dict())
             if not ok:
                 raise ValueError(f"{reason} {detail}")
             self._stage = "metadata"
@@ -396,6 +546,9 @@ class RecordingCapture:
             with self._finalization_file(req.path) as source:
                 if len(source) != len(audio) or source.channels != len(req.channels) or source.subtype != "FLOAT":
                     raise ValueError("WAV audio became invalid during metadata finalization")
+                if self._is_ve and (source.samplerate != req.sample_rate or not np.array_equal(
+                        source.read(dtype="float32", always_2d=True), audio)):
+                    raise ValueError("VE WAV rate or raw voltage data changed during metadata finalization")
         if self._status_warning:
             self._warnings.append(self._status_warning)
         self.outcome = RecordingResult(req.request_id, req.purpose, req.path, req.sample_rate,
@@ -420,7 +573,16 @@ class RecordingCapture:
         try:
             yield source
         finally:
-            self._close_finalization_handle(source, path, source.close)
+            original = sys.exception()
+            try:
+                self._close_finalization_handle(source, path, source.close)
+            except OSError as cleanup:
+                # The close helper already retains uncertain file ownership.
+                # For VE, preserve a prior processing error and attach cleanup
+                # diagnostics to its traceback rather than replacing its cause.
+                if not self._is_ve or original is None:
+                    raise
+                original.add_note(str(cleanup))
 
     def _rewrite_trimmed(self, audio):
         req = self.request
