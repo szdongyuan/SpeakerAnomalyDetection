@@ -25,6 +25,8 @@ from base.recording_settings import validate_recorded_audio
 from base.streaming_file_writer import StreamingWavWriter
 from base.wav_calibration_metadata import (
     WavCalibrationMetadataAppendResult,
+    WavCalibrationMetadataReadStatus,
+    inspect_wav_calibration_metadata,
     append_wav_calibration_metadata_result,
 )
 from consts.ve3668n_consts import VE_BACKEND
@@ -532,15 +534,23 @@ class RecordingCapture:
             if isinstance(metadata_result, WavCalibrationMetadataAppendResult):
                 self._owned_temporary_paths.update(metadata_result.cleanup_paths)
                 self._unreleased_finalization_handles.extend(metadata_result.retained_handles)
-                if not metadata_result.handles_released:
+                self._warnings.extend(metadata_result.close_errors)
+                if (not metadata_result.handles_released
+                        or (self._is_ve and metadata_result.retained_handles)):
                     self._handles_released = False
-                    self._fail("metadata", "; ".join(metadata_result.close_errors))
+                    self._fail("metadata", metadata_result.primary_error or "; ".join(metadata_result.close_errors)
+                               or "WAV metadata file handles were not released")
+                    return
+                if self._is_ve and metadata_result.primary_error is not None:
+                    self._fail("metadata", metadata_result.primary_error)
                     return
                 metadata_appended = metadata_result.appended
             else:
                 # Compatibility for explicitly injected bool-only test appenders.
                 metadata_appended = bool(metadata_result)
             if not metadata_appended:
+                if self._is_ve:
+                    raise ValueError("required VE WAV calibration metadata was not appended")
                 self._warnings.append("WAV calibration metadata was not appended")
             # Optional metadata failure is a warning only while audio remains readable.
             with self._finalization_file(req.path) as source:
@@ -549,6 +559,22 @@ class RecordingCapture:
                 if self._is_ve and (source.samplerate != req.sample_rate or not np.array_equal(
                         source.read(dtype="float32", always_2d=True), audio)):
                     raise ValueError("VE WAV rate or raw voltage data changed during metadata finalization")
+            if self._is_ve:
+                diagnostic = inspect_wav_calibration_metadata(req.path, logger=self._logger)
+                self._unreleased_finalization_handles.extend(diagnostic.retained_handles)
+                self._warnings.extend(diagnostic.close_errors)
+                if not diagnostic.handles_released or diagnostic.retained_handles:
+                    self._handles_released = False
+                    self._fail("metadata", diagnostic.primary_error or "; ".join(diagnostic.close_errors)
+                               or "WAV metadata reader handle was not released")
+                    return
+                if diagnostic.primary_error is not None:
+                    self._fail("metadata", diagnostic.primary_error)
+                    return
+                if (diagnostic.status is not WavCalibrationMetadataReadStatus.VALID
+                        or diagnostic.declared_backend != VE_BACKEND
+                        or diagnostic.metadata != req.calibration_metadata.to_dict()):
+                    raise ValueError("VE WAV metadata readback differs from the frozen request snapshot")
         if self._status_warning:
             self._warnings.append(self._status_warning)
         self.outcome = RecordingResult(req.request_id, req.purpose, req.path, req.sample_rate,

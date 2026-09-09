@@ -2,6 +2,9 @@ import os
 import sys
 import threading
 import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from numbers import Integral
 
 import numpy as np
@@ -26,6 +29,9 @@ from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFr
 from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.recording_process_protocol import RecordingRequest
 from base.recording_service import RecordingCallbacks, RecordingService
+from base.ve3668n_calibration import verify_ve_calibration_result
+from base.ve3668n_input import calibration_fingerprint, validate_device_snapshot
+from base.ve3668n_stores import VEStoreIOError
 from ui.recording_service_bridge import RecordingProcessorFacade, RecordingServiceBridge
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import (
@@ -42,9 +48,12 @@ from consts.running_consts import DEFAULT_DIR
 
 class CalibrationWindow(QDialog):
 
-    def __init__(self, input_device=None, input_channels=None, *, recording_bridge=None):
+    def __init__(self, input_device=None, input_channels=None, *, recording_bridge=None,
+                 ve_profile_store=None, ve_calibration_store=None):
         super().__init__()
         self.recording_bridge = recording_bridge
+        self.ve_profile_store = ve_profile_store
+        self.ve_calibration_store = ve_calibration_store
         self.input_device = input_device
         self.input_channels = list(input_channels or [])
         self.init_ui()
@@ -71,6 +80,8 @@ class CalibrationWindow(QDialog):
             input_device=self.input_device,
             input_channels=self.input_channels,
             recording_bridge=self.recording_bridge,
+            ve_profile_store=self.ve_profile_store,
+            ve_calibration_store=self.ve_calibration_store,
         )
         self.input_cal_wnd.calibration_finished.connect(
             self._on_input_calibration_finished
@@ -78,6 +89,7 @@ class CalibrationWindow(QDialog):
         self.input_cal_wnd.calibration_state_changed.connect(
             self._on_input_calibration_state_changed
         )
+        self.input_cal_wnd.calibration_availability_changed.connect(self._sync_calibration_button_state)
         self.tabwidget.addTab(self.output_cal_wnd, "输出校准")
         self.tabwidget.addTab(self.input_cal_wnd, "输入校准")
 
@@ -143,6 +155,10 @@ class CalibrationWindow(QDialog):
         self._sync_calibration_button_state()
 
     def _input_calibration_controls_available(self):
+        bridge = self.input_cal_wnd.recording_bridge
+        if (self.input_cal_wnd._ve_input and bridge is not None
+                and not self.input_cal_wnd._can_start_recording_workflow()):
+            return False
         return (
             self.input_cal_wnd.calibration_available
             and self.input_cal_wnd.current_channel is not None
@@ -154,6 +170,10 @@ class CalibrationWindow(QDialog):
             enabled = self._input_calibration_controls_available()
             self.cal_btn.setEnabled(enabled)
             self.reset_btn.setEnabled(enabled)
+            if self.input_cal_wnd._ve_input:
+                self.input_cal_wnd.channel_combo_box.setEnabled(enabled)
+                self.input_cal_wnd.standard_spl_i.setEnabled(enabled)
+                self.input_cal_wnd.standard_spl_ii.setEnabled(enabled)
             return
         self.cal_btn.setEnabled(True)
         self.reset_btn.setEnabled(True)
@@ -621,13 +641,29 @@ class OutputCalibration(QWidget):
             super().keyPressEvent(event)
 
 
+@dataclass(frozen=True)
+class _VECalibrationContext:
+    request: RecordingRequest
+    standard_spl: float
+    calibrated_at: str
+
+
 class InputCalibration(QWidget):
     calibration_finished = pyqtSignal(bool)
     calibration_state_changed = pyqtSignal(bool)
+    calibration_availability_changed = pyqtSignal()
 
-    def __init__(self, input_device=None, input_channels=None, *, recording_bridge=None):
+    def __init__(self, input_device=None, input_channels=None, *, recording_bridge=None,
+                 ve_profile_store=None, ve_calibration_store=None):
         super().__init__()
         self.recording_bridge = recording_bridge
+        self.ve_profile_store = ve_profile_store
+        self.ve_calibration_store = ve_calibration_store
+        self._ve_input = (input_device or {}).get("backend") == "vkinging"
+        self._ve_capture_context = None
+        self._ve_accepted_audio = None
+        self._ve_calibration_records = {}
+        self._ve_display_device = None
         self._owns_recording_bridge = False
         self._recording_closed = False
         self._release_notice_session = None
@@ -652,6 +688,10 @@ class InputCalibration(QWidget):
         self.init_ui()
         self._initialize_calibration_state()
 
+    def _can_start_recording_workflow(self):
+        bridge = self.recording_bridge
+        return bridge is None or not bridge.service.busy
+
     @staticmethod
     def _normalize_input_channels(input_channels):
         normalized = []
@@ -667,6 +707,9 @@ class InputCalibration(QWidget):
         return normalized
 
     def _initialize_calibration_state(self):
+        if self._ve_input:
+            self.refresh_ve_calibration_state()
+            return
         if self.input_device is None:
             self._set_calibration_unavailable("未选择输入设备")
             return
@@ -706,6 +749,65 @@ class InputCalibration(QWidget):
         )
         self._on_channel_changed(self.channel_combo_box.currentIndex())
 
+    def _current_ve_device(self):
+        if self.ve_profile_store is None or self.ve_calibration_store is None:
+            raise ValueError("VE 输入校准需要共享设备配置和校准存储")
+        if not isinstance(self.input_device, Mapping):
+            raise ValueError("VE 输入设备身份无效")
+        identity = calibration_fingerprint(self.input_device, 0, self.input_device.get("input_config"))
+        try:
+            self.ve_calibration_store.observe(self.input_device)
+            profile = self.ve_profile_store.load(self.input_device, self.ve_calibration_store)
+        except ValueError:
+            # Observation can durably invalidate records before an unsupported
+            # profile is rejected. Read with the last supported identity to
+            # show that sticky status, including a failed attempt to start.
+            previous = self._ve_display_device
+            if previous is not None and identity["machine_id"] == previous["machine_id"]:
+                self._set_ve_records(self.ve_calibration_store.observe(previous))
+            raise
+        return validate_device_snapshot({**self.input_device, "input_config": profile})
+
+    def _set_ve_records(self, records):
+        self._ve_calibration_records = records
+        self.saved_v2pa_factors = {
+            channel: record["v2pa_factor"] for channel, record in records.items()
+            if record["status"] == "valid"
+        }
+
+    def refresh_ve_calibration_state(self):
+        """Refresh shared VE state without resetting selection or provenance.
+
+        The hardware profile is the only sampling-rate source. A rate-only
+        refresh neither writes calibration nor produces a recalibration popup.
+        """
+        if (not self._ve_input or self._recording_closed or self.streaming_processor is not None
+                or not self._can_start_recording_workflow()):
+            return False
+        try:
+            device = self._current_ve_device()
+            if (not device["available"] or not self.input_channels
+                    or not set(self.input_channels).issubset(device["physical_channels"])):
+                raise ValueError("VE 输入设备或物理通道不可用")
+            records = self.ve_calibration_store.observe(device)
+        except (ValueError, VEStoreIOError) as exc:
+            self.default_logger.error(f"VE input calibration unavailable: {exc}")
+            self._set_calibration_unavailable(str(exc))
+            return False
+        self._ve_display_device = device
+        self._set_ve_records(records)
+        self.calibration_available = True
+        self.calibration_unavailable_message = None
+        self.channel_combo_box.setEnabled(True)
+        self.standard_spl_i.setEnabled(True)
+        self.standard_spl_ii.setEnabled(True)
+        selected = self.current_channel
+        if selected not in self.input_channels:
+            selected = next((channel for channel in self.input_channels
+                             if channel not in self.saved_v2pa_factors), self.input_channels[0])
+        self._select_channel(selected)
+        return True
+
     def _set_calibration_unavailable(self, message):
         self.calibration_available = False
         self.calibration_unavailable_message = message
@@ -716,6 +818,9 @@ class InputCalibration(QWidget):
         self.channel_combo_box.setEnabled(False)
         self.channel_status_label.setText(message)
         self.v2pa_factor_lineedit.clear()
+        if self._ve_input:
+            self.standard_spl_i.setEnabled(False)
+            self.standard_spl_ii.setEnabled(False)
 
     def _on_channel_changed(self, index):
         if not self.calibration_available or index < 0:
@@ -738,10 +843,20 @@ class InputCalibration(QWidget):
         self.active_capture_channel = physical_channel
         self.channel_combo_box.setEnabled(False)
         self.channel_status_label.setText("状态: 录制中")
+        if self._ve_input:
+            self.standard_spl_i.setEnabled(False)
+            self.standard_spl_ii.setEnabled(False)
 
     def _clear_active_capture(self, refresh_display=True):
         captured_channel = self.active_capture_channel
         self.active_capture_channel = None
+        if self._ve_input:
+            self._ve_capture_context = None
+            self._ve_accepted_audio = None
+            enabled = self.calibration_available and not self._recording_closed
+            enabled = enabled and self._can_start_recording_workflow()
+            self.standard_spl_i.setEnabled(enabled)
+            self.standard_spl_ii.setEnabled(enabled)
         if not self.calibration_available:
             return
         if captured_channel is not None:
@@ -751,11 +866,21 @@ class InputCalibration(QWidget):
                 self.channel_combo_box.setCurrentIndex(captured_index)
                 self.channel_combo_box.blockSignals(False)
                 self.current_channel = captured_channel
-        self.channel_combo_box.setEnabled(True)
+        self.channel_combo_box.setEnabled(enabled if self._ve_input else True)
         if refresh_display:
             self._refresh_channel_display()
 
     def _refresh_channel_display(self):
+        if self._ve_input:
+            record = self._ve_calibration_records.get(self.current_channel)
+            status = record["status"] if record is not None else "none"
+            text = {"none": "未校准，仅电压数据", "valid": "实测校准有效",
+                    "invalidated": "配置已变更，需重新校准"}[status]
+            self.channel_status_label.setText("状态: " + text)
+            factor = self.saved_v2pa_factors.get(self.current_channel)
+            self.v2pa_factor_lineedit.setText(
+                str(np.round(float(factor), decimals=6)) if factor is not None else "")
+            return
         factor = self.saved_v2pa_factors.get(self.current_channel)
         if factor is None:
             self.channel_status_label.setText("状态: 未校准")
@@ -789,6 +914,13 @@ class InputCalibration(QWidget):
             completed_channel,
         )
 
+    def _success_popup_message(self, factor, next_channel):
+        return (
+            "校准成功\n"
+            f"本次校准结果：{float(factor):.6f} Pa/V\n"
+            f"下次校准通道：{next_channel}"
+        )
+
     def init_ui(self):
         """
         Initializes the user interface.
@@ -817,6 +949,10 @@ class InputCalibration(QWidget):
         layout.addWidget(recorded_box)
         layout.addItem(v_spacer_2)
         layout.addWidget(v2pa_factor_box)
+        if self._ve_input:
+            reminder = QLabel("更换麦克风后请清除该通道旧校准并重新校准")
+            reminder.setWordWrap(True)
+            layout.addWidget(reminder)
         layout.addItem(v_spacer_3)
         layout.setContentsMargins(12, 20, 12, 25)
 
@@ -960,6 +1096,16 @@ class InputCalibration(QWidget):
         if self.recording_bridge is None:
             self.recording_bridge = RecordingServiceBridge(RecordingService(), self)
             self._owns_recording_bridge = True
+            # Qt destruction can bypass closeEvent. Capture the owned bridge,
+            # never dereference the already-destroyed widget or its controls.
+            bridge = self.recording_bridge
+            def shutdown_owned_bridge(_=None, bridge=bridge):
+                # Invalidate Python delivery before service cleanup can enqueue
+                # cancellation/release events against the deleted Qt child.
+                bridge._delivery_closed = True
+                if not bridge._shutdown_requested:
+                    bridge.service.shutdown()
+            self.destroyed.connect(shutdown_owned_bridge)
             self.recording_bridge.shutting_down.connect(self.close_recording)
             QApplication.instance().aboutToQuit.connect(self.recording_bridge.shutdown)
         return self.recording_bridge
@@ -973,25 +1119,33 @@ class InputCalibration(QWidget):
                 message=self.calibration_unavailable_message or "请先选择输入设备和有效输入通道。")
             return False
         bridge = self._get_recording_bridge()
-        if self.streaming_processor is not None or bridge.service.busy:
+        if (self.streaming_processor is not None
+                or not self._can_start_recording_workflow()):
             self.calibration_popup(success_flag=False, message="录音设备忙，请等待当前录音结束后再校准。")
             return False
         self.stop_timer = False
         self.recorded_time = 10
-        self.v2pa_factor_lineedit.clear()
+        if not self._ve_input:
+            self.v2pa_factor_lineedit.clear()
         self._begin_capture(self.current_channel)
         self._capture_standard_spl_db = 94.0 if self.standard_spl_flag else 114.0
         try:
+            device = self._current_ve_device() if self._ve_input else self.input_device
+            sample_rate = device["input_config"]["sample_rate"] if self._ve_input else 44100
             request = RecordingRequest(
-                request_id=uuid.uuid4().hex, purpose="calibration", sample_rate=44100,
-                target_samples=441000, channels=(self.active_capture_channel,),
-                device=self.input_device,
+                request_id=uuid.uuid4().hex, purpose="calibration", sample_rate=sample_rate,
+                target_samples=sample_rate * 10, channels=(self.active_capture_channel,),
+                device=device,
                 # The service replaces this unused placeholder in its background
                 # allocator; the widget neither creates nor removes temp files.
                 path=os.path.abspath("calibration-unused.wav"),
                 streaming=False, trim_samples=0, monitor={},
                 calibration_metadata=None, validation_thresholds={},
             )
+            if self._ve_input:
+                self._ve_capture_context = _VECalibrationContext(
+                    request, self._capture_standard_spl_db, datetime.now(timezone.utc).isoformat())
+                self._ve_accepted_audio = None
             session = bridge.start(request, RecordingCallbacks(
                 result_ready=self._on_calibration_result_ready,
                 accepted=self._on_calibration_accepted,
@@ -1002,7 +1156,7 @@ class InputCalibration(QWidget):
             ))
             self.streaming_processor = RecordingProcessorFacade(session)
             self._release_notice_session = session
-        except (RuntimeError, ValueError, TypeError) as exc:
+        except (RuntimeError, ValueError, TypeError, VEStoreIOError) as exc:
             self.streaming_processor = None
             self._clear_active_capture()
             self.default_logger.error(f"Failed to start input calibration recording: {exc}")
@@ -1019,6 +1173,14 @@ class InputCalibration(QWidget):
     def _on_calibration_result_ready(self, session, audio):
         if not self._is_current_session(session):
             session.reject_result("calibration window no longer owns this result")
+            return
+        if self._ve_input:
+            try:
+                self._verified_ve_audio(session, audio)
+            except ValueError as exc:
+                session.reject_result(str(exc))
+                return
+            session.accept_result()
             return
         request, descriptor = session.request, audio.descriptor
         if (descriptor.request_id != request.request_id
@@ -1041,6 +1203,8 @@ class InputCalibration(QWidget):
         if not self._is_current_session(session):
             return
         self.streaming_processor.set_recorded_audio(audio)
+        if self._ve_input:
+            self._ve_accepted_audio = audio
         self._on_streaming_complete()
 
     def _on_calibration_failed(self, session, failure):
@@ -1053,8 +1217,15 @@ class InputCalibration(QWidget):
             self.cancel_calibration()
 
     def _on_calibration_released(self, session):
-        if self._release_notice_session is session:
+        owned = self._release_notice_session is session
+        if owned:
             self._release_notice_session = None
+        if self._ve_input and self._is_current_session(session):
+            self._on_streaming_complete()
+        if self._ve_input and owned and not self._recording_closed:
+            if self.streaming_processor is None:
+                self._clear_active_capture()
+            self.calibration_availability_changed.emit()
 
     def _on_calibration_release_failed(self, session, error):
         current = self._release_notice_session is session
@@ -1062,6 +1233,14 @@ class InputCalibration(QWidget):
             self._release_notice_session = None
         self.default_logger.error(
             f"Input calibration temporary cleanup failed for {session.request.path}: {error}")
+        if self._ve_input:
+            if current and self._is_current_session(session):
+                self._finish_failed_calibration(f"输入校准资源未释放，未保存校准：{error}")
+            if current and not self._recording_closed:
+                if self.streaming_processor is None:
+                    self._clear_active_capture()
+                self.calibration_availability_changed.emit()
+            return
         if current and not self._recording_closed and not self.stop_timer:
             QMessageBox.warning(self, "录音资源未释放",
                 "输入校准临时文件未能清理，文件仍被保留。此问题不会改变本次校准结果。\n"
@@ -1072,6 +1251,9 @@ class InputCalibration(QWidget):
         """
         Handle streaming recording completion and calculate calibration result.
         """
+        if self._ve_input:
+            self._finish_ve_calibration()
+            return
         processor = self.streaming_processor
         if (self.stop_timer or self._recording_closed or processor is None
                 or processor.session.state != "completed"):
@@ -1143,12 +1325,86 @@ class InputCalibration(QWidget):
         self.active_capture_channel = None
         self.saved_v2pa_factors[captured_channel] = float(v2pa_factor)
         self.channel_combo_box.setEnabled(True)
-        self._select_channel(self._next_uncalibrated_channel(captured_channel))
+        next_channel = self._next_uncalibrated_channel(captured_channel)
+        self._select_channel(next_channel)
         self.calibration_state_changed.emit(True)
         if not self.stop_timer:
             self.calibration_popup(success_flag=True)
             self.default_logger.info("Input calibration succeeded and was saved.")
             self.calibration_finished.emit(True)
+
+    def _verified_ve_audio(self, session, audio):
+        context, request = self._ve_capture_context, session.request
+        # The service allocates a private path asynchronously AFTER start().
+        # Only that path may differ from the frozen admission context.
+        if (session.cancel_requested or context is None
+                or replace(context.request, path=request.path) != request):
+            raise ValueError("输入校准请求已变更")
+        column = verify_ve_calibration_result(request, audio.descriptor, audio.multi)
+        if (audio.multi.shape != (request.target_samples, 1)
+                or audio.mono.shape != (request.target_samples,) or audio.mono.dtype != np.float32
+                or not np.array_equal(audio.mono, column)):
+            raise ValueError("输入校准单通道原始电压数据不匹配")
+        return audio.mono
+
+    def _check_ve_current_context(self, request):
+        channel = request.channels[0]
+        expected = calibration_fingerprint(request.device, channel, request.device["input_config"])
+        if not isinstance(self.input_device, Mapping):
+            raise ValueError("输入设备身份已变更")
+        current = calibration_fingerprint(self.input_device, channel, self.input_device.get("input_config"))
+        if (self.current_channel != channel or self.active_capture_channel != channel
+                or channel not in self.input_channels
+                or any(current[key] != expected[key] for key in ("backend", "model", "machine_id"))):
+            raise ValueError("输入设备身份或校准物理通道已变更")
+        # Observe changed conditions through the shared store before rejecting:
+        # invalidation is sticky, even if an external editor restores the values.
+        device = self._current_ve_device()
+        if (not device["available"] or channel not in device["physical_channels"]
+                or current != expected
+                or calibration_fingerprint(device, channel, device["input_config"]) != expected):
+            raise ValueError("输入校准配置已变更，需重新校准")
+
+    def _finish_ve_calibration(self):
+        processor = self.streaming_processor
+        if processor is None or not self._is_current_session(processor.session):
+            return
+        session = processor.session
+        audio, context = self._ve_accepted_audio, self._ve_capture_context
+        if (audio is None or context is None or session.state != "completed"
+                or session.cancel_requested or not session.released.is_set()
+                or session.release_error is not None):
+            return
+        try:
+            request = session.request
+            volts = self._verified_ve_audio(session, audio)
+            self._check_ve_current_context(request)
+            raw_level = self._calculate_spl_from_data(volts)
+            factor = self.calculate_v2pa_factor(raw_level, context.standard_spl)
+            if not np.isfinite(raw_level) or not np.isfinite(factor) or factor <= 0:
+                raise ValueError("输入校准计算结果无效")
+            channel = request.channels[0]
+            record = self.ve_calibration_store.save(
+                request.device, channel, v2pa_factor=float(factor),
+                standard_spl=context.standard_spl, calibration_sample_rate=request.sample_rate,
+                calibration_duration_seconds=10.0, calibrated_at=context.calibrated_at)
+        except (ValueError, ArithmeticError, VEStoreIOError) as exc:
+            self.default_logger.error(f"Failed to calculate or save VE calibration: {exc}")
+            self._finish_failed_calibration(f"输入校准失败，未保存校准：{exc}")
+            return
+        self._stop_calibration_timers()
+        self.streaming_processor = None
+        self._ve_calibration_records[channel] = record
+        self.saved_v2pa_factors[channel] = float(factor)
+        self._clear_active_capture(refresh_display=False)
+        next_channel = self._next_uncalibrated_channel(channel)
+        self._select_channel(next_channel)
+        self.calibration_state_changed.emit(True)
+        self.calibration_popup(
+            success_flag=True,
+            message=self._success_popup_message(factor, self.current_channel),
+        )
+        self.calibration_finished.emit(True)
 
     def _stop_calibration_timers(self):
         self.update_ui_timer.stop()
@@ -1274,6 +1530,9 @@ class InputCalibration(QWidget):
         It resets the recorded time to 10 seconds and updates the recorded label to display the new time in red.
         Additionally, it clears the v2pa_factor line edit and stops any ongoing streaming recording.
         """
+        if self._ve_input:
+            self._reset_ve_calibration()
+            return
         if not self.calibration_available:
             return
 
@@ -1327,8 +1586,27 @@ class InputCalibration(QWidget):
         self.channel_combo_box.setEnabled(True)
         self._select_channel(self.input_channels[0])
 
+    def _reset_ve_calibration(self):
+        if (self._recording_closed or not self.calibration_available or self.current_channel is None
+                or self.streaming_processor is not None
+                or not self._can_start_recording_workflow()):
+            return
+        channel = self.current_channel
+        try:
+            changed = self.ve_calibration_store.reset(self.input_device, channel)
+        except (ValueError, VEStoreIOError) as exc:
+            self.default_logger.error(f"Failed to reset VE input calibration: {exc}")
+            self.calibration_popup(success_flag=False, message=f"输入校准重置失败：{exc}")
+            return
+        self._ve_calibration_records.pop(channel, None)
+        self.saved_v2pa_factors.pop(channel, None)
+        self._refresh_channel_display()
+        if changed:
+            self.calibration_state_changed.emit(True)
+
     def cancel_calibration(self):
-        self._release_notice_session = None
+        if not self._ve_input or self._recording_closed:
+            self._release_notice_session = None
         self.stop_timer = True
         self._stop_calibration_timers()
         processor = self.streaming_processor
@@ -1338,6 +1616,8 @@ class InputCalibration(QWidget):
             processor.stop_streaming()
 
     def close_recording(self):
+        if self._recording_closed:
+            return
         self._recording_closed = True
         self.cancel_calibration()
         if self._owns_recording_bridge:

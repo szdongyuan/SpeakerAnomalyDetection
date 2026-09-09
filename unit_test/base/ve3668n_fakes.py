@@ -36,16 +36,48 @@ def device_info(**overrides):
     return deepcopy(device)
 
 
+def wav_metadata(sources=("measured", "none"), sample_rate=44100,
+                 physical_channels=None):
+    """Task 5's exact example, with independent data on every call."""
+    channels = []
+    if physical_channels is None:
+        physical_channels = (7, 1)[:len(sources)]
+    if len(sources) != len(physical_channels):
+        raise ValueError("factor sources must match physical channels")
+    for index, (physical, source) in enumerate(zip(physical_channels, sources)):
+        measured = source == "measured"
+        channels.append({
+            "wav_channel_index": index, "physical_input_channel": physical,
+            "factor_source": source, "calibrated": measured,
+            "v2pa_factor": 10.0 if measured else None,
+            "calibration": {
+                "standard_spl": 94.0,
+                "calibrated_at": "2026-08-28T10:00:00+08:00",
+                "sample_rate": 51200, "duration_seconds": 10.0,
+            } if measured else None,
+        })
+    return {
+        "schema_version": 1, "backend": "vkinging",
+        "acquisition": {
+            "model": "VE3668N", "machine_id": "TEST-DEVICE",
+            **input_config(sample_rate),
+        },
+        "recorded_channels": channels,
+    }
+
+
 def capture_request(path, **overrides):
     """Frozen request with file-local provenance; never accesses real stores."""
     from base.recording_process_protocol import RecordingRequest
 
     rate = overrides.get("sample_rate", 51200)
     device = device_info(input_config=input_config(rate))
+    metadata = wav_metadata(("none", "none"), sample_rate=rate)
+    metadata["acquisition"]["machine_id"] = device["machine_id"]
     values = dict(request_id="ve-capture", purpose="main", sample_rate=rate,
                   target_samples=9, channels=(7, 1), device=device,
                   path=str(path), streaming=False, trim_samples=2,
-                  monitor={}, calibration_metadata=None,
+                  monitor={}, calibration_metadata=metadata,
                   validation_thresholds={"enabled": False})
     values.update(overrides)
     return RecordingRequest(**values)
@@ -433,6 +465,95 @@ def capture_orphan_parent(connection, options):
                 break
         threading.Event().wait(.01)
     threading.Event().wait()
+
+
+class MetadataOwnershipFaults:
+    """Real files with independent processing/close faults at metadata boundaries.
+
+    A failed close deliberately leaves the underlying file open. Tests own the
+    final release, so garbage collection cannot hide a missing ownership handoff.
+    """
+
+    def __init__(self, path, *, readback_open=None, processing_failure=None,
+                 close_failures=(), read_after_backend=False, processing_error_type=OSError):
+        self.path = os.fspath(path)
+        self.readback_open = readback_open
+        self.processing_failure = processing_failure
+        self.close_failures = set(close_failures)
+        self.read_after_backend = read_after_backend
+        self.processing_error_type = processing_error_type
+        self.files = []
+        self.temporary_paths = []
+        self.source_opens = 0
+
+    def install(self, monkeypatch):
+        from base import wav_calibration_metadata as module
+        real_open = open
+        real_temporary = module.tempfile.NamedTemporaryFile
+        owner = self
+
+        class Boundary:
+            def __init__(self, wrapped, stage):
+                self.wrapped = wrapped
+                self.stage = stage
+                self.close_attempts = 0
+                self.saw_backend = False
+                owner.files.append(self)
+
+            def __getattr__(self, name):
+                return getattr(self.wrapped, name)
+
+            def read(self, *args, **kwargs):
+                if self.stage == owner.processing_failure and not owner.read_after_backend:
+                    raise owner.processing_error_type(f"PRIMARY-{self.stage.upper()}-READ-ERROR")
+                data = self.wrapped.read(*args, **kwargs)
+                self.saw_backend |= b'"backend":"vkinging"' in data
+                return data
+
+            def tell(self):
+                if (self.stage == owner.processing_failure and owner.read_after_backend
+                        and self.saw_backend):
+                    raise owner.processing_error_type(f"PRIMARY-{self.stage.upper()}-READ-ERROR")
+                return self.wrapped.tell()
+
+            def write(self, *args, **kwargs):
+                if self.stage == owner.processing_failure:
+                    raise owner.processing_error_type("PRIMARY-WRITE-ERROR")
+                return self.wrapped.write(*args, **kwargs)
+
+            def close(self):
+                self.close_attempts += 1
+                if self.stage in owner.close_failures:
+                    raise OSError(f"SECONDARY-{self.stage.upper()}-CLOSE-ERROR")
+                self.wrapped.close()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+        def tracked_open(path, *args, **kwargs):
+            wrapped = real_open(path, *args, **kwargs)
+            if os.fspath(path) == owner.path:
+                owner.source_opens += 1
+                stage = "readback" if (owner.readback_open is not None
+                                       and owner.source_opens >= owner.readback_open) else "source"
+            else:
+                stage = "validation"
+            return Boundary(wrapped, stage)
+
+        def tracked_temporary(*args, **kwargs):
+            wrapped = real_temporary(*args, **kwargs)
+            owner.temporary_paths.append(wrapped.name)
+            return Boundary(wrapped, "temporary")
+
+        monkeypatch.setattr(module, "open", tracked_open, raising=False)
+        monkeypatch.setattr(module.tempfile, "NamedTemporaryFile", tracked_temporary)
+
+    def release_all(self):
+        for boundary in self.files:
+            boundary.wrapped.close()
 
 
 def discovery_factory(*, trace_path=None, mode="normal"):

@@ -26,10 +26,73 @@ class RecordingServiceBridge(QObject):
         self._finished = set()
         self._delivered = set()
         self._lock = threading.Lock()
+        self._delivery_closed = False
         self._shutdown_requested = False
+        self._ve_release_pending = False
         self._event.connect(self._deliver, Qt.QueuedConnection)
         self._preview_wakeup.connect(self._deliver_preview, Qt.QueuedConnection)
         self._invoke.connect(self._call, Qt.QueuedConnection)
+
+    @property
+    def hardware_busy(self):
+        """Whether capture/native ownership work makes hardware edits unsafe.
+
+        Broad ``service.busy`` also includes parent-side result processing.  A
+        completed capture must not keep the hardware dialog disabled while its
+        WAV result is being read or accepted.
+        """
+        service = self.service
+        lock = getattr(service, "_lock", None)
+
+        def snapshot():
+            worker = getattr(service, "_worker", None)
+            closed = getattr(service, "closed", None)
+            return bool(
+                self._shutdown_requested
+                or self._ve_release_pending
+                or getattr(service, "_closing", False)
+                or (closed is not None and closed.is_set())
+                or getattr(service, "_capture_session", None) is not None
+                or getattr(service, "_pending_ve_release", None) is not None
+                or getattr(service, "_ownership_uncertain", False)
+                or (worker is not None and getattr(worker, "retiring", False))
+            )
+
+        if lock is None:
+            return snapshot()
+        with lock:
+            return snapshot()
+
+    def release_ve(self, required_signature, callback=None):
+        """Request native VE synchronization without blocking the Qt thread."""
+        if QThread.currentThread() is not self.thread():
+            raise RuntimeError("Recording bridge VE release must start on its GUI thread")
+        completion_lock = threading.Lock()
+        completed = False
+
+        def complete(status, diagnostics=()):
+            nonlocal completed
+            with completion_lock:
+                if completed:
+                    return
+                completed = True
+            self._ve_release_pending = False
+            if callback is not None:
+                value = (status, tuple(diagnostics))
+                self._invoke.emit(lambda value=value: callback(*value))
+
+        # Establish busy before crossing into the service: its supervisor may
+        # complete on another thread before ``release_ve`` returns.  Completion
+        # is then the only path that clears this call's pending transition, so
+        # a returned ``pending`` can never resurrect already-completed state.
+        self._ve_release_pending = True
+        status = self.service.release_ve(required_signature, complete)
+        if status in ("released", "unchanged", "busy", "closing"):
+            # Immediate service outcomes still cross the same queued Qt
+            # boundary.  The service may also enqueue its callback; ``complete``
+            # makes those two legitimate paths exactly-once.
+            complete(status, ())
+        return status
 
     def start(self, request, callbacks):
         if QThread.currentThread() is not self.thread():
@@ -45,6 +108,12 @@ class RecordingServiceBridge(QObject):
             raise
 
     def _enqueue(self, kind, session, value):
+        if self._delivery_closed:
+            if kind == "preview":
+                session.release_preview(value.sequence)
+            elif kind == "result_ready":
+                session.reject_result("recording consumer was destroyed")
+            return
         key = session.request.request_id
         if kind == "preview":
             with self._lock:

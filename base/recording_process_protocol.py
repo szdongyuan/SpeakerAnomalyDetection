@@ -13,6 +13,7 @@ from base.ve3668n_input import (
     validate_physical_channels,
     validate_sample_rate,
 )
+from base.ve3668n_wav_metadata import validate_ve_wav_metadata
 from consts.ve3668n_consts import VE_BACKEND
 
 
@@ -113,6 +114,21 @@ def _ve_request(request):
             or type(monitor.get("enabled", False)) is not bool
             or monitor.get("enabled", False)):
         raise ValueError("VE monitor must be disabled and contain only known fields")
+    if request.purpose == "calibration":
+        if request.target_samples != 10 * request.sample_rate or request.trim_samples != 0:
+            raise ValueError("VE calibration requires ten seconds and trim_samples=0")
+    if request.purpose == "main" or request.calibration_metadata is not None:
+        metadata = validate_ve_wav_metadata(request.calibration_metadata)
+        expected = {"model": request.device["model"],
+                    "machine_id": request.device["machine_id"], **profile}
+        if metadata["acquisition"] != expected:
+            raise ValueError("VE metadata acquisition must match the frozen request")
+        entries = metadata["recorded_channels"]
+        if (len(entries) != len(request.channels)
+                or any(entry["wav_channel_index"] != index
+                       or entry["physical_input_channel"] != physical
+                       for index, (entry, physical) in enumerate(zip(entries, request.channels)))):
+            raise ValueError("VE metadata channel order must match the frozen request")
 
 
 @dataclass(frozen=True)

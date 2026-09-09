@@ -16,11 +16,12 @@ from base.recording_capture import RecordingCapture
 from base.recording_process_protocol import RecordingResult, RecordingFailure
 from base.wav_calibration_metadata import (
     WavCalibrationMetadataAppendResult, append_wav_calibration_metadata_result,
+    inspect_wav_calibration_metadata,
 )
 from unit_test.base.recording_process_fakes import (
     ControlledMetadataAppender, ControlledWriter, FakeStatus, MetadataFileFaults,
 )
-from unit_test.base.ve3668n_fakes import CaptureSDK, DiscoveryClock, capture_request
+from unit_test.base.ve3668n_fakes import CaptureSDK, DiscoveryClock, capture_request, wav_metadata
 
 
 @pytest.fixture(autouse=True)
@@ -482,7 +483,8 @@ def test_shared_capture_exact_trim_float_voltage_with_no_portaudio(
     assert (actual, outcome.raw_frames, outcome.final_frames) == (rate, raw, raw - trim)
     np.testing.assert_array_equal(audio, np.tile([8.25, 2.5], (raw - trim, 1)))
     assert sf.info(outcome.path).subtype == "FLOAT"
-    assert not outcome.metadata_appended and outcome.handles_released
+    assert outcome.metadata_appended and outcome.handles_released
+    assert inspect_wav_calibration_metadata(outcome.path).metadata == capture.request.calibration_metadata.to_dict()
     assert capture.started.is_set() and streams[0].handles_released
     assert capture.started_at == 100.0
     assert capture.progress_snapshot().frames == raw  # still available after _stream is closed
@@ -684,6 +686,44 @@ def test_rate_verification_delay_cannot_reset_native_capture_deadline(tmp_path):
     assert not blocks and "no progress" in failures[0][1]
 
 
+@pytest.mark.parametrize("mode", ["false", "missing", "throw", "unreleased", "retained", "lie", "tamper",
+                                  "gain", "frames", "rate", "channels", "subtype"])
+def test_main_metadata_is_required_and_cannot_damage_raw_audio(tmp_path, mode):
+    def appender(path, metadata, **kwargs):
+        if mode == "false":
+            return False
+        if mode == "missing":
+            return None
+        if mode == "throw":
+            raise OSError("injected metadata failure")
+        if mode == "unreleased":
+            return WavCalibrationMetadataAppendResult(True, False, close_errors=("unreleased metadata",))
+        if mode == "retained":
+            append_wav_calibration_metadata_result(path, metadata, **kwargs)
+            return WavCalibrationMetadataAppendResult(True, True, retained_handles=((path, object()),))
+        if mode == "lie":
+            return True
+        if mode == "tamper":
+            metadata["acquisition"]["machine_id"] = "different-frozen-snapshot"
+        else:
+            audio, rate = sf.read(path, dtype="float32", always_2d=True)
+            if mode == "gain":
+                audio *= .1
+            elif mode == "frames":
+                audio = audio[:-1]
+            elif mode == "rate":
+                rate = 48000
+            elif mode == "channels":
+                audio = audio[:, :1]
+            sf.write(path, audio, rate, subtype="PCM_16" if mode == "subtype" else "FLOAT")
+        return append_wav_calibration_metadata_result(path, metadata, **kwargs)
+    capture, _, _, _ = start_capture(tmp_path, metadata_appender=appender)
+    outcome = capture.wait(3)
+    assert isinstance(outcome, RecordingFailure), outcome
+    assert outcome.stage == "metadata"
+    assert outcome.handles_released is (mode not in ("unreleased", "retained"))
+
+
 def test_quality_gate_uses_only_temporary_tenth_scale_and_leaves_raw_voltage(tmp_path, monkeypatch):
     from base import recording_capture
     inspected = []
@@ -768,6 +808,24 @@ def test_ve_writer_failure_cannot_become_success(tmp_path, fail_at):
     assert outcome.handles_released is (fail_at == "write")
 
 
+@pytest.mark.parametrize("stage", ["source", "temporary", "validation"])
+@pytest.mark.parametrize("close_fails", [True, False])
+def test_ve_actual_metadata_file_faults_are_failures_with_owned_handles(tmp_path, monkeypatch, stage, close_fails):
+    faults = MetadataFileFaults(stage, close_fails=close_fails)
+    faults.install(monkeypatch)
+    try:
+        capture, _, _, _ = start_capture(tmp_path)
+        outcome = capture.wait(3)
+        assert isinstance(outcome, RecordingFailure), outcome
+        assert outcome.handles_released is not close_fails
+        assert outcome.stage == "metadata"
+        if close_fails:
+            assert capture._unreleased_finalization_handles
+            assert outcome.cleanup_paths == tuple(faults.temporary_paths)
+    finally:
+        faults.release_all()
+
+
 @pytest.mark.parametrize("operation", ["get_devices", "create_task", "create_iepe_voltage_channel",
                                        "configure_sample_clock", "start_task", "verify_actual_sample_rate",
                                        "read_task_data", "stop_task", "clear_task", "close"])
@@ -819,6 +877,24 @@ def test_shared_callback_structural_checks_are_unconditional(tmp_path, purpose, 
     capture._input_callback(np.ones(shape, dtype=np.float32), frames, None, None)
     assert capture._failure is not None and "shape" in capture._failure[1]
     assert capture.raw_frames == 0
+
+
+@pytest.mark.parametrize("rate", [44100, 48000, 51200])
+def test_calibration_captures_exact_ten_seconds_raw_voltage_without_metadata(tmp_path, rate):
+    def forbidden(*args, **kwargs):
+        pytest.fail("calibration must not append a main recording snapshot")
+    capture, _, _, _ = start_capture(tmp_path, request_options=dict(
+        purpose="calibration", sample_rate=rate, channels=(7,), target_samples=rate * 10,
+        trim_samples=0, streaming=True, calibration_metadata=None,
+        validation_thresholds={"enabled": True}), metadata_appender=forbidden, queue_seconds=11)
+    outcome = capture.wait(4)
+    assert isinstance(outcome, RecordingResult), outcome
+    assert outcome.raw_frames == outcome.final_frames == rate * 10
+    audio, actual = sf.read(outcome.path, dtype="float32")
+    assert actual == rate and len(audio) == rate * 10
+    np.testing.assert_array_equal(audio, np.full(rate * 10, 8.25, dtype=np.float32))
+    assert sf.info(outcome.path).subtype == "FLOAT"
+    assert not outcome.metadata_appended and capture.snapshot(generation=1, sequence=1) is None
 
 
 def test_compact_short_read_ignores_old_finite_tail(tmp_path):
@@ -891,6 +967,23 @@ def test_ve_finalization_retains_failed_close_without_masking_primary_error(
             boundary.wrapped.close()
 
 
+def test_measured_snapshot_never_applies_pa_gain_to_capture_or_preview(tmp_path):
+    metadata = wav_metadata(sample_rate=44100)
+    metadata["acquisition"]["machine_id"] = "test-machine-1"
+    capture, _, _, _ = start_capture(tmp_path, request_options=dict(
+        sample_rate=44100, streaming=True, calibration_metadata=metadata))
+    outcome = capture.wait(3)
+    assert isinstance(outcome, RecordingResult), outcome
+    np.testing.assert_array_equal(sf.read(outcome.path, dtype="float32")[0], np.tile([8.25, 2.5], (7, 1)))
+    preview = capture.snapshot(generation=1, sequence=1)
+    assert preview.waveforms[0].time[0] == 0.0
+    assert preview.waveforms[0].time[-1] > 0.0
+    assert np.all(np.diff(preview.waveforms[0].time) > 0.0)
+    assert max(preview.waveforms[0].amplitude) == 8.25
+    assert inspect_wav_calibration_metadata(outcome.path).metadata == metadata
+    assert metadata["recorded_channels"][0]["calibration"]["sample_rate"] == 51200
+
+
 def test_sdk_factory_itself_runs_on_the_owner_thread_and_failure_opens_no_task(tmp_path):
     stream, sdk, _, _, failures = make_stream(tmp_path)
     calls = []
@@ -924,10 +1017,145 @@ def test_native_control_waits_cannot_be_configured_unbounded(tmp_path, field, va
                           DiscoveryClock(), **{field: value})
 
 
+def test_mandatory_metadata_reader_close_failure_transfers_open_handle(tmp_path, monkeypatch):
+    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    faults = MetadataOwnershipFaults(tmp_path / "capture.wav", readback_open=2,
+                                     close_failures=("readback",))
+    faults.install(monkeypatch)
+    try:
+        capture, _, _, _ = start_capture(tmp_path)
+        outcome = capture.wait(3)
+        readers = [item for item in faults.files if item.stage == "readback"]
+        assert len(readers) == 1 and readers[0].close_attempts == 1
+        assert not readers[0].wrapped.closed
+        assert isinstance(outcome, RecordingFailure) and outcome.stage == "metadata"
+        assert not outcome.handles_released
+        assert (outcome.path, readers[0]) in capture._unreleased_finalization_handles
+        assert "SECONDARY-READBACK-CLOSE-ERROR" in outcome.message
+        assert outcome.cleanup_paths == ()
+    finally:
+        faults.release_all()
+
+
+@pytest.mark.parametrize("processing,close_stages,first", [
+    ("temporary", (), "PRIMARY-WRITE-ERROR"),
+    ("temporary", ("temporary",), "PRIMARY-WRITE-ERROR"),
+    ("temporary", ("source", "temporary"), "PRIMARY-WRITE-ERROR"),
+    ("validation", ("validation",), "PRIMARY-VALIDATION-READ-ERROR"),
+    ("readback", (), "PRIMARY-READBACK-READ-ERROR"),
+    ("readback", ("readback",), "PRIMARY-READBACK-READ-ERROR"),
+    (None, ("temporary", "source"), "SECONDARY-TEMPORARY-CLOSE-ERROR"),
+])
+def test_metadata_primary_fault_reaches_capture_with_separate_cleanup_diagnostics(
+    tmp_path, monkeypatch, caplog, processing, close_stages, first,
+):
+    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    faults = MetadataOwnershipFaults(tmp_path / "capture.wav", readback_open=2,
+                                     processing_failure=processing, close_failures=close_stages,
+                                     read_after_backend=processing == "readback")
+    faults.install(monkeypatch)
+    try:
+        capture, _, _, _ = start_capture(tmp_path)
+        outcome = capture.wait(3)
+        assert isinstance(outcome, RecordingFailure) and outcome.stage == "metadata"
+        assert outcome.handles_released is (not close_stages)
+        assert first in outcome.message
+        if processing is not None:
+            assert "SECONDARY-" not in outcome.message
+        for stage in close_stages:
+            boundary = next(item for item in faults.files if item.stage == stage)
+            assert not boundary.wrapped.closed
+            assert (boundary.name, boundary) in capture._unreleased_finalization_handles
+            assert any(f"SECONDARY-{stage.upper()}-CLOSE-ERROR" in item for item in capture._warnings)
+            assert f"SECONDARY-{stage.upper()}-CLOSE-ERROR" in caplog.text
+        assert all(item.close_attempts == 1 for item in faults.files)
+    finally:
+        faults.release_all()
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+@pytest.mark.parametrize("error_type", [OSError, ValueError, RuntimeError, MemoryError])
+def test_legacy_metadata_write_fault_keeps_warning_only_when_handles_release(
+    tmp_path, monkeypatch, caplog, close_fails, error_type,
+):
+    from base.recording_process_protocol import RecordingRequest
+    from unit_test.base.recording_process_fakes import FakeBackend, device_info, known_audio
+    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    path = tmp_path / "legacy.wav"
+    metadata = {"recorded_channels": [
+        {"wav_channel_index": 0, "physical_input_channel": 0, "calibrated": False},
+        {"wav_channel_index": 1, "physical_input_channel": 2, "calibrated": False},
+    ]}
+    faults = MetadataOwnershipFaults(path, processing_failure="temporary",
+                                     close_failures=("temporary",) if close_fails else (),
+                                     processing_error_type=error_type)
+    faults.install(monkeypatch)
+    backend = FakeBackend()
+    capture = RecordingCapture(RecordingRequest(
+        request_id="legacy-metadata", purpose="main", sample_rate=100, target_samples=9,
+        channels=(0, 2), device=device_info(), path=str(path), streaming=False,
+        trim_samples=0, monitor={}, calibration_metadata=metadata,
+        validation_thresholds={"enabled": False}), backend=backend)
+    try:
+        capture.start()
+        assert capture.started.wait(3)
+        backend.stream.feed(known_audio())
+        outcome = capture.wait(3)
+        assert isinstance(outcome, RecordingFailure if close_fails else RecordingResult)
+        assert outcome.handles_released is not close_fails
+        assert "PRIMARY-WRITE-ERROR" in caplog.text
+        if close_fails:
+            assert outcome.stage == "metadata" and "PRIMARY-WRITE-ERROR" in outcome.message
+            assert "SECONDARY-" not in outcome.message
+            assert capture._unreleased_finalization_handles
+        else:
+            assert not outcome.metadata_appended
+            assert "WAV calibration metadata was not appended" in outcome.warnings
+            assert not capture._unreleased_finalization_handles
+        np.testing.assert_array_equal(sf.read(path, dtype="float32")[0], known_audio()[:9, [0, 2]])
+    finally:
+        capture.cancel()
+        capture.wait(3)
+        faults.release_all()
+
+
+@pytest.mark.parametrize("error_type", [ValueError, RuntimeError, MemoryError])
+@pytest.mark.parametrize("stage", ["source", "temporary", "validation", "readback"])
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_metadata_ordinary_exception_cannot_bypass_capture_ownership_handoff(
+    tmp_path, monkeypatch, caplog, error_type, stage, close_fails,
+):
+    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    close_order = (("temporary", "source") if stage == "temporary" else (stage,)) if close_fails else ()
+    faults = MetadataOwnershipFaults(tmp_path / "capture.wav", readback_open=2,
+                                     processing_failure=stage, close_failures=close_order,
+                                     processing_error_type=error_type)
+    faults.install(monkeypatch)
+    try:
+        capture, _, _, _ = start_capture(tmp_path)
+        outcome = capture.wait(3)
+        assert isinstance(outcome, RecordingFailure) and outcome.stage == "metadata"
+        first = "PRIMARY-WRITE-ERROR" if stage == "temporary" else f"PRIMARY-{stage.upper()}-READ-ERROR"
+        assert outcome.message == first
+        expected = tuple(next(item for item in faults.files if item.stage == name) for name in close_order)
+        assert all(not item.wrapped.closed for item in expected)
+        assert outcome.handles_released is not close_fails
+        assert capture._unreleased_finalization_handles == [(item.name, item) for item in expected]
+        for detail, name in zip(capture._warnings, close_order):
+            assert f"SECONDARY-{name.upper()}-CLOSE-ERROR" in detail
+            assert detail in caplog.text
+        assert len(capture._warnings) == len(expected)
+        assert all(item.close_attempts == 1 for item in faults.files)
+        # Successful append already replaced its temporary file before readback.
+        pending_temporaries = tuple(faults.temporary_paths) if close_fails and stage != "readback" else ()
+        assert outcome.cleanup_paths == pending_temporaries
+    finally:
+        faults.release_all()
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 def test_uncalibrated_main_capture_preserves_voltage_and_cumulative_preview(tmp_path, streaming):
-    request = capture_request(tmp_path / "uncalibrated.wav", streaming=streaming,
-                              calibration_metadata=None)
+    request = capture_request(tmp_path / "uncalibrated.wav", streaming=streaming)
     sdk = CaptureSDK()
     def stream_factory(**kwargs):
         return Ve3668nInputStream(**kwargs, sdk_factory=lambda: sdk)
@@ -935,7 +1163,8 @@ def test_uncalibrated_main_capture_preserves_voltage_and_cumulative_preview(tmp_
     capture.start()
     outcome = capture.wait(3)
     assert isinstance(outcome, RecordingResult), outcome
-    assert outcome.handles_released and not outcome.metadata_appended
+    assert outcome.handles_released and outcome.metadata_appended
+    assert inspect_wav_calibration_metadata(outcome.path).metadata == request.calibration_metadata.to_dict()
     assert outcome.raw_frames == request.target_samples
     assert outcome.final_frames == request.target_samples - request.trim_samples
     audio, rate = sf.read(request.path, dtype="float32", always_2d=True)
@@ -955,23 +1184,3 @@ def test_uncalibrated_main_capture_preserves_voltage_and_cumulative_preview(tmp_
     else:
         assert preview is None
     assert [row["operation"] for row in sdk.trace][-3:] == ["stop_task", "clear_task", "close"]
-
-
-def test_optional_metadata_cannot_change_ve_raw_voltage(tmp_path):
-    from base.recording_process_protocol import RecordingFailure
-    request = capture_request(tmp_path / "changed.wav", calibration_metadata=None)
-    sdk = CaptureSDK()
-    def stream_factory(**kwargs):
-        return Ve3668nInputStream(**kwargs, sdk_factory=lambda: sdk)
-    def corrupt_audio(path, metadata, **kwargs):
-        audio, rate = sf.read(path, dtype="float32", always_2d=True)
-        audio[0, 0] += 1
-        sf.write(path, audio, rate, subtype="FLOAT")
-        return False
-    capture = RecordingCapture(request, ve_stream_factory=stream_factory,
-                               metadata_appender=corrupt_audio)
-    capture.start()
-    outcome = capture.wait(3)
-    assert isinstance(outcome, RecordingFailure), outcome
-    assert outcome.stage == "metadata" and "raw voltage" in outcome.message
-    assert outcome.handles_released
