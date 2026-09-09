@@ -10,6 +10,7 @@ from base.recording_channel_selection import (
     RecordingChannelSelectionError,
     canonicalize_recording_input_channels,
 )
+from base.ve3668n_input import validate_physical_channels
 from base.product_test_project_config import (
     PRODUCT_TRIGGER_MODE_MIXED,
     classify_project_trigger_mode,
@@ -121,11 +122,17 @@ class SequenceWidgetUiOpsMixin:
         )
         raw_channels = getattr(self, "mic_channels", [])
         try:
-            channels = canonicalize_recording_input_channels(
-                raw_channels,
-                max_input_channels=maximum,
-            )
-        except RecordingChannelSelectionError as error:
+            if mic and mic.get("backend") == "vkinging":
+                channels = validate_physical_channels(raw_channels)
+                inventory = validate_physical_channels(mic.get("physical_channels"))
+                if any(channel not in inventory for channel in channels):
+                    raise ValueError("selected VE physical channels are unavailable")
+            else:
+                channels = canonicalize_recording_input_channels(
+                    raw_channels,
+                    max_input_channels=maximum,
+                )
+        except (RecordingChannelSelectionError, ValueError) as error:
             self._channel_selection_error = str(error)
             self.default_logger.error(
                 "Invalid recording input channel selection "
@@ -356,9 +363,8 @@ class SequenceWidgetUiOpsMixin:
         if callable(clear_wav_calibration_state):
             clear_wav_calibration_state()
         else:
-            self.data_struct.wav_calibration_metadata = None
-            self.data_struct.wav_calibration_metadata_authoritative = False
-            self.data_struct.wav_calibration_warning_shown = False
+            from base.data_struct.data_deal_struct import DataDealStruct
+            DataDealStruct.clear_wav_calibration_context(self.data_struct)
         clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
         if callable(clear_all_direction_waveforms):
             clear_all_direction_waveforms()
@@ -560,8 +566,12 @@ class SequenceWidgetUiOpsMixin:
         else:
             can_start = bool(getattr(self, "sequence_config", None))
 
-        can_start = can_start and not getattr(self, "player_status_flag", False)
-        can_start = can_start and not getattr(self, "_record_workflow_busy", False)
+        recording_admission = getattr(self, "_can_start_recording_workflow", None)
+        if callable(recording_admission):
+            can_start = can_start and recording_admission()
+        else:
+            can_start = can_start and not getattr(self, "player_status_flag", False)
+            can_start = can_start and not getattr(self, "_record_workflow_busy", False)
         can_start = can_start and not getattr(
             self,
             "_analysis_round_completion_pending",

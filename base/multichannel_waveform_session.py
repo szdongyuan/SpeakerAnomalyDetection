@@ -4,6 +4,7 @@ from collections.abc import Mapping
 
 import numpy as np
 
+from base.rolling_waveform_accumulator import RollingWaveformAccumulator
 from base.streaming_waveform_accumulator import (
     StreamingWaveformAccumulator,
     StreamingWaveformSnapshot,
@@ -13,10 +14,19 @@ from base.streaming_waveform_accumulator import (
 class MultichannelWaveformSession:
     """Bounded display-only waveform envelopes for one recording run."""
 
-    def __init__(self, *, max_points: int):
+    def __init__(
+        self,
+        *,
+        max_points: int,
+        rolling_window_seconds: int | None = None,
+    ):
         self._max_points = max_points
+        self._rolling_window_seconds = rolling_window_seconds
         self._channels: tuple[int, ...] = ()
-        self._accumulators: dict[int, StreamingWaveformAccumulator] = {}
+        self._accumulators: dict[
+            int,
+            StreamingWaveformAccumulator | RollingWaveformAccumulator,
+        ] = {}
 
     @property
     def channels(self) -> tuple[int, ...]:
@@ -46,10 +56,16 @@ class MultichannelWaveformSession:
         new_channels = tuple(int(channel) for channel in channel_snapshot)
         new_accumulators = {}
         for channel in new_channels:
-            accumulator = StreamingWaveformAccumulator(
-                max_points=self._max_points,
-                retain_raw=False,
-            )
+            if self._rolling_window_seconds is None:
+                accumulator = StreamingWaveformAccumulator(
+                    max_points=self._max_points,
+                    retain_raw=False,
+                )
+            else:
+                accumulator = RollingWaveformAccumulator(
+                    max_points=self._max_points,
+                    window_seconds=self._rolling_window_seconds,
+                )
             accumulator.begin(
                 sample_rate=sample_rate,
                 startup_trim_samples=startup_trim_samples,

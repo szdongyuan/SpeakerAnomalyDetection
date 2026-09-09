@@ -320,6 +320,69 @@ class ControlledMetadataAppender:
         return append_wav_calibration_metadata_result(path, metadata, **kwargs)
 
 
+class MetadataFileFaults:
+    """Exercise the actual metadata helper with real files and one fault boundary."""
+    def __init__(self, target, *, close_fails=True):
+        self.target = target
+        self.close_fails = close_fails
+        self.files = []
+        self.temporary_paths = []
+
+    def install(self, monkeypatch):
+        from base import wav_calibration_metadata as module
+        real_open = open
+        real_temporary = module.tempfile.NamedTemporaryFile
+        owner = self
+
+        class FileBoundary:
+            def __init__(self, wrapped, stage):
+                self.wrapped = wrapped
+                self.stage = stage
+                self.close_attempts = 0
+                owner.files.append(self)
+
+            def __getattr__(self, name):
+                return getattr(self.wrapped, name)
+
+            def read(self, *args, **kwargs):
+                if self.stage == owner.target and not owner.close_fails:
+                    raise OSError(f"injected metadata {self.stage} read failure")
+                return self.wrapped.read(*args, **kwargs)
+
+            def write(self, *args, **kwargs):
+                if self.stage == owner.target and not owner.close_fails:
+                    raise OSError("injected metadata temporary write failure")
+                return self.wrapped.write(*args, **kwargs)
+
+            def close(self):
+                self.close_attempts += 1
+                if self.stage == owner.target and owner.close_fails:
+                    raise OSError(f"injected metadata {self.stage} close failure")
+                self.wrapped.close()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+        def tracked_open(path, *args, **kwargs):
+            stage = "validation" if os.fspath(path) in self.temporary_paths else "source"
+            return FileBoundary(real_open(path, *args, **kwargs), stage)
+
+        def tracked_temporary(*args, **kwargs):
+            wrapped = real_temporary(*args, **kwargs)
+            self.temporary_paths.append(wrapped.name)
+            return FileBoundary(wrapped, "temporary")
+
+        monkeypatch.setattr(module, "open", tracked_open, raising=False)
+        monkeypatch.setattr(module.tempfile, "NamedTemporaryFile", tracked_temporary)
+
+    def release_all(self):
+        for boundary in self.files:
+            boundary.wrapped.close()
+
+
 def process_dependencies(**options):
     """Importable injection for actual spawn; all options are plain scalar values."""
     if options.get("hang_ready"):
@@ -347,6 +410,7 @@ def process_dependencies(**options):
                 preview_session_constructions += 1
                 update(
                     preview_session_constructions=preview_session_constructions,
+                    preview_rolling_window_seconds=kwargs.get("rolling_window_seconds"),
                 )
                 if preview_fault == "construct":
                     update(preview_fault_observed=preview_fault)
@@ -667,66 +731,3 @@ def open_process_observer(pid):
     kernel.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
     kernel.CloseHandle.argtypes = [ctypes.c_void_p]
     return kernel, handle
-
-
-class MetadataFileFaults:
-    """Exercise the actual metadata helper with real files and one fault boundary."""
-    def __init__(self, target, *, close_fails=True):
-        self.target = target
-        self.close_fails = close_fails
-        self.files = []
-        self.temporary_paths = []
-
-    def install(self, monkeypatch):
-        from base import wav_calibration_metadata as module
-        real_open = open
-        real_temporary = module.tempfile.NamedTemporaryFile
-        owner = self
-
-        class FileBoundary:
-            def __init__(self, wrapped, stage):
-                self.wrapped = wrapped
-                self.stage = stage
-                self.close_attempts = 0
-                owner.files.append(self)
-
-            def __getattr__(self, name):
-                return getattr(self.wrapped, name)
-
-            def read(self, *args, **kwargs):
-                if self.stage == owner.target and not owner.close_fails:
-                    raise OSError(f"injected metadata {self.stage} read failure")
-                return self.wrapped.read(*args, **kwargs)
-
-            def write(self, *args, **kwargs):
-                if self.stage == owner.target and not owner.close_fails:
-                    raise OSError("injected metadata temporary write failure")
-                return self.wrapped.write(*args, **kwargs)
-
-            def close(self):
-                self.close_attempts += 1
-                if self.stage == owner.target and owner.close_fails:
-                    raise OSError(f"injected metadata {self.stage} close failure")
-                self.wrapped.close()
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                self.close()
-
-        def tracked_open(path, *args, **kwargs):
-            stage = "validation" if os.fspath(path) in self.temporary_paths else "source"
-            return FileBoundary(real_open(path, *args, **kwargs), stage)
-
-        def tracked_temporary(*args, **kwargs):
-            wrapped = real_temporary(*args, **kwargs)
-            self.temporary_paths.append(wrapped.name)
-            return FileBoundary(wrapped, "temporary")
-
-        monkeypatch.setattr(module, "open", tracked_open, raising=False)
-        monkeypatch.setattr(module.tempfile, "NamedTemporaryFile", tracked_temporary)
-
-    def release_all(self):
-        for boundary in self.files:
-            boundary.wrapped.close()
