@@ -378,6 +378,7 @@ def capture_dependencies(*, trace_path, read_delay=.06, block_operation=None,
             def __init__(self, **kwargs):
                 record(
                     "preview_session_construct",
+                    rolling_window_seconds=kwargs.get("rolling_window_seconds"),
                 )
                 if preview_fault == "construct":
                     record("preview_fault", phase=preview_fault)

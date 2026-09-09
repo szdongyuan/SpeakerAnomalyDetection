@@ -6,6 +6,7 @@ import os
 
 import numpy as np
 
+from base.recording_preview_config import validate_recording_preview_time_mode
 from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
 from base.ve3668n_input import (
     normalize_machine_id,
@@ -14,6 +15,13 @@ from base.ve3668n_input import (
     validate_sample_rate,
 )
 from base.ve3668n_wav_metadata import validate_ve_wav_metadata
+from consts.recording_preview_consts import (
+    MAIN_RECORDING_LIVE_MAX_POINTS,
+    MAIN_RECORDING_LIVE_WINDOW_SECONDS,
+    PREVIEW_TIME_LOWER_BOUND_TOLERANCE,
+    PREVIEW_TIME_MODE_CUMULATIVE,
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+)
 from consts.ve3668n_consts import VE_BACKEND
 
 
@@ -145,6 +153,7 @@ class RecordingRequest:
     monitor: Mapping
     calibration_metadata: Mapping | None
     validation_thresholds: Mapping
+    preview_time_mode: str = PREVIEW_TIME_MODE_RELATIVE_LATEST
 
     def __post_init__(self):
         if not isinstance(self.request_id, str) or not self.request_id:
@@ -165,6 +174,11 @@ class RecordingRequest:
             raise ValueError("recording path must be absolute")
         if not isinstance(self.streaming, bool):
             raise ValueError("streaming must be a boolean")
+        object.__setattr__(
+            self,
+            "preview_time_mode",
+            validate_recording_preview_time_mode(self.preview_time_mode),
+        )
         for name in ("device", "monitor", "validation_thresholds"):
             value = getattr(self, name)
             if not isinstance(value, Mapping):
@@ -236,6 +250,7 @@ class RecordingPreview:
     sample_stop: int
     channels: tuple[int, ...]
     waveforms: tuple[StreamingWaveformSnapshot, ...]
+    time_mode: str = PREVIEW_TIME_MODE_CUMULATIVE
 
     def __post_init__(self):
         if not isinstance(self.request_id, str) or not self.request_id:
@@ -243,21 +258,44 @@ class RecordingPreview:
         _integer("generation", self.generation, 1)
         _integer("sequence", self.sequence, 1)
         _integer("sample_stop", self.sample_stop)
+        if self.time_mode not in (
+            PREVIEW_TIME_MODE_CUMULATIVE,
+            PREVIEW_TIME_MODE_RELATIVE_LATEST,
+        ):
+            raise ValueError("preview time mode is invalid")
         channels = _channels(self.channels)
         if len(channels) != len(self.waveforms):
             raise ValueError("preview channel and waveform counts differ")
         owned = []
         for waveform in self.waveforms:
-            if (not isinstance(waveform, StreamingWaveformSnapshot)
+            structurally_invalid = (
+                    not isinstance(waveform, StreamingWaveformSnapshot)
                     or waveform.sample_stop != self.sample_stop
                     or not isinstance(waveform.time, np.ndarray)
                     or not isinstance(waveform.amplitude, np.ndarray)
                     or waveform.time.ndim != 1 or waveform.amplitude.ndim != 1
                     or waveform.time.dtype != np.float64 or waveform.amplitude.dtype != np.float32
-                    or len(waveform.time) != len(waveform.amplitude) or len(waveform.time) > 4000
+                    or len(waveform.time) != len(waveform.amplitude)
+                    or len(waveform.time) > MAIN_RECORDING_LIVE_MAX_POINTS
                     or not np.all(np.isfinite(waveform.time))
-                    or np.any(np.diff(waveform.time) <= 0)):
-                raise ValueError("invalid cumulative preview waveform")
+                    or np.any(np.diff(waveform.time) <= 0)
+            )
+            if self.time_mode == PREVIEW_TIME_MODE_CUMULATIVE:
+                invalid = structurally_invalid or np.any(waveform.time < 0.0)
+            else:
+                invalid = structurally_invalid or (
+                    len(waveform.time) > 0
+                    and (
+                        waveform.time[-1] != 0.0
+                        or np.any(waveform.time > 0.0)
+                        or waveform.time[0] < (
+                            -MAIN_RECORDING_LIVE_WINDOW_SECONDS
+                            - PREVIEW_TIME_LOWER_BOUND_TOLERANCE
+                        )
+                    )
+                )
+            if invalid:
+                raise ValueError(f"invalid {self.time_mode} preview waveform")
             time_axis = waveform.time.copy()
             amplitude = waveform.amplitude.copy()
             time_axis.setflags(write=False)
@@ -269,7 +307,8 @@ class RecordingPreview:
     def __reduce__(self):
         # NumPy pickle does not preserve write protection; reconstruct via validation.
         return (type(self), (self.request_id, self.generation, self.sequence,
-                             self.sample_stop, self.channels, self.waveforms))
+                             self.sample_stop, self.channels, self.waveforms,
+                             self.time_mode))
 
 
 @dataclass(frozen=True)

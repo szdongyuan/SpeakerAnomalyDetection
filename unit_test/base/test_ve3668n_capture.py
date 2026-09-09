@@ -18,6 +18,12 @@ from base.wav_calibration_metadata import (
     WavCalibrationMetadataAppendResult, append_wav_calibration_metadata_result,
     inspect_wav_calibration_metadata,
 )
+from consts.recording_preview_consts import (
+    MAIN_RECORDING_LIVE_WINDOW_SECONDS,
+    PREVIEW_TIME_LOWER_BOUND_TOLERANCE,
+    PREVIEW_TIME_MODE_CUMULATIVE,
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+)
 from unit_test.base.recording_process_fakes import (
     ControlledMetadataAppender, ControlledWriter, FakeStatus, MetadataFileFaults,
 )
@@ -465,8 +471,12 @@ def test_ve_adapter_release_uncertainty_keeps_capture_slot_closed(tmp_path):
 
 @pytest.mark.parametrize("rate", [44100, 48000, 51200])
 @pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("preview_time_mode", [
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+    PREVIEW_TIME_MODE_CUMULATIVE,
+])
 def test_shared_capture_exact_trim_float_voltage_with_no_portaudio(
-        tmp_path, monkeypatch, rate, streaming):
+        tmp_path, monkeypatch, rate, streaming, preview_time_mode):
     from base import recording_capture
     def forbidden(*args, **kwargs):
         pytest.fail("VE must not use sounddevice or default device")
@@ -476,6 +486,7 @@ def test_shared_capture_exact_trim_float_voltage_with_no_portaudio(
     trim = rate // 100
     capture, sdk, streams, _ = start_capture(tmp_path, CaptureSDK(counts=[0, 2, 1]), request_options={
         "sample_rate": rate, "target_samples": raw, "trim_samples": trim, "streaming": streaming,
+        "preview_time_mode": preview_time_mode,
     }, backend=object())
     outcome = capture.wait(3)
     assert isinstance(outcome, RecordingResult), outcome
@@ -491,10 +502,17 @@ def test_shared_capture_exact_trim_float_voltage_with_no_portaudio(
     preview = capture.snapshot(generation=1, sequence=1)
     if streaming:
         assert preview.sample_stop == raw - trim
+        assert preview.time_mode == preview_time_mode
         for waveform in preview.waveforms:
-            assert waveform.time[0] == 0.0
-            assert waveform.time[-1] > 0.0
-            assert np.all(np.diff(waveform.time) > 0.0)
+            if preview_time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST:
+                assert waveform.time[-1] == 0.0
+                assert waveform.time[0] >= (
+                    -MAIN_RECORDING_LIVE_WINDOW_SECONDS - PREVIEW_TIME_LOWER_BOUND_TOLERANCE
+                )
+            else:
+                assert waveform.time[0] == 0.0
+                assert waveform.time[-1] > 0.0
+                assert np.all(np.diff(waveform.time) > 0.0)
         assert max(preview.waveforms[0].amplitude) == 8.25
         assert max(preview.waveforms[1].amplitude) == 2.5
     else:
@@ -976,9 +994,9 @@ def test_measured_snapshot_never_applies_pa_gain_to_capture_or_preview(tmp_path)
     assert isinstance(outcome, RecordingResult), outcome
     np.testing.assert_array_equal(sf.read(outcome.path, dtype="float32")[0], np.tile([8.25, 2.5], (7, 1)))
     preview = capture.snapshot(generation=1, sequence=1)
-    assert preview.waveforms[0].time[0] == 0.0
-    assert preview.waveforms[0].time[-1] > 0.0
-    assert np.all(np.diff(preview.waveforms[0].time) > 0.0)
+    assert preview.time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
+    assert preview.waveforms[0].time[-1] == 0.0
+    assert preview.waveforms[0].time[0] >= -MAIN_RECORDING_LIVE_WINDOW_SECONDS
     assert max(preview.waveforms[0].amplitude) == 8.25
     assert inspect_wav_calibration_metadata(outcome.path).metadata == metadata
     assert metadata["recorded_channels"][0]["calibration"]["sample_rate"] == 51200
@@ -1155,7 +1173,7 @@ def test_metadata_ordinary_exception_cannot_bypass_capture_ownership_handoff(
 
 @pytest.mark.parametrize("streaming", [False, True])
 def test_uncalibrated_main_capture_preserves_voltage_and_cumulative_preview(tmp_path, streaming):
-    request = capture_request(tmp_path / "uncalibrated.wav", streaming=streaming)
+    request = capture_request(tmp_path / "uncalibrated.wav", streaming=streaming, preview_time_mode=PREVIEW_TIME_MODE_CUMULATIVE)
     sdk = CaptureSDK()
     def stream_factory(**kwargs):
         return Ve3668nInputStream(**kwargs, sdk_factory=lambda: sdk)

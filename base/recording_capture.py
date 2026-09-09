@@ -26,8 +26,13 @@ from base.streaming_file_writer import StreamingWavWriter
 from base.wav_calibration_metadata import (
     WavCalibrationMetadataAppendResult,
     WavCalibrationMetadataReadStatus,
-    inspect_wav_calibration_metadata,
     append_wav_calibration_metadata_result,
+    inspect_wav_calibration_metadata,
+)
+from consts.recording_preview_consts import (
+    MAIN_RECORDING_LIVE_MAX_POINTS,
+    MAIN_RECORDING_LIVE_WINDOW_SECONDS,
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
 )
 from consts.ve3668n_consts import VE_BACKEND
 
@@ -135,7 +140,14 @@ class RecordingCapture:
         self._waveforms = None
         if self._preview_enabled:
             try:
-                self._waveforms = MultichannelWaveformSession(max_points=4000)
+                self._waveforms = MultichannelWaveformSession(
+                    max_points=MAIN_RECORDING_LIVE_MAX_POINTS,
+                    rolling_window_seconds=(
+                        MAIN_RECORDING_LIVE_WINDOW_SECONDS
+                        if request.preview_time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
+                        else None
+                    ),
+                )
                 self._waveforms.begin(
                     channels=request.channels,
                     sample_rate=request.sample_rate,
@@ -198,6 +210,7 @@ class RecordingCapture:
                 snapshots[0].sample_stop,
                 self.request.channels,
                 snapshots,
+                self.request.preview_time_mode,
             )
         except Exception as exc:
             # Presentation boundary: reducer/snapshot faults disable preview only.

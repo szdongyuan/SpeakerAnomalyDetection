@@ -7,7 +7,16 @@ from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDoubleSpinBox, 
 from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QStyle, QVBoxLayout
 
 from base.sound_device_manager import SoundDeviceManager
+from base.recording_preview_config import (
+    resolve_recording_preview_time_mode,
+    validate_recording_preview_time_mode,
+)
 from consts import model_consts
+from consts.recording_preview_consts import (
+    PREVIEW_TIME_MODE_CUMULATIVE,
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
+)
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
 
@@ -62,7 +71,7 @@ class RecordConfigWindow(BaseConfigWindow):
         self.setMinimumWidth(560)
         self.resize(560, 420)
         self.input_data = input_data or {}
-        if speaker is not None:
+        if speaker is not None or (self.mic or {}).get("backend") == "vkinging":
             self.speaker = speaker
         else:
             _, self.speaker = SoundDeviceManager().get_default_device("speaker", refresh=False)
@@ -93,6 +102,20 @@ class RecordConfigWindow(BaseConfigWindow):
         self.samplerate_combo = QComboBox()
         self.samplerate_combo.addItems(["44100", "48000"])
         self.samplerate_combo.setCurrentText(str(self.input_data.get("sample_rate", 44100)))
+        if (self.mic or {}).get("backend") == "vkinging":
+            from base.ve3668n_input import resolve_effective_input_rate
+            self.samplerate_combo.clear()
+            try:
+                rate = resolve_effective_input_rate(self.mic, self.input_data.get("sample_rate", 44100))
+                self.samplerate_combo.addItem(str(rate), rate)
+            except ValueError as exc:
+                self.samplerate_combo.addItem("配置不可用")
+                self.samplerate_combo.setToolTip(str(exc))
+            self.samplerate_combo.setEnabled(False)
+            self.ve_hint_label = QLabel(
+                "VE 采样率来自硬件设置，请在硬件面板修改。VE 不支持实时监听。\n"
+                "若产品已启用监听，请切回普通声卡，在录制配置中关闭监听后再选择 VE。")
+            self.ve_hint_label.setWordWrap(True)
 
         label_input_device = QLabel("输入设备:")
         self.input_device_display = QLineEdit()
@@ -109,6 +132,34 @@ class RecordConfigWindow(BaseConfigWindow):
         self.streaming_recording_checkbox = QCheckBox("启用")
         self.streaming_recording_checkbox.setChecked(
             bool(self.input_data.get("use_streaming_recording", False))
+        )
+        self.preview_time_mode_label = QLabel("预览显示方式:")
+        self.preview_time_mode_combo = QComboBox()
+        self.preview_time_mode_combo.addItem(
+            "最新 10 秒", PREVIEW_TIME_MODE_RELATIVE_LATEST
+        )
+        self.preview_time_mode_combo.addItem(
+            "累计显示", PREVIEW_TIME_MODE_CUMULATIVE
+        )
+        self.preview_time_mode_error_label = QLabel()
+        self.preview_time_mode_error_label.setWordWrap(True)
+        self._invalid_preview_time_mode = None
+        self._preview_time_mode_needs_repair = False
+        try:
+            preview_time_mode = resolve_recording_preview_time_mode(self.input_data)
+        except ValueError as exc:
+            self._preview_time_mode_needs_repair = True
+            self._invalid_preview_time_mode = self.input_data.get(
+                RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
+            )
+            self.preview_time_mode_combo.setCurrentIndex(-1)
+            self.preview_time_mode_error_label.setText(str(exc))
+        else:
+            self.preview_time_mode_combo.setCurrentIndex(
+                self.preview_time_mode_combo.findData(preview_time_mode)
+            )
+        self.preview_time_mode_combo.currentIndexChanged.connect(
+            self._on_preview_time_mode_changed
         )
         label_recording_root = QLabel("音频保存根目录:")
         self.recording_root_input = QLineEdit()
@@ -151,7 +202,9 @@ class RecordConfigWindow(BaseConfigWindow):
             max_out = 0
 
         self._monitor_output_available = max_out > 0
+        self._initializing_streaming_controls = True
         self._on_streaming_recording_toggled(self.streaming_recording_checkbox.isChecked())
+        self._initializing_streaming_controls = False
 
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
@@ -167,21 +220,43 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(self.streaming_recording_checkbox, 5, 1)
         grid_layout.addWidget(label_recording_root, 6, 0)
         grid_layout.addLayout(recording_root_layout, 6, 1)
+        grid_layout.addWidget(self.preview_time_mode_label, 7, 0)
+        grid_layout.addWidget(self.preview_time_mode_combo, 7, 1)
+        grid_layout.addWidget(self.preview_time_mode_error_label, 8, 0, 1, 2)
+        if hasattr(self, "ve_hint_label"):
+            grid_layout.addWidget(self.ve_hint_label, 9, 0, 1, 2)
 
         in_group_box.setLayout(grid_layout)
         return in_group_box
 
     def on_click_ok_btn(self):
+        try:
+            preview_time_mode = validate_recording_preview_time_mode(
+                self.preview_time_mode_combo.currentData()
+            )
+        except ValueError as exc:
+            self.final_data = None
+            self.preview_time_mode_error_label.setText(str(exc))
+            self._preview_time_mode_needs_repair = True
+            self._invalid_preview_time_mode = self.input_data.get(
+                RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
+            )
+            self._refresh_preview_time_mode_visibility()
+            QMessageBox.warning(self, "设置警告", str(exc))
+            return
         recording_root = str(self.recording_root_input.text() or "").strip()
         if recording_root and not os.path.isdir(recording_root):
             QMessageBox.warning(self, "设置警告", "音频保存根目录不存在，请重新选择。")
             return
         self.final_data = {
             "total_time": self.time_input.value(),
-            "sample_rate": int(self.samplerate_combo.currentText()),
+            "sample_rate": (self.input_data.get("sample_rate", 44100)
+                            if (self.mic or {}).get("backend") == "vkinging"
+                            else int(self.samplerate_combo.currentText())),
             "monitor_playback": bool(self.monitor_checkbox.isChecked()),
             "monitor_gain_db": float(self.monitor_gain_db_input.value()),
             "use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked()),
+            RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: preview_time_mode,
             model_consts.RECORDING_ROOT_CONFIG_KEY: (
                 os.path.abspath(recording_root) if recording_root else ""
             ),
@@ -211,14 +286,53 @@ class RecordConfigWindow(BaseConfigWindow):
         )
 
     def _on_monitor_toggled(self, checked: bool):
+        if (self.mic or {}).get("backend") == "vkinging":
+            self.monitor_gain_db_input.setEnabled(False)
+            self._refresh_preview_time_mode_visibility()
+            return
         self.monitor_gain_db_input.setEnabled(bool(checked))
+        self._refresh_preview_time_mode_visibility()
 
     def _on_streaming_recording_toggled(self, checked: bool):
+        if (self.mic or {}).get("backend") == "vkinging":
+            self.monitor_checkbox.setEnabled(False)
+            self.monitor_gain_db_input.setEnabled(False)
+            self._refresh_preview_time_mode_visibility()
+            return
         monitor_enabled = bool(checked and self._monitor_output_available)
-        if not monitor_enabled:
+        if not monitor_enabled and not self._initializing_streaming_controls:
             self.monitor_checkbox.setChecked(False)
         self.monitor_checkbox.setEnabled(monitor_enabled)
         self._on_monitor_toggled(monitor_enabled and self.monitor_checkbox.isChecked())
+        self._refresh_preview_time_mode_visibility()
+
+    def _on_preview_time_mode_changed(self, _index):
+        try:
+            validate_recording_preview_time_mode(
+                self.preview_time_mode_combo.currentData()
+            )
+        except ValueError:
+            return
+        self._preview_time_mode_needs_repair = False
+        self._invalid_preview_time_mode = None
+        self.preview_time_mode_error_label.clear()
+        self._refresh_preview_time_mode_visibility()
+
+    def _refresh_preview_time_mode_visibility(self):
+        if not hasattr(self, "preview_time_mode_combo"):
+            return
+        needs_repair = self._preview_time_mode_needs_repair
+        if (self.mic or {}).get("backend") == "vkinging":
+            has_effective_preview = self.streaming_recording_checkbox.isChecked()
+        else:
+            has_effective_preview = bool(
+                self.streaming_recording_checkbox.isChecked()
+                or self.monitor_checkbox.isChecked()
+            )
+        visible = needs_repair or has_effective_preview
+        self.preview_time_mode_label.setVisible(visible)
+        self.preview_time_mode_combo.setVisible(visible)
+        self.preview_time_mode_error_label.setVisible(needs_repair)
 
 
 class ImportAudioConfigWindow(BaseConfigWindow):

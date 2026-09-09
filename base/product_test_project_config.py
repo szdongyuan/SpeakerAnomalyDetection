@@ -5,6 +5,7 @@ import os
 
 from base.hardware_trigger.serial_full_frame_matcher import normalize_hex_frame
 from base.load_config import LoadUiConfig
+from base.recording_preview_config import resolve_recording_preview_time_mode
 from consts import error_code
 from consts.product_test_project_consts import (
     CONDITION_NAME_KEY,
@@ -734,15 +735,21 @@ class ProductTestProjectConfigManager(object):
         acquisition_detail = acquisition.get("detail", {})
         analysis_list = sequence_data.get("analysis_list", {})
         display_sequence = analysis_list.get("display_sequence", [])
+        if acquisition_mode not in {"RECORD_ONLY", "IMPORT_AUDIO"}:
+            info["reason"] = f"不支持的采集模式：{acquisition_mode or '-'}"
+            return info
+        if acquisition_mode == "RECORD_ONLY":
+            try:
+                resolve_recording_preview_time_mode(acquisition_detail)
+            except ValueError as exc:
+                info["reason"] = str(exc)
+                return info
         duration = acquisition_detail.get("total_time")
         sample_rate = acquisition_detail.get("sample_rate")
         if acquisition_mode == "RECORD_ONLY" and (
             not isinstance(duration, (int, float)) or duration <= 0
         ):
             info["reason"] = "录音时长无效"
-            return info
-        if acquisition_mode not in {"RECORD_ONLY", "IMPORT_AUDIO"}:
-            info["reason"] = f"不支持的采集模式：{acquisition_mode or '-'}"
             return info
         info["duration"] = duration if acquisition_mode == "RECORD_ONLY" else None
         if not isinstance(sample_rate, (int, float)) or sample_rate <= 0:

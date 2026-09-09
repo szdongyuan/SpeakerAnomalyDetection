@@ -1,3 +1,4 @@
+from collections import UserDict
 import gc
 import inspect
 import logging
@@ -9,6 +10,15 @@ import numpy as np
 import pytest
 
 from ui.sequence import sequence_widget_analysis_ops, sequence_widget_streaming_ops
+from consts.recording_preview_consts import (
+    MAIN_RECORDING_FINAL_MAX_POINTS,
+    MAIN_RECORDING_LIVE_MAX_POINTS,
+    MAIN_RECORDING_LIVE_WINDOW_SECONDS,
+    PREVIEW_TIME_LOWER_BOUND_TOLERANCE,
+    PREVIEW_TIME_MODE_CUMULATIVE,
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
+)
 from ui.sequence.multichannel_waveform_session import MultichannelWaveformSession
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
@@ -30,8 +40,17 @@ class _PlotWindow:
     def __init__(self, channel, calls):
         self.channel_index = channel
         self._calls = calls
+        self.data = None
+        self.is_live_preview = False
+        self.presentation_mode = "complete"
 
     def set_data(self, time_axis, amplitude):
+        self.data = (
+            np.array(time_axis, copy=True),
+            np.array(amplitude, copy=True),
+        )
+        self.is_live_preview = False
+        self.presentation_mode = "complete"
         self._calls.append(
             SimpleNamespace(
                 channel=self.channel_index,
@@ -39,6 +58,50 @@ class _PlotWindow:
                 y=np.array(amplitude, copy=True),
             )
         )
+
+    def set_live_data(self, time_axis, amplitude):
+        self.data = (
+            np.array(time_axis, copy=True),
+            np.array(amplitude, copy=True),
+        )
+        self.is_live_preview = True
+        self.presentation_mode = PREVIEW_TIME_MODE_RELATIVE_LATEST
+        self._calls.append(
+            SimpleNamespace(
+                channel=self.channel_index,
+                x=self.data[0].copy(),
+                y=self.data[1].copy(),
+                live=True,
+            )
+        )
+
+    def set_cumulative_preview_data(self, time_axis, amplitude):
+        self.data = (
+            np.array(time_axis, copy=True),
+            np.array(amplitude, copy=True),
+        )
+        self.is_live_preview = True
+        self.presentation_mode = PREVIEW_TIME_MODE_CUMULATIVE
+        self._calls.append(
+            SimpleNamespace(
+                channel=self.channel_index,
+                x=self.data[0].copy(),
+                y=self.data[1].copy(),
+                live=True,
+                mode=PREVIEW_TIME_MODE_CUMULATIVE,
+            )
+        )
+
+    def snapshot_plot_state(self):
+        if self.data is None:
+            data = None
+        else:
+            data = tuple(value.copy() for value in self.data)
+        return data, self.is_live_preview
+
+    def restore_plot_state(self, state):
+        data, self.is_live_preview = state
+        self.data = None if data is None else tuple(value.copy() for value in data)
 
 
 class _Workspace:
@@ -61,14 +124,17 @@ class _Workspace:
 
 class _RuntimeHost(SequenceWidgetStreamingOpsMixin):
     def __init__(self, channels=(0,)):
+        self.data_btn = mock.Mock()
         self.streaming_wav_writer = _Writer()
         self.default_logger = logging.getLogger(__name__)
         self._recording_input_channels = tuple(channels)
         self._active_input_channels = list(channels)
+        self.sequence_config = [{"seq1": {"acq": {"detail": {}}}}]
         self.channel_workspace = _Workspace(channels)
         self._streaming_first_chunk_logged = True
         self._streaming_waveform_session = MultichannelWaveformSession(
-            max_points=self._WAVEFORM_DISPLAY_MAX_POINTS
+            max_points=MAIN_RECORDING_LIVE_MAX_POINTS,
+            rolling_window_seconds=MAIN_RECORDING_LIVE_WINDOW_SECONDS,
         )
         self._streaming_waveform_generation = 0
         self._streaming_waveform_refresh_scheduled = False
@@ -352,9 +418,201 @@ def test_refresh_is_coalesced_and_projects_latest_snapshot():
     host.scheduled.pop()()
 
     assert [call.channel for call in host.channel_workspace.calls] == [0, 2]
-    assert all(call.x[-1] == pytest.approx(0.3) for call in host.channel_workspace.calls)
+    assert all(call.x[-1] == 0.0 for call in host.channel_workspace.calls)
+    assert all(call.live is True for call in host.channel_workspace.calls)
     np.testing.assert_array_equal(host.channel_workspace.calls[0].y, [1.0, 2.0, 3.0, 4.0])
     np.testing.assert_array_equal(host.channel_workspace.calls[1].y, [10.0, 20.0, 30.0, 40.0])
+
+
+@pytest.mark.parametrize(
+    "mode,rolling_seconds,setter_name,other_setter",
+    [
+        (
+            PREVIEW_TIME_MODE_RELATIVE_LATEST,
+            MAIN_RECORDING_LIVE_WINDOW_SECONDS,
+            "set_live_data",
+            "set_cumulative_preview_data",
+        ),
+        (
+            PREVIEW_TIME_MODE_CUMULATIVE,
+            None,
+            "set_cumulative_preview_data",
+            "set_live_data",
+        ),
+    ],
+)
+def test_begin_freezes_selected_mode_and_projection_uses_only_selected_setter(
+    mode, rolling_seconds, setter_name, other_setter
+):
+    host = _RuntimeHost(channels=(0, 2))
+    detail = host.sequence_config[0]["seq1"]["acq"]["detail"]
+    detail[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] = mode
+    original_session = host._streaming_waveform_session
+
+    host._begin_streaming_waveform_session(10, 0, "forward")
+
+    active_session = host._streaming_waveform_session
+    assert active_session is not original_session
+    assert active_session._rolling_window_seconds == rolling_seconds
+    assert host._streaming_waveform_time_mode == mode
+    for window in host.channel_workspace.all_subwindows():
+        setattr(window, other_setter, None)
+
+    detail[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] = (
+        PREVIEW_TIME_MODE_CUMULATIVE
+        if mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
+        else PREVIEW_TIME_MODE_RELATIVE_LATEST
+    )
+    host.on_audio_chunk_received(
+        np.array([[1.0, 10.0], [2.0, 20.0]], dtype=np.float32)
+    )
+    host.scheduled.pop()()
+
+    assert host._streaming_waveform_session is active_session
+    assert host._streaming_waveform_time_mode == mode
+    assert all(window.presentation_mode == mode
+               for window in host.channel_workspace.all_subwindows())
+    assert all(call.live is True for call in host.channel_workspace.calls)
+
+    for window in host.channel_workspace.all_subwindows():
+        assert callable(getattr(window, setter_name))
+
+
+def test_begin_preserves_mapping_acquisition_detail():
+    host = _RuntimeHost(channels=(0, 2))
+    host.sequence_config = [{
+        "seq1": {
+            "acq": {
+                "detail": UserDict({
+                    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY:
+                        PREVIEW_TIME_MODE_CUMULATIVE,
+                }),
+            },
+        },
+    }]
+
+    host._begin_streaming_waveform_session(10, 0, "forward")
+
+    assert host._streaming_waveform_time_mode == PREVIEW_TIME_MODE_CUMULATIVE
+    assert host._streaming_waveform_session._rolling_window_seconds is None
+
+
+@pytest.mark.parametrize("invalid_detail", [None, []])
+def test_begin_rejects_explicit_non_mapping_detail_before_session_creation(
+    monkeypatch, invalid_detail
+):
+    host = _RuntimeHost(channels=(0, 2))
+    host.sequence_config = [{
+        "seq1": {"acq": {"detail": invalid_detail}},
+    }]
+    original_session = host._streaming_waveform_session
+    session_factory = mock.Mock(wraps=MultichannelWaveformSession)
+    monkeypatch.setattr(
+        sequence_widget_streaming_ops,
+        "MultichannelWaveformSession",
+        session_factory,
+    )
+
+    with pytest.raises(ValueError, match="detail must be a mapping"):
+        host._begin_streaming_waveform_session(10, 0, "forward")
+
+    session_factory.assert_not_called()
+    assert host._streaming_waveform_session is original_session
+
+
+@pytest.mark.parametrize(
+    "mode,setter_name",
+    [
+        (PREVIEW_TIME_MODE_RELATIVE_LATEST, "set_live_data"),
+        (PREVIEW_TIME_MODE_CUMULATIVE, "set_cumulative_preview_data"),
+    ],
+)
+def test_mode_aware_projection_preflights_and_rolls_back_every_window(
+    mode, setter_name
+):
+    host = _RuntimeHost(channels=(0, 2))
+    windows = host.channel_workspace.all_subwindows()
+    prior_time = np.array([-1.0, 0.0], dtype=np.float64)
+    prior_amplitude = np.array([7.0, 8.0], dtype=np.float32)
+    for window in windows:
+        window.set_live_data(prior_time, prior_amplitude)
+    prior_states = [window.snapshot_plot_state() for window in windows]
+    failing = mock.Mock(side_effect=RuntimeError("second plot failed"))
+    setattr(windows[1], setter_name, failing)
+    waveforms = tuple(
+        SimpleNamespace(
+            time=np.array([0.0, 1.0], dtype=np.float64),
+            amplitude=np.array([1.0, 2.0], dtype=np.float32),
+        )
+        for _ in windows
+    )
+
+    with pytest.raises(RuntimeError, match="second plot failed"):
+        host._project_live_waveforms_to_workspace((0, 2), waveforms, mode)
+
+    for window, prior in zip(windows, prior_states):
+        current = window.snapshot_plot_state()
+        np.testing.assert_array_equal(current[0][0], prior[0][0])
+        np.testing.assert_array_equal(current[0][1], prior[0][1])
+        assert current[1] is prior[1]
+
+
+def test_compatible_streaming_projects_only_the_latest_ten_seconds_live():
+    host = _RuntimeHost(channels=(0, 2))
+    sample_rate = 1_000
+    host._begin_streaming_waveform_session(sample_rate, 0, "forward")
+    samples = sample_rate * 12
+    time = np.arange(samples, dtype=np.float32)
+
+    for start in range(0, samples, 997):
+        stop = min(start + 997, samples)
+        chunk = np.column_stack((time[start:stop], -time[start:stop])).astype(np.float32)
+        host.on_audio_chunk_received(chunk)
+
+    assert len(host.scheduled) == 1
+    host.scheduled.pop()()
+
+    assert len(host.streaming_wav_writer.chunks) == 13
+    for window in host.channel_workspace.all_subwindows():
+        x_data, _ = window.data
+        assert window.is_live_preview is True
+        assert x_data[-1] == 0.0
+        assert x_data[0] >= -MAIN_RECORDING_LIVE_WINDOW_SECONDS - PREVIEW_TIME_LOWER_BOUND_TOLERANCE
+        assert len(x_data) <= MAIN_RECORDING_LIVE_MAX_POINTS
+
+
+def test_second_channel_live_failure_rolls_back_all_plots_and_keeps_capture():
+    host = _RuntimeHost(channels=(0, 2))
+    host.default_logger = mock.Mock()
+    prior = np.array([-1.0, 0.0], dtype=np.float64)
+    for column, window in enumerate(host.channel_workspace.all_subwindows()):
+        window.set_live_data(prior, np.array([column + 1, column + 2], dtype=np.float32))
+    prior_states = [window.snapshot_plot_state() for window in host.channel_workspace.all_subwindows()]
+    host.channel_workspace.calls.clear()
+    second = host.channel_workspace.all_subwindows()[1]
+    second.set_live_data = mock.Mock(side_effect=RuntimeError("second live plot failed"))
+    processor = host.streaming_processor
+    writer = host.streaming_wav_writer
+
+    host._begin_streaming_waveform_session(10, 0, "forward")
+    host.on_audio_chunk_received(
+        np.array([[3.0, 30.0], [4.0, 40.0]], dtype=np.float32)
+    )
+    host.scheduled.pop()()
+
+    for window, prior_state in zip(host.channel_workspace.all_subwindows(), prior_states):
+        restored = window.snapshot_plot_state()
+        if prior_state[0] is None:
+            assert restored[0] is None
+        else:
+            np.testing.assert_array_equal(restored[0][0], prior_state[0][0])
+            np.testing.assert_array_equal(restored[0][1], prior_state[0][1])
+        assert restored[1] is True
+    assert host._streaming_waveform_live_enabled is False
+    host.default_logger.error.assert_called_once()
+    assert host.streaming_processor is processor
+    assert host.streaming_wav_writer is writer
+    assert len(writer.chunks) == 1
 
 
 def test_stale_generation_callback_is_a_no_op():
@@ -438,7 +696,7 @@ def test_deferred_failure_disables_only_live_projection_and_releases_buffer(
             side_effect=RuntimeError("snapshot failed")
         )
     else:
-        host.channel_workspace._windows[0].set_data = mock.Mock(
+        host.channel_workspace._windows[0].set_live_data = mock.Mock(
             side_effect=RuntimeError("workspace failed")
         )
 
@@ -458,7 +716,7 @@ def test_deferred_failure_disables_only_live_projection_and_releases_buffer(
     if failure_point == "snapshot":
         host._streaming_waveform_session.snapshots.assert_called_once_with()
     else:
-        host.channel_workspace._windows[0].set_data.assert_called_once()
+        host.channel_workspace._windows[0].set_live_data.assert_called_once()
 
 
 def test_natural_completion_flushes_tail_before_authoritative_projection_then_releases():
@@ -845,6 +1103,128 @@ def test_later_completion_error_does_not_delete_recording_as_invalid(
     assert recorded_path.exists()
 
 
+def test_in_process_workspace_contract_failure_is_presentation_only(
+    tmp_path, monkeypatch
+):
+    host = _RuntimeHost(channels=(0, 2))
+    host.default_logger = mock.Mock()
+    recorded_path = tmp_path / "workspace-presentation-failed.wav"
+    recorded_path.write_bytes(b"valid finalized wav")
+    host.recorded_path = str(recorded_path)
+    writer = host.streaming_wav_writer
+    writer.finalize = mock.Mock(wraps=writer.finalize)
+    recorded_multi = np.asarray(
+        [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]],
+        dtype=np.float32,
+    )
+    host.data_struct = SimpleNamespace(
+        sample_rate=48_000,
+        store_wave_data=None,
+        store_wave_data_multi=None,
+    )
+    host.recorded_signal_info = {"labels": "not_labeled"}
+    host.streaming_stimulus_data = object()
+    host.streaming_mode = "record_only"
+    host.player_status_flag = True
+    host.data_btn = mock.Mock()
+    host.replayer_btn = mock.Mock()
+    host.count_board = SimpleNamespace(mode="")
+    host.barcode_scanner_box = SimpleNamespace(isChecked=lambda: False)
+    host._condition_record_cache = {}
+    host._record_workflow_busy = True
+    host._resolve_recording_acq_detail = lambda: {}
+    host._append_recording_wav_calibration_metadata = mock.Mock(return_value=True)
+    host._resolve_active_recording_waveform_direction = lambda fallback="": "forward"
+    host._update_current_recent_session_result = mock.Mock()
+    host.update_player_btn_is_paused = mock.Mock()
+    host._reset_barcode_commit_dedup = mock.Mock()
+    host._handle_invalid_recording = mock.Mock()
+    host._should_run_silent_analysis_after_recording = lambda: True
+    events = []
+    host.run = mock.Mock(
+        side_effect=lambda **_kwargs: events.append("analysis") or True
+    )
+    windows = host.channel_workspace.all_subwindows()
+    retained = {}
+    for window in windows:
+        window.set_live_data(
+            np.asarray([-1.0, 0.0], dtype=np.float64),
+            np.asarray([window.channel_index + 1.0, window.channel_index + 2.0]),
+        )
+        retained[window.channel_index] = tuple(value.copy() for value in window.data)
+    host.channel_workspace._windows.reverse()
+
+    original_validate_workspace = host._validate_final_waveform_workspace
+    validation_attempts = []
+
+    def validate_workspace_after_publication(run_channels):
+        validation_attempts.append(tuple(run_channels))
+        np.testing.assert_array_equal(
+            host.data_struct.store_wave_data_multi,
+            recorded_multi,
+        )
+        assert host.streaming_wav_writer is None
+        assert writer.finalized is True
+        events.append("presentation")
+        return original_validate_workspace(run_channels)
+
+    host._validate_final_waveform_workspace = validate_workspace_after_publication
+    validation = mock.Mock(return_value=(True, "", ""))
+    database = mock.Mock()
+    database.save_signal_info_to_db.side_effect = lambda *_args: (
+        events.append("database") or (sequence_widget_streaming_ops.error_code.OK, "saved")
+    )
+    warnings = []
+    monkeypatch.setattr(
+        sequence_widget_streaming_ops,
+        "validate_recorded_audio",
+        validation,
+    )
+    monkeypatch.setattr(
+        sequence_widget_streaming_ops,
+        "RecordingManager",
+        lambda: database,
+    )
+    monkeypatch.setattr(
+        sequence_widget_streaming_ops.QMessageBox,
+        "warning",
+        lambda *args: warnings.append(args[-1]),
+    )
+
+    result = host._on_streaming_complete(
+        recorded_mono=recorded_multi.mean(axis=1),
+        recorded_multi=recorded_multi,
+        sample_rate=48_000,
+    )
+
+    assert result is True
+    assert validation_attempts == [(0, 2)]
+    assert events == ["presentation", "database", "analysis"]
+    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, recorded_multi)
+    np.testing.assert_array_equal(
+        host.data_struct.store_wave_data,
+        recorded_multi.mean(axis=1),
+    )
+    writer.finalize.assert_called_once_with()
+    assert recorded_path.exists()
+    host._handle_invalid_recording.assert_not_called()
+    database.save_signal_info_to_db.assert_called_once_with(
+        host.recorded_signal_info,
+        None,
+    )
+    host.run.assert_called_once_with(
+        show_windows=False,
+        analysis_config_override={},
+    )
+    assert warnings == ["录音已保存，但波形刷新失败。"]
+    for window in host.channel_workspace.all_subwindows():
+        restored_time, restored_amplitude = window.data
+        expected_time, expected_amplitude = retained[window.channel_index]
+        np.testing.assert_array_equal(restored_time, expected_time)
+        np.testing.assert_array_equal(restored_amplitude, expected_amplitude)
+        assert window.is_live_preview is True
+
+
 def test_manual_cleanup_invalidates_pending_live_callback_before_resources():
     host = _RuntimeHost()
     events = []
@@ -1092,10 +1472,17 @@ def test_coalesced_600_second_delivery_reaches_live_and_final_endpoints(
     allow_authoritative_reduction = False
     original_prepare = host._prepare_waveform_display_data
 
-    def reject_live_full_history_reduction(waveform, rate):
+    def reject_live_full_history_reduction(waveform, rate, *, max_points=None):
         if not allow_authoritative_reduction:
             raise AssertionError("live refresh used the legacy full-history reducer")
-        return original_prepare(waveform, rate)
+        assert max_points == MAIN_RECORDING_FINAL_MAX_POINTS
+        np.testing.assert_array_equal(
+            host.data_struct.store_wave_data_multi[:, 0],
+            raw_mono[trim:],
+        )
+        events.append("publish-authoritative-array")
+        events.append("prepare-final-48000")
+        return original_prepare(waveform, rate, max_points=max_points)
 
     legacy_prepare = mock.Mock(side_effect=reject_live_full_history_reduction)
     host._prepare_waveform_display_data = legacy_prepare
@@ -1121,7 +1508,9 @@ def test_coalesced_600_second_delivery_reaches_live_and_final_endpoints(
     assert host._streaming_waveform_pending is False
     legacy_prepare.assert_not_called()
     live_call = host.channel_workspace.calls[-1]
-    assert live_call.x[-1] == pytest.approx(expected_endpoint)
+    assert live_call.x[-1] == 0.0
+    assert live_call.x[0] >= -MAIN_RECORDING_LIVE_WINDOW_SECONDS - PREVIEW_TIME_LOWER_BOUND_TOLERANCE
+    assert live_call.live is True
     assert len(live_call.x) <= host._WAVEFORM_DISPLAY_MAX_POINTS
 
     writer = host.streaming_wav_writer
@@ -1151,6 +1540,8 @@ def test_coalesced_600_second_delivery_reaches_live_and_final_endpoints(
     processor = _Processor()
     host.streaming_processor = processor
     host._streaming_completion_processor = None
+    events = []
+
     host.data_struct = SimpleNamespace(
         sample_rate=sample_rate,
         store_wave_data=None,
@@ -1182,9 +1573,9 @@ def test_coalesced_600_second_delivery_reaches_live_and_final_endpoints(
 
     validation = mock.Mock(return_value=(True, "", ""))
     database = mock.Mock()
-    database.save_signal_info_to_db.return_value = (
-        sequence_widget_streaming_ops.error_code.OK,
-        "saved",
+    database.save_signal_info_to_db.side_effect = lambda *_args: (
+        events.append("database-save")
+        or (sequence_widget_streaming_ops.error_code.OK, "saved")
     )
     monkeypatch.setattr(
         sequence_widget_streaming_ops,
@@ -1199,18 +1590,33 @@ def test_coalesced_600_second_delivery_reaches_live_and_final_endpoints(
 
     calls_before_completion = len(host.channel_workspace.calls)
     allow_authoritative_reduction = True
+    original_set_data = host.channel_workspace.all_subwindows()[0].set_data
+
+    def observe_final_projection(time_axis, amplitude):
+        events.append("project-final")
+        return original_set_data(time_axis, amplitude)
+
+    host.channel_workspace.all_subwindows()[0].set_data = observe_final_projection
 
     host._on_streaming_recording_finished(processor)
 
     assert processor.process_queue_calls == 1
+    assert events == [
+        "publish-authoritative-array",
+        "prepare-final-48000",
+        "project-final",
+        "database-save",
+    ]
     assert len(host.channel_workspace.calls) == calls_before_completion + 1
     authoritative_call = host.channel_workspace.calls[-1]
     assert authoritative_call.x[-1] == pytest.approx(expected_endpoint)
     assert 600 - authoritative_call.x[-1] <= 1 / sample_rate
     assert all(
         len(call.x) <= host._WAVEFORM_DISPLAY_MAX_POINTS
-        for call in host.channel_workspace.calls
+        for call in host.channel_workspace.calls[:-1]
     )
+    assert host._WAVEFORM_DISPLAY_MAX_POINTS < len(authoritative_call.x)
+    assert len(authoritative_call.x) <= MAIN_RECORDING_FINAL_MAX_POINTS
     assert legacy_prepare.call_count == 1
     assert host._direction_waveform_cache == {}
     assert host._condition_record_cache["forward"] == {
@@ -1224,6 +1630,7 @@ def test_coalesced_600_second_delivery_reaches_live_and_final_endpoints(
     expected_time, expected_display = original_prepare(
         raw_mono[trim:],
         sample_rate,
+        max_points=MAIN_RECORDING_FINAL_MAX_POINTS,
     )
     np.testing.assert_array_equal(authoritative_call.x, expected_time)
     np.testing.assert_array_equal(authoritative_call.y, expected_display)

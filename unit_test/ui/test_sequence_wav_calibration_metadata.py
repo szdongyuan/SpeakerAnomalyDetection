@@ -471,7 +471,8 @@ def test_final_projection_failure_is_presentation_only_and_releases_run_state(
         host.recorded_signal_info,
         None,
     )
-    host.run.assert_called_once_with(show_windows=False)
+    host.run.assert_called_once_with(
+        show_windows=False, analysis_config_override=host.analysis_config)
     host._handle_invalid_recording.assert_not_called()
     host._project_normalized_waveform_to_workspace.assert_called_once()
     projection_args = host._project_normalized_waveform_to_workspace.call_args.args
@@ -537,7 +538,7 @@ def test_final_contract_mismatch_rejects_before_db_and_analysis(
         ((2, 0), "order"),
     ],
 )
-def test_final_workspace_contract_mismatch_is_invalid_before_publication(
+def test_final_workspace_contract_mismatch_is_presentation_only_after_publication(
     monkeypatch,
     workspace_channels,
     reason_fragment,
@@ -558,31 +559,67 @@ def test_final_workspace_contract_mismatch_is_invalid_before_publication(
     )
     host.data_struct = data_struct
     host._project_normalized_waveform_to_workspace = mock.Mock()
+    validate_workspace = mock.Mock(wraps=host._validate_final_waveform_workspace)
+    host._validate_final_waveform_workspace = validate_workspace
+    abort_selection = mock.Mock(wraps=host._abort_recording_channel_selection)
+    host._abort_recording_channel_selection = abort_selection
     database = mock.Mock()
     database.save_signal_info_to_db.return_value = (error_code.OK, "saved")
+    warning = mock.Mock()
     monkeypatch.setattr(
         "ui.sequence.sequence_widget_streaming_ops.RecordingManager",
         lambda: database,
     )
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_streaming_ops.QMessageBox.warning",
+        warning,
+    )
 
-    host._on_streaming_complete(
+    result = host._on_streaming_complete(
         recorded_mono=recorded_multi.mean(axis=1),
         recorded_multi=recorded_multi,
         sample_rate=48000,
         completion_source="test",
     )
 
-    assert data_struct.mono_publications == []
-    assert data_struct.multi_publications == []
-    assert data_struct.store_wave_data is previous_mono
-    assert data_struct.store_wave_data_multi is previous_multi
-    host._append_recording_wav_calibration_metadata.assert_not_called()
+    assert result is True
+    assert len(data_struct.mono_publications) == 1
+    assert len(data_struct.multi_publications) == 1
+    np.testing.assert_array_equal(
+        data_struct.mono_publications[0],
+        recorded_multi.mean(axis=1),
+    )
+    np.testing.assert_array_equal(
+        data_struct.multi_publications[0],
+        recorded_multi,
+    )
+    np.testing.assert_array_equal(
+        data_struct.store_wave_data,
+        recorded_multi.mean(axis=1),
+    )
+    np.testing.assert_array_equal(data_struct.store_wave_data_multi, recorded_multi)
+    assert [call for call in calls if call == ("finalize",)] == [("finalize",)]
+    host._append_recording_wav_calibration_metadata.assert_called_once_with()
+    validate_workspace.assert_called_once_with((0, 2))
     host._project_normalized_waveform_to_workspace.assert_not_called()
-    database.save_signal_info_to_db.assert_not_called()
-    host.run.assert_not_called()
-    host._handle_invalid_recording.assert_called_once()
-    assert reason_fragment in host._handle_invalid_recording.call_args.args[0]
+    warning.assert_called_once()
+    assert "波形刷新失败" in warning.call_args.args[2]
+    presentation_errors = [
+        call.args[0]
+        for call in host.default_logger.error.call_args_list
+        if "Final waveform projection failed" in call.args[0]
+    ]
+    assert len(presentation_errors) == 1
+    assert reason_fragment in presentation_errors[0]
+    database.save_signal_info_to_db.assert_called_once_with(
+        host.recorded_signal_info,
+        None,
+    )
+    host.run.assert_called_once_with(
+        show_windows=False, analysis_config_override=host.analysis_config)
+    host._handle_invalid_recording.assert_not_called()
+    abort_selection.assert_not_called()
     assert host.streaming_processor is None
     assert host.streaming_wav_writer is None
-    assert host._recording_input_channels is None
-    assert ("abort_run",) in calls
+    assert host._recording_input_channels == (0, 2)
+    assert ("abort_run",) not in calls
