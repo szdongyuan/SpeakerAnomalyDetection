@@ -183,6 +183,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
         return result
 
     def on_serial_full_frame_received(self, payload):
+        if getattr(self, "_round_reset_in_progress", False) or getattr(self, "_round_reset_delete_failed", False):
+            return
         if getattr(self, "_serial_product_error_dialog_open", False):
             self.default_logger.info("serial_product_frame_ignored_error_dialog_open")
             return

@@ -244,6 +244,9 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             )
             return True
         self._analysis_task_records[request.task_id] = dict(record or {})
+        track_request = getattr(self, "_track_round_analysis_request", None)
+        if callable(track_request):
+            track_request(request, record)
         self._analysis_task_queue.append(request)
         self._set_condition_analysis_stage(condition_key, "分析排队", "running")
         self.default_logger.info(
@@ -464,6 +467,9 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         self._refresh_analysis_action_state()
 
     def _handle_analysis_terminal(self, result):
+        track_result = getattr(self, "_track_round_analysis_result", None)
+        if callable(track_result):
+            track_result(result)
         if result.task_id in self._analysis_handled_terminal_task_ids:
             return
         self._analysis_handled_terminal_task_ids.add(result.task_id)
@@ -1064,6 +1070,9 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         button = getattr(self, "data_btn", None)
         if button is None:
             return
+        if getattr(self, "_round_reset_delete_failed", False):
+            button.setEnabled(False)
+            return
         condition_key = self._selected_analysis_condition_key()
         record = self._resolve_condition_record(condition_key) if condition_key else None
         wav_path = self._analysis_record_wav_path(record)
@@ -1147,6 +1156,9 @@ class SequenceWidgetAnalysisProcessOpsMixin:
     def _write_analysis_worker_log(self, record):
         if not isinstance(record, dict):
             return
+        track_log = getattr(self, "_track_round_analysis_log", None)
+        if callable(track_log):
+            track_log(record)
         level = str(record.get("level") or "INFO").upper()
         raw_message = json.dumps(record, ensure_ascii=False, default=str)
         debug_writer = getattr(

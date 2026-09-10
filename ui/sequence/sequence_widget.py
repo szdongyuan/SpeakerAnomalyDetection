@@ -18,6 +18,7 @@ from ui.sequence.sequencement_count_board import SequenceCountBoard
 
 from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
 from ui.sequence.sequence_widget_test_metadata_ops import SequenceWidgetTestMetadataOpsMixin
+from ui.sequence.sequence_widget_round_reset_ops import SequenceWidgetRoundResetOpsMixin
 from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
 from ui.sequence.sequence_widget_tcp_ops import SequenceWidgetTcpOpsMixin
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
@@ -33,6 +34,7 @@ from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOps
 class SequenceWindow(
     SequenceWidgetUiOpsMixin,
     SequenceWidgetTestMetadataOpsMixin,
+    SequenceWidgetRoundResetOpsMixin,
     SequenceWidgetBarcodeOpsMixin,
     SequenceWidgetTcpOpsMixin,
     SequenceWidgetSerialTriggerOpsMixin,
@@ -112,6 +114,7 @@ class SequenceWindow(
         )
         self._initialize_analysis_process_runtime()
         self._init_test_round_metadata()
+        self._init_round_reset()
         self._refresh_test_mode_availability()
         self.player_status_flag = False
         # True while a record run is still processing (record -> analysis -> save -> count updates).

@@ -304,7 +304,7 @@ class SequenceToolsBar(QWidget):
         return sample_number_layout
 
     def create_current_round_layout(self):
-        current_round_label = QLabel(" 当前测试轮次：")
+        current_round_label = QLabel("当前轮次：")
         current_round_label.setFixedHeight(40)
         current_round_label.setStyleSheet(ui_style_const.toolbar_field_label_style)
         self.current_round_spinbox.setObjectName("currentRoundSpinBox")
@@ -317,11 +317,23 @@ class SequenceToolsBar(QWidget):
         self.current_round_spinbox.setAccessibleName("当前测试轮次")
         self.current_round_spinbox.setAccessibleDescription("请输入当前测试轮次")
         self.current_round_spinbox.setStyleSheet(ui_style_const.toolbar_spinbox_style)
+        self.reset_round_button = QPushButton("重置")
+        self.reset_round_button.setObjectName("resetCurrentRoundButton")
+        self.reset_round_button.setFixedSize(52, 35)
+        self.reset_round_button.setToolTip("重置当前轮次")
+        self.reset_round_button.setAccessibleName("重置当前轮次")
+        self.reset_round_button.setAutoDefault(False)
+        self.reset_round_button.setStyleSheet(
+            ui_style_const.qpushbutton_style
+            + "QPushButton#resetCurrentRoundButton { font-size: 14px; padding: 4px 6px; }"
+        )
         vertical_line = self._create_separator(QFrame.VLine)
 
         current_round_layout = self.create_part_layout()
         current_round_layout.addWidget(current_round_label)
         current_round_layout.addWidget(self.current_round_spinbox)
+        current_round_layout.addSpacing(6)
+        current_round_layout.addWidget(self.reset_round_button)
         current_round_layout.addSpacing(10)
         current_round_layout.addWidget(vertical_line)
 

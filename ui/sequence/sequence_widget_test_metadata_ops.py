@@ -116,6 +116,9 @@ class SequenceWidgetTestMetadataOpsMixin:
     def _attach_test_round_metadata(self, recorded_signal_info):
         if self._test_round_metadata is not None:
             recorded_signal_info.update(self._test_round_metadata)
+        register = getattr(self, "_register_round_recording", None)
+        if callable(register) and recorded_signal_info.get("file_path"):
+            register(recorded_signal_info)
 
     def _cancel_test_metadata_preflight(self):
         # No recording has started. Preserve a partially completed round for retry.
