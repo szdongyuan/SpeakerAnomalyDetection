@@ -304,7 +304,7 @@ class SequenceToolsBar(QWidget):
         return sample_number_layout
 
     def create_current_round_layout(self):
-        current_round_label = QLabel("当前轮次：")
+        current_round_label = QLabel(" 当前测试轮次：")
         current_round_label.setFixedHeight(40)
         current_round_label.setStyleSheet(ui_style_const.toolbar_field_label_style)
         self.current_round_spinbox.setObjectName("currentRoundSpinBox")
