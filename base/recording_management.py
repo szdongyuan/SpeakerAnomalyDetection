@@ -150,11 +150,20 @@ class RecordingManager(object):
             }
             condition_field = {"file_path": old_file_path}
             with DataSave(self.db_path) as database:
-                return database.update_table_data(
+                result = database.update_table_data(
                     "audio_data_table",
                     update_data,
                     condition_field,
                 )
+                if result == (error_code.INVALID_UPDATE, "No data has been updated"):
+                    normalized_path = self.normalize_audio_path_for_db(old_file_path)
+                    if normalized_path != old_file_path:
+                        result = database.update_table_data(
+                            "audio_data_table",
+                            update_data,
+                            {"file_path": normalized_path},
+                        )
+                return result
         except Exception as e:
             err_msg = "The update operation failed. %s" % (str(e)[:40])
             return error_code.INVALID_RENAME, err_msg

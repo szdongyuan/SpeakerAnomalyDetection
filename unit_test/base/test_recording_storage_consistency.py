@@ -3,6 +3,7 @@ import sqlite3
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from base import recording_management
 from base.db_manager import DataSave
@@ -143,6 +144,143 @@ def test_update_audio_label_propagates_no_match_failure(monkeypatch):
     )
 
     assert result == (error_code.INVALID_UPDATE, "No data has been updated")
+
+
+@pytest.fixture
+def label_database(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        recording_management.running_consts, "DEFAULT_DIR", str(tmp_path / "application")
+    )
+    database_path = tmp_path / "labels.db"
+    with DataSave(str(database_path)) as database:
+        assert database.create_table()[0] == error_code.OK
+    manager = RecordingManager()
+    manager.db_path = str(database_path)
+    return manager, database_path
+
+
+@pytest.mark.parametrize("location", ["internal", "external"])
+@pytest.mark.parametrize("label", ["OK", "NG"])
+@pytest.mark.parametrize("lookup", ["raw", "canonical", "legacy"])
+def test_update_audio_label_round_trips_original_path_through_sqlite(
+    tmp_path, label_database, location, label, lookup
+):
+    manager, database_path = label_database
+    root = tmp_path / ("application" if location == "internal" else "factory_audio")
+    source_path = root / "audio_data" / "not_labeled" / "sample.wav"
+    source_info = _audio_info(source_path)
+    original_source_info = source_info.copy()
+    assert manager.save_signal_info_to_db(source_info, None)[0] == error_code.OK
+    assert source_info == original_source_info
+    unrelated_info = _audio_info(root / "audio_data" / "not_labeled" / "unrelated.wav")
+    assert manager.save_signal_info_to_db(unrelated_info, None)[0] == error_code.OK
+
+    canonical_source = (
+        "audio_data/not_labeled/sample.wav"
+        if location == "internal"
+        else source_path.as_posix()
+    )
+    with sqlite3.connect(database_path) as connection:
+        saved_id, saved_label = connection.execute(
+            "SELECT audio_data_id, labels FROM audio_data_table WHERE file_path = ?",
+            (canonical_source,),
+        ).fetchone()
+        assert saved_label == "not_labeled"
+        if lookup == "legacy":
+            connection.execute(
+                "UPDATE audio_data_table SET file_path = ? WHERE audio_data_id = ?",
+                (str(source_path), saved_id),
+            )
+        unrelated_before = connection.execute(
+            "SELECT * FROM audio_data_table WHERE audio_data_id != ?", (saved_id,)
+        ).fetchall()
+
+    target_path = root / "audio_data" / label / "sample.wav"
+    updated_info = _audio_info(target_path)
+    updated_info["labels"] = label
+    original_updated_info = updated_info.copy()
+    old_file_path = canonical_source if lookup == "canonical" else str(source_path)
+    if os.name == "nt" and lookup != "canonical":
+        assert "\\" in old_file_path and os.path.isabs(old_file_path)
+
+    result = manager.update_audio_label(updated_info, old_file_path)
+
+    assert result[0] == error_code.OK
+    assert updated_info == original_updated_info
+    expected_target = (
+        f"audio_data/{label}/sample.wav"
+        if location == "internal"
+        else target_path.as_posix()
+    )
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM audio_data_table").fetchone() == (2,)
+        assert connection.execute(
+            "SELECT file_path, labels FROM audio_data_table WHERE audio_data_id = ?",
+            (saved_id,),
+        ).fetchall() == [(expected_target, label)]
+        assert connection.execute(
+            "SELECT * FROM audio_data_table WHERE audio_data_id != ?", (saved_id,)
+        ).fetchall() == unrelated_before
+
+
+def test_update_audio_label_absent_row_remains_invalid_in_sqlite(tmp_path, label_database):
+    manager, database_path = label_database
+    unrelated_info = _audio_info(tmp_path / "application" / "unrelated.wav")
+    assert manager.save_signal_info_to_db(unrelated_info, None)[0] == error_code.OK
+    with sqlite3.connect(database_path) as connection:
+        before = connection.execute("SELECT * FROM audio_data_table").fetchall()
+
+    result = manager.update_audio_label(
+        {"file_path": str(tmp_path / "application" / "OK" / "missing.wav"), "labels": "OK"},
+        str(tmp_path / "application" / "missing.wav"),
+    )
+
+    assert result == (error_code.INVALID_UPDATE, "No data has been updated")
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT * FROM audio_data_table").fetchall() == before
+
+
+@pytest.mark.parametrize(
+    "update_result, expected_attempts",
+    [
+        ((error_code.INVALID_UPDATE, "No data has been updated"), 2),
+        ((error_code.INVALID_UPDATE, "database is locked"), 1),
+        ((error_code.INVALID_TYPE_DATA, "No data has been updated"), 1),
+        ((error_code.OK, "updated"), 1),
+    ],
+)
+def test_update_audio_label_retries_only_the_distinct_no_match_candidate(
+    tmp_path, monkeypatch, update_result, expected_attempts
+):
+    application_root = tmp_path / "application"
+    monkeypatch.setattr(recording_management.running_consts, "DEFAULT_DIR", str(application_root))
+    database = _UpdateDatabase(update_result)
+    monkeypatch.setattr(recording_management, "DataSave", lambda _path: _DatabaseContext(database))
+    old_path = str(application_root / "old.wav")
+    updated_info = {"file_path": str(application_root / "new.wav"), "labels": "OK"}
+
+    result = RecordingManager().update_audio_label(updated_info, old_path)
+
+    assert result == update_result
+    expected_paths = [old_path, "old.wav"][:expected_attempts]
+    assert database.calls == [
+        (("audio_data_table", {"file_path": "new.wav", "labels": "OK"}, {"file_path": path}), {})
+        for path in expected_paths
+    ]
+
+
+def test_update_audio_label_does_not_retry_identical_canonical_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(recording_management.running_consts, "DEFAULT_DIR", str(tmp_path / "application"))
+    database = _UpdateDatabase((error_code.INVALID_UPDATE, "No data has been updated"))
+    monkeypatch.setattr(recording_management, "DataSave", lambda _path: _DatabaseContext(database))
+    canonical_path = (tmp_path / "external" / "missing.wav").as_posix()
+
+    result = RecordingManager().update_audio_label(
+        {"file_path": canonical_path, "labels": "NG"}, canonical_path
+    )
+
+    assert result == (error_code.INVALID_UPDATE, "No data has been updated")
+    assert len(database.calls) == 1
 
 
 def test_rename_audio_normalizes_paths_written_to_database(tmp_path, monkeypatch):
