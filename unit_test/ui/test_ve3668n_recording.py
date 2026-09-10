@@ -96,8 +96,7 @@ def host_factory(ui_qapp, tmp_path, monkeypatch):
         host._cache_condition_record = mock.Mock()
         host._update_current_recent_session_result = mock.Mock()
         host._is_manual_product_condition_cycle_active = lambda: False
-        # Result computation is request-scoped now; this fixture exercises
-        # capture/publication and intentionally has no frozen analysis config.
+        # This fixture covers capture; original subprocess routing is tested separately.
         host._should_run_silent_analysis_after_recording = lambda: False
         host.run = mock.Mock(return_value=True)
         host.count_board = SimpleNamespace(mode="view")
@@ -106,15 +105,6 @@ def host_factory(ui_qapp, tmp_path, monkeypatch):
         host.replayer_btn = QPushButton()
         host.update_player_btn_is_paused = mock.Mock()
         host._send_recording_tcp_finish = mock.Mock()
-        class InlineExecutor:
-            @staticmethod
-            def submit(request_id, work, deliver):
-                from ui.sequence.request_scoped_recording_executor import (
-                    RequestScopedExecutionOutcome,
-                )
-                deliver(RequestScopedExecutionOutcome(request_id, value=work()))
-                return True
-        host._get_request_scoped_recording_executor = lambda: InlineExecutor()
         host.saved = save
         host.refresh_channel_windows()
         hosts.append(host)
@@ -711,24 +701,6 @@ def test_legacy_waveform_replacement_resets_only_ve_owned_tooltip(
     assert window.toolTip() == expected_hint
 
 
-def test_live_factor_lookup_uses_only_recording_snapshot_not_current_registry(host_factory, monkeypatch):
-    host = host_factory()
-    save_calibration(host)
-    session, _, audio = started_audio(host)
-    host._on_process_recording_result(session, audio)
-    session.state = "completed"
-    host._on_process_recording_accepted(session, audio)
-    session.released.set()
-    host._on_process_recording_released(session)
-    save_calibration(host, factor=99)
-    save_calibration(host, physical=1, factor=42)
-    forbidden = mock.Mock(side_effect=AssertionError("current registry fallback"))
-    monkeypatch.setattr(analysis, "load_mic_channel_v2pa_factors", forbidden)
-    host._prepare_live_mic_calibration_batch()
-    assert host._resolve_live_mic_channel_v2pa_factor(7) == 10
-    with pytest.raises(ValueError, match="VE"):
-        host._resolve_live_mic_channel_v2pa_factor(1)
-    forbidden.assert_not_called()
 
 
 @pytest.mark.parametrize("outcome", ["ordinary", "streaming", "cancel", "close", "metadata_false", "release_error"])

@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from numbers import Integral
 
 import numpy as np
-from ui.sequence.recording_analysis_eligibility import fast_recording_overlap_eligible
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
@@ -691,20 +690,7 @@ class InputCalibration(QWidget):
 
     def _can_start_recording_workflow(self):
         bridge = self.recording_bridge
-        if bridge is None:
-            return True
-        service = bridge.service
-        provider = getattr(self, "analysis_eligibility_provider", None)
-        if not callable(provider):
-            provider = getattr(bridge, "analysis_eligibility_provider", None)
-        if not callable(provider):
-            return not getattr(service, "busy", False)
-        unfinished = tuple(tuple(items) for items in (provider() or ()))
-        if fast_recording_overlap_eligible((), unfinished):
-            return getattr(
-                service, "can_start_recording",
-                not getattr(service, "busy", False))
-        return not getattr(service, "busy", False)
+        return bridge is None or not bridge.service.busy
 
     @staticmethod
     def _normalize_input_channels(input_channels):

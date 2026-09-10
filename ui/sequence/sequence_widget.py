@@ -53,9 +53,6 @@ class SequenceWindow(
         super().__init__()
         self.recording_bridge = recording_bridge
         self._owns_recording_bridge = False
-        if recording_bridge is not None:
-            recording_bridge.analysis_eligibility_provider = (
-                self._unfinished_recording_analysis_identifiers)
         self.data_struct = DataDealStruct()
         self.recorded_path = None
         self.count_board = None

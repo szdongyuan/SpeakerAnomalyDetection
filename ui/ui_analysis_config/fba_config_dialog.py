@@ -21,7 +21,6 @@ from ui.ui_analysis_config.common_widgets import (
     WeightingSelectorWidget,
 )
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
-from ui.ui_analysis_config.analysis_compat import parse_fba_custom_bands_text
 
 
 class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
@@ -229,7 +228,7 @@ class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
 
     @staticmethod
     def _parse_custom_bands_text(text: str):
-        return parse_fba_custom_bands_text(text)
+        return parse_custom_bands(text)
 
     def _validate_form(self) -> bool:
         if self.f_min_spin.value() >= self.f_max_spin.value():

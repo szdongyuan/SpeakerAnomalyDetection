@@ -122,26 +122,8 @@ class MainWindow(QMainWindow):
                     or hardware_busy)
 
     def _calibration_admission_available(self):
-        """Use fast admission only through the sequence's scoped policy.
-
-        Hardware selection remains guarded by ``_hardware_busy``.  Calibration
-        may overlap an eligible result finalizer, but native capture/release and
-        shutdown ownership still make opening a new calibration dialog unsafe.
-        """
         bridge = getattr(self, "recording_bridge", None)
-        hardware_busy = getattr(bridge, "hardware_busy", None)
-        if hardware_busy is None:
-            return not self._hardware_busy()
-        if hardware_busy:
-            return False
-        can_start = getattr(
-            getattr(self, "sequence_window", None),
-            "_can_start_calibration_workflow",
-            None,
-        )
-        if not callable(can_start):
-            return not self._hardware_busy()
-        return bool(can_start())
+        return not self._hardware_busy() and not getattr(getattr(bridge, "service", None), "busy", False)
 
     @staticmethod
     def _ve_signature(mic, channels):

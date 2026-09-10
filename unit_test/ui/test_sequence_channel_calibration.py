@@ -121,21 +121,6 @@ def test_recording_attempt_captures_once_after_reset_before_process_start(monkey
     assert host._recording_wav_calibration_metadata is snapshots[0]
 
 
-def test_recording_attempt_is_blocked_while_player_is_active(monkeypatch):
-    host = RecordingSnapshotHost()
-    host.player_status_flag = True
-    build = mock.Mock()
-    monkeypatch.setattr(
-        "ui.sequence.sequence_widget_analysis_ops.build_recording_wav_calibration_metadata",
-        build,
-    )
-
-    host.judge_play_and_record()
-
-    assert host.events == []
-    build.assert_not_called()
-
-
 def test_replay_replaces_snapshot_and_each_attempt_reads_once(monkeypatch):
     host = RecordingSnapshotHost()
     built = []
@@ -1311,8 +1296,7 @@ class StreamingAnalysisHost(
         size = SimpleNamespace(width=lambda: 1600, height=lambda: 900)
         return SimpleNamespace(size=lambda: size)
 
-    def instance_analysis_class(
-            self, key, _item_type, params, *, analysis_config=None):
+    def instance_analysis_class(self, key, _item_type, params):
         instance = RuntimeAnalysis(key, self.events)
         instance.data_struct = self.data_struct
         instance.analysis_config = dict(params)
@@ -1387,13 +1371,13 @@ class StreamingAnalysisHost(
     def _drain_queued_directional_trigger(self):
         self.events.append("drain_trigger")
 
-    def _capture_excel_export_cache(self, *, analysis_config=None):
+    def _capture_excel_export_cache(self):
         return None
 
-    def _maybe_export_excel_results(self, *, analysis_config=None):
+    def _maybe_export_excel_results(self):
         return None
 
-    def _can_output_ok_ng(self, *, analysis_config=None):
+    def _can_output_ok_ng(self):
         return False, ""
 
     def _sync_left_panel_analysis_details(self, *_args):
@@ -1402,8 +1386,7 @@ class StreamingAnalysisHost(
     def _hide_analysis_window(self, _instance):
         return None
 
-    def _capture_current_analysis_report_snapshot(
-            self, session_id=None, *, analysis_config=None):
+    def _capture_current_analysis_report_snapshot(self, session_id=None):
         self.events.append(("report_snapshot", session_id))
 
     def _update_recent_session(self, session_id, **fields):
@@ -1493,3 +1476,18 @@ def test_streaming_completion_without_analysis_keeps_legacy_completion_path():
         "recording completed successfully" in call.args[0]
         for call in host.default_logger.info.call_args_list
     )
+
+
+def test_recording_attempt_is_blocked_while_player_is_active(monkeypatch):
+    host = RecordingSnapshotHost()
+    host.player_status_flag = True
+    build = mock.Mock()
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_analysis_ops.build_recording_wav_calibration_metadata",
+        build,
+    )
+
+    host.judge_play_and_record()
+
+    assert host.events == []
+    build.assert_not_called()
