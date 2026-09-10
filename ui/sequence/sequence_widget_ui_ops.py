@@ -572,6 +572,7 @@ class SequenceWidgetUiOpsMixin:
         else:
             can_start = can_start and not getattr(self, "player_status_flag", False)
             can_start = can_start and not getattr(self, "_record_workflow_busy", False)
+        can_start = can_start and not getattr(self, "_round_reset_delete_failed", False)
         can_start = can_start and not getattr(
             self,
             "_analysis_round_completion_pending",

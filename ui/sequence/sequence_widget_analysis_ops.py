@@ -1083,6 +1083,9 @@ class SequenceWidgetAnalysisOpsMixin(
         return self._update_manual_product_mark_group_count(session_record.get("group_id"))
 
     def _prepare_next_manual_product_condition_recording(self):
+        if getattr(self, "_round_reset_delete_failed", False):
+            QMessageBox.warning(self, "删除未完成", "请先点击重置，完成剩余数据的删除。")
+            return None
         can_start = getattr(self, "_can_start_recording_workflow", None)
         if callable(can_start):
             if not can_start():
@@ -1156,6 +1159,10 @@ class SequenceWidgetAnalysisOpsMixin(
         if not group_id:
             group_id = self._generate_recording_token()
             self._manual_product_condition_group_id = group_id
+            self._condition_record_cache = {}
+            activate_round = getattr(self, "_activate_reset_round", None)
+            if callable(activate_round):
+                activate_round(group_id)
             self._displayed_manual_product_condition_group_id = group_id
             self._current_cycle_recorded_count = group_id
             self._manual_product_condition_results = {}
@@ -1445,6 +1452,9 @@ class SequenceWidgetAnalysisOpsMixin(
                         use_product_model_dir=True,
                         analysis_storage_context=storage_context,
                     )
+                    register_copy = getattr(self, "_register_round_recording", None)
+                    if callable(register_copy):
+                        register_copy(self.recorded_signal_info)
                     shutil.copy2(file_path, self.recorded_path)
                     self.recorded_signal_info.update(
                         {

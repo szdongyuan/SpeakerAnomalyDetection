@@ -69,6 +69,12 @@ class RecordingManager(object):
                 )
                 if insert_code != error_code.OK:
                     return insert_code, insert_message
+                if audio_info.get("round_data_record_key"):
+                    audio_info["audio_data_id"] = audio_data[0]
+                    audio_info["audio_database_path"] = self.db_path
+                    audio_info["audio_database_file_path"] = self.normalize_audio_path_for_db(
+                        audio_info["file_path"]
+                    )
                 return error_code.OK, ret_msg
         except Exception as e:
             err_msg = "Failed to save the recording and stimulus signals to the database. %s" % (str(e)[:40])

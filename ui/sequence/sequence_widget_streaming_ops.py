@@ -191,6 +191,10 @@ class SequenceWidgetStreamingOpsMixin:
         )
 
         self._condition_record_cache[key] = {
+            "group_id": (
+                recorded_signal_info.get("round_data_group_id")
+                or getattr(self, "_manual_product_condition_group_id", "")
+            ),
             "recorded_path": recorded_path,
             "recorded_signal_info": recorded_signal_info,
             "session_id": session_id,
@@ -306,6 +310,22 @@ class SequenceWidgetStreamingOpsMixin:
         key = str(condition_key or "").strip()
         record_cache = getattr(self, "_condition_record_cache", {}) or {}
         record = record_cache.get(key)
+        if getattr(self, "product_test_condition_configs", None):
+            # A product condition may only use a completed recording from the
+            # active/displayed round. Never restore it from older sessions or
+            # the global last-recording pointer after reset or round advance.
+            group_id = (
+                getattr(self, "_manual_product_condition_group_id", "")
+                or getattr(self, "_displayed_manual_product_condition_group_id", "")
+            )
+            if not record or not group_id:
+                return None
+            record_group = record.get("group_id") or (
+                record.get("recorded_signal_info", {}) or {}
+            ).get("round_data_group_id")
+            if record_group != group_id or not self._resolve_labelable_condition_record_path(record):
+                return None
+            return dict(record)
         if record and self._resolve_labelable_condition_record_path(record):
             return dict(record)
 
@@ -400,6 +420,13 @@ class SequenceWidgetStreamingOpsMixin:
             session_record = (getattr(self, "recent_test_session_by_id", {}) or {}).get(session_id)
             if source_type == "imported":
                 session_id = ""
+            elif getattr(self, "product_test_condition_configs", None):
+                record_group = record.get("group_id") or recorded_signal_info.get("round_data_group_id")
+                if (
+                    not self._condition_key_matches_record(key, session_record)
+                    or session_record.get("group_id") != record_group
+                ):
+                    session_id = ""
             elif not self._condition_key_matches_record(key, session_record):
                 recent_record = self._condition_record_from_recent_sessions(key)
                 session_id = (
@@ -420,6 +447,7 @@ class SequenceWidgetStreamingOpsMixin:
                     QMessageBox.warning(self, "提示", f"标记失败: {msg}")
                     return
                 self._condition_record_cache[key] = {
+                    **record,
                     "recorded_path": new_path,
                     "recorded_signal_info": updated_info,
                     "session_id": session_id,
@@ -447,6 +475,7 @@ class SequenceWidgetStreamingOpsMixin:
             else:
                 recorded_signal_info["labels"] = normalized_label
                 self._condition_record_cache[key] = {
+                    **record,
                     "recorded_path": recorded_path,
                     "recorded_signal_info": recorded_signal_info,
                     "session_id": session_id,
@@ -582,6 +611,9 @@ class SequenceWidgetStreamingOpsMixin:
                     source_path
                 )
                 updated_signal_info["labels"] = previous_label or "not_labeled"
+        update_round_path = getattr(self, "_update_round_audio_path", None)
+        if callable(update_round_path):
+            update_round_path(updated_signal_info, source_path, final_file_path)
         return save_code, msg, final_file_path, updated_signal_info
 
     def _should_run_silent_analysis_after_recording(self) -> bool:
@@ -2106,6 +2138,9 @@ class SequenceWidgetStreamingOpsMixin:
                 with self._raw_audio_csv_export_lock:
                     self._raw_audio_csv_export_threads.discard(thread)
 
+        register_file = getattr(self, "_register_round_file", None)
+        if callable(register_file):
+            register_file(dict(self.recorded_signal_info), str(csv_path), is_raw_csv=True)
         thread = threading.Thread(
             target=_worker,
             name=f"raw-audio-csv-{os.path.basename(wav_path)}",
@@ -2370,6 +2405,9 @@ class SequenceWidgetStreamingOpsMixin:
             # Save to database
             save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
             if save_code == error_code.OK:
+                register_database = getattr(self, "_register_round_database_record", None)
+                if callable(register_database):
+                    register_database(self.recorded_signal_info)
                 self.default_logger.info(f"Database save successful: {save_msg}")
             else:
                 self.default_logger.error(f"Database save failed: {save_msg}")
