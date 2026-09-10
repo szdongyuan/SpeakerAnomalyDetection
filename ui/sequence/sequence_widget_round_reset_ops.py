@@ -5,7 +5,7 @@ from pathlib import Path
 import uuid
 
 from PyQt5.QtCore import QSignalBlocker, QTimer
-from PyQt5.QtWidgets import QCheckBox, QMessageBox
+from PyQt5.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout
 
 from base.analysis_artifact_paths import (
     build_wav_csv_directory,
@@ -14,6 +14,7 @@ from base.analysis_artifact_paths import (
 )
 from base.test_round_data import RoundDataRecord
 from base.recording_management import RecordingManager
+from ui.config_dialog_base import ConfigDialogBase
 
 
 class SequenceWidgetRoundResetOpsMixin:
@@ -164,19 +165,50 @@ class SequenceWidgetRoundResetOpsMixin:
         return "将删除：" + "、".join(parts) + "。" if parts else "无待删除文件。"
 
     def _confirm_round_reset(self, group_id):
-        dialog = QMessageBox(self)
-        dialog.setWindowTitle("重置当前测试")
-        dialog.setIcon(QMessageBox.Question)
-        dialog.setText("将清空本轮测试进度及界面结果，并解除配置锁定。")
-        delete_box = QCheckBox("同时删除本轮原始数据及分析结果")
-        dialog.setCheckBox(delete_box)
-        confirm = dialog.addButton("重置", QMessageBox.AcceptRole)
-        cancel = dialog.addButton("取消", QMessageBox.RejectRole)
-        dialog.setDefaultButton(cancel)
-        dialog.setEscapeButton(cancel)
+        dialog = ConfigDialogBase(self)
+        dialog.setWindowTitle("重置当前测试轮次")
+        dialog.setMinimumWidth(560)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+        message = QLabel(
+            "清空本轮进度和界面结果，"
+            "返回首个端口并解锁配置。"
+        )
+        message.setWordWrap(False)
+        preserved_values = QLabel("当前测试轮次、样本编号和 S/N 保持不变。")
+        message_layout = QVBoxLayout()
+        message_layout.setContentsMargins(0, 0, 0, 0)
+        message_layout.setSpacing(8)
+        message_layout.addWidget(message)
+        message_layout.addWidget(preserved_values)
+        layout.addLayout(message_layout)
+        delete_box = QCheckBox("同时删除本轮数据")
+        layout.addWidget(delete_box)
+        details = QLabel()
+        details.setObjectName("roundResetDataSummary")
+        details.setWordWrap(True)
+        details_layout = QVBoxLayout()
+        details_layout.setContentsMargins(24, 0, 0, 0)
+        details_layout.addWidget(details)
+        layout.addLayout(details_layout)
+        cancel = QPushButton("取消")
+        cancel.setObjectName("roundResetCancelButton")
+        cancel.setDefault(True)
+        confirm = QPushButton("重置")
+        confirm.setObjectName("roundResetConfirmButton")
+        confirm.setAutoDefault(False)
+        confirm.clicked.connect(dialog.accept)
+        cancel.clicked.connect(dialog.reject)
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        button_layout.addWidget(cancel)
+        button_layout.addWidget(confirm)
+        layout.addLayout(button_layout)
+
         def update_delete_details(checked):
             confirm.setText("删除数据并重置" if checked else "重置")
-            lines = ["轮次编号、样本编号和 S/N 保留。"]
+            lines = []
             if checked:
                 if self._round_reset_delete_failed:
                     lines.append("上次删除未完成，本次重试剩余文件和记录。")
@@ -185,16 +217,15 @@ class SequenceWidgetRoundResetOpsMixin:
                     "对应数据库记录同步删除，报告及导入源文件保留。",
                 ])
             else:
-                lines.append("本轮数据、数据库记录、报告及导入源文件保留。")
-            dialog.setInformativeText("\n".join(lines))
+                lines.append("未勾选时保留已保存的数据和报告。")
+            details.setText("\n".join(lines))
 
         delete_box.toggled.connect(update_delete_details)
         update_delete_details(False)
         if self._round_reset_delete_failed:
             delete_box.setChecked(True)
             delete_box.setEnabled(False)
-        dialog.exec()
-        if dialog.clickedButton() is not confirm:
+        if dialog.exec() != dialog.Accepted:
             return None
         return delete_box.isChecked()
 
@@ -298,5 +329,6 @@ class SequenceWidgetRoundResetOpsMixin:
         self._set_manual_analysis_button_state("idle")
         self.data_btn.setEnabled(False)
         self.replayer_btn.setEnabled(False)
+        self.left_panel.reset_ai_result_panel()
         self.left_panel.set_current_stage("等待开始", tone="pending")
         self._persist_test_metadata_ui_state()
