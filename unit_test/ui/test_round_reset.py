@@ -348,25 +348,32 @@ def test_database_relocated_record_is_not_deleted(tmp_path):
 
 
 def test_reset_dialog_freezes_target_and_defaults_to_keep(host, monkeypatch):
-    from PyQt5.QtWidgets import QMessageBox
+    from PyQt5.QtWidgets import QCheckBox, QLabel, QPushButton
 
     group = start_round(host)
     results = []
 
     def inspect_dialog(dialog):
-        assert isinstance(dialog, QMessageBox)
-        results.append(dialog.checkBox().isChecked())
+        checkbox = dialog.findChild(QCheckBox)
+        details = dialog.findChild(QLabel, "roundResetDataSummary")
+        cancel = dialog.findChild(QPushButton, "roundResetCancelButton")
+        assert dialog.windowTitle() == "重置当前测试轮次"
+        assert checkbox.text() == "同时删除本轮数据"
+        assert cancel.isDefault()
+        results.append(checkbox.isChecked())
         assert not results[-1]
-        assert "将删除" not in dialog.informativeText()
-        dialog.checkBox().setChecked(True)
-        assert "对应数据库记录同步删除" in dialog.informativeText()
-        dialog.checkBox().setChecked(False)
-        assert "同步删除" not in dialog.informativeText()
-        dialog.checkBox().setChecked(True)
-        confirm = next(b for b in dialog.buttons() if b.text() == "删除数据并重置")
+        assert details.text() == "未勾选时保留已保存的数据和报告。"
+        checkbox.setChecked(True)
+        assert "对应数据库记录同步删除" in details.text()
+        checkbox.setChecked(False)
+        assert "同步删除" not in details.text()
+        checkbox.setChecked(True)
+        confirm = dialog.findChild(QPushButton, "roundResetConfirmButton")
+        assert confirm.text() == "删除数据并重置"
         confirm.click()
+        return dialog.result()
 
-    monkeypatch.setattr(QMessageBox, "exec", inspect_dialog)
+    monkeypatch.setattr(reset_ops.ConfigDialogBase, "exec", inspect_dialog)
     assert host._confirm_round_reset(group) is True
     assert results == [False]
 
@@ -391,18 +398,23 @@ def test_deletion_summary_distinguishes_raw_and_analysis_csv(host, tmp_path):
 
 
 def test_retry_dialog_includes_remaining_file_details(host, tmp_path, monkeypatch):
+    from PyQt5.QtWidgets import QCheckBox, QLabel, QPushButton
+
     group = start_round(host)
     add_record(host, tmp_path / "audio.wav")
     host._round_reset_delete_failed = True
 
     def inspect_dialog(dialog):
-        assert dialog.checkBox().isChecked()
-        assert not dialog.checkBox().isEnabled()
-        assert "本次重试剩余文件和记录" in dialog.informativeText()
-        assert "将删除：原始音频 1 个。" in dialog.informativeText()
-        next(b for b in dialog.buttons() if b.text() == "取消").click()
+        checkbox = dialog.findChild(QCheckBox)
+        details = dialog.findChild(QLabel, "roundResetDataSummary")
+        assert checkbox.isChecked()
+        assert not checkbox.isEnabled()
+        assert "本次重试剩余文件和记录" in details.text()
+        assert "将删除：原始音频 1 个。" in details.text()
+        dialog.findChild(QPushButton, "roundResetCancelButton").click()
+        return dialog.result()
 
-    monkeypatch.setattr(reset_ops.QMessageBox, "exec", inspect_dialog)
+    monkeypatch.setattr(reset_ops.ConfigDialogBase, "exec", inspect_dialog)
     assert host._confirm_round_reset(group) is None
 
 
@@ -467,6 +479,66 @@ def test_reset_unlocks_real_configuration_control(host):
     host._on_reset_current_round()
     assert not host._analysis_round_config_locked
     assert host.using_file_combobox.isEnabled()
+
+
+@pytest.mark.parametrize("delete_data", [False, True])
+@pytest.mark.parametrize("port", ["B口", "C口"])
+def test_reset_task_panel_returns_to_first_port_and_clears_details(
+    host, tmp_path, delete_data, port
+):
+    from PyQt5.QtGui import QFont
+    from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
+
+    conditions = [
+        {"key": f"{name}-{gear}", "group_name": name,
+         "condition_name": f"档位{gear}", "test_queue": "q1"}
+        for name in ("A口", "B口", "C口") for gear in (1, 2)
+    ]
+    host.product_test_condition_configs = conditions
+    left_panel = MotorDetectionLeftPanel(None, condition_configs=conditions)
+    host.left_panel = left_panel
+    panel = left_panel.ai_result_panel
+    left_panel.set_channels(list(range(5)))
+    left_panel.set_current_round(7)
+    try:
+        start_round(host)
+        info = add_record(host, tmp_path / "audio.wav")
+        panel.set_condition_channel_results(f"{port}-2", [
+            {"raw_channel": channel, "result": "OK"} for channel in range(5)
+        ])
+        panel.set_condition_result(f"{port}-2", "OK")
+        panel.rows[f"{port}-2"]["runtime_details"] = {"SPL": "old result"}
+        panel.select_condition(f"{port}-2", show_detail=True)
+        assert panel.current_port == port
+        assert not panel.detail_frame.isHidden()
+        host._confirm_round_reset = Mock(return_value=delete_data)
+        host.toolsbar.reset_round_button.click()
+
+        assert panel.current_port_combo.currentText() == "A口"
+        assert panel.port_index_label.text() == "第1/3个"
+        assert panel.selected_key == "A口-1"
+        assert panel.viewed_key == ""
+        assert panel.detail_frame.isHidden()
+        assert panel.progress_label.text() == "档位进度：0/2"
+        assert panel.port_result_value.text() == "待判定"
+        assert panel.round_result_value.text() == "待判定"
+        assert panel.stage_label.text() == "等待开始"
+        for row in panel.rows.values():
+            assert row["result"] == "待检测"
+            assert row["completed_channels"] == 0
+            assert row["channel_results"] == []
+            assert row["runtime_details"] == {}
+        assert host.toolsbar.current_round_spinbox.value() == 7
+        assert Path(info["file_path"]).exists() is (not delete_data)
+        panel.setFont(QFont("Microsoft YaHei", 9))
+        left_panel.resize(570, 950)
+        left_panel.show()
+        QApplication.processEvents()
+        screenshot = tmp_path / "task-panel-after-reset.png"
+        assert panel.grab().save(str(screenshot))
+        print(f"Reset panel screenshot: {screenshot}")
+    finally:
+        left_panel.close()
 
 
 def test_history_selection_does_not_change_deletion_target(host, tmp_path):
