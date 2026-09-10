@@ -184,7 +184,14 @@ def test_calibration_cleanup_failure_warns_without_releasing_or_revoking_success
         assert session.state == "completed"
         assert manager.get_mic_v2pa_factor(device_info(), [1]) > 0
         assert widget.saved_v2pa_factors[1] > 0
-        widget.calibration_popup.assert_called_once_with(success_flag=True)
+        widget.calibration_popup.assert_called_once_with(
+            success_flag=True,
+            message=(
+                "校准成功\n"
+                f"本次校准结果：{widget.saved_v2pa_factors[1]:.6f} Pa/V\n"
+                "下次校准通道：0"
+            ),
+        )
         path = Path(session.request.path)
         if not cleanup_denied:
             assert not pending

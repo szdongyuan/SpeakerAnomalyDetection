@@ -1110,6 +1110,7 @@ class InputCalibration(QWidget):
             QApplication.instance().aboutToQuit.connect(self.recording_bridge.shutdown)
         return self.recording_bridge
 
+
     def clicked_calibration(self):
         """Start one asynchronous, single-channel ten-second calibration."""
         if self._recording_closed:
@@ -1329,7 +1330,12 @@ class InputCalibration(QWidget):
         self._select_channel(next_channel)
         self.calibration_state_changed.emit(True)
         if not self.stop_timer:
-            self.calibration_popup(success_flag=True)
+            self.calibration_popup(
+                success_flag=True,
+                message=self._success_popup_message(
+                    v2pa_factor, self.current_channel
+                ),
+            )
             self.default_logger.info("Input calibration succeeded and was saved.")
             self.calibration_finished.emit(True)
 

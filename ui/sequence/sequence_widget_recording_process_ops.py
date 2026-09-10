@@ -111,6 +111,25 @@ class SequenceWidgetRecordingProcessOpsMixin:
 
 
 
+    def _ve_prewarm_admission_available(self):
+        """Project process-lifetime VE ownership state into capture admission."""
+        lifetime = getattr(self, "ve_prewarm_lifetime", None)
+        if lifetime is None:
+            return True
+        signature = None
+        mic = getattr(self, "mic", None)
+        if (mic or {}).get("backend") == "vkinging":
+            try:
+                from base.ve3668n_input import ve_acquisition_signature
+                signature = ve_acquisition_signature(
+                    mic,
+                    getattr(self, "mic_channels", ()),
+                    (mic.get("input_config") or {}).get("sample_rate"),
+                )
+            except (TypeError, ValueError, AttributeError, OverflowError):
+                signature = None
+        return lifetime.admission_for(signature) == "allowed"
+
     def _can_start_recording_workflow(self):
         """Combine local non-capture blockers with the service's atomic admission state."""
         if any(bool(getattr(self, name, False)) for name in (
@@ -127,6 +146,8 @@ class SequenceWidgetRecordingProcessOpsMixin:
         for controller in controllers:
             if controller is not None and controller.is_audio_playing():
                 return False
+        if not SequenceWidgetRecordingProcessOpsMixin._ve_prewarm_admission_available(self):
+            return False
         if (getattr(self, "_recording_publication_in_progress", False)
                 or getattr(self, "_recording_process_contexts", None)
                 or getattr(self, "_record_workflow_busy", False)

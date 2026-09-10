@@ -29,6 +29,8 @@ class RecordingServiceBridge(QObject):
         self._delivery_closed = False
         self._shutdown_requested = False
         self._ve_release_pending = False
+        self._ve_prewarm_pending = False
+        self._ve_prewarm_calls = set()
         self._event.connect(self._deliver, Qt.QueuedConnection)
         self._preview_wakeup.connect(self._deliver_preview, Qt.QueuedConnection)
         self._invoke.connect(self._call, Qt.QueuedConnection)
@@ -50,6 +52,7 @@ class RecordingServiceBridge(QObject):
             return bool(
                 self._shutdown_requested
                 or self._ve_release_pending
+                or self._ve_prewarm_pending
                 or getattr(service, "_closing", False)
                 or (closed is not None and closed.is_set())
                 or getattr(service, "_capture_session", None) is not None
@@ -94,6 +97,56 @@ class RecordingServiceBridge(QObject):
             complete(status, ())
         return status
 
+    def prewarm_ve(self, request, callback):
+        """Start one no-file VE prewarm without blocking the Qt thread."""
+        if QThread.currentThread() is not self.thread():
+            raise RuntimeError("Recording bridge VE prewarm must start on its GUI thread")
+        call_token = object()
+        completion_lock = threading.Lock()
+        completed = False
+
+        def complete(completion):
+            nonlocal completed
+            with completion_lock:
+                if completed:
+                    return
+                completed = True
+            # Clear the bridge-side hardware reservation before queueing user
+            # code so its admission snapshot observes the terminal state.
+            with self._lock:
+                self._ve_prewarm_calls.discard(call_token)
+                self._ve_prewarm_pending = bool(self._ve_prewarm_calls)
+            if callback is not None:
+                def deliver(completion=completion):
+                    try:
+                        callback(completion)
+                    except Exception as error:
+                        # The prewarm consumer is a UI extension boundary just
+                        # like recording event delivery.  A broken consumer
+                        # must not unwind through the queued Qt slot.
+                        logging.getLogger(__name__).exception(
+                            "VE prewarm UI callback failed: %s", error)
+
+                self._invoke.emit(deliver)
+
+        # Reserve before entering the service because test doubles and shutdown
+        # races may complete synchronously before the admission call returns.
+        with self._lock:
+            self._ve_prewarm_calls.add(call_token)
+            self._ve_prewarm_pending = True
+        try:
+            status = self.service.prewarm_ve(request, complete)
+        except Exception:
+            with self._lock:
+                self._ve_prewarm_calls.discard(call_token)
+                self._ve_prewarm_pending = bool(self._ve_prewarm_calls)
+            raise
+        if status != "accepted":
+            with self._lock:
+                self._ve_prewarm_calls.discard(call_token)
+                self._ve_prewarm_pending = bool(self._ve_prewarm_calls)
+        return status
+
     def start(self, request, callbacks):
         if QThread.currentThread() is not self.thread():
             raise RuntimeError("Recording bridge must be started on its GUI thread")
@@ -133,6 +186,7 @@ class RecordingServiceBridge(QObject):
             with self._lock:
                 self._finished.add(key)
         self._event.emit((kind, session, value))
+
 
     @pyqtSlot(str)
     def _deliver_preview(self, key):

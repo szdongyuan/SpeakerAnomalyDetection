@@ -23,10 +23,23 @@ from ui.sequence.sequence_widget import SequenceWindow
 
 class MainWindow(QMainWindow):
 
-    def __init__(self, *, recording_bridge=None, ve_profile_store=None,
-                 ve_calibration_store=None, discovery_factory=None,
-                 hardware_selection_path=None):
+    def __init__(self, *, ve_prewarm_lifetime=None, recording_bridge=None,
+                 ve_profile_store=None, ve_calibration_store=None,
+                 discovery_factory=None, hardware_selection_path=None):
+        from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+
+        app = QApplication.instance()
+        if ve_prewarm_lifetime is None:
+            ve_prewarm_lifetime = getattr(app, "_ve_prewarm_lifetime", None)
+            if ve_prewarm_lifetime is None:
+                ve_prewarm_lifetime = VePrewarmLifetime()
+        if not isinstance(ve_prewarm_lifetime, VePrewarmLifetime):
+            raise TypeError("ve_prewarm_lifetime must be a VePrewarmLifetime")
+        # The application owns the compatibility fallback across window rebuilds.
+        # Explicit launcher injection also becomes the fallback for later callers.
+        app._ve_prewarm_lifetime = ve_prewarm_lifetime
         super().__init__()
+        self.ve_prewarm_lifetime = ve_prewarm_lifetime
         if recording_bridge is None:
             from base.recording_service import RecordingService
             from ui.recording_service_bridge import RecordingServiceBridge
@@ -38,7 +51,6 @@ class MainWindow(QMainWindow):
         self.ve_discovery_factory = discovery_factory
         self.hardware_selection_path = hardware_selection_path
         self.ve_discovery = None
-        self._ve_pending_result = None
         QApplication.instance().aboutToQuit.connect(self.recording_bridge.shutdown)
         # set up statusbar object data
         self.user_name = None
@@ -121,9 +133,37 @@ class MainWindow(QMainWindow):
         return bool(getattr(self.sequence_window, "player_status_flag", False)
                     or hardware_busy)
 
+    def _hardware_selection_admission_available(self):
+        snapshot = self.ve_prewarm_lifetime.snapshot()
+        if snapshot.state == "pending":
+            return False
+        return not self._hardware_busy()
+
     def _calibration_admission_available(self):
+        """Use fast admission only through the sequence's scoped policy.
+
+        Hardware selection remains guarded by ``_hardware_busy``.  Calibration
+        may overlap an eligible result finalizer, but native capture/release and
+        shutdown ownership still make opening a new calibration dialog unsafe.
+        """
+        lifetime = self.ve_prewarm_lifetime
+        signature = self._ve_signature(self.mic, self.mic_channels)
+        if lifetime.admission_for(signature) != "allowed":
+            return False
         bridge = getattr(self, "recording_bridge", None)
-        return not self._hardware_busy() and not getattr(getattr(bridge, "service", None), "busy", False)
+        hardware_busy = getattr(bridge, "hardware_busy", None)
+        if hardware_busy is None:
+            return not self._hardware_busy()
+        if hardware_busy:
+            return False
+        can_start = getattr(
+            getattr(self, "sequence_window", None),
+            "_can_start_calibration_workflow",
+            None,
+        )
+        if not callable(can_start):
+            return not self._hardware_busy()
+        return bool(can_start())
 
     @staticmethod
     def _ve_signature(mic, channels):
@@ -138,6 +178,159 @@ class MainWindow(QMainWindow):
             # newly acquired.  Accepted transitions away from it are handled
             # conservatively by the caller's old-VE check.
             return None
+
+    @classmethod
+    def _ve_prewarm_signature(cls, mic, channels):
+        """Return a capture-ready VE signature, never an unavailable choice."""
+        if (mic or {}).get("backend") != "vkinging" or not mic.get("available"):
+            return None
+        return cls._ve_signature(mic, channels)
+
+    def _show_ve_prewarm_status(self, message):
+        statusbar = self.statusBar()
+        if statusbar is not None:
+            statusbar.showMessage(message)
+
+    def _refresh_ve_admission_controls(self):
+        """Synchronize visible actions after a process-lifetime state change."""
+        refresh_recording = getattr(
+            self.sequence_window, "update_player_btn_is_paused", None)
+        if callable(refresh_recording):
+            refresh_recording()
+        self._update_hardware_busy_state()
+
+    def _try_start_ve_prewarm(self, device, channels, source):
+        """Validate and atomically consume the process's one prewarm chance."""
+        if (device or {}).get("backend") != "vkinging":
+            return "not_ve"
+
+        signature = self._ve_prewarm_signature(device, channels)
+        if signature is None:
+            return "invalid"
+        from uuid import uuid4
+        from base.recording_process_protocol import VePrewarmRequest
+
+        token = f"ve-selection-{uuid4().hex}"
+        warmup_id = f"ve-prewarm-{uuid4().hex}"
+        try:
+            request = VePrewarmRequest.create(
+                warmup_id, device, channels, signature[3], attempt=1)
+        except (TypeError, ValueError, AttributeError, OverflowError):
+            return "invalid"
+        if not self.ve_prewarm_lifetime.claim(token, signature):
+            return "consumed"
+
+        context = (token, warmup_id, signature)
+        self._ve_prewarm_context = context
+        self._refresh_ve_admission_controls()
+        if self._hardware_busy():
+            self.ve_prewarm_lifetime.mark_skipped_busy(
+                token, signature, f"{source}: hardware busy")
+            self._ve_prewarm_context = None
+            import logging
+            logging.getLogger(__name__).info(
+                "VE prewarm skipped because hardware is busy (%s)", source)
+            self._show_ve_prewarm_status("VE 设备初始化已跳过：硬件正忙")
+            self._refresh_ve_admission_controls()
+            return "skipped_busy"
+
+        def complete(completion, context=context):
+            self._on_ve_prewarm_complete(context, completion)
+
+        status = self.recording_bridge.prewarm_ve(request, complete)
+        if status == "accepted":
+            if (getattr(self, "_ve_prewarm_context", None) == context
+                    and self.ve_prewarm_lifetime.snapshot().state == "pending"):
+                self._show_ve_prewarm_status("VE 设备正在初始化…")
+            return status
+        if status == "busy":
+            self.ve_prewarm_lifetime.mark_skipped_busy(
+                token, signature, f"{source}: service busy")
+            self._ve_prewarm_context = None
+            import logging
+            logging.getLogger(__name__).info(
+                "VE prewarm skipped because service admission is busy (%s)", source)
+            self._show_ve_prewarm_status("VE 设备初始化已跳过：硬件正忙")
+            self._refresh_ve_admission_controls()
+            return "skipped_busy"
+        if status == "closing":
+            self.ve_prewarm_lifetime.mark_skipped_busy(
+                token, signature, f"{source}: application closing")
+            self._ve_prewarm_context = None
+            self._refresh_ve_admission_controls()
+            return "closing"
+
+        # The service contract currently exposes only accepted/busy/closing.
+        # Treat any future rejection as a consumed deterministic failure.
+        from types import SimpleNamespace
+        fault = SimpleNamespace(
+            stage="admission", code=None,
+            detail=f"VE prewarm admission returned {status!r}", diagnostics=())
+        self.ve_prewarm_lifetime.mark_failed(
+            token, signature, fault, ownership_safe=True)
+        self._ve_prewarm_context = None
+        self._refresh_ve_admission_controls()
+        self._render_ve_prewarm_failure(fault, ownership_safe=True)
+        return str(status)
+
+    def _on_ve_prewarm_complete(self, context, completion):
+        """Apply one authenticated service terminal to the claimed selection."""
+        if getattr(self, "_ve_prewarm_context", None) != context:
+            return
+        token, warmup_id, signature = context
+        if (getattr(completion, "warmup_id", None) != warmup_id
+                or getattr(completion, "signature", None) != signature):
+            return
+        snapshot = self.ve_prewarm_lifetime.snapshot()
+        if (snapshot.state != "pending" or snapshot.token != token
+                or snapshot.signature != signature):
+            return
+
+        if completion.success:
+            changed = self.ve_prewarm_lifetime.mark_succeeded(token, signature)
+        else:
+            changed = self.ve_prewarm_lifetime.mark_failed(
+                token, signature, completion,
+                ownership_safe=completion.ownership_safe)
+        if not changed:
+            return
+        self._ve_prewarm_context = None
+        self._refresh_ve_admission_controls()
+
+        # Shutdown terminals still consume the opportunity, but must never
+        # mutate visible UI or raise a modal while the window is closing.
+        if (getattr(self, "_recording_close_requested", False)
+                or self._ve_prewarm_signature(
+                    self.mic, self.mic_channels) != signature):
+            return
+        if completion.success:
+            self.update_statusbar()
+            return
+
+        import logging
+        logging.getLogger(__name__).error(
+            "VE prewarm failed: %s", "; ".join((
+                f"{completion.stage}"
+                + (f" (code={completion.code})" if completion.code is not None else "")
+                + f": {completion.detail}",
+                *tuple(completion.diagnostics),
+            )))
+        self.update_statusbar()
+        self._show_ve_prewarm_status("VE 设备初始化失败")
+        self._render_ve_prewarm_failure(
+            completion, ownership_safe=completion.ownership_safe)
+
+    def _render_ve_prewarm_failure(self, fault, *, ownership_safe):
+        code = getattr(fault, "code", None)
+        cause = getattr(fault, "detail", "VE 设备初始化失败")
+        if code is not None:
+            cause = f"{cause} (code={code})"
+        if ownership_safe:
+            guidance = "请进入硬件设置重新选择设备或采集配置。"
+        else:
+            guidance = "硬件资源状态无法确认，请关闭并重启应用后再试。"
+        QMessageBox.critical(
+            self, "Vkinging 设备初始化失败", f"{cause}\n{guidance}")
 
     def _on_ve_hardware_release_complete(self, status, diagnostics):
         if status in ("released", "unchanged"):
@@ -154,20 +347,14 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "VE 资源回收", message)
 
     def _update_hardware_busy_state(self):
-        busy = self._hardware_busy()
         privileged = self.access_lvl in ("Engineer", "Admin")
-        self.hardware_action_selection.setEnabled(not busy and privileged)
+        self.hardware_action_selection.setEnabled(
+            self._hardware_selection_admission_available() and privileged)
         self.hardware_action_calibration.setEnabled(
             self._calibration_admission_available() and privileged)
-        if not busy and self._ve_pending_result is not None:
-            event, self._ve_pending_result = self._ve_pending_result, None
-            self._on_ve_discovery_result(event)
 
     def _on_ve_discovery_result(self, event):
         if (self.mic or {}).get("backend") != "vkinging":
-            return
-        if self._hardware_busy():
-            self._ve_pending_result = event
             return
         from base.hardware_selection import resolve_ve_input
         self.mic = resolve_ve_input(self.mic, self.mic_channels,
@@ -178,9 +365,10 @@ class MainWindow(QMainWindow):
         self.sequence_window.mic_channels = list(self.mic_channels)
         self.update_statusbar()
         self.sequence_window.refresh_channel_windows()
+        self._try_start_ve_prewarm(
+            self.mic, self.mic_channels, "startup discovery")
 
     def _close_ve_discovery(self):
-        self._ve_pending_result = None
         if self.ve_discovery is not None:
             self.ve_discovery.close()
         if hasattr(self, "_hardware_busy_timer"):
@@ -286,7 +474,10 @@ class MainWindow(QMainWindow):
         # create sequence widget, and set main window layout
         main_window = QWidget()
         layout = QVBoxLayout()
-        self.sequence_window = SequenceWindow(recording_bridge=self.recording_bridge)
+        self.sequence_window = SequenceWindow(
+            recording_bridge=self.recording_bridge,
+            ve_prewarm_lifetime=self.ve_prewarm_lifetime,
+        )
         if hasattr(self, "ve_profile_store"):
             self.sequence_window.ve_profile_store = self.ve_profile_store
             self.sequence_window.ve_calibration_store = self.ve_calibration_store
@@ -440,6 +631,7 @@ class MainWindow(QMainWindow):
             dialog.exec()
         finally:
             self.sequence_window._product_test_program_config_dialog_open = False
+            self.sequence_window.update_player_btn_is_paused()
 
     def show_statusbar_layout(self):
         # create status bar, show the user data and device data, and close drag status bar modify window size
@@ -523,7 +715,7 @@ class MainWindow(QMainWindow):
 
     def on_hardware_window_init(self):
         # Prevent hardware changes during playback/recording
-        if self._hardware_busy():
+        if not self._hardware_selection_admission_available():
             QMessageBox.warning(self, "提示", "播放或录音进行中，请等待完成后再修改硬件设置")
             return
         old_was_ve = (self.mic or {}).get("backend") == "vkinging"
@@ -543,9 +735,9 @@ class MainWindow(QMainWindow):
             options = dict(profile_store=self.ve_profile_store,
                 calibration_store=self.ve_calibration_store,
                 discovery_factory=self.ve_discovery_factory,
-                selection_path=self.hardware_selection_path, busy_check=self._hardware_busy)
+                selection_path=self.hardware_selection_path,
+                busy_check=lambda: not self._hardware_selection_admission_available())
             self.ve_discovery.cancel()
-            self._ve_pending_result = None
         accepted, speaker, speaker_channels, mic, mic_channels = open_hardware_selection_window(
             driver=driver_name,
             speaker_device=self.speaker,
@@ -577,11 +769,18 @@ class MainWindow(QMainWindow):
             self.sequence_window.update_v2pa_factor()
         self.sequence_window.refresh_channel_windows()
         new_ve_signature = self._ve_signature(self.mic, self.mic_channels)
+        prewarm_owns_transition = False
+        if (self.mic or {}).get("backend") == "vkinging":
+            prewarm_status = self._try_start_ve_prewarm(
+                self.mic, self.mic_channels, "hardware confirmation")
+            prewarm_owns_transition = prewarm_status in (
+                "accepted", "skipped_busy", "closing")
         if (old_was_ve and (
                 (self.mic or {}).get("backend") != "vkinging"
                 or old_ve_signature is None
                 or new_ve_signature is None
-                or old_ve_signature != new_ve_signature)):
+                or old_ve_signature != new_ve_signature)
+                and not prewarm_owns_transition):
             self.recording_bridge.release_ve(
                 new_ve_signature, self._on_ve_hardware_release_complete)
 
@@ -854,7 +1053,10 @@ class MainWindow(QMainWindow):
 
 
 if __name__ == "__main__":
+    from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+
     app = QApplication(sys.argv)
-    window = MainWindow()
+    ve_prewarm_lifetime = VePrewarmLifetime()
+    window = MainWindow(ve_prewarm_lifetime=ve_prewarm_lifetime)
     window.show()
     sys.exit(app.exec())

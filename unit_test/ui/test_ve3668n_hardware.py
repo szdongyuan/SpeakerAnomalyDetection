@@ -17,10 +17,17 @@ from ui import hardware_window as hardware_ui
 from base.ve3668n_discovery import DiscoveryEvent, DiscoveryResult
 from base.ve3668n_stores import VEInputProfileStore, VECalibrationStore
 from base.ve3668n_input import validate_device_snapshot
+from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
 from base.recording_process_protocol import VeLifecycleCounts
+from base.recording_service import VePrewarmCompletion
 from unit_test.base.ve3668n_fakes import device_info
 from unit_test.base.test_ve3668n_stores import save_measurement
 from unit_test.base.test_ve3668n_hardware_selection import fake_soundcards
+from ui.acquisition_config_window import RecordConfigWindow
+from consts.recording_preview_consts import (
+    PREVIEW_TIME_MODE_CUMULATIVE,
+    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
+)
 
 
 def test_model_uses_only_discovered_ains_and_preserves_ve_on_output_change(ui_qapp):
@@ -267,6 +274,33 @@ def test_unknown_rate_is_blank_and_requires_explicit_repair(controls, ui_qapp):
     assert controls.profiles.load(device, controls.calibrations)["sample_rate"] == 48000
 
 
+@pytest.mark.parametrize("rate", [44100, 48000, 51200])
+@pytest.mark.parametrize("monitor", [False, True])
+def test_record_config_effective_rate_preserves_product_rate_and_monitor(ui_qapp, monkeypatch, rate, monitor):
+    from base.sound_device_manager import SoundDeviceManager
+    def forbidden(*args, **kwargs):
+        raise AssertionError("No automatic output/mic fallback for VE")
+    monkeypatch.setattr(SoundDeviceManager, "get_default_device", forbidden)
+    device = device_info()
+    device["input_config"]["sample_rate"] = rate
+    product = {"sample_rate": 96000, "monitor_playback": monitor,
+               "monitor_gain_db": 4.5, "use_streaming_recording": True,
+               RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: PREVIEW_TIME_MODE_CUMULATIVE}
+    original = deepcopy(product)
+    window = RecordConfigWindow(product, mic=device)
+    assert str(rate) in window.samplerate_combo.currentText()
+    assert not window.samplerate_combo.isEnabled()
+    assert "硬件" in window.ve_hint_label.text() and "普通声卡" in window.ve_hint_label.text()
+    assert not window.monitor_checkbox.isEnabled() and not window.monitor_gain_db_input.isEnabled()
+    window.streaming_recording_checkbox.setChecked(False)
+    assert window.monitor_checkbox.isChecked() is monitor
+    window.on_click_ok_btn()
+    assert window.final_data["sample_rate"] == 96000
+    assert window.final_data["monitor_playback"] is monitor
+    assert window.final_data["monitor_gain_db"] == 4.5
+    assert window.final_data[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] == PREVIEW_TIME_MODE_CUMULATIVE
+    assert product == original
+    window.close()
 
 
 @pytest.fixture
@@ -305,35 +339,75 @@ def main_window_harness(controls, monkeypatch):
             self.hardware_busy = False
             self.release_calls = []
             self.release_callback = None
+            self.prewarm_status = "busy"
+            self.prewarm_calls = []
+            self.prewarm_callback = None
 
         def release_ve(self, signature, callback):
             self.release_calls.append(signature)
             self.release_callback = callback
             return "pending"
 
+        def prewarm_ve(self, request, callback):
+            self.prewarm_calls.append(request)
+            self.prewarm_callback = callback
+            return self.prewarm_status
 
         @staticmethod
         def shutdown():
             return None
 
     bridge = Bridge()
+    lifetime = VePrewarmLifetime()
     windows = []
     def create(*, recording_bridge=None, lifetime_instance=None):
-        window = MainWindow(
+        window = MainWindow(ve_prewarm_lifetime=lifetime_instance or lifetime,
             recording_bridge=recording_bridge or bridge, ve_profile_store=controls.profiles,
             ve_calibration_store=controls.calibrations, discovery_factory=OrderedDiscovery,
             hardware_selection_path=controls.path)
         windows.append(window)
         return window
-    yield SimpleNamespace(create=create, bridge=bridge,
+    yield SimpleNamespace(create=create, bridge=bridge, lifetime=lifetime,
                           events=events, namespace=namespace)
     for window in windows:
         window._close_ve_discovery()
         window.close()
 
 
+class _QtPrewarmService:
+    """Service boundary fake used through the real RecordingServiceBridge."""
+
+    def __init__(self, status="accepted"):
+        self.status = status
+        self.closed = threading.Event()
+        self._closing = False
+        self._worker = None
+        self._capture_session = None
+        self._pending_ve_release = None
+        self._ownership_uncertain = False
+        self.calls = []
+        self.callback = None
+
+    def prewarm_ve(self, request, callback):
+        self.calls.append(request)
+        self.callback = callback
+        return self.status
+
+    def release_ve(self, _signature, _callback):
+        return "unchanged"
+
+    def shutdown(self, callback=None):
+        self._closing = True
+        self.closed.set()
+        if callback is not None:
+            callback()
 
 
+def _prewarm_completion(request, *, success=True, stage="completed", detail="",
+                        ownership_safe=True):
+    return VePrewarmCompletion(
+        request.warmup_id, request.signature, success, stage, None, detail, (),
+        VeLifecycleCounts(1, 1, 1, 1, 1, 1), ownership_safe)
 
 
 def test_main_startup_is_async_and_shares_instance_stores(main_window_harness, controls, ui_qapp):
@@ -350,12 +424,102 @@ def test_main_startup_is_async_and_shares_instance_stores(main_window_harness, c
     assert "legacy calibration refresh" not in main_window_harness.events
 
 
+def test_main_real_qt_bridge_ignores_late_discovery_then_completes_current_generation(
+        main_window_harness, ui_qapp):
+    from ui.recording_service_bridge import RecordingServiceBridge
+
+    service = _QtPrewarmService("accepted")
+    bridge = RecordingServiceBridge(service)
+    lifetime = VePrewarmLifetime()
+    window = main_window_harness.create(
+        recording_bridge=bridge, lifetime_instance=lifetime)
+    discovery = window.ve_discovery.service
+    stale_generation = discovery.generation
+    window.ve_discovery.refresh()
+
+    discovery.deliver([device_info(name="stale")], generation=stale_generation)
+    ui_qapp.processEvents()
+    assert service.calls == [] and lifetime.snapshot().state == "available"
+
+    discovery.deliver([device_info(name="current")])
+    ui_qapp.processEvents()
+    assert len(service.calls) == 1 and lifetime.snapshot().state == "pending"
+    service.callback(_prewarm_completion(service.calls[0]))
+    ui_qapp.processEvents()
+    assert lifetime.snapshot().state == "succeeded"
 
 
+@pytest.mark.parametrize("status,expected", [("busy", "skipped_busy"), ("closing", "skipped_busy")])
+def test_main_real_qt_bridge_consumes_immediate_busy_and_closing_without_callback(
+        main_window_harness, ui_qapp, status, expected):
+    from ui.recording_service_bridge import RecordingServiceBridge
+
+    service = _QtPrewarmService(status)
+    bridge = RecordingServiceBridge(service)
+    lifetime = VePrewarmLifetime()
+    window = main_window_harness.create(
+        recording_bridge=bridge, lifetime_instance=lifetime)
+
+    window.ve_discovery.service.deliver([device_info()])
+    ui_qapp.processEvents()
+
+    assert len(service.calls) == 1
+    assert lifetime.snapshot().state == expected
+    assert not bridge.hardware_busy
 
 
+def test_main_real_qt_bridge_discards_projected_busy_before_service_admission(
+        main_window_harness, ui_qapp):
+    from ui.recording_service_bridge import RecordingServiceBridge
+
+    service = _QtPrewarmService("accepted")
+    service._capture_session = object()
+    bridge = RecordingServiceBridge(service)
+    lifetime = VePrewarmLifetime()
+    window = main_window_harness.create(
+        recording_bridge=bridge, lifetime_instance=lifetime)
+
+    window.ve_discovery.service.deliver([device_info()])
+    ui_qapp.processEvents()
+
+    assert service.calls == []
+    assert lifetime.snapshot().state == "skipped_busy"
 
 
+@pytest.mark.parametrize("stale_selection,ownership_safe", [(False, True), (True, False)])
+def test_main_real_qt_bridge_release_failure_terminalizes_with_original_ownership(
+        main_window_harness, ui_qapp, monkeypatch, stale_selection, ownership_safe):
+    from ui.recording_service_bridge import RecordingServiceBridge
+
+    critical = []
+    monkeypatch.setattr(main_window_harness.namespace["QMessageBox"],
+                        "critical", lambda *args: critical.append(args[-1]))
+    service = _QtPrewarmService("accepted")
+    bridge = RecordingServiceBridge(service)
+    lifetime = VePrewarmLifetime()
+    window = main_window_harness.create(
+        recording_bridge=bridge, lifetime_instance=lifetime)
+    window.ve_discovery.service.deliver([device_info()])
+    ui_qapp.processEvents()
+    request = service.calls[0]
+    if stale_selection:
+        window.mic = device_info(machine_id="new-selection")
+        window.mic_channels = [7, 1]
+
+    service.callback(_prewarm_completion(
+        request, success=False, stage="release_ve", detail="release failed",
+        ownership_safe=ownership_safe))
+    ui_qapp.processEvents()
+
+    snapshot = lifetime.snapshot()
+    assert snapshot.state == "failed"
+    assert snapshot.failed_signature == request.signature
+    assert snapshot.ownership_safe is ownership_safe
+    assert getattr(window, "_ve_prewarm_context", None) is None
+    assert bool(critical) is not stale_selection
+    if stale_selection:
+        assert lifetime.admission_for(window._ve_signature(
+            window.mic, window.mic_channels)) == "allowed"
 
 
 def test_main_rate_only_accept_and_cancel_do_not_reset_calibration(main_window_harness, controls, ui_qapp, monkeypatch):
@@ -398,10 +562,127 @@ def test_main_shared_recording_busy_guards_hardware_and_calibration(main_window_
     assert not window.mic["available"]
 
 
+def _configure_main_calibration_admission(
+    window, bridge, *, current_type="SPL", old_type="SPL",
+    can_start=True, hardware_busy=False, playback=False, closing=False,
+):
+    from ui.sequence.sequence_widget_recording_process_ops import (
+        SequenceWidgetRecordingProcessOpsMixin,
+    )
+
+    sequence = window.sequence_window
+    sequence.recording_bridge = bridge
+    current = {"display_sequence": ["current"],
+               "current": {"type": current_type}}
+    old = {"display_sequence": ["old"], "old": {"type": old_type}}
+    processor = object()
+    sequence.analysis_config = current
+    sequence._build_recent_session_config_snapshot = lambda: {
+        "analysis_config": deepcopy(current),
+    }
+    sequence._recording_process_contexts = {
+        "old": SimpleNamespace(
+            enabled_analysis_identifiers=(old_type,),
+            recent_session_config_snapshot={"analysis_config": old},
+            processor=processor,
+        )
+    }
+    sequence._record_workflow_busy = True
+    sequence._recording_closed = False
+    sequence._closing = closing
+    sequence.player_status_flag = True
+    sequence.streaming_processor = processor
+    sequence._condition_playback_controller = SimpleNamespace(
+        is_audio_playing=lambda: playback)
+    sequence.recent_session_panel = None
+    for name in (
+        "_can_start_recording_workflow",
+        "_can_start_calibration_workflow",
+    ):
+        setattr(sequence, name, MethodType(
+            getattr(SequenceWidgetRecordingProcessOpsMixin, name), sequence))
+    bridge.service.busy = True
+    bridge.service.can_start_recording = can_start
+    bridge.hardware_busy = hardware_busy
 
 
+@pytest.mark.parametrize("current_type", ["SPL", "ED", "future-analysis"])
+def test_main_calibration_action_waits_for_recording_publication(
+    main_window_harness, monkeypatch, current_type,
+):
+    window = main_window_harness.create()
+    window.access_lvl = "Engineer"
+    window.mic = {"backend": "sounddevice", "name": "test-input"}
+    _configure_main_calibration_admission(
+        window, main_window_harness.bridge, current_type=current_type)
+    constructed = []
+
+    class CalibrationDialog:
+        input_calibration_flag = False
+
+        def __init__(self, **kwargs):
+            constructed.append(kwargs)
+
+        def exec(self):
+            return None
+
+    monkeypatch.setitem(
+        main_window_harness.namespace, "CalibrationWindow", CalibrationDialog)
+    window.hardware_action_calibration.triggered.connect(
+        window.on_calibration_window_init)
+
+    window._update_hardware_busy_state()
+    assert not window.hardware_action_selection.isEnabled()
+    assert not window.hardware_action_calibration.isEnabled()
+    window.hardware_action_calibration.trigger()
+
+    assert constructed == []
 
 
+@pytest.mark.parametrize(
+    "case,overrides",
+    [
+        ("ineligible-old", {"old_type": "future-analysis"}),
+        ("ineligible-old-ed", {"old_type": "ED"}),
+        ("ineligible-old-and-current", {
+            "old_type": "future-analysis", "current_type": "ED"}),
+        ("active-capture", {"can_start": False, "hardware_busy": True}),
+        ("capacity-full", {"can_start": False}),
+        ("playback", {"playback": True}),
+        ("release", {"hardware_busy": True}),
+        ("closing", {"closing": True}),
+    ],
+)
+def test_main_calibration_action_retains_outer_blockers(
+    main_window_harness, monkeypatch, case, overrides,
+):
+    window = main_window_harness.create()
+    window.access_lvl = "Engineer"
+    window.mic = {"backend": "sounddevice", "name": "test-input"}
+    _configure_main_calibration_admission(
+        window, main_window_harness.bridge, **overrides)
+    constructed = []
+
+    class CalibrationDialog:
+        input_calibration_flag = False
+
+        def __init__(self, **kwargs):
+            constructed.append(kwargs)
+
+        def exec(self):
+            return None
+
+    monkeypatch.setitem(
+        main_window_harness.namespace, "CalibrationWindow", CalibrationDialog)
+    window.hardware_action_calibration.triggered.connect(
+        window.on_calibration_window_init)
+
+    assert not window._calibration_admission_available(), case
+    window._update_hardware_busy_state()
+    assert not window.hardware_action_calibration.isEnabled(), case
+    window.on_calibration_window_init()
+
+    assert constructed == []
 
 
 def test_main_background_result_does_not_disable_hardware_dialog(

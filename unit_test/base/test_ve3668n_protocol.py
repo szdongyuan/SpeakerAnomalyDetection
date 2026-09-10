@@ -369,3 +369,148 @@ def test_worker_fatal_scalar_contract(field, value):
     values[field] = value
     with pytest.raises(ValueError):
         WorkerFatal(**values)
+
+
+def _prewarm_request(**changes):
+    from base.recording_process_protocol import VePrewarmRequest
+
+    values = dict(warmup_id="warm-1", device=device_info(), channels=(7, 1),
+                  sample_rate=51200, attempt=1)
+    values.update(changes)
+    return VePrewarmRequest.create(**values)
+
+
+def _prewarm_result(**changes):
+    from base.recording_process_protocol import VePrewarmResult
+    from consts.ve3668n_consts import VE_BACKEND
+
+    values = dict(
+        warmup_id="warm-1", generation=2, attempt=1,
+        signature=(VE_BACKEND, "test-machine-1", (7, 1), 51200),
+        success=True, stage="completed", code=None, detail="",
+        frames_per_channel=25600, handles_released=True, diagnostics=(),
+        lifecycle_counts=_lifecycle_counts(task_stop=1),
+    )
+    values.update(changes)
+    return VePrewarmResult(**values)
+
+
+def test_ve_prewarm_request_is_half_second_per_channel_and_frozen():
+    device = device_info()
+    request = _prewarm_request(device=device)
+
+    assert request.frames_per_channel == 25600
+    assert request.target_samples == 25600
+    assert request.channels == (7, 1)
+    assert request.signature == ("vkinging", device["machine_id"], (7, 1), 51200)
+    device["machine_id"] = "changed"
+    assert request.device["machine_id"] == "test-machine-1"
+    with pytest.raises(TypeError):
+        request.device["machine_id"] = "changed"
+    with pytest.raises(AttributeError):
+        request.attempt = 2
+
+
+def test_ve_prewarm_request_is_spawn_serializable():
+    request = _prewarm_request()
+
+    restored = pickle.loads(pickle.dumps(request))
+    assert restored == request
+    assert restored.device.to_dict() == request.device.to_dict()
+    assert restored.channels == (7, 1)
+
+
+@pytest.mark.parametrize("changes", [
+    {"warmup_id": ""}, {"warmup_id": 1},
+    {"device": {**device_info(), "backend": "sounddevice"}},
+    {"device": device_info(available=False)},
+    {"channels": ()}, {"channels": (7, 7)}, {"channels": (7, 0)},
+    {"channels": {7, 1}},
+    {"sample_rate": 48000}, {"sample_rate": True},
+    {"attempt": 0}, {"attempt": 3}, {"attempt": True},
+])
+def test_ve_prewarm_request_rejects_malformed_values(changes):
+    with pytest.raises(ValueError):
+        _prewarm_request(**changes)
+
+
+def test_ve_prewarm_request_constructor_rejects_incorrect_frame_count():
+    from base.recording_process_protocol import VePrewarmRequest
+
+    values = dict(warmup_id="warm-1", device=device_info(), channels=(7, 1),
+                  sample_rate=51200, frames_per_channel=25599, attempt=1)
+    with pytest.raises(ValueError, match="frames_per_channel"):
+        VePrewarmRequest(**values)
+
+
+def test_ve_prewarm_result_is_frozen_and_spawn_serializable():
+    result = _prewarm_result()
+
+    assert pickle.loads(pickle.dumps(result)) == result
+    assert result.signature[2] == (7, 1)
+    with pytest.raises(AttributeError):
+        result.success = False
+
+
+@pytest.mark.parametrize("changes", [
+    {"stage": "start_task"},
+    {"code": -12001},
+    {"detail": "native error"},
+    {"frames_per_channel": 25599},
+    {"handles_released": False},
+])
+def test_ve_prewarm_success_rejects_contradictory_terminal_state(changes):
+    with pytest.raises(ValueError):
+        _prewarm_result(**changes)
+
+
+@pytest.mark.parametrize("changes", [
+    {"stage": "completed", "detail": "failed after completion"},
+    {"stage": "start_task", "detail": ""},
+])
+def test_ve_prewarm_failure_rejects_contradictory_terminal_state(changes):
+    with pytest.raises(ValueError):
+        _prewarm_result(success=False, frames_per_channel=0, **changes)
+
+
+@pytest.mark.parametrize("changes", [
+    {"stage": "start_task", "code": -12001, "detail": "device was not ready",
+     "frames_per_channel": 0, "handles_released": True},
+    {"stage": "capture_timeout", "code": None, "detail": "no valid frames",
+     "frames_per_channel": 1024, "handles_released": True},
+    {"stage": "detach", "code": None, "detail": "detach timed out",
+     "frames_per_channel": 25600, "handles_released": False,
+     "diagnostics": ("owner exit pending",)},
+])
+def test_ve_prewarm_failure_preserves_valid_staged_faults(changes):
+    result = _prewarm_result(success=False, **changes)
+
+    assert not result.success
+    assert pickle.loads(pickle.dumps(result)) == result
+
+
+@pytest.mark.parametrize("changes", [
+    {"warmup_id": ""}, {"warmup_id": 1},
+    {"generation": 0}, {"generation": True}, {"generation": 1.0},
+    {"attempt": 0}, {"attempt": 3}, {"attempt": True},
+    {"signature": ("sounddevice", "test-machine-1", (7, 1), 51200)},
+    {"signature": ("vkinging", "test-machine-1", (1, 7), 96000)},
+    {"success": 1}, {"stage": ""}, {"stage": 1},
+    {"code": True}, {"code": 1.0}, {"detail": 1},
+    {"frames_per_channel": -1}, {"frames_per_channel": True},
+    {"frames_per_channel": 1.0}, {"handles_released": 1},
+    {"diagnostics": ["cleanup failed"]}, {"diagnostics": (1,)},
+    {"lifecycle_counts": None},
+])
+def test_ve_prewarm_result_rejects_malformed_values(changes):
+    with pytest.raises(ValueError):
+        _prewarm_result(**changes)
+
+
+def test_ve_prewarm_result_revalidates_nested_lifecycle_counts():
+    counts = _lifecycle_counts()
+    result = _prewarm_result(lifecycle_counts=counts)
+    object.__setattr__(counts, "task_clear", -1)
+
+    with pytest.raises(ValueError, match="task_clear"):
+        result.__post_init__()
