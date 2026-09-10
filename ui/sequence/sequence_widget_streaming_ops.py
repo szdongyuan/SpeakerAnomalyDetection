@@ -1,5 +1,4 @@
 from collections.abc import Mapping
-import copy
 import json
 import os
 import threading
@@ -173,44 +172,30 @@ class SequenceWidgetStreamingOpsMixin:
             normalized = os.path.join(DEFAULT_DIR, normalized).replace("\\", "/")
         return os.path.abspath(normalized)
 
-    def _cache_condition_record(
-        self, condition_key: str, *, recorded_path=None,
-        recorded_signal_info=None, session_id=None, cache_target=None,
-        update_presentation=True,
-    ) -> None:
+    def _cache_condition_record(self, condition_key: str) -> None:
         key = str(condition_key or "").strip()
         if not key:
             return
-        if cache_target is None:
-            if not isinstance(getattr(self, "_condition_record_cache", None), dict):
-                self._condition_record_cache = {}
-            cache_target = self._condition_record_cache
-        elif not isinstance(cache_target, dict):
-            raise TypeError("condition cache target must be a dict")
+        if not isinstance(getattr(self, "_condition_record_cache", None), dict):
+            self._condition_record_cache = {}
 
-        recorded_signal_info = dict(
-            (getattr(self, "recorded_signal_info", {}) if recorded_signal_info is None
-             else recorded_signal_info) or {})
-        recorded_path = ((getattr(self, "recorded_path", None)
-                          if recorded_path is None else recorded_path)
-                         or recorded_signal_info.get("file_path"))
+        recorded_signal_info = dict(getattr(self, "recorded_signal_info", {}) or {})
+        recorded_path = getattr(self, "recorded_path", None) or recorded_signal_info.get("file_path")
         if not recorded_path and not recorded_signal_info:
             return
         source_type = str(recorded_signal_info.get("source_type") or "").strip()
         session_id = (
             ""
             if source_type == "imported"
-            else str((getattr(self, "_current_recent_session_id", "")
-                      if session_id is None else session_id) or "")
+            else str(getattr(self, "_current_recent_session_id", "") or "")
         )
 
-        cache_target[key] = {
+        self._condition_record_cache[key] = {
             "recorded_path": recorded_path,
             "recorded_signal_info": recorded_signal_info,
             "session_id": session_id,
         }
-        channel_workspace = (
-            getattr(self, "channel_workspace", None) if update_presentation else None)
+        channel_workspace = getattr(self, "channel_workspace", None)
         if channel_workspace is not None:
             if hasattr(channel_workspace, "set_condition_audio_path"):
                 channel_workspace.set_condition_audio_path(key, recorded_path)
@@ -599,17 +584,13 @@ class SequenceWidgetStreamingOpsMixin:
                 updated_signal_info["labels"] = previous_label or "not_labeled"
         return save_code, msg, final_file_path, updated_signal_info
 
-    def _should_run_silent_analysis_after_recording(
-            self, analysis_config=None) -> bool:
-        config = (analysis_config if isinstance(analysis_config, dict)
-                  else (getattr(self, "analysis_config", {}) or {}))
-        if bool(config.get("auto_analysis", False)):
-            return True
-        is_manual_product_cycle_active = getattr(self, "_is_manual_product_condition_cycle_active", None)
-        if callable(is_manual_product_cycle_active) and is_manual_product_cycle_active():
-            return True
-        is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
-        return callable(is_directional_cycle_active) and is_directional_cycle_active()
+    def _should_run_silent_analysis_after_recording(self) -> bool:
+        return bool(
+            (getattr(self, "analysis_config", {}) or {}).get(
+                "auto_analysis",
+                True,
+            )
+        )
 
     def on_sequence_config_updated(self, *_):
         """
@@ -765,9 +746,6 @@ class SequenceWidgetStreamingOpsMixin:
         Summarize DataDealStruct.analysis_result_dict into overall OK/NG.
         Rule: all items OK -> OK; otherwise NG.
         """
-        if (getattr(self, "_ve_calibration_skips", {})
-                or getattr(self, "_ve_channel_skips", {})):
-            return False, "NG"
         result_dict = getattr(self.data_struct, "analysis_result_dict", None)
         if not isinstance(result_dict, dict) or len(result_dict) == 0:
             return False, "NG"
@@ -788,7 +766,7 @@ class SequenceWidgetStreamingOpsMixin:
             return False, "NG"
         return passed, ("OK" if passed else "NG")
 
-    def _can_output_ok_ng(self, *, analysis_config=None):
+    def _can_output_ok_ng(self):
         """
         Decide whether current analysis_config is expected to produce OK/NG output.
 
@@ -797,14 +775,7 @@ class SequenceWidgetStreamingOpsMixin:
         - RSC always writes (overall OK/NG + max exceed)
         - SPL/SPLF/FR/HD/RB/PRB/LOUD/FBA/FFT write only when threshold/compare is enabled.
         """
-        channel_skips = getattr(self, "_ve_channel_skips", {})
-        if channel_skips:
-            return False, "所选声压分析通道不存在，无法产出OK/NG：\n" + "\n".join(
-                f"{key}：{skip.reason}" for key, skip in channel_skips.items())
-        if getattr(self, "_ve_calibration_skips", {}):
-            return False, "所选声压分析缺少有效实测校准，无法产出OK/NG"
-        cfg = (analysis_config if isinstance(analysis_config, dict)
-               else (self.analysis_config or {}))
+        cfg = self.analysis_config or {}
         seq = cfg.get("display_sequence") or []
         if not isinstance(seq, list) or len(seq) == 0:
             return False, "当前配置未选择任何分析项"
@@ -1302,14 +1273,7 @@ class SequenceWidgetStreamingOpsMixin:
             super().closeEvent(event)
             return
 
-        # Invalidate result submissions first.  The bounded shutdown waits for
-        # a safe durable-effect boundary before the final spool snapshot.
-        shutdown_recording_results = getattr(
-            self, "_shutdown_request_scoped_recording_executor", None)
-        if callable(shutdown_recording_results):
-            shutdown_recording_results()
-
-        while not bool(getattr(self, "_request_scoped_skip_final_spool", False)):
+        while True:
             # Show "saving" dialog
             saving_dialog = QDialog(self)
             saving_dialog.setWindowTitle("正在保存")
@@ -1513,8 +1477,9 @@ class SequenceWidgetStreamingOpsMixin:
                 if callable(clear_wav_calibration_state):
                     clear_wav_calibration_state()
                 else:
-                    from base.data_struct.data_deal_struct import DataDealStruct
-                    DataDealStruct.clear_wav_calibration_context(self.data_struct)
+                    self.data_struct.wav_calibration_metadata = None
+                    self.data_struct.wav_calibration_metadata_authoritative = False
+                    self.data_struct.wav_calibration_warning_shown = False
         except Exception:
             pass
         try:
@@ -2106,24 +2071,19 @@ class SequenceWidgetStreamingOpsMixin:
                     boundary_name="channel-selection",
                 )
 
-    def _schedule_raw_audio_csv_export(
-        self, raw_channels, *, recording_context=None,
-    ) -> bool:
+    def _schedule_raw_audio_csv_export(self, raw_channels) -> bool:
         project_context = dict(
             getattr(self, "product_test_project_context", {}) or {}
         )
         if project_context.get(EXPORT_RAW_AUDIO_CSV_KEY, False) is not True:
             return False
 
-        wav_path = str(
-            recording_context.request.path if recording_context is not None
-            else getattr(self, "recorded_path", "") or "")
-        signal_info = (
-            recording_context.recorded_signal_info if recording_context is not None
-            else getattr(self, "recorded_signal_info", {}) or {})
+        wav_path = str(getattr(self, "recorded_path", "") or "")
         try:
             storage_metadata = dict(
-                signal_info.get("analysis_storage", {})
+                (getattr(self, "recorded_signal_info", {}) or {}).get(
+                    "analysis_storage", {}
+                )
             )
             storage_context = storage_context_from_metadata(storage_metadata)
             csv_path = build_raw_audio_csv_path(
@@ -2132,10 +2092,7 @@ class SequenceWidgetStreamingOpsMixin:
             )
             channels = tuple(int(channel) for channel in raw_channels)
         except (TypeError, ValueError, OSError) as error:
-            if recording_context is not None:
-                self.raw_audio_csv_export_failed.emit(wav_path, str(error))
-            else:
-                self._on_raw_audio_csv_export_failed(wav_path, str(error))
+            self._on_raw_audio_csv_export_failed(wav_path, str(error))
             return False
 
         def _worker():
@@ -2161,10 +2118,7 @@ class SequenceWidgetStreamingOpsMixin:
         except RuntimeError as error:
             with self._raw_audio_csv_export_lock:
                 self._raw_audio_csv_export_threads.discard(thread)
-            if recording_context is not None:
-                self.raw_audio_csv_export_failed.emit(wav_path, str(error))
-            else:
-                self._on_raw_audio_csv_export_failed(wav_path, str(error))
+            self._on_raw_audio_csv_export_failed(wav_path, str(error))
             return False
         return True
 
@@ -2225,378 +2179,8 @@ class SequenceWidgetStreamingOpsMixin:
                     window.setToolTip(owned[0])
                 del window._recording_voltage_tooltip
 
-    def _present_request_scoped_recording_context(self, context):
-        """Project a completed request on the GUI only if it still owns it."""
-        owns = getattr(self, "_recording_context_owns_active_workflow", None)
-        if callable(owns) and not owns(context):
-            return False
-        if context.active_transition_applied:
-            return True
-        context.active_transition_applied = True
-        audio = context.publication_audio
-        if audio is None:
-            return False
-        recorded_multi = np.asarray(audio.multi)
-        sample_rate = int(context.publication_sample_rate)
-        self.data_struct.store_wave_data_multi = recorded_multi
-        self.data_struct.store_wave_data = recorded_multi.mean(axis=1).astype(
-            np.float32, copy=False)
-        self.data_struct.sample_rate = sample_rate
-        if isinstance(getattr(self.data_struct, "analysis_result_dict", None), dict):
-            # The active request owns a complete result snapshot.  Empty
-            # selection is therefore an explicit successful no-op and must
-            # retire stale verdicts from the previous recording.
-            self.data_struct.analysis_result_dict.clear()
-            self.data_struct.analysis_result_dict.update(
-                context.analysis_result_dict or {})
-        if isinstance(getattr(self, "recorded_signal_info", None), dict):
-            self.recorded_signal_info["sample_rate"] = sample_rate
-        request = context.request
-        ve_recording = request.device.get("backend") == "vkinging"
-        if ve_recording:
-            self.data_struct.audio_lenth = len(recorded_multi)
-            self.data_struct.wav_calibration_metadata = request.calibration_metadata
-            self.data_struct.wav_calibration_metadata_authoritative = True
-            self.data_struct.wav_calibration_warning_shown = False
-            from base.wav_calibration_metadata import WavCalibrationMetadataReadStatus
-            self.data_struct.wav_calibration_declared_backend = "vkinging"
-            self.data_struct.wav_calibration_read_status = (
-                WavCalibrationMetadataReadStatus.VALID)
-        else:
-            from base.data_struct.data_deal_struct import DataDealStruct
-            DataDealStruct.clear_wav_calibration_context(self.data_struct)
-        try:
-            final_waveform_windows = context.publication_final_windows
-            self._project_normalized_waveform_to_workspace(
-                recorded_multi,
-                sample_rate,
-                final_waveform_windows,
-                max_points=MAIN_RECORDING_FINAL_MAX_POINTS,
-            )
-            if ve_recording:
-                self._set_recording_voltage_tooltips(
-                    final_waveform_windows or (),
-                    request.calibration_metadata)
-        except Exception as error:
-            self.default_logger.error(
-                f"Final waveform projection failed after publication: {error}")
-            QMessageBox.warning(self, "提示", "录音已保存，但波形刷新失败。")
-        self.streaming_processor = None
-        self.streaming_stimulus_data = None
-        self.streaming_mode = None
-        self.player_status_flag = False
-        self.data_btn.setEnabled(True)
-        self.replayer_btn.setEnabled(True)
-        self._awaiting_ok_ng = True
-        self._sn_clear_on_next_scan = True
-        self._pending_recent_session_append = True
-        update_recent = getattr(self, "_update_current_recent_session_result", None)
-        if callable(update_recent):
-            update_recent(
-                context.analysis_label
-                or context.recorded_signal_info.get("labels", "not_labeled"),
-                session_id=context.recent_session_id,
-                recorded_path=context.request.path,
-                recorded_signal_info=context.recorded_signal_info,
-                sample_rate=sample_rate,
-                analysis_result_dict=context.analysis_result_dict,
-                config_snapshot=context.recent_session_config_snapshot,
-            )
-        count_board = getattr(self, "count_board", None)
-        if context.count_visual_refresh == "mark":
-            refresh = getattr(count_board, "set_mark_text", None)
-            if callable(refresh):
-                refresh()
-        elif context.count_visual_refresh == "test":
-            refresh = getattr(count_board, "set_test_text", None)
-            if callable(refresh):
-                refresh()
 
-        analysis_incomplete = bool(context.analysis_diagnostics)
-        if analysis_incomplete:
-            finalize_failed_analysis = getattr(
-                self, "_finalize_serial_product_condition_analysis_failure", None)
-            if callable(finalize_failed_analysis):
-                finalize_failed_analysis(
-                    "声压分析未执行：\n" + "\n".join(
-                        str(item) for item in context.analysis_diagnostics))
-        if context.manual_product_cycle_active and not analysis_incomplete:
-            mark_complete = getattr(
-                self, "_mark_manual_product_condition_recording_completed", None)
-            if callable(mark_complete):
-                mark_complete()
-            if context.count_mode == "mark" and context.product_group_id:
-                counted = dict(getattr(
-                    self, "_manual_product_condition_counted_group_labels", {}) or {})
-                count_label = context.business_effects_result.get("mark_count_label")
-                if count_label in ("OK", "NG", "not_labeled"):
-                    counted[str(context.product_group_id)] = count_label
-                    self._manual_product_condition_counted_group_labels = counted
-        if context.serial_product_condition_executing and not analysis_incomplete:
-            finalize_serial = getattr(
-                self, "_finalize_serial_product_condition_after_analysis", None)
-            if callable(finalize_serial):
-                finalize_serial()
-        if context.manual_product_cycle_active and not analysis_incomplete:
-            advance = getattr(
-                self, "_advance_manual_product_condition_cycle_after_recording", None)
-            if callable(advance):
-                advance()
-        if context.serial_product_condition_executing and not analysis_incomplete:
-            serial_complete = getattr(
-                self, "_on_serial_product_condition_completed", None)
-            if callable(serial_complete):
-                serial_complete()
-        if context.manual_product_cycle_active:
-            self.data_btn.setEnabled(False)
-            self.replayer_btn.setDisabled(True)
-        finalize = getattr(self, "_finalize_recording_channel_selection", None)
-        if callable(finalize):
-            finalize()
-        clear_direction = getattr(self, "_clear_active_recording_direction", None)
-        if callable(clear_direction):
-            clear_direction()
-        unlock = getattr(self, "_unlock_sn_after_recording_if_needed", None)
-        if callable(unlock):
-            unlock()
-        update_button = getattr(self, "update_player_btn_is_paused", None)
-        if callable(update_button):
-            update_button()
-        on_direction = getattr(self, "_on_directional_recording_completed", None)
-        if callable(on_direction):
-            on_direction(direction=context.direction, owns_active_presentation=True)
-        drain = getattr(self, "_drain_queued_directional_trigger", None)
-        if callable(drain):
-            QTimer.singleShot(0, drain)
-        reset_barcode = getattr(self, "_reset_barcode_commit_dedup", None)
-        if callable(reset_barcode):
-            reset_barcode()
-        return True
 
-    def _complete_detached_recording_context(
-        self, context, recorded_mono, recorded_multi, sample_rate,
-    ):
-        """Complete A-owned business work without borrowing B's mutable UI state."""
-        context.business_completed = False
-        context.business_failure = ""
-        context.awaiting_ok_ng = False
-        context.sn_clear_on_next_scan = False
-        context.pending_recent_session_append = False
-        ledger = context.business_effect_ledger
-        attempts = context.business_effect_attempts
-
-        def complete_effect(name, publisher):
-            if name in ledger:
-                return ledger[name]
-            attempts[name] = attempts.get(name, 0) + 1
-            value = publisher()
-            if value is False:
-                raise RuntimeError(f"{name} failed")
-            ledger[name] = value
-            return value
-        signal_info = context.recorded_signal_info
-        signal_info["sample_rate"] = sample_rate
-        signal_info.setdefault("file_path", context.request.path)
-        if context.direction:
-            signal_info["condition_key"] = context.direction
-        if context.barcode:
-            signal_info["barcode"] = context.barcode
-
-        # This path returns before the legacy completion hook. Export the
-        # owning request once, including when business publication is retried.
-        if "artifact:raw-audio-csv" not in ledger:
-            ledger["artifact:raw-audio-csv"] = self._schedule_raw_audio_csv_export(
-                context.request.channels, recording_context=context)
-
-        def update_recent_record(
-                label, *, completion_state, completion_error):
-            records = context.publication_recent_sessions_snapshot
-            if not context.publication_owner_snapshot_frozen:
-                # Direct synchronous callers do not cross the worker boundary.
-                records = getattr(self, "recent_test_session_by_id", {}) or {}
-            record = (
-                records.get(context.recent_session_id)
-                if isinstance(records, dict) else None)
-            if not isinstance(record, dict):
-                return
-            formatter = getattr(
-                self, "_format_recent_session_result_label", None)
-            stored_label = (
-                formatter(label) if callable(formatter) else str(label or ""))
-            record.update({
-                "request_id": context.request.request_id,
-                "result_label": stored_label,
-                "recorded_path": context.request.path,
-                "recorded_signal_info": dict(signal_info or {}),
-                "analysis_result_dict": dict(
-                    context.analysis_result_dict or {}),
-                "sample_rate": sample_rate,
-                "config_snapshot": dict(
-                    context.recent_session_config_snapshot or {}),
-                "business_completion_state": str(completion_state or ""),
-                "business_completion_error": str(completion_error or ""),
-            })
-            context.pending_ui_session_record = copy.deepcopy(record)
-
-        def record_failure(message):
-            context.business_completed = False
-            context.business_failure = str(message)
-            self.default_logger.error(context.business_failure)
-            update_recent_record(
-                (signal_info or {}).get("labels", "not_labeled"),
-                completion_state="failed",
-                completion_error=context.business_failure)
-            return False
-
-        try:
-            complete_effect("condition:cache", lambda:
-                self._cache_condition_record(
-                    context.direction,
-                    recorded_path=context.request.path,
-                    recorded_signal_info=signal_info,
-                    session_id=context.recent_session_id,
-                    cache_target=context.condition_record_cache,
-                    update_presentation=False,
-                ))
-            def cache_request_result():
-                result_caches = getattr(
-                    self, "_recording_result_condition_caches", None)
-                if not isinstance(result_caches, dict):
-                    result_caches = {}
-                    self._recording_result_condition_caches = result_caches
-                result_caches[context.request.request_id] = dict(
-                    context.condition_record_cache)
-                while len(result_caches) > 32:
-                    result_caches.pop(next(iter(result_caches)))
-                return True
-            complete_effect("condition:result-cache", cache_request_result)
-
-            recording_manager = RecordingManager()
-            # Analysis mutates signal_info before its label write can fail.
-            # Keep the original upsert label across retries so an uncommitted
-            # label update cannot be mistaken for an already persisted value.
-            saved_label = ledger.setdefault(
-                "database:initial-label",
-                str(signal_info.get("labels") or "not_labeled"))
-            def save_database():
-                save_code, save_msg = recording_manager.save_signal_info_to_db(
-                    signal_info, None)
-                if save_code != error_code.OK:
-                    raise RuntimeError(f"database: {save_msg}")
-                return save_msg
-            save_msg = complete_effect("database:upsert", save_database)
-            self.default_logger.info(f"Database save successful: {save_msg}")
-
-            if context.analysis_required:
-                analysis = getattr(
-                    self, "_run_request_scoped_recording_analysis", None)
-                if not callable(analysis):
-                    return record_failure(
-                        "analysis: request-scoped runner unavailable")
-                analysis_result = complete_effect("analysis:compute", lambda: analysis(
-                    context=context, request=context.request,
-                    recorded_mono=recorded_mono, recorded_multi=recorded_multi,
-                    sample_rate=sample_rate))
-                if analysis_result is False:
-                    return record_failure(
-                        "analysis: request-scoped analysis failed")
-                if hasattr(analysis_result, "analysis_result_dict"):
-                    context.analysis_result_dict = dict(
-                        analysis_result.analysis_result_dict or {})
-                    context.analysis_label = str(
-                        analysis_result.label or "not_labeled")
-                    context.analysis_diagnostics = tuple(
-                        analysis_result.diagnostics or ())
-                    context.analysis_items_data = dict(
-                        analysis_result.analysis_items_data or {})
-                    if context.analysis_diagnostics:
-                        context.analysis_label = "not_labeled"
-                    elif context.analysis_label in ("OK", "NG"):
-                        signal_info["labels"] = context.analysis_label
-                elif isinstance(analysis_result, dict):
-                    context.analysis_result_dict = dict(analysis_result)
-                if (context.analysis_label in ("OK", "NG")
-                        and context.analysis_label != saved_label):
-                    def update_label():
-                        update_code, update_message = recording_manager.update_audio_label(
-                            signal_info, context.request.path)
-                        if update_code != error_code.OK:
-                            raise RuntimeError(
-                                f"analysis label persistence: {update_message}")
-                        return update_message
-                    complete_effect("database:analysis-label", update_label)
-                    cached = context.condition_record_cache.get(context.direction)
-                    if isinstance(cached, dict):
-                        cached["recorded_signal_info"] = dict(signal_info)
-
-            if context.directional_cycle_active or context.count_mode == "mark":
-                complete_cycle = getattr(
-                    self, "_complete_request_scoped_recording_cycle", None)
-                if not callable(complete_cycle):
-                    return record_failure(
-                        "cycle: request-scoped completion unavailable")
-                cycle_result = complete_effect("state:cycle", lambda: complete_cycle(
-                    context=context,
-                    request=context.request,
-                    recorded_mono=recorded_mono,
-                    recorded_multi=recorded_multi,
-                    sample_rate=sample_rate,
-                    directional_cycle_active=context.directional_cycle_active,
-                    count_mode=context.count_mode))
-                if cycle_result is False:
-                    return record_failure(
-                        "cycle: request-scoped completion failed")
-                context.cycle_completion_result = cycle_result
-
-            if ((context.manual_product_cycle_active
-                    or context.serial_product_condition_executing)
-                    and not context.analysis_diagnostics):
-                complete_product = getattr(
-                    self, "_complete_request_scoped_product_recording", None)
-                if not callable(complete_product):
-                    return record_failure(
-                        "product: request-scoped completion unavailable")
-                product_result = complete_effect("state:product", lambda: complete_product(
-                    context=context,
-                    request=context.request,
-                    recorded_mono=recorded_mono,
-                    recorded_multi=recorded_multi,
-                    sample_rate=sample_rate))
-                if product_result is False:
-                    return record_failure(
-                        "product: request-scoped completion failed")
-                context.product_completion_result = product_result
-
-            update_recent_record(
-                (signal_info or {}).get("labels", "not_labeled"),
-                completion_state="completed", completion_error="",
-            )
-
-            publish_business = getattr(
-                self, "_publish_request_scoped_recording_business", None)
-            if not callable(publish_business):
-                return record_failure(
-                    "business: request-scoped publication unavailable")
-            complete_effect("business:publication", lambda: publish_business(context))
-
-            context.awaiting_ok_ng = True
-            context.sn_clear_on_next_scan = True
-            context.pending_recent_session_append = True
-            context.business_completed = True
-            return True
-        except Exception as error:
-            return record_failure(f"business: {error}")
-
-    def _recording_completion_analysis_config(self, recording_context=None):
-        if recording_context is not None:
-            snapshot = getattr(
-                recording_context, "recent_session_config_snapshot", None)
-            if isinstance(snapshot, dict):
-                frozen = snapshot.get("analysis_config")
-                if isinstance(frozen, dict):
-                    return frozen
-        current = getattr(self, "analysis_config", None)
-        return current if isinstance(current, dict) else {}
 
     def _on_streaming_complete(
         self,
@@ -2606,9 +2190,6 @@ class SequenceWidgetStreamingOpsMixin:
         completion_source="streaming",
         prefinalized=False,
         final_waveform_windows=None,
-        recording_context=None,
-        request_owned_only=False,
-        serialized_legacy=False,
     ):
         """
         Handle streaming completion: alignment, file save, and analysis.
@@ -2621,20 +2202,9 @@ class SequenceWidgetStreamingOpsMixin:
         - Save to database
         - Enable buttons and optionally run analysis
         """
-        def owns_active_presentation():
-            if recording_context is None:
-                return True
-            owns = getattr(self, "_recording_context_owns_active_workflow", None)
-            if callable(owns):
-                return owns(recording_context)
-            return (getattr(self, "_active_recording_process_id", None)
-                    == recording_context.request.request_id)
-
         try:
-            processor = (recording_context.processor if recording_context is not None
-                         else getattr(self, "streaming_processor", None))
-            run_channels = (recording_context.request.channels if recording_context is not None
-                            else getattr(self, "_recording_input_channels", None))
+            processor = getattr(self, "streaming_processor", None)
+            run_channels = getattr(self, "_recording_input_channels", None)
             if run_channels is None:
                 # Compatibility for isolated callers. The main recording path
                 # always owns an immutable run snapshot.
@@ -2735,15 +2305,6 @@ class SequenceWidgetStreamingOpsMixin:
                     self._handle_invalid_recording(quality_reason)
                     return
 
-            request = (recording_context.request if recording_context is not None
-                       else getattr(self, "_recording_process_request", None)
-                       if prefinalized else None)
-            if recording_context is not None and (
-                    request_owned_only
-                    or (not serialized_legacy and not owns_active_presentation())):
-                return self._complete_detached_recording_context(
-                    recording_context, recorded_mono, recorded_multi, sample_rate)
-
             # Publish the validated, trimmed recording atomically to the
             # authoritative analysis state. Invalid captures must leave the
             # previous recording available to downstream analysis.
@@ -2752,21 +2313,18 @@ class SequenceWidgetStreamingOpsMixin:
                 np.float32,
                 copy=False,
             )
-            ve_recording = request is not None and request.device.get("backend") == "vkinging"
-            if ve_recording:
-                # Publish the exact request snapshot, not current hardware or
-                # registry state. The gate consumes this provenance directly.
-                self.data_struct.sample_rate = request.sample_rate
-                self.data_struct.audio_lenth = len(recorded_multi)
+
+            request = (getattr(self, "_recording_process_request", None)
+                       if prefinalized else None)
+            self.data_struct.sample_rate = sample_rate
+            self.data_struct.audio_lenth = len(recorded_multi)
+            if request is not None and request.device.get("backend") == "vkinging":
+                from base.wav_calibration_metadata import WavCalibrationMetadataReadStatus
                 self.data_struct.wav_calibration_metadata = request.calibration_metadata
                 self.data_struct.wav_calibration_metadata_authoritative = True
                 self.data_struct.wav_calibration_warning_shown = False
-                from base.wav_calibration_metadata import WavCalibrationMetadataReadStatus
                 self.data_struct.wav_calibration_declared_backend = "vkinging"
                 self.data_struct.wav_calibration_read_status = WavCalibrationMetadataReadStatus.VALID
-                clear_results = getattr(self, "_clear_replaced_ve_analysis_results", None)
-                if callable(clear_results):
-                    clear_results()
             else:
                 from base.data_struct.data_deal_struct import DataDealStruct
                 DataDealStruct.clear_wav_calibration_context(self.data_struct)
@@ -2774,49 +2332,29 @@ class SequenceWidgetStreamingOpsMixin:
             if not prefinalized:
                 self._append_recording_wav_calibration_metadata()
 
-            recorded_signal_info = (recording_context.recorded_signal_info
-                                    if recording_context is not None
-                                    else self.recorded_signal_info)
-            recorded_signal_info["sample_rate"] = sample_rate
-            self._schedule_raw_audio_csv_export(
-                run_channels, recording_context=recording_context)
+            self.recorded_signal_info["sample_rate"] = sample_rate
+            self._schedule_raw_audio_csv_export(run_channels)
             condition_key = (
-                recording_context.direction if recording_context is not None
-                else self._recording_process_direction if prefinalized
+                self._recording_process_direction if prefinalized
                 else self._resolve_active_recording_waveform_direction(fallback="")
             )
-            self._cache_condition_record(
-                condition_key,
-                recorded_path=request.path if request is not None else None,
-                recorded_signal_info=recorded_signal_info,
-                session_id=(recording_context.recent_session_id
-                            if recording_context is not None else None),
-            )
-            if (owns_active_presentation() and recording_context is not None
-                    and isinstance(getattr(self, "recorded_signal_info", None), dict)):
-                self.recorded_signal_info["sample_rate"] = sample_rate
+            self._cache_condition_record(condition_key)
 
-            # The authoritative recording has already been published. Workspace
-            # validation, waveform preparation, and Qt mutations are one
-            # presentation-only attempt and cannot invalidate the saved audio.
+            # Final data and workspace semantic validation have succeeded, so
+            # waveform preparation / Qt failures are presentation-only.
             try:
-                if owns_active_presentation():
-                    final_waveform_windows = self._validate_final_waveform_workspace(
-                        run_channels
-                    )
-                    self._project_normalized_waveform_to_workspace(
-                        recorded_multi,
-                        sample_rate,
-                        final_waveform_windows,
-                        max_points=MAIN_RECORDING_FINAL_MAX_POINTS,
-                    )
-                    if ve_recording:
-                        self._set_recording_voltage_tooltips(
-                            final_waveform_windows, request.calibration_metadata)
-                    else:
-                        clear_voltage_hint = getattr(self, "_clear_recording_voltage_tooltips", None)
-                        if callable(clear_voltage_hint):
-                            clear_voltage_hint(final_waveform_windows)
+                if final_waveform_windows is None:
+                    final_waveform_windows = self._validate_final_waveform_workspace(run_channels)
+                self._project_normalized_waveform_to_workspace(
+                    recorded_multi,
+                    sample_rate,
+                    final_waveform_windows,
+                    max_points=MAIN_RECORDING_FINAL_MAX_POINTS,
+                )
+                if request is not None and request.device.get("backend") == "vkinging":
+                    self._set_recording_voltage_tooltips(final_waveform_windows, request.calibration_metadata)
+                else:
+                    self._clear_recording_voltage_tooltips(final_waveform_windows)
             except Exception as error:
                 self.default_logger.error(
                     "Final waveform projection failed after recording save: "
@@ -2830,7 +2368,7 @@ class SequenceWidgetStreamingOpsMixin:
                 )
 
             # Save to database
-            save_code, save_msg = RecordingManager().save_signal_info_to_db(recorded_signal_info, None)
+            save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
             if save_code == error_code.OK:
                 self.default_logger.info(f"Database save successful: {save_msg}")
             else:
@@ -2842,51 +2380,29 @@ class SequenceWidgetStreamingOpsMixin:
                     return
 
             # Clean up streaming state
+            self.streaming_processor = None
+            self.streaming_stimulus_data = None
+            self.streaming_mode = None
             clear_active_recording_direction = getattr(self, "_clear_active_recording_direction", None)
-            if owns_active_presentation():
-                self.streaming_processor = None
-                self.streaming_stimulus_data = None
-                self.streaming_mode = None
-                if callable(clear_active_recording_direction):
-                    clear_active_recording_direction()
-                self.player_status_flag = False  # Recording complete, allow hardware access
+            if callable(clear_active_recording_direction):
+                clear_active_recording_direction()
+            self.player_status_flag = False  # Recording complete, allow hardware access
 
-            # Enable buttons for replay and data analysis
-            if owns_active_presentation():
-                self.data_btn.setEnabled(True)
-                self.replayer_btn.setEnabled(True)
-                # Re-evaluate manual analysis independently from recording state.
-                _refresh_manual_analysis_action(self, fallback_enabled=True)
+            # Re-evaluate manual analysis independently from recording state.
+            _refresh_manual_analysis_action(self, fallback_enabled=True)
+            self.replayer_btn.setEnabled(True)
 
-            if owns_active_presentation():
-                self._awaiting_ok_ng = True
-                self._sn_clear_on_next_scan = True
-                self._pending_recent_session_append = True
-                unlock_sn_after_recording = getattr(
-                    self, "_unlock_sn_after_recording_if_needed", None)
-                if callable(unlock_sn_after_recording):
-                    unlock_sn_after_recording()
+            self._awaiting_ok_ng = True
+            self._sn_clear_on_next_scan = True
+            self._pending_recent_session_append = True
+            unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
+            if callable(unlock_sn_after_recording):
+                unlock_sn_after_recording()
             try:
-                current_label = (recorded_signal_info or {}).get("labels", "not_labeled")
+                current_label = (self.recorded_signal_info or {}).get("labels", "not_labeled")
             except Exception:
                 current_label = "not_labeled"
-            self._update_current_recent_session_result(
-                current_label,
-                session_id=(recording_context.recent_session_id
-                            if recording_context is not None else None),
-                recorded_path=request.path if request is not None else None,
-                recorded_signal_info=recorded_signal_info,
-                sample_rate=sample_rate,
-                analysis_result_dict=(recording_context.analysis_result_dict
-                                      if recording_context is not None else None),
-                config_snapshot=(recording_context.recent_session_config_snapshot
-                                 if recording_context is not None else None),
-            )
-
-            # Saving or recent-session observers can synchronously start B. From
-            # this point onward all remaining work is active presentation/business.
-            if not owns_active_presentation():
-                return save_code == error_code.OK
+            self._update_current_recent_session_result(current_label)
 
             is_manual_product_cycle_active = getattr(self, "_is_manual_product_condition_cycle_active", None)
             manual_product_cycle_was_active = (
@@ -2907,7 +2423,7 @@ class SequenceWidgetStreamingOpsMixin:
             # 操作员误以为可以重新输入。直接跳过即可。
             is_sn_locked_for_cycle = getattr(self, "_is_sn_locked_for_cycle", None)
             sn_locked = callable(is_sn_locked_for_cycle) and is_sn_locked_for_cycle()
-            if owns_active_presentation() and self.barcode_scanner_box.isChecked() and not sn_locked:
+            if self.barcode_scanner_box.isChecked() and not sn_locked:
                 try:
                     self.lineedit_s_or_n.setFocus()
                     self.lineedit_s_or_n.selectAll()
@@ -2916,151 +2432,97 @@ class SequenceWidgetStreamingOpsMixin:
 
             on_directional_recording_completed = getattr(self, "_on_directional_recording_completed", None)
             if callable(on_directional_recording_completed):
-                on_directional_recording_completed(
-                    direction=condition_key,
-                    owns_active_presentation=owns_active_presentation(),
-                )
+                on_directional_recording_completed()
 
-            # Motor directional workflow needs left-panel AI results even when the
-            # legacy auto-analysis checkbox is off, so run silently in that case too.
-            analysis_succeeded = True
-            completion_analysis_config = (
-                self._recording_completion_analysis_config(recording_context))
+            # Recording owns only WAV publication.  Automatic analysis is queued
+            # according to the current test-queue setting and may overlap the next
+            # condition's recording.
             enqueue_analysis = getattr(
                 self,
                 "_enqueue_automatic_analysis_current_recording",
                 None,
             )
-            if recording_context is None and callable(enqueue_analysis):
-                # The upstream legacy-streaming path owns its independent
-                # background queue. Process recordings keep the frozen,
-                # request-scoped executor below so the same WAV is never
-                # analyzed by both mechanisms.
-                enqueue_analysis()
-            else:
-                should_run_analysis = (
-                    bool(getattr(recording_context, "analysis_required", False))
-                    if recording_context is not None
-                    else self._should_run_silent_analysis_after_recording())
-                if should_run_analysis:
-                    analysis_succeeded = self.run(
-                        show_windows=False,
-                        analysis_config_override=completion_analysis_config)
-
-            ve_pressure_skips = ({
-                **getattr(self, "_ve_channel_skips", {}),
-                **getattr(self, "_ve_calibration_skips", {}),
-            } if ve_recording else {})
-            pressure_blocked = bool(ve_pressure_skips)
-            analysis_failed = analysis_succeeded is False or pressure_blocked
-            if analysis_failed:
-                finalize_failed_analysis = getattr(
-                    self,
-                    "_finalize_serial_product_condition_analysis_failure",
-                    None,
-                )
-                failure_finalized = bool(
-                    callable(finalize_failed_analysis)
-                    and finalize_failed_analysis(
-                        "声压分析未执行：\n" + "\n".join(
-                            f"{key}：{skip.reason}" for key, skip in ve_pressure_skips.items())
-                        if pressure_blocked else "输入校准文件错误，本次分析已停止"
-                    )
-                )
-                if not failure_finalized:
-                    self._awaiting_ok_ng = False
-                    self._sn_clear_on_next_scan = False
-                    self._pending_recent_session_append = False
-            else:
-                if manual_product_cycle_was_active:
-                    mark_manual_product_complete = getattr(
-                        self,
-                        "_mark_manual_product_condition_recording_completed",
-                        None,
-                    )
-                    if callable(mark_manual_product_complete):
-                        mark_manual_product_complete()
-                    update_group_count = getattr(
-                        self,
-                        "_update_manual_product_mark_group_count",
-                        None,
-                    )
-                    if callable(update_group_count):
-                        update_group_count(
-                            getattr(
-                                self,
-                                "_manual_product_condition_group_id",
-                                "",
-                            )
-                        )
-
-                finalize_serial_condition = getattr(
-                    self,
-                    "_finalize_serial_product_condition_after_analysis",
-                    None,
-                )
-                if callable(finalize_serial_condition) and not finalize_serial_condition():
+            if prefinalized:
+                session = getattr(self, "_recording_process_session", None)
+                context_for = getattr(self, "_recording_context_for_session", None)
+                context = context_for(session) if callable(context_for) else None
+                if (getattr(self, "_recording_process_cancelled", False)
+                        or (context is not None and (context.cancelled or context.failed or context.cleanup_owned))):
                     return
+            if callable(enqueue_analysis):
+                enqueue_analysis()
 
-                advance_manual_product_cycle = getattr(
+            if manual_product_cycle_was_active:
+                mark_manual_product_complete = getattr(
                     self,
-                    "_advance_manual_product_condition_cycle_after_recording",
+                    "_mark_manual_product_condition_recording_completed",
                     None,
                 )
-                if callable(advance_manual_product_cycle):
-                    advance_manual_product_cycle()
-                serial_condition_completed = getattr(
+                if callable(mark_manual_product_complete):
+                    mark_manual_product_complete()
+                update_group_count = getattr(
                     self,
-                    "_on_serial_product_condition_completed",
+                    "_update_manual_product_mark_group_count",
                     None,
                 )
-                if callable(serial_condition_completed):
-                    serial_condition_completed()
+                if callable(update_group_count):
+                    update_group_count(
+                        getattr(
+                            self,
+                            "_manual_product_condition_group_id",
+                            "",
+                        )
+                    )
+
+            finalize_serial_condition = getattr(
+                self,
+                "_finalize_serial_product_condition_after_analysis",
+                None,
+            )
+            if callable(finalize_serial_condition) and not finalize_serial_condition():
+                return
+
+            advance_manual_product_cycle = getattr(
+                self,
+                "_advance_manual_product_condition_cycle_after_recording",
+                None,
+            )
+            if callable(advance_manual_product_cycle):
+                advance_manual_product_cycle()
+            serial_condition_completed = getattr(
+                self,
+                "_on_serial_product_condition_completed",
+                None,
+            )
+            if callable(serial_condition_completed):
+                serial_condition_completed()
             if manual_product_cycle_was_active:
                 self.data_btn.setEnabled(False)
                 self.replayer_btn.setDisabled(True)
 
             # Update player button state
-            if owns_active_presentation():
-                sync_busy = getattr(self, "_sync_recording_workflow_busy", None)
-                if callable(sync_busy):
-                    sync_busy()
-                else:
-                    self._record_workflow_busy = False
-                _refresh_manual_analysis_action(self, fallback_enabled=True)
-                self.update_player_btn_is_paused()
-            if owns_active_presentation():
-                try:
-                    self._reset_barcode_commit_dedup()
-                except Exception:
-                    self._last_committed_barcode = None
-                    self._last_committed_barcode_time = 0.0
+            self._record_workflow_busy = False
+            _refresh_manual_analysis_action(self, fallback_enabled=True)
+            self.update_player_btn_is_paused()
+            try:
+                self._reset_barcode_commit_dedup()
+            except Exception:
+                self._last_committed_barcode = None
+                self._last_committed_barcode_time = 0.0
 
-            if pressure_blocked:
-                self.default_logger.info("Voltage recording saved; pressure analysis incomplete")
-            elif analysis_failed:
-                self.default_logger.error(
-                    f"{str(completion_source).capitalize()} recording analysis failed"
-                )
-            else:
-                self.default_logger.info(
-                    f"{str(completion_source).capitalize()} recording completed successfully"
-                )
+            self.default_logger.info(
+                f"{str(completion_source).capitalize()} recording completed successfully"
+            )
 
             drain = getattr(self, "_drain_queued_directional_trigger", None)
-            if owns_active_presentation() and callable(drain):
+            if callable(drain):
                 drain()
             # Only the completed business path authorizes a remote finish.
             # Early returns and caught failures intentionally do not report it.
-            # Missing analysis channels/calibration do not invalidate raw capture.
-            # Condition/report failure above remains distinct from acquisition
-            # completion; other analysis failures retain the legacy contract.
-            return save_code == error_code.OK and (not analysis_failed or pressure_blocked)
+            return save_code == error_code.OK
 
         except Exception as e:
             self.default_logger.error(f"Error in streaming completion: {e}")
-            if not owns_active_presentation():
-                return
             # Clean up on error
             try:
                 _claim_and_finalize_streaming_wav_writer(self)
@@ -3268,40 +2730,6 @@ class SequenceWidgetStreamingOpsMixin:
         except Exception:
             pass
 
-    def _prepare_streaming_resources_for_new_capture(self):
-        """Detach presentation from an older finalizer without cancelling it."""
-        self._streaming_cleanup_in_progress = True
-        try:
-            _run_optional_streaming_cleanup(
-                self,
-                active_query_name="_streaming_waveform_session_is_active",
-                cleanup_name="_end_streaming_waveform_session",
-                boundary_name="live-session",
-            )
-            processor = getattr(self, "streaming_processor", None)
-            contexts = getattr(self, "_recording_process_contexts", None)
-            owned_processors = {
-                id(context.processor)
-                for context in (contexts.values() if isinstance(contexts, dict) else ())
-                if context.processor is not None
-            }
-            if processor is not None:
-                self.streaming_processor = None
-                if id(processor) not in owned_processors:
-                    try:
-                        processor.stop_streaming()
-                    except Exception as error:
-                        _log_streaming_boundary(
-                            self, "error", f"Error stopping legacy processor: {error}")
-            try:
-                _claim_and_finalize_streaming_wav_writer(self)
-            except Exception as error:
-                _log_streaming_boundary(
-                    self, "error", f"Error finalizing legacy WAV writer: {error}")
-            self.streaming_stimulus_data = None
-            self.streaming_mode = None
-        finally:
-            self._streaming_cleanup_in_progress = False
 
     def _cleanup_streaming_resources(self):
         """

@@ -1141,7 +1141,7 @@ def test_in_process_workspace_contract_failure_is_presentation_only(
     host._handle_invalid_recording = mock.Mock()
     host._should_run_silent_analysis_after_recording = lambda: True
     events = []
-    host.run = mock.Mock(
+    host._enqueue_automatic_analysis_current_recording = mock.Mock(
         side_effect=lambda **_kwargs: events.append("analysis") or True
     )
     windows = host.channel_workspace.all_subwindows()
@@ -1212,10 +1212,7 @@ def test_in_process_workspace_contract_failure_is_presentation_only(
         host.recorded_signal_info,
         None,
     )
-    host.run.assert_called_once_with(
-        show_windows=False,
-        analysis_config_override={},
-    )
+    host._enqueue_automatic_analysis_current_recording.assert_called_once_with()
     assert warnings == ["录音已保存，但波形刷新失败。"]
     for window in host.channel_workspace.all_subwindows():
         restored_time, restored_amplitude = window.data

@@ -177,7 +177,8 @@ def _complete_recording(
     host._should_run_silent_analysis_after_recording = lambda: False
     host._handle_invalid_recording = lambda reason: calls.append(("discard", reason))
     host._project_normalized_waveform_to_workspace = mock.Mock()
-    host.run = mock.Mock(return_value=True)
+    host.run = mock.Mock()
+    host._enqueue_automatic_analysis_current_recording = mock.Mock(return_value=True)
 
     def save_signal_info_to_db(*_args):
         calls.append(("db",))
@@ -404,7 +405,8 @@ def _prepare_final_completion_host(
     host._append_recording_wav_calibration_metadata = mock.Mock(return_value=True)
     host._handle_invalid_recording = mock.Mock()
     host._should_run_silent_analysis_after_recording = lambda: True
-    host.run = mock.Mock(return_value=True)
+    host.run = mock.Mock()
+    host._enqueue_automatic_analysis_current_recording = mock.Mock(return_value=True)
     host._is_manual_product_condition_cycle_active = lambda: False
     host._finalize_serial_product_condition_after_analysis = lambda: True
     host._advance_manual_product_condition_cycle_after_recording = mock.Mock()
@@ -471,8 +473,8 @@ def test_final_projection_failure_is_presentation_only_and_releases_run_state(
         host.recorded_signal_info,
         None,
     )
-    host.run.assert_called_once_with(
-        show_windows=False, analysis_config_override=host.analysis_config)
+    host._enqueue_automatic_analysis_current_recording.assert_called_once_with()
+    host.run.assert_not_called()
     host._handle_invalid_recording.assert_not_called()
     host._project_normalized_waveform_to_workspace.assert_called_once()
     projection_args = host._project_normalized_waveform_to_workspace.call_args.args
@@ -615,8 +617,8 @@ def test_final_workspace_contract_mismatch_is_presentation_only_after_publicatio
         host.recorded_signal_info,
         None,
     )
-    host.run.assert_called_once_with(
-        show_windows=False, analysis_config_override=host.analysis_config)
+    host._enqueue_automatic_analysis_current_recording.assert_called_once_with()
+    host.run.assert_not_called()
     host._handle_invalid_recording.assert_not_called()
     abort_selection.assert_not_called()
     assert host.streaming_processor is None

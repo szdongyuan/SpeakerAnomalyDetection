@@ -10,11 +10,6 @@ import numpy as np
 import pytest
 from PyQt5.QtWidgets import QApplication
 
-from consts.recording_preview_consts import (
-    PLOT_PRESENTATION_COMPLETE,
-    PREVIEW_TIME_MODE_RELATIVE_LATEST,
-)
-
 if "concurrent_log_handler" not in sys.modules:
     concurrent_log_handler = types.ModuleType("concurrent_log_handler")
 
@@ -496,16 +491,16 @@ class _ImportAnalysisHost(SequenceWidgetAnalysisOpsMixin):
         size = SimpleNamespace(width=lambda: 1600, height=lambda: 900)
         return SimpleNamespace(size=lambda: size)
 
-    def instance_analysis_class(self, _key, _type, _params, *, analysis_config=None):
+    def instance_analysis_class(self, _key, _type, _params):
         self.analysis_window.append(_AnalysisInstance(self))
 
-    def _capture_excel_export_cache(self, *, analysis_config=None):
+    def _capture_excel_export_cache(self):
         self.excel_calls += 1
 
-    def _maybe_export_excel_results(self, *, analysis_config=None):
+    def _maybe_export_excel_results(self):
         self.excel_calls += 1
 
-    def _can_output_ok_ng(self, *, analysis_config=None):
+    def _can_output_ok_ng(self):
         return True, ""
 
     def _summarize_ok_ng(self):
@@ -562,7 +557,7 @@ class _CombinedJudgmentHost(_ImportAnalysisHost):
             "spl": {"type": "SPL", "limit_checked": True},
         }
 
-    def instance_analysis_class(self, key, _type, _params, *, analysis_config=None):
+    def instance_analysis_class(self, key, _type, _params):
         if key == "ai":
             self.analysis_window.append(
                 _AIJudgmentAnalysisInstance(self, self.ai_label)
@@ -858,17 +853,9 @@ def test_direct_import_rebuilds_real_workspace_before_committing_mapping(
     monkeypatch,
 ):
     host = _RealDirectImportWorkspaceHost()
-    sample_count = 12_003
-    channels_first = np.vstack(
-        (
-            np.sin(np.arange(sample_count, dtype=np.float32) / 17.0),
-            np.cos(np.arange(sample_count, dtype=np.float32) / 19.0),
-        )
-    ).astype(np.float32)
-    retained_window = host.channel_workspace.all_subwindows()[0]
-    retained_window.set_live_data(
-        np.asarray([-1.0, 0.0]),
-        np.asarray([7.0, 8.0], dtype=np.float32),
+    channels_first = np.asarray(
+        [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
+        dtype=np.float32,
     )
     render_events = []
     original_set_data = ChannelPlotSubWindow.set_data
@@ -908,26 +895,10 @@ def test_direct_import_rebuilds_real_workspace_before_committing_mapping(
         assert [event[0] for event in render_events] == [0, 1]
         assert all(event[1] == (7,) for event in render_events)
         assert all(event[2] == "hardware" for event in render_events)
-        assert all(
-            len(event[3]) <= host._WAVEFORM_DISPLAY_MAX_POINTS
-            for event in render_events
-        )
-        assert render_events[0][3][[0, -1]] == pytest.approx(
-            channels_first[0, [0, -1]]
-        )
-        assert render_events[1][3][[0, -1]] == pytest.approx(
-            channels_first[1, [0, -1]]
-        )
+        np.testing.assert_allclose(render_events[0][3], channels_first[0])
+        np.testing.assert_allclose(render_events[1][3], channels_first[1])
         assert host._active_input_channels == [0, 1]
         assert host._waveform_presentation_owner == "direct_import"
-        for window in host.channel_workspace.all_subwindows():
-            time_axis, _amplitude = window.plot_item.getData()
-            assert len(time_axis) <= host._WAVEFORM_DISPLAY_MAX_POINTS
-            assert time_axis[0] == 0.0
-            assert time_axis[-1] == pytest.approx((sample_count - 1) / 44_100)
-            assert window.is_live_preview is False
-            assert window.presentation_mode == PLOT_PRESENTATION_COMPLETE
-            assert window.plot_widget.getViewBox().state["autoRange"][0] is True
     finally:
         host.channel_workspace.close()
         qapp.processEvents()
@@ -943,12 +914,6 @@ def test_direct_import_real_plot_failure_restores_previous_workspace(
     previous_x = np.asarray([0.0], dtype=np.float32)
     previous_y = np.asarray([0.75], dtype=np.float32)
     previous_window.set_data(previous_x, previous_y)
-    previous_x_range = previous_window.plot_widget.viewRange()[0]
-    previous_x_auto_range = previous_window.plot_widget.getViewBox().state[
-        "autoRange"
-    ][0]
-    previous_live_preview = previous_window.is_live_preview
-    previous_presentation_mode = previous_window.presentation_mode
     original_set_data = ChannelPlotSubWindow.set_data
 
     def fail_second_column(window, x_data, y_data):
@@ -985,19 +950,9 @@ def test_direct_import_real_plot_failure_restores_previous_workspace(
         )
         restored_windows = host.channel_workspace.all_subwindows()
         assert [window.channel_index for window in restored_windows] == [7]
-        restored_window = restored_windows[0]
-        restored_x, restored_y = restored_window.plot_item.getData()
+        restored_x, restored_y = restored_windows[0].snapshot_plot_state()
         np.testing.assert_array_equal(restored_x, previous_x)
         np.testing.assert_array_equal(restored_y, previous_y)
-        assert restored_window.is_live_preview is previous_live_preview
-        assert restored_window.presentation_mode == previous_presentation_mode
-        assert restored_window.plot_widget.viewRange()[0] == pytest.approx(
-            previous_x_range
-        )
-        assert (
-            restored_window.plot_widget.getViewBox().state["autoRange"][0]
-            == previous_x_auto_range
-        )
     finally:
         host.channel_workspace.close()
         qapp.processEvents()
@@ -1335,24 +1290,14 @@ def test_recent_view_rebuilds_real_workspace_before_committing_mapping(
     monkeypatch,
 ):
     host = _RealRecentWorkspaceHost()
-    sample_count = 12_003
-    channels_first = np.vstack(
-        (
-            np.sin(np.arange(sample_count, dtype=np.float32) / 17.0),
-            np.cos(np.arange(sample_count, dtype=np.float32) / 19.0),
-        )
-    ).astype(np.float32)
-    retained_time = np.asarray([-1.0, 0.0])
-    retained_amplitude = np.asarray([7.0, 8.0], dtype=np.float32)
-    host.channel_workspace.all_subwindows()[0].set_live_data(
-        retained_time,
-        retained_amplitude,
+    channels_first = np.asarray(
+        [[0.2, 0.3, 0.4], [0.6, 0.7, 0.8]],
+        dtype=np.float32,
     )
     render_events = []
     original_set_data = ChannelPlotSubWindow.set_data
 
     def observe_set_data(window, x_data, y_data):
-        result = original_set_data(window, x_data, y_data)
         if window.channel_index in (2, 4):
             render_events.append(
                 (
@@ -1360,11 +1305,9 @@ def test_recent_view_rebuilds_real_workspace_before_committing_mapping(
                     tuple(host._active_input_channels),
                     host._waveform_presentation_owner,
                     np.asarray(y_data).copy(),
-                    window.is_live_preview,
-                    window.plot_widget.getViewBox().state["autoRange"][0],
                 )
             )
-        return result
+        return original_set_data(window, x_data, y_data)
 
     monkeypatch.setattr(ChannelPlotSubWindow, "set_data", observe_set_data)
     diagnostic = _metadata_result(
@@ -1391,31 +1334,14 @@ def test_recent_view_rebuilds_real_workspace_before_committing_mapping(
         assert [event[0] for event in render_events] == [2, 4]
         assert all(event[1] == (7,) for event in render_events)
         assert all(event[2] == "recent_view" for event in render_events)
-        assert all(
-            len(event[3]) <= host._WAVEFORM_DISPLAY_MAX_POINTS
-            for event in render_events
-        )
-        assert all(event[4] is False for event in render_events)
-        assert all(event[5] is True for event in render_events)
+        np.testing.assert_allclose(render_events[0][3], channels_first[0])
+        np.testing.assert_allclose(render_events[1][3], channels_first[1])
         assert host._active_input_channels == [7]
         assert host._waveform_presentation_owner == "hardware"
         assert [
             window.channel_index
             for window in host.channel_workspace.all_subwindows()
         ] == [7]
-        restored_window = host.channel_workspace.all_subwindows()[0]
-        restored_x, restored_y = restored_window.plot_item.getData()
-        np.testing.assert_array_equal(restored_x, retained_time)
-        np.testing.assert_array_equal(restored_y, retained_amplitude)
-        assert restored_window.is_live_preview is True
-        assert (
-            restored_window.presentation_mode
-            == PREVIEW_TIME_MODE_RELATIVE_LATEST
-        )
-        assert restored_window.plot_widget.viewRange()[0] == pytest.approx(
-            [-10.0, 0.0]
-        )
-        assert restored_window.plot_widget.getViewBox().state["autoRange"][0] is False
     finally:
         host.channel_workspace.close()
         qapp.processEvents()

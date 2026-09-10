@@ -1,16 +1,15 @@
 """Main-recording adapter: request snapshots, envelopes and accepted results."""
-import copy
 import os
 import time
 from uuid import uuid4
 
 import numpy as np
-from PyQt5.QtCore import QObject, QTimer, pyqtSignal
+from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
 
 from base.play_and_record import resolve_startup_trim_samples
 from base.recording_preview_config import resolve_recording_preview_time_mode
-from base.recording_process_protocol import FrozenConfig, RecordingFailure, RecordingRequest
+from base.recording_process_protocol import RecordingFailure, RecordingRequest
 from base.recording_service import RecordingCallbacks, RecordingService
 from base.recording_settings import merge_audio_validation_thresholds
 from base.ve3668n_input import validate_sample_rate
@@ -18,512 +17,10 @@ from base.ve3668n_wav_metadata import validate_ve_wav_metadata
 from consts.ve3668n_consts import VE_BACKEND
 from ui.recording_service_bridge import RecordingProcessorFacade, RecordingServiceBridge
 from ui.sequence.recording_process_context import RecordingProcessContext
-from ui.sequence.recording_analysis_eligibility import (
-    enabled_analysis_identifiers,
-    fast_recording_overlap_eligible,
-)
 
-
-class _RequestScopedDispatchFailureBridge(QObject):
-    """Move a worker dispatch failure onto the owning GUI thread."""
-
-    failed = pyqtSignal(str)
-
-    def __init__(self, owner, generation):
-        super().__init__(owner if isinstance(owner, QObject) else None)
-        self._owner = owner
-        self._generation = int(generation)
-        self.failed.connect(self._deliver)
-
-    def notify(self, request_id):
-        self.failed.emit(str(request_id))
-
-    def _deliver(self, request_id):
-        owner = self._owner
-        executor = getattr(owner, "_request_scoped_recording_executor", None)
-        owner._reconcile_request_scoped_dispatch_failure(
-            request_id, executor, self._generation)
 
 
 class SequenceWidgetRecordingProcessOpsMixin:
-    def _request_scoped_recording_generation(self):
-        generation = getattr(self, "_request_scoped_executor_generation", None)
-        if generation is None:
-            generation = 0
-            self._request_scoped_executor_generation = generation
-        return int(generation)
-
-    def _request_scoped_generation_is_current(self, generation):
-        return (
-            not bool(getattr(self, "_request_scoped_executor_closed", False))
-            and int(generation) == self._request_scoped_recording_generation()
-            and not any(bool(getattr(self, name, False)) for name in (
-                "_closing", "_shutdown_started", "_recording_closed")))
-
-    def _get_request_scoped_recording_executor(self):
-        if (bool(getattr(self, "_request_scoped_executor_closed", False))
-                or any(bool(getattr(self, name, False)) for name in (
-                    "_closing", "_shutdown_started", "_recording_closed"))):
-            return None
-        executor = getattr(self, "_request_scoped_recording_executor", None)
-        if executor is not None:
-            return executor
-        bridge = getattr(self, "recording_bridge", None)
-        invoke = getattr(bridge, "_invoke", None)
-        emit = getattr(invoke, "emit", None)
-        if not callable(emit):
-            return None
-        from ui.sequence.request_scoped_recording_executor import (
-            RequestScopedRecordingExecutor,
-        )
-        if getattr(self, "_request_scoped_durable_effect_lock", None) is None:
-            import threading
-            self._request_scoped_durable_effect_lock = threading.RLock()
-        generation = self._request_scoped_recording_generation()
-        notifier = _RequestScopedDispatchFailureBridge(self, generation)
-        executor = RequestScopedRecordingExecutor(
-            dispatch=emit, capacity=2, max_workers=1,
-            dispatch_failure_notify=notifier.notify)
-        self._request_scoped_dispatch_failure_bridge = notifier
-        self._request_scoped_recording_executor = executor
-        return executor
-
-    def _reserve_request_scoped_recording_capacity(self, request_id):
-        executor = self._get_request_scoped_recording_executor()
-        if executor is None:
-            # Isolated legacy hosts without a GUI dispatcher cannot run the
-            # background publisher. Preserve their synchronous test boundary;
-            # production RecordingServiceBridge instances always provide it.
-            return None, "accepted"
-        reserve = getattr(executor, "reserve_with_status", None)
-        if not callable(reserve):
-            return None, "accepted"
-        return executor, str(reserve(request_id))
-
-    def _release_recording_publication_reservation(self, context):
-        if context is None or not bool(getattr(
-                context, "publication_reservation_active", False)):
-            return False
-        # Claim before crossing into the executor so duplicate/late terminal
-        # callbacks cannot release a newer request with the same owner state.
-        context.publication_reservation_active = False
-        executor = getattr(context, "publication_reservation_executor", None)
-        release = getattr(executor, "release_reservation", None)
-        return bool(release(context.request.request_id)) if callable(release) else False
-
-    def _reconcile_request_scoped_dispatch_failure(
-            self, request_id, executor, generation):
-        if (executor is None
-                or not self._request_scoped_generation_is_current(generation)
-                or executor is not getattr(
-                    self, "_request_scoped_recording_executor", executor)):
-            return ()
-        context = self._recording_contexts().get(str(request_id))
-        if (context is None or context.publication_delivered
-                or context.publication_executor_generation != int(generation)):
-            return ()
-        reconcile = getattr(executor, "reconcile_dispatch_failures", None)
-        if not callable(reconcile):
-            return ()
-        return reconcile(str(request_id))
-
-    def _deliver_request_scoped_recording_publication(
-            self, context, outcome, generation=None):
-        if generation is None:
-            generation = context.publication_executor_generation
-        if not self._request_scoped_generation_is_current(generation):
-            return
-        if context.publication_delivered or context.publication_delivery_finalizing:
-            return
-        context.publication_delivery_finalizing = True
-        context.publication_started = False
-        succeeded = outcome.error is None and outcome.value is True
-        if not succeeded:
-            if outcome.error is not None:
-                context.business_completed = False
-                context.business_failure = str(outcome.error)
-                self.default_logger.error(
-                    "Request-scoped recording publication failed "
-                    f"request={context.request.request_id}: {outcome.error}")
-            now = time.monotonic()
-            from ui.sequence.request_scoped_recording_executor import (
-                RequestScopedDispatchError,
-            )
-            can_retry = (
-                not isinstance(outcome.error, RequestScopedDispatchError)
-                and not context.cancelled and not context.failed
-                and context.publication_attempts < context.publication_max_attempts
-                and now <= context.publication_retry_deadline
-                and not any(bool(getattr(self, name, False)) for name in (
-                    "_closing", "_shutdown_started", "_recording_closed")))
-            if can_retry and not context.publication_retry_pending:
-                context.publication_retry_pending = True
-                delay_ms = 50 * (2 ** max(0, context.publication_attempts - 1))
-                scheduler = getattr(
-                    self, "_schedule_request_scoped_recording_retry", None)
-                if callable(scheduler):
-                    scheduler(delay_ms, lambda context=context, generation=generation:
-                              self._retry_request_scoped_recording_publication(
-                                  context, generation))
-                else:
-                    QTimer.singleShot(
-                        delay_ms,
-                        lambda context=context, generation=generation:
-                        self._retry_request_scoped_recording_publication(
-                            context, generation))
-                context.publication_delivery_finalizing = False
-                return
-        owned_active = self._recording_context_owns_active_workflow(context)
-        stage = "upsert"
-        try:
-            session = context.session
-            session_record = context.pending_ui_session_record
-            if isinstance(session_record, dict):
-                records = getattr(self, "recent_test_session_by_id", None)
-                session_id = str(
-                    context.recent_session_id
-                    or session_record.get("session_id") or "")
-                if isinstance(records, dict) and session_id:
-                    existing = records.get(session_id)
-                    if isinstance(existing, dict):
-                        existing.clear()
-                        existing.update(copy.deepcopy(session_record))
-                    else:
-                        records[session_id] = copy.deepcopy(session_record)
-                panel = getattr(self, "recent_session_panel", None)
-                upsert = getattr(panel, "upsert_session", None)
-                if callable(upsert):
-                    upsert(session_record)
-            context.pending_ui_session_record = None
-            stage = "present"
-            if succeeded:
-                presenter = getattr(
-                    self, "_present_request_scoped_recording_context", None)
-                if callable(presenter) and owned_active:
-                    presenter(context)
-            else:
-                self._apply_active_publication_failure(
-                    context,
-                    context.business_failure
-                    or "录音结果发布失败，已恢复录音控制")
-            stage = "notify"
-            if succeeded and session is not None and not context.cancelled:
-                self._notify_process_recording_finished(session, context=context)
-            stage = "drop"
-            self._drop_recording_context(context)
-        except Exception as error:
-            self._recover_request_scoped_delivery_failure(
-                context, stage, error, owned_active=owned_active)
-            return
-        context.publication_audio = None
-        context.publication_final_windows = None
-        context.publication_delivered = True
-        context.publication_delivery_finalizing = False
-
-    def _recover_request_scoped_delivery_failure(
-            self, context, stage, error, *, owned_active):
-        """Finish one failed GUI terminal without leaving admission wedged."""
-        message = f"{stage} delivery failed: {error}"
-        context.business_completed = False
-        context.business_failure = message
-        self.default_logger.error(
-            "Request-scoped recording owner delivery failed "
-            f"request={context.request.request_id} stage={stage}: {error}")
-        try:
-            self._apply_active_publication_failure(
-                context, message, owned_active=owned_active)
-        except Exception as recovery_error:
-            self.default_logger.error(
-                "Request-scoped active failure recovery callback failed "
-                f"request={context.request.request_id}: {recovery_error}")
-            if owned_active:
-                context.active_transition_applied = True
-                self.streaming_processor = None
-                self.player_status_flag = False
-        dropped = False
-        try:
-            dropped = self._drop_recording_context(context) is not False
-        except Exception as drop_error:
-            self.default_logger.error(
-                "Request-scoped context drop recovery failed "
-                f"request={context.request.request_id}: {drop_error}")
-            contexts = self._recording_contexts()
-            if contexts.get(context.request.request_id) is context:
-                contexts.pop(context.request.request_id, None)
-                if getattr(self, "_active_recording_process_id", None) == (
-                        context.request.request_id):
-                    self._active_recording_process_id = None
-                self._record_workflow_busy = bool(contexts)
-                dropped = True
-        context.pending_ui_session_record = None
-        context.publication_audio = None
-        context.publication_final_windows = None
-        context.publication_started = False
-        context.publication_delivered = True
-        context.publication_delivery_finalizing = False
-        release_reservation = getattr(
-            self, "_release_recording_publication_reservation", None)
-        if dropped and callable(release_reservation):
-            release_reservation(context)
-
-    def _retry_request_scoped_recording_publication(
-            self, context, generation=None):
-        if generation is None:
-            generation = context.publication_executor_generation
-        if not self._request_scoped_generation_is_current(generation):
-            return
-        context.publication_retry_pending = False
-        if context.publication_delivered or context.cancelled:
-            return
-        if self._recording_contexts().get(context.request.request_id) is not context:
-            return
-        self._submit_request_scoped_recording_publication(context)
-
-    def _retry_request_scoped_recording_submission(
-            self, context, generation=None):
-        if generation is None:
-            generation = context.publication_executor_generation
-        # A callback queued before close must be a complete no-op.  In
-        # particular, do not clear flags or call the executor factory after
-        # its host generation has been invalidated.
-        if not self._request_scoped_generation_is_current(generation):
-            return
-        context.publication_submission_retry_pending = False
-        if context.publication_delivered or context.cancelled or context.failed:
-            return
-        if self._recording_contexts().get(context.request.request_id) is not context:
-            return
-        if time.monotonic() > context.publication_retry_deadline:
-            self._fail_request_scoped_recording_submission(
-                context,
-                "request-scoped recording result executor deadline expired")
-            return
-        waiters = getattr(self, "_request_scoped_submission_waiters", None)
-        if isinstance(waiters, list) and waiters and waiters[0] is not context:
-            self._schedule_request_scoped_submission_front(generation)
-            return
-        self._submit_request_scoped_recording_publication(context)
-
-    def _remove_request_scoped_submission_waiter(self, context, generation=None):
-        waiters = getattr(self, "_request_scoped_submission_waiters", None)
-        if not isinstance(waiters, list):
-            return
-        self._request_scoped_submission_waiters = [
-            value for value in waiters if value is not context]
-        if generation is not None:
-            self._schedule_request_scoped_submission_front(generation)
-
-    def _schedule_request_scoped_submission_front(self, generation):
-        waiters = getattr(self, "_request_scoped_submission_waiters", None)
-        if not isinstance(waiters, list):
-            return
-        contexts = self._recording_contexts()
-        waiters[:] = [
-            context for context in waiters
-            if (not context.publication_delivered and not context.cancelled
-                and contexts.get(context.request.request_id) is context)]
-        if not waiters or not self._request_scoped_generation_is_current(generation):
-            return
-        context = waiters[0]
-        if context.publication_submission_retry_pending:
-            return
-        now = time.monotonic()
-        if now > context.publication_retry_deadline:
-            self._fail_request_scoped_recording_submission(
-                context,
-                "request-scoped recording result executor deadline expired")
-            return
-        context.publication_submission_retry_pending = True
-        delay_ms = min(250, 50 * (2 ** min(
-            4, max(0, context.publication_submission_failures - 1))))
-        scheduler = getattr(
-            self, "_schedule_request_scoped_recording_retry", None)
-        callback = lambda context=context, generation=generation: (
-            self._retry_request_scoped_recording_submission(context, generation))
-        if callable(scheduler):
-            scheduler(delay_ms, callback)
-        else:
-            QTimer.singleShot(delay_ms, callback)
-
-    def _apply_active_publication_failure(
-            self, context, message, *, owned_active=None):
-        if owned_active is None:
-            owned_active = self._recording_context_owns_active_workflow(context)
-        if (context.active_transition_applied
-                or not owned_active):
-            return False
-        context.active_transition_applied = True
-        self.streaming_processor = None
-        self.player_status_flag = False
-        handler = getattr(self, "_handle_invalid_recording", None)
-        if callable(handler):
-            handler(str(message))
-        return True
-
-    def _fail_request_scoped_recording_submission(self, context, message):
-        if context.publication_delivered:
-            return
-        context.publication_started = False
-        context.publication_submission_retry_pending = False
-        context.publication_delivered = True
-        context.business_completed = False
-        context.business_failure = str(message)
-        self.default_logger.error(
-            "Request-scoped recording result publication failed "
-            f"request={context.request.request_id}: {message}")
-        generation = self._request_scoped_recording_generation()
-        self._remove_request_scoped_submission_waiter(
-            context,
-            generation if self._request_scoped_generation_is_current(
-                generation) else None)
-        self._apply_active_publication_failure(context, message)
-        self._drop_recording_context(context)
-        context.publication_audio = None
-        context.publication_final_windows = None
-
-    def _handle_request_scoped_submission_full(self, context, generation):
-        context.publication_submission_failures += 1
-        if (context.cancelled or context.failed
-                or not self._request_scoped_generation_is_current(generation)):
-            return
-        waiters = getattr(self, "_request_scoped_submission_waiters", None)
-        if not isinstance(waiters, list):
-            waiters = []
-            self._request_scoped_submission_waiters = waiters
-        if not any(value is context for value in waiters):
-            waiters.append(context)
-        self._schedule_request_scoped_submission_front(generation)
-
-    def _submit_request_scoped_recording_publication(self, context):
-        if context.publication_started or context.publication_delivered:
-            return False
-        generation = self._request_scoped_recording_generation()
-        if not self._request_scoped_generation_is_current(generation):
-            return False
-        waiters = getattr(self, "_request_scoped_submission_waiters", None)
-        if isinstance(waiters, list) and waiters:
-            if not any(value is context for value in waiters):
-                waiters.append(context)
-            if (waiters[0] is not context
-                    or context.publication_submission_retry_pending):
-                self._schedule_request_scoped_submission_front(generation)
-                return False
-        executor = (getattr(context, "publication_reservation_executor", None)
-                    or self._get_request_scoped_recording_executor())
-        if executor is None or context.publication_audio is None:
-            return False
-        audio = context.publication_audio
-        kwargs = dict(
-            recorded_mono=audio.mono, recorded_multi=audio.multi,
-            sample_rate=context.publication_sample_rate,
-            completion_source="process", prefinalized=True,
-            final_waveform_windows=context.publication_final_windows,
-            recording_context=context, request_owned_only=True)
-        context.publication_started = True
-        context.publication_executor_generation = generation
-        submit_with_status = getattr(executor, "submit_with_status", None)
-        submit = submit_with_status if callable(submit_with_status) else executor.submit
-        submit_result = submit(
-            context.request.request_id,
-            lambda kwargs=kwargs, generation=generation:
-            self._on_streaming_complete(**kwargs)
-            if self._request_scoped_generation_is_current(generation) else False,
-            lambda outcome, context=context, generation=generation:
-            self._deliver_request_scoped_recording_publication(
-                context, outcome, generation))
-        if callable(submit_with_status):
-            submit_status = str(submit_result)
-        else:
-            submit_status = "accepted" if submit_result else "full"
-        context.publication_submit_status = submit_status
-        if submit_status != "accepted":
-            context.publication_started = False
-            if submit_status == "full":
-                self._handle_request_scoped_submission_full(context, generation)
-            return False
-        remove_waiter = getattr(
-            self, "_remove_request_scoped_submission_waiter", None)
-        if callable(remove_waiter):
-            remove_waiter(context, generation)
-        context.publication_attempts += 1
-        context.publication_submission_retry_pending = False
-        return True
-
-    def _publish_serialized_recording_context(self, context):
-        """Finish an ineligible request through the pre-overlap UI workflow.
-
-        Admission guarantees that a context containing any analysis outside the
-        fast-overlap set cannot coexist with another result session.  Keeping
-        that request on the synchronous completion path preserves the original
-        analysis widgets and user-visible behavior without teaching the
-        request-scoped background analyzer about additional analysis types.
-        """
-        if context.publication_started or context.publication_delivered:
-            return False
-        audio = context.publication_audio
-        if audio is None:
-            return False
-        context.publication_started = True
-        context.publication_attempts += 1
-        try:
-            succeeded = self._on_streaming_complete(
-                recorded_mono=audio.mono,
-                recorded_multi=audio.multi,
-                sample_rate=context.publication_sample_rate,
-                completion_source="process",
-                prefinalized=True,
-                final_waveform_windows=context.publication_final_windows,
-                recording_context=context,
-                serialized_legacy=True,
-            )
-            context.business_completed = succeeded is True
-            if succeeded is True and not context.cancelled:
-                self._notify_process_recording_finished(
-                    context.session, context=context)
-        finally:
-            context.publication_started = False
-            context.publication_delivered = True
-            context.active_transition_applied = True
-            finalize_channels = getattr(
-                self, "_finalize_recording_channel_selection", None)
-            if callable(finalize_channels):
-                finalize_channels()
-            self._drop_recording_context(context)
-            context.publication_audio = None
-            context.publication_final_windows = None
-        return True
-
-    def _shutdown_request_scoped_recording_executor(self):
-        self._request_scoped_executor_generation = (
-            self._request_scoped_recording_generation() + 1)
-        self._request_scoped_executor_closed = True
-        self._request_scoped_submission_waiters = []
-        executor = getattr(self, "_request_scoped_recording_executor", None)
-        self._request_scoped_recording_executor = None
-        self._request_scoped_dispatch_failure_bridge = None
-        retained = ()
-        if executor is not None:
-            retained = executor.shutdown(wait=True, timeout=.5)
-            for context in self._recording_contexts().values():
-                if getattr(context, "publication_reservation_executor", None) is executor:
-                    context.publication_reservation_active = False
-            if retained:
-                self.default_logger.warning(
-                    "Request-scoped result shutdown retained work: "
-                    + ", ".join(retained))
-        durable_lock = getattr(self, "_request_scoped_durable_effect_lock", None)
-        if durable_lock is not None:
-            acquired = durable_lock.acquire(timeout=.5)
-            if acquired:
-                durable_lock.release()
-            else:
-                self._request_scoped_skip_final_spool = True
-                retained = tuple(retained) + ("durable-effect-boundary",)
-                self.default_logger.error(
-                    "Request-scoped durable publication did not quiesce before close")
-        self._request_scoped_retained_work_ids = tuple(retained)
-        return tuple(retained)
-
     def _recording_contexts(self):
         contexts = getattr(self, "_recording_process_contexts", None)
         if not isinstance(contexts, dict):
@@ -611,36 +108,10 @@ class SequenceWidgetRecordingProcessOpsMixin:
                     is contexts[request_id])
         return active_id == request_id
 
-    def _recording_admission_config_snapshot(self):
-        builder = getattr(self, "_build_recent_session_config_snapshot", None)
-        snapshot = copy.deepcopy(builder() or {}) if callable(builder) else {}
-        if not isinstance(snapshot.get("analysis_config"), dict):
-            snapshot["analysis_config"] = copy.deepcopy(
-                getattr(self, "analysis_config", {}) or {})
-        return snapshot
 
-    def _unfinished_recording_analysis_identifiers(self):
-        identifiers = []
-        contexts = getattr(self, "_recording_process_contexts", None)
-        for context in (contexts.values() if isinstance(contexts, dict) else ()):
-            frozen = tuple(getattr(context, "enabled_analysis_identifiers", ()) or ())
-            if not frozen:
-                frozen = enabled_analysis_identifiers(
-                    getattr(context, "recent_session_config_snapshot", {}) or {})
-            identifiers.append(frozen)
-        return tuple(identifiers)
 
-    def _recording_analysis_overlap_eligible(self, config_snapshot=None):
-        snapshot = (SequenceWidgetRecordingProcessOpsMixin
-                    ._recording_admission_config_snapshot(self)
-                    if config_snapshot is None else copy.deepcopy(config_snapshot))
-        return fast_recording_overlap_eligible(
-            enabled_analysis_identifiers(snapshot),
-            SequenceWidgetRecordingProcessOpsMixin
-            ._unfinished_recording_analysis_identifiers(self),
-        )
 
-    def _can_start_recording_workflow(self, config_snapshot=None):
+    def _can_start_recording_workflow(self):
         """Combine local non-capture blockers with the service's atomic admission state."""
         if any(bool(getattr(self, name, False)) for name in (
                 "_recording_closed", "_closing", "_shutdown_started", "_close_in_progress",
@@ -656,49 +127,17 @@ class SequenceWidgetRecordingProcessOpsMixin:
         for controller in controllers:
             if controller is not None and controller.is_audio_playing():
                 return False
-        bridge = getattr(self, "recording_bridge", None)
-        overlap_eligible = (SequenceWidgetRecordingProcessOpsMixin
-                            ._recording_analysis_overlap_eligible(
-                                self, config_snapshot))
-        if bridge is not None:
-            service = bridge.service
-            if not overlap_eligible:
-                return (not getattr(service, "busy", False)
-                        and not getattr(self, "_record_workflow_busy", False)
-                        and not getattr(self, "player_status_flag", False))
-            try:
-                service_can_start = service.can_start_recording
-            except AttributeError:
-                # Compatibility is intentionally limited to legacy test/window
-                # service doubles that predate the additive property.
-                return (not getattr(service, "busy", False)
-                        and not getattr(self, "_record_workflow_busy", False)
-                        and not getattr(self, "player_status_flag", False))
-            if not service_can_start:
-                return False
-            executor = getattr(self, "_request_scoped_recording_executor", None)
-            if (executor is not None
-                    and not bool(getattr(executor, "can_reserve", True))):
-                return False
-        contexts = getattr(self, "_recording_process_contexts", None)
-        contexts = contexts if isinstance(contexts, dict) else {}
-        if getattr(self, "_record_workflow_busy", False) and not contexts:
+        if (getattr(self, "_recording_publication_in_progress", False)
+                or getattr(self, "_recording_process_contexts", None)
+                or getattr(self, "_record_workflow_busy", False)
+                or getattr(self, "player_status_flag", False)):
             return False
-        processor = getattr(self, "streaming_processor", None)
-        owned_processors = {id(context.processor) for context in contexts.values()
-                            if context.processor is not None}
-        if getattr(self, "player_status_flag", False):
-            if processor is None or id(processor) not in owned_processors:
-                return False
-        return True
+        bridge = getattr(self, "recording_bridge", None)
+        return bridge is None or bool(getattr(
+            bridge.service, "can_start_recording", not getattr(bridge.service, "busy", False)))
 
     def _can_start_calibration_workflow(self):
-        """Evaluate an empty-analysis calibration against unfinished contexts."""
-        calibration_snapshot = FrozenConfig.snapshot({
-            "analysis_config": {"display_sequence": []},
-        })
-        return self._can_start_recording_workflow(
-            config_snapshot=calibration_snapshot)
+        return self._can_start_recording_workflow()
 
     def _recording_context_owns_active_workflow(self, context):
         if context is None:
@@ -716,19 +155,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
         request_id = context.request.request_id
         if contexts.get(request_id) is not context:
             return False
-        release_reservation = getattr(
-            self, "_release_recording_publication_reservation", None)
-        if callable(release_reservation):
-            release_reservation(context)
-        elif bool(getattr(context, "publication_reservation_active", False)):
-            # Narrow compatibility for isolated callback harnesses that bind
-            # only `_drop_recording_context` from this mixin.
-            context.publication_reservation_active = False
-            executor = getattr(context, "publication_reservation_executor", None)
-            release = getattr(executor, "release_reservation", None)
-            if callable(release):
-                release(request_id)
-        contexts.pop(request_id, None)
+        contexts.pop(request_id)
         if getattr(self, "_active_recording_process_id", None) == request_id:
             self._active_recording_process_id = None
         self._sync_recording_workflow_busy()
@@ -741,29 +168,13 @@ class SequenceWidgetRecordingProcessOpsMixin:
             bridge = RecordingServiceBridge(RecordingService())
             self.recording_bridge = bridge
             self._owns_recording_bridge = True
-        bridge.analysis_eligibility_provider = (
-            self._unfinished_recording_analysis_identifiers)
         return bridge
 
     def _start_process_recording(self, recorded_dict, sample_rate, *, tcp_completion_address=None):
-        config_snapshot = getattr(self, "_pending_recording_config_snapshot", None)
-        self._pending_recording_config_snapshot = None
-        if config_snapshot is None:
-            config_snapshot = self._recording_admission_config_snapshot()
-        contexts = self._recording_contexts()
-        eligible = self._recording_analysis_overlap_eligible(config_snapshot)
-        bridge = getattr(self, "recording_bridge", None)
-        if contexts and not eligible:
-            raise RuntimeError(
-                "recording result processing blocks this analysis configuration")
-        if (bridge is not None and not eligible
-                and getattr(bridge.service, "busy", False)):
-            # Unlike capacity, analysis eligibility is UI-owned policy and is
-            # not represented by RecordingService.start(). A reentrant result
-            # transition after the initial guard must therefore reject
-            # explicitly so the caller performs its established full cleanup.
-            raise RuntimeError(
-                "recording service is busy with ineligible result processing")
+        if (any(not context.cancelled and not context.cleanup_owned
+                for context in self._recording_contexts().values())
+                or getattr(self, "_recording_publication_in_progress", False)):
+            raise RuntimeError("previous recording publication has not entered the analysis queue")
         detail = self._resolve_recording_acq_detail()
         preview_time_mode = resolve_recording_preview_time_mode(detail)
         if recorded_dict["device"].get("backend") == VE_BACKEND:
@@ -787,15 +198,6 @@ class SequenceWidgetRecordingProcessOpsMixin:
             getattr(self, "_recording_wav_calibration_metadata", None),
             merge_audio_validation_thresholds(detail),
             preview_time_mode)
-        reservation_executor, reservation_status = (
-            self._reserve_request_scoped_recording_capacity(request.request_id))
-        if reservation_status != "accepted":
-            if reservation_status == "full":
-                raise RuntimeError(
-                    "CAPACITY_BACKPRESSURE: recording publication pipeline is full")
-            raise RuntimeError(
-                "recording publication pipeline rejected reservation: "
-                f"{reservation_status}")
         previous_recent_owner = self._recent_session_owner_snapshot()
         attempt_recent_owner = None
         recent_placeholder_attempted = False
@@ -820,53 +222,6 @@ class SequenceWidgetRecordingProcessOpsMixin:
                 recorded_signal_info=dict(
                     getattr(self, "recorded_signal_info", {}) or {}),
                 workflow_token=getattr(self, "_recording_workflow_token", None),
-                product_condition_key=str(
-                    getattr(self, "_get_active_product_condition_key", lambda: "")() or ""),
-                product_group_id=str(
-                    getattr(self, "_manual_product_condition_group_id", "") or ""),
-                publication_group_id=str(
-                    getattr(self, "_manual_product_condition_group_id", "")
-                    or getattr(self, "_current_cycle_recorded_count", "")
-                    or getattr(self, "_current_run_recording_token", "")
-                    or request.request_id),
-                product_condition_keys=tuple(
-                    getattr(self, "_manual_product_condition_keys", lambda: ())() or ()),
-                manual_product_cycle_active=bool(
-                    getattr(self, "_is_manual_product_condition_cycle_active", lambda: False)()),
-                serial_product_condition_executing=bool(
-                    getattr(self, "_serial_product_condition_executing", False)),
-                directional_cycle_active=bool(
-                    getattr(self, "_is_directional_cycle_active", lambda: False)()),
-                count_mode=str(
-                    getattr(getattr(self, "count_board", None), "mode", "") or ""),
-                barcode=str(
-                    (getattr(self, "recorded_signal_info", {}) or {}).get("barcode") or ""),
-                analysis_result_dict={},
-                recent_session_config_snapshot=copy.deepcopy(config_snapshot),
-                enabled_analysis_identifiers=enabled_analysis_identifiers(config_snapshot),
-                product_report_config=dict(
-                    getattr(self, "product_test_pdf_report_config", {}) or {}),
-                analysis_required=bool(
-                    getattr(self, "_should_run_silent_analysis_after_recording", lambda: False)()),
-                stimulus_info=dict(
-                    getattr(getattr(self, "data_struct", None), "stimulus_info", {}) or {}),
-                stimulus_signal=(
-                    np.asarray(
-                        getattr(getattr(self, "data_struct", None), "stimulus_data"),
-                        dtype=np.float32,
-                    ).copy()
-                    if getattr(getattr(self, "data_struct", None), "stimulus_data", None)
-                    is not None else None),
-                analysis_executor=(
-                    getattr(self, "_recording_request_analysis_executor", None)
-                    if callable(getattr(
-                        self, "_recording_request_analysis_executor", None))
-                    else None),
-                publication_reservation_executor=reservation_executor,
-                publication_reservation_active=reservation_executor is not None,
-                publication_executor_generation=(
-                    self._request_scoped_recording_generation()
-                    if reservation_executor is not None else -1),
             )
             validate_workspace = getattr(
                 self, "_validate_final_waveform_workspace", None)
@@ -876,8 +231,6 @@ class SequenceWidgetRecordingProcessOpsMixin:
                 except (TypeError, ValueError, OverflowError):
                     context.final_windows = None
         except Exception:
-            if reservation_executor is not None:
-                reservation_executor.release_reservation(request.request_id)
             if recent_placeholder_attempted and attempt_recent_owner is None:
                 candidate_recent_owner = self._recent_session_owner_snapshot()
                 if self._recent_session_owner_changed(
@@ -1039,8 +392,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
                 context.final_windows = self._validate_final_waveform_workspace(
                     request.channels)
         except (TypeError, ValueError, OverflowError) as error:
-            if getattr(session.request, "device", {}).get("backend") == VE_BACKEND:
-                context.failed = True
+            context.failed = True
             session.reject_result(str(error))
             return
         context.validated_audio = audio
@@ -1081,8 +433,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
     def _on_process_recording_accepted(self, session, audio):
         context = self._recording_context_for_session(session)
         if context is not None and not context.cancelled and not context.failed:
-            if (getattr(session.request, "device", {}).get("backend") == VE_BACKEND
-                    and audio is not context.validated_audio):
+            if audio is not context.validated_audio:
                 return
             # Business completion can relabel/move or start the next round. Wait
             # for released as well as accepted before entering that code.
@@ -1150,62 +501,60 @@ class SequenceWidgetRecordingProcessOpsMixin:
         if context is not None:
             return self._publish_recording_context(context)
 
-    def _freeze_request_scoped_publication_inputs(self, context):
-        """Copy UI-owned publication inputs before background execution."""
-        if context.publication_owner_snapshot_frozen:
-            return
-        records = getattr(self, "recent_test_session_by_id", None)
-        context.publication_recent_sessions_snapshot = copy.deepcopy(
-            records if isinstance(records, dict) else {})
-        context.recent_session_config_snapshot = copy.deepcopy(
-            context.recent_session_config_snapshot or {})
-        context.product_report_config = copy.deepcopy(
-            context.product_report_config or {})
-        context.condition_record_cache = copy.deepcopy(
-            context.condition_record_cache or {})
-        context.publication_owner_snapshot_frozen = True
 
     def _publish_recording_context(self, context):
         session = context.session
-        if session is None or context.cancelled or context.failed:
+        if (session is None or context.cancelled or context.failed or context.cleanup_owned
+                or context.publication_started
+                or self._recording_context_for_session(session) is not context
+                or not self._is_active_recording_process(session)):
             return
         audio = context.accepted_audio
-        if getattr(session.request, "device", {}).get("backend") == VE_BACKEND:
-            if session.request is not context.request:
-                self._on_process_recording_failed(session, RecordingFailure(
-                    session.request.request_id, "protocol", session.request.path,
-                    "VE accepted result no longer matches its frozen request"))
-                return
-            if (not session.released.is_set() or session.release_error is not None
-                    or audio is None or audio is not context.validated_audio):
-                return
-        if audio is not None and session.state == "completed":
-            context.accepted_audio = None
-            context.validated_audio = None
+        if audio is None or session.state != "completed":
+            return
+        released = session.released.is_set() and session.release_error is None
+        # Soundcard temp-cleanup failure is optional in the original pipeline:
+        # accepted audio remains publishable after its once-only warning. The
+        # service keeps the exact file lease. VE requires confirmed release.
+        optional_soundcard_cleanup = (
+            context.request.device.get("backend") != VE_BACKEND and context.release_warned)
+        if not released and not optional_soundcard_cleanup:
+            return
+        if session.request is not context.request or audio is not context.validated_audio:
+            return
+        # Claim before GUI observers can reenter. Admission remains held through
+        # the original queue's snapshot of the current recording and config.
+        context.publication_started = True
+        context.accepted_audio = None
+        self._recording_publication_in_progress = True
+        self.recorded_path = context.request.path
+        self.recorded_signal_info = dict(context.recorded_signal_info or self.recorded_signal_info)
+        self._recording_input_channels = tuple(context.request.channels)
+        self._active_input_channels = list(context.request.channels)
+        self._recording_process_request = context.request
+        self._recording_process_direction = context.direction
+        try:
             for warning in audio.descriptor.warnings:
                 self.default_logger.warning(f"Recording {session.request.request_id}: {warning}")
-            context.publication_audio = audio
-            context.publication_sample_rate = int(audio.descriptor.sample_rate)
-            context.publication_final_windows = context.final_windows
-            freeze_inputs = getattr(
-                self, "_freeze_request_scoped_publication_inputs", None)
-            if callable(freeze_inputs):
-                freeze_inputs(context)
-            else:
-                # Narrow compatibility for isolated callback harnesses that
-                # bind only this method rather than the complete mixin.
-                context.publication_owner_snapshot_frozen = True
-            if (not fast_recording_overlap_eligible(
-                    context.enabled_analysis_identifiers, ())):
-                self._publish_serialized_recording_context(context)
-                return
-            if not context.publication_retry_deadline:
-                context.publication_retry_deadline = time.monotonic() + 5.0
-            if not self._submit_request_scoped_recording_publication(context):
-                if context.publication_submit_status == "full":
-                    self.default_logger.warning(
-                        "Request-scoped recording result executor is at capacity; "
-                        f"resubmission retained request={context.request.request_id}")
+            succeeded = self._on_streaming_complete(
+                recorded_mono=audio.mono, recorded_multi=audio.multi,
+                sample_rate=audio.descriptor.sample_rate,
+                completion_source="process", prefinalized=True,
+                final_waveform_windows=context.final_windows)
+            if succeeded is True:
+                self._notify_process_recording_finished(session, context=context)
+        finally:
+            if self._is_active_recording_process(session):
+                self._finalize_recording_channel_selection()
+            context.publication_delivered = True
+            self._drop_recording_context(context)
+            self._recording_publication_in_progress = False
+        refresh = getattr(self, "update_player_btn_is_paused", None)
+        if callable(refresh):
+            refresh()
+        drain = getattr(self, "_drain_queued_directional_trigger", None)
+        if callable(drain):
+            drain()
 
     def _notify_process_recording_finished(self, session, *, context=None):
         context = context or self._recording_context_for_session(session)
@@ -1216,9 +565,6 @@ class SequenceWidgetRecordingProcessOpsMixin:
             return
         # Claim before network I/O, including a send that raises after delivery.
         context.tcp_completion = None
-        context.business_effect_attempts["tcp:authorization"] = (
-            context.business_effect_attempts.get("tcp:authorization", 0) + 1)
-        context.business_effect_ledger["tcp:authorization"] = completion[1]
         if completion[1] is not None:
             self._send_recording_tcp_finish(completion[1])
 
