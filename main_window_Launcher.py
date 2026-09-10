@@ -8,10 +8,12 @@ class MainWindowLauncher(object):
         from consts import ui_style_const
         from ui.splash_screen_window import Splash, LoaderThread
         from base.recording_service import RecordingService
+        from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
         from ui.recording_service_bridge import RecordingServiceBridge
 
         self.app = QApplication(sys.argv)
         self.app.setFont(QFont(ui_style_const.UI_FONT_FAMILY_NAME))
+        self.ve_prewarm_lifetime = VePrewarmLifetime()
         self.recording_service = RecordingService()
         self.recording_bridge = RecordingServiceBridge(self.recording_service, self.app)
         self.app.aboutToQuit.connect(self.recording_bridge.shutdown)
@@ -41,7 +43,10 @@ class MainWindowLauncher(object):
         try:
             self.splash.close()
             from main_window import MainWindow
-            self.window = MainWindow(recording_bridge=self.recording_bridge)
+            self.window = MainWindow(
+                ve_prewarm_lifetime=self.ve_prewarm_lifetime,
+                recording_bridge=self.recording_bridge,
+            )
             self.window.show()
         except Exception as e:
             msg = f"主界面启动失败：{str(e)}"

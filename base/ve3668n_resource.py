@@ -252,6 +252,14 @@ class VeResourceController:
             request=request, callback=callback, fail=fail,
             stop_event=stop_event)
 
+    def prewarm(self, *, request, fail):
+        """Bind a no-file adapter that validates and discards target frames."""
+        return self._adapter(
+            request=request,
+            callback=lambda _physical, _frames, _first, _second: None,
+            fail=fail,
+            stop_event=threading.Event(),
+        )
 
     def _adapter(self, *, request, callback, fail, stop_event):
         signature = ve_acquisition_signature(

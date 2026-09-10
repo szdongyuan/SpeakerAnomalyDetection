@@ -576,8 +576,9 @@ def test_completed_calibration_saves_before_emitting_success(qapp):
         )
         _deliver_accepted(widget)
 
+    factor = 10 ** (4.0 / 20.0)
     save.assert_called_once_with(
-        v2pa_factor=pytest.approx(10 ** (4.0 / 20.0)),
+        v2pa_factor=pytest.approx(factor),
         input_device=DEVICE,
         input_channel=1,
         standard_spl_db=94.0,
@@ -589,7 +590,23 @@ def test_completed_calibration_saves_before_emitting_success(qapp):
     assert events == ["saved", "changed"]
     assert widget.streaming_processor is None
     assert float(widget.v2pa_factor_lineedit.text()) > 0.0
-    widget.calibration_popup.assert_called_once_with(success_flag=True)
+    widget.calibration_popup.assert_called_once_with(
+        success_flag=True,
+        message=(
+            "校准成功\n"
+            f"本次校准结果：{factor:.6f} Pa/V\n"
+            "下次校准通道：1"
+        ),
+    )
+
+
+def test_failed_calibration_popup_keeps_existing_default_text(qapp):
+    widget = InputCalibration(DEVICE, [1])
+    with mock.patch("ui.calibration_window.QMessageBox") as message_box_type:
+        widget.calibration_popup(success_flag=False)
+    message_box = message_box_type.return_value
+    message_box.setText.assert_called_once_with("校准失败，请重试")
+    message_box.setWindowTitle.assert_called_once_with("校准失败")
 
 
 def test_completed_calibration_round_trips_through_runtime_resolver(qapp, tmp_path):
@@ -708,6 +725,15 @@ def test_success_saves_current_channel_then_advances_without_starting_next(qapp)
     assert widget.streaming_processor is None
     start_next.assert_not_called()
     assert changes == [True]
+    factor = 10 ** (4.0 / 20.0)
+    widget.calibration_popup.assert_called_once_with(
+        success_flag=True,
+        message=(
+            "校准成功\n"
+            f"本次校准结果：{factor:.6f} Pa/V\n"
+            "下次校准通道：2"
+        ),
+    )
 
 
 def test_advancement_wraps_in_stable_order_and_excludes_current(qapp):
@@ -744,6 +770,73 @@ def test_final_channel_stays_selected(qapp):
 
     assert widget.current_channel == 2
     assert widget.channel_combo_box.currentData() == 2
+    factor = 10 ** (4.0 / 20.0)
+    widget.calibration_popup.assert_called_once_with(
+        success_flag=True,
+        message=(
+            "校准成功\n"
+            f"本次校准结果：{factor:.6f} Pa/V\n"
+            "下次校准通道：2"
+        ),
+    )
+
+
+def test_ve_success_popup_reports_saved_factor_and_selected_next_channel():
+    factor = 1.23456789
+    record = {"v2pa_factor": factor}
+    session = SimpleNamespace(
+        state="completed",
+        cancel_requested=False,
+        released=SimpleNamespace(is_set=lambda: True),
+        release_error=None,
+        request=SimpleNamespace(
+            device=DEVICE,
+            channels=(7,),
+            sample_rate=48000,
+        ),
+    )
+    host = SimpleNamespace(
+        streaming_processor=SimpleNamespace(session=session),
+        _ve_accepted_audio=object(),
+        _ve_capture_context=SimpleNamespace(
+            standard_spl=94.0,
+            calibrated_at="2026-09-04T12:00:00+08:00",
+        ),
+        _ve_calibration_records={},
+        saved_v2pa_factors={},
+        input_channels=[7, 3],
+        current_channel=7,
+        _is_current_session=mock.Mock(return_value=True),
+        _verified_ve_audio=mock.Mock(return_value=np.array([0.1])),
+        _check_ve_current_context=mock.Mock(),
+        _calculate_spl_from_data=mock.Mock(return_value=90.0),
+        calculate_v2pa_factor=mock.Mock(return_value=factor),
+        ve_calibration_store=SimpleNamespace(save=mock.Mock(return_value=record)),
+        _stop_calibration_timers=mock.Mock(),
+        _clear_active_capture=mock.Mock(),
+        calibration_state_changed=SimpleNamespace(emit=mock.Mock()),
+        calibration_popup=mock.Mock(),
+        calibration_finished=SimpleNamespace(emit=mock.Mock()),
+    )
+    host._next_uncalibrated_channel = lambda channel: (
+        InputCalibration._next_uncalibrated_channel(host, channel)
+    )
+    host._select_channel = lambda channel: setattr(host, "current_channel", channel)
+    host._success_popup_message = lambda saved_factor, next_channel: (
+        InputCalibration._success_popup_message(host, saved_factor, next_channel)
+    )
+
+    InputCalibration._finish_ve_calibration(host)
+
+    assert host.current_channel == 3
+    host.calibration_popup.assert_called_once_with(
+        success_flag=True,
+        message=(
+            "校准成功\n"
+            f"本次校准结果：{record['v2pa_factor']:.6f} Pa/V\n"
+            "下次校准通道：3"
+        ),
+    )
 
 
 def test_114_db_selection_is_saved_exactly(qapp):

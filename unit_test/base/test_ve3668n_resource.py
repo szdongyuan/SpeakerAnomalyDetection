@@ -11,6 +11,7 @@ from base.recording_capture import RecordingCapture
 from base.recording_process_protocol import (
     RecordingResult,
     VeLifecycleCounts,
+    VePrewarmRequest,
 )
 from base.ve3668n_discovery import discover_devices
 from base.ve3668n_resource import (
@@ -52,16 +53,19 @@ def controller_for(sdk_factory, fatals=None, **options):
     return controller, fatals
 
 
-def _main_metadata(device, channels, rate):
-    metadata = wav_metadata(tuple("none" for _ in channels), rate, physical_channels=channels)
-    metadata["acquisition"]["machine_id"] = device["machine_id"]
-    return metadata
-
-
 def stream(controller, tmp_path, name="A", *, target=4, callback=None, **request_options):
-    metadata = _main_metadata(request_options.get("device", device_info()),
-                              request_options.get("channels", (7, 1)),
-                              request_options.get("sample_rate", 51200))
+    channels = request_options.get("channels", (7, 1))
+    device = request_options.get("device")
+    metadata = wav_metadata(("none", "none"), request_options.get("sample_rate", 51200))
+    metadata["acquisition"]["machine_id"] = (
+        device["machine_id"] if device is not None else "test-machine-1")
+    by_physical = {entry["physical_input_channel"]: entry
+                   for entry in metadata["recorded_channels"]}
+    metadata["recorded_channels"] = []
+    for index, physical in enumerate(channels):
+        entry = by_physical[physical]
+        entry["wav_channel_index"] = index
+        metadata["recorded_channels"].append(entry)
     request = capture_request(
         tmp_path / f"{name}.wav", request_id=name, target_samples=target,
         trim_samples=0, calibration_metadata=metadata, **request_options,
@@ -85,11 +89,254 @@ def wait_released(adapter, timeout=2):
     assert adapter.handles_released
 
 
+def prewarm_request(warmup_id="warm-1", *, channels=(7, 1), sample_rate=44100):
+    return VePrewarmRequest.create(
+        warmup_id,
+        device_info(input_config={
+            "sample_rate": sample_rate,
+            "input_mode": "IEPE",
+            "unit": "V",
+            "range_min": -10.0,
+            "range_max": 10.0,
+        }),
+        channels,
+        sample_rate,
+        attempt=1,
+    )
+
+
 def wait_failed(controller, timeout=2):
     deadline = time.monotonic() + timeout
     while not controller.failed and time.monotonic() < deadline:
         time.sleep(.002)
     assert controller.failed
+
+
+def test_prewarm_discards_partial_multichannel_reads_and_retains_task(tmp_path):
+    sdk = CaptureSDK(
+        counts=(1000, 2048, 17),
+        hooks={"read_task_data": lambda *args, **kwargs: time.sleep(.001)},
+    )
+    controller, fatals = controller_for(lambda: sdk)
+    request = prewarm_request()
+    failures = []
+
+    adapter = controller.prewarm(request=request, fail=lambda *item: failures.append(item))
+
+    assert adapter.start()
+    assert adapter.completed.wait(2)
+    assert adapter.progress_snapshot.frames == request.frames_per_channel
+    assert adapter.handles_released
+    assert adapter.failure_snapshot is None
+    assert failures == [] and fatals == []
+    assert controller.signature == request.signature
+    assert sdk.calls("start_task") == 1
+    assert not hasattr(request, "path")
+    assert list(tmp_path.iterdir()) == []
+
+    recording, blocks, recording_failures = stream(
+        controller,
+        tmp_path,
+        device=dict(request.device),
+        channels=request.channels,
+        sample_rate=request.sample_rate,
+    )
+    assert recording.start()
+    wait_released(recording)
+    assert blocks and recording_failures == []
+    assert sdk.calls("start_task") == 1
+    assert controller.release(.5).success
+
+
+@pytest.mark.parametrize(
+    ("buffer_factory", "returned", "expected_code"),
+    [
+        (lambda requested, channels: (ctypes.c_float * (requested * channels))(),
+         1, None),
+        (lambda requested, channels: (ctypes.c_double * (requested * channels - 1))(),
+         1, None),
+        (lambda requested, channels: (ctypes.c_double * (requested * channels))(),
+         -1, -1),
+        (lambda requested, channels: (ctypes.c_double * (requested * channels))(),
+         lambda requested: requested + 1, 2049),
+    ],
+    ids=("wrong_scalar_type", "wrong_capacity", "negative_count", "oversized_count"),
+)
+def test_prewarm_rejects_malformed_native_buffer_before_progress(
+        buffer_factory, returned, expected_code):
+    class MalformedSDK(CaptureSDK):
+        def read_task_data(self, task, *, channel_count, samples_per_channel,
+                           timeout_seconds):
+            self._call(
+                "read_task_data", task, channel_count=channel_count,
+                samples_per_channel=samples_per_channel,
+                timeout_seconds=timeout_seconds,
+            )
+            count = returned(samples_per_channel) if callable(returned) else returned
+            return buffer_factory(samples_per_channel, channel_count), count
+
+    controller, _ = controller_for(lambda: MalformedSDK())
+    failures = []
+    adapter = controller.prewarm(
+        request=prewarm_request(), fail=lambda *item: failures.append(item))
+
+    assert adapter.start()
+    assert adapter.completed.wait(2)
+    wait_failed(controller)
+
+    assert adapter.progress_snapshot.frames == 0
+    assert len(failures) == 1
+    assert adapter.failure_snapshot.stage == "read_task_data"
+    assert adapter.failure_snapshot.code == expected_code
+    assert not adapter.handles_released or controller.failed
+
+
+def test_prewarm_rejects_short_scalar_payload_before_progress():
+    class ShortPayloadSDK(CaptureSDK):
+        def read_task_data(self, task, *, channel_count, samples_per_channel,
+                           timeout_seconds):
+            self._call(
+                "read_task_data", task, channel_count=channel_count,
+                samples_per_channel=samples_per_channel,
+                timeout_seconds=timeout_seconds,
+            )
+            buffer = (ctypes.c_double * (samples_per_channel * channel_count))()
+            buffer[:] = [float("nan")] * len(buffer)
+            buffer[0] = 1.0
+            return buffer, 1
+
+    controller, _ = controller_for(lambda: ShortPayloadSDK())
+    failures = []
+    adapter = controller.prewarm(
+        request=prewarm_request(), fail=lambda *item: failures.append(item))
+
+    assert adapter.start()
+    assert adapter.completed.wait(2)
+    wait_failed(controller)
+
+    assert adapter.progress_snapshot.frames == 0
+    assert adapter.failure_snapshot == VeResourceFault(
+        "read_task_data", None, "VkDaq returned non-finite voltage samples")
+    assert len(failures) == 1
+
+
+def test_prewarm_malformed_later_block_preserves_last_valid_frame_progress():
+    class ValidThenMalformedSDK(CaptureSDK):
+        def __init__(self):
+            super().__init__(counts=(1,))
+            self.reads = 0
+
+        def read_task_data(self, task, *, channel_count, samples_per_channel,
+                           timeout_seconds):
+            self.reads += 1
+            if self.reads == 1:
+                return super().read_task_data(
+                    task,
+                    channel_count=channel_count,
+                    samples_per_channel=samples_per_channel,
+                    timeout_seconds=timeout_seconds,
+                )
+            self._call(
+                "read_task_data", task, channel_count=channel_count,
+                samples_per_channel=samples_per_channel,
+                timeout_seconds=timeout_seconds,
+            )
+            return (ctypes.c_double * 1)(), 1
+
+    controller, _ = controller_for(lambda: ValidThenMalformedSDK())
+    adapter = controller.prewarm(request=prewarm_request(), fail=lambda *_: None)
+
+    assert adapter.start()
+    assert adapter.completed.wait(2)
+    wait_failed(controller)
+
+    assert adapter.progress_snapshot.frames == 1
+    assert adapter.failure_snapshot.stage == "read_task_data"
+
+
+def test_prewarm_preserves_native_read_code_and_detail():
+    controller, _ = controller_for(
+        lambda: CaptureSDK(failures=("read_task_data",)))
+    adapter = controller.prewarm(request=prewarm_request(), fail=lambda *_: None)
+
+    assert adapter.start()
+    assert adapter.completed.wait(2)
+    wait_failed(controller)
+
+    assert adapter.failure_snapshot == VeResourceFault(
+        "read_task_data", -17, "injected read_task_data")
+
+
+@pytest.mark.parametrize("returned", [True, "1", 1.0, None])
+def test_prewarm_noninteger_returned_frames_are_protocol_faults_without_code(
+        returned):
+    class NonIntegerCountSDK(CaptureSDK):
+        def read_task_data(self, task, *, channel_count, samples_per_channel,
+                           timeout_seconds):
+            self._call(
+                "read_task_data", task, channel_count=channel_count,
+                samples_per_channel=samples_per_channel,
+                timeout_seconds=timeout_seconds,
+            )
+            buffer = (ctypes.c_double * (samples_per_channel * channel_count))()
+            return buffer, returned
+
+    controller, _ = controller_for(lambda: NonIntegerCountSDK())
+    adapter = controller.prewarm(request=prewarm_request(), fail=lambda *_: None)
+
+    assert adapter.start()
+    assert adapter.completed.wait(2)
+    wait_failed(controller)
+
+    assert adapter.progress_snapshot.frames == 0
+    assert adapter.failure_snapshot.code is None
+    assert adapter.failure_snapshot.stage == "read_task_data"
+    assert "integer" in adapter.failure_snapshot.detail
+
+
+@pytest.mark.parametrize(
+    ("boundary", "offset", "expected_detail"),
+    [
+        ("no_progress", 0.0, "VE capture made no progress for 5 seconds"),
+        ("no_progress", .001, "VE capture made no progress for 5 seconds"),
+        ("total", 0.0, "VE capture total deadline exceeded before target frames"),
+        ("total", .001, "VE capture total deadline exceeded before target frames"),
+    ],
+    ids=(
+        "no_progress_exact", "no_progress_just_after",
+        "total_exact", "total_just_after",
+    ),
+)
+def test_prewarm_rejects_final_valid_block_at_or_after_capture_deadline(
+        boundary, offset, expected_detail):
+    clock = DiscoveryClock()
+    calls = 0
+
+    def advance_for_boundary(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if boundary == "total" and calls == 10:
+            clock.advance(1.0)
+        if calls == 11:
+            clock.advance((5.0 if boundary == "no_progress" else 4.5) + offset)
+
+    sdk = CaptureSDK(
+        counts=(2048,) * 10 + (1570,),
+        hooks={"read_task_data": advance_for_boundary},
+    )
+    controller, _ = controller_for(lambda: sdk, clock=clock)
+    request = prewarm_request()
+    adapter = controller.prewarm(request=request, fail=lambda *_: None)
+
+    assert adapter.start()
+    assert adapter.completed.wait(2)
+    wait_failed(controller)
+
+    assert calls == 11
+    assert adapter.progress_snapshot.frames == 20480
+    assert adapter.progress_snapshot.frames < request.frames_per_channel
+    assert adapter.failure_snapshot == VeResourceFault(
+        "read_task_data", None, expected_detail)
 
 
 @pytest.mark.parametrize(
@@ -112,6 +359,124 @@ def test_ve_resource_fault_rejects_worker_incompatible_shape(args, message):
 def test_ve_resource_fault_accepts_native_integer_code_and_no_code():
     assert VeResourceFault("start_task", -12001, "native failure").code == -12001
     assert VeResourceFault("read_task_data", None, "protocol failure").code is None
+
+
+@pytest.mark.parametrize("native", [False, True], ids=("runtime", "native"))
+def test_prewarm_normalizes_empty_initialization_exception_once(native):
+    class EmptyStartFailureSDK(CaptureSDK):
+        def start_task(self, task):
+            self._call("start_task", task)
+            if native:
+                raise VkDaqError("VkDaqStartTask", -12001, "   ")
+            raise RuntimeError()
+
+    controller, fatals = controller_for(lambda: EmptyStartFailureSDK())
+    failures = []
+    adapter = controller.prewarm(
+        request=prewarm_request(), fail=lambda *item: failures.append(item))
+
+    assert adapter.start() is False
+    assert adapter.completed.wait(2)
+    assert controller.failed
+
+    expected = VeResourceFault(
+        "start_task", -12001 if native else None,
+        "VkDaqError" if native else "RuntimeError",
+    )
+    assert adapter.failure_snapshot == expected
+    assert controller.failure_snapshot == expected
+    assert len(failures) == len(fatals) == 1
+    assert failures[0][0] == fatals[0][0] == "start_task"
+    assert expected.detail in failures[0][1]
+    assert expected.detail in fatals[0][1]
+    assert any(item.startswith("bind:") for item in adapter.diagnostics)
+    assert adapter.failure_snapshot == expected
+    assert adapter.progress_snapshot.frames == 0
+
+
+@pytest.mark.parametrize("native", [False, True], ids=("runtime", "native"))
+def test_prewarm_normalizes_empty_read_exception_once(native):
+    def fail_read(*args, **kwargs):
+        if native:
+            raise VkDaqError("VkDaqGetTaskData", -17, "")
+        raise RuntimeError()
+
+    controller, fatals = controller_for(
+        lambda: CaptureSDK(hooks={"read_task_data": fail_read}))
+    failures = []
+    adapter = controller.prewarm(
+        request=prewarm_request(), fail=lambda *item: failures.append(item))
+
+    assert adapter.start()
+    assert adapter.completed.wait(2)
+    assert controller.failed
+
+    expected = VeResourceFault(
+        "read_task_data", -17 if native else None,
+        "VkDaqError" if native else "RuntimeError",
+    )
+    assert adapter.failure_snapshot == expected
+    assert controller.failure_snapshot == expected
+    assert len(failures) == len(fatals) == 1
+    assert failures[0][0] == fatals[0][0] == "read_task_data"
+    assert expected.detail in failures[0][1]
+    assert expected.detail in fatals[0][1]
+    assert adapter.progress_snapshot.frames == 0
+    assert adapter.progress_snapshot.frames < adapter.request.frames_per_channel
+
+
+def test_prewarm_preserves_first_native_fault_over_cleanup_and_bind_diagnostics():
+    class StartFailureSDK(CaptureSDK):
+        def start_task(self, task):
+            self._call("start_task", task)
+            raise VkDaqError(
+                "VkDaqStartTask", -12001,
+                "iio_device_create_multi_buffer: invalid argument",
+            )
+
+    sdk = StartFailureSDK(failures=("clear_task", "close"))
+    controller, _ = controller_for(lambda: sdk)
+    failures = []
+    adapter = controller.prewarm(
+        request=prewarm_request(), fail=lambda *item: failures.append(item))
+
+    assert adapter.start() is False
+    assert adapter.completed.wait(2)
+
+    expected = VeResourceFault(
+        "start_task", -12001,
+        "iio_device_create_multi_buffer: invalid argument",
+    )
+    assert adapter.failure_snapshot == expected
+    assert controller.failure_snapshot == expected
+    assert failures == [("start_task", str(VkDaqError(
+        "VkDaqStartTask", -12001,
+        "iio_device_create_multi_buffer: invalid argument")))]
+    assert any(item.startswith("bind:") for item in adapter.diagnostics)
+    assert controller.release(.2).success is False
+    assert adapter.failure_snapshot == expected
+    assert controller.failure_snapshot == expected
+
+
+def test_prewarm_detach_timeout_has_structured_first_fault():
+    entered = threading.Event()
+    allow_read = threading.Event()
+
+    def block(*args, **kwargs):
+        entered.set()
+        assert allow_read.wait(2)
+
+    controller, _ = controller_for(
+        lambda: CaptureSDK(hooks={"read_task_data": block}),
+        detach_timeout=.03,
+    )
+    adapter = controller.prewarm(request=prewarm_request(), fail=lambda *_: None)
+    assert adapter.start() and entered.wait(1)
+
+    assert adapter.stop() is False
+    assert adapter.failure_snapshot == VeResourceFault(
+        "detach", None, "VE adapter detach confirmation timed out")
+    allow_read.set()
 
 
 @pytest.mark.parametrize("channel_order", ALL_ORDERED_CHANNEL_CASES)
@@ -142,6 +507,12 @@ def test_all_nonempty_ordered_channel_permutations_share_the_same_slot_release_p
     transitions = []
 
     for identity in ("A", "B"):
+        metadata = wav_metadata(
+            ("none",) * len(channel_order),
+            sample_rate=51200,
+            physical_channels=channel_order,
+        )
+        metadata["acquisition"]["machine_id"] = device["machine_id"]
         request = capture_request(
             tmp_path / f"{identity}.wav",
             request_id=identity,
@@ -149,7 +520,7 @@ def test_all_nonempty_ordered_channel_permutations_share_the_same_slot_release_p
             channels=channel_order,
             target_samples=4,
             trim_samples=0,
-            calibration_metadata=_main_metadata(device, channel_order, 51200),
+            calibration_metadata=metadata,
         )
         capture = RecordingCapture(
             request,
@@ -643,3 +1014,9 @@ def test_successful_release_returns_to_uninitialized_and_cleanup_is_idempotent(t
     wait_released(second)
     assert controller.close(.5).success
     assert controller.lifecycle_counts == VeLifecycleCounts(2, 2, 2, 2, 2, 2)
+
+
+def _main_metadata(device, channels, rate):
+    metadata = wav_metadata(tuple("none" for _ in channels), rate, physical_channels=channels)
+    metadata["acquisition"]["machine_id"] = device["machine_id"]
+    return metadata

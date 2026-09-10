@@ -48,10 +48,11 @@ class SequenceWindow(
     raw_audio_csv_export_succeeded = pyqtSignal(str)
     raw_audio_csv_export_failed = pyqtSignal(str, str)
 
-    def __init__(self, *, recording_bridge=None):
+    def __init__(self, *, recording_bridge=None, ve_prewarm_lifetime=None):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
         super().__init__()
         self.recording_bridge = recording_bridge
+        self.ve_prewarm_lifetime = ve_prewarm_lifetime
         self._owns_recording_bridge = False
         self.data_struct = DataDealStruct()
         self.recorded_path = None

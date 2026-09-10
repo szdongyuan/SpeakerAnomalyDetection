@@ -2,6 +2,8 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from consts import error_code
 from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
 from ui.sequence import sequence_widget_config_ops as config_ops_module
@@ -35,6 +37,7 @@ def _load_main_window_method(method_name, globals_dict):
 
 def test_main_window_connects_program_changes_before_opening_dialog():
     events = []
+    refresh_states = []
 
     class FakeSignal:
         def __init__(self):
@@ -48,17 +51,35 @@ def test_main_window_connects_program_changes_before_opening_dialog():
         def __init__(self, manager, queue_editor, parent):
             assert manager is None
             assert queue_editor is parent._open_analysis_model_select
+            self.queue_editor = queue_editor
             self.programs_changed = FakeSignal()
 
         def exec(self):
             events.append("opened")
+            self.queue_editor("queue.json")
             self.programs_changed.callback()
 
     sequence_window = SimpleNamespace(
-        on_product_test_program_updated=lambda: events.append("refreshed")
+        _product_test_program_config_dialog_open=False,
+        button_enabled=True,
+        on_product_test_program_updated=lambda: events.append("refreshed"),
     )
+
+    def refresh_button():
+        refresh_states.append(
+            sequence_window._product_test_program_config_dialog_open
+        )
+        sequence_window.button_enabled = (
+            not sequence_window._product_test_program_config_dialog_open
+        )
+
+    sequence_window.update_player_btn_is_paused = refresh_button
+
+    def refresh_nested_queue(_path):
+        refresh_button()
+
     window = SimpleNamespace(
-        _open_analysis_model_select=lambda _path: None,
+        _open_analysis_model_select=refresh_nested_queue,
         sequence_window=sequence_window,
     )
     on_product_test_program_config = _load_main_window_method(
@@ -69,6 +90,50 @@ def test_main_window_connects_program_changes_before_opening_dialog():
     on_product_test_program_config(window)
 
     assert events == ["connected", "opened", "refreshed"]
+    assert refresh_states == [True, False]
+    assert sequence_window._product_test_program_config_dialog_open is False
+    assert sequence_window.button_enabled is True
+
+
+def test_main_window_refreshes_button_after_exceptional_dialog_exit():
+    refresh_states = []
+
+    class FakeSignal:
+        def connect(self, _callback):
+            return None
+
+    class FakeDialog:
+        def __init__(self, _manager, _queue_editor, _parent):
+            self.programs_changed = FakeSignal()
+
+        def exec(self):
+            raise RuntimeError("dialog failed")
+
+    sequence_window = SimpleNamespace(
+        _product_test_program_config_dialog_open=False,
+        on_product_test_program_updated=lambda: None,
+    )
+
+    def refresh_button():
+        refresh_states.append(
+            sequence_window._product_test_program_config_dialog_open
+        )
+
+    sequence_window.update_player_btn_is_paused = refresh_button
+    window = SimpleNamespace(
+        _open_analysis_model_select=lambda _path: None,
+        sequence_window=sequence_window,
+    )
+    on_product_test_program_config = _load_main_window_method(
+        "on_product_test_program_config",
+        {"ProductTestProjectConfigDialog": FakeDialog},
+    )
+
+    with pytest.raises(RuntimeError, match="dialog failed"):
+        on_product_test_program_config(window)
+
+    assert sequence_window._product_test_program_config_dialog_open is False
+    assert refresh_states == [False]
 
 
 def test_main_window_shuts_down_product_pdf_exporter_before_exit():

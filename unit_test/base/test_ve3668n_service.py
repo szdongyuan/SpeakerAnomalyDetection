@@ -17,14 +17,62 @@ import soundfile as sf
 
 from base.recording_process_protocol import (
     RecordingCancelled, RecordingEvent, RecordingFailure, RecordingPreview, RecordingProgress, RecordingResult,
-    VeLifecycleCounts, VeReleaseOutcome,
+    VE_PREWARM_DETACHING, VE_PREWARM_PROGRESS,
+    VeLifecycleCounts, VePrewarmRequest, VePrewarmResult, VeReleaseOutcome,
+    VePrewarmProgress, VePrewarmStarted,
     WorkerFatal,
 )
 from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
 from base.ve3668n_capture_timing import VeCaptureProgress
 from base.recording_service import RecordingCallbacks, RecordingService, _Worker
+from consts.recording_preview_consts import (
+    MAIN_RECORDING_LIVE_WINDOW_SECONDS,
+    PREVIEW_TIME_LOWER_BOUND_TOLERANCE,
+    PREVIEW_TIME_MODE_CUMULATIVE,
+    PREVIEW_TIME_MODE_RELATIVE_LATEST,
+)
 from unit_test.base.test_recording_service import Events, eventually
 from unit_test.base.ve3668n_fakes import DiscoveryClock, capture_request
+
+
+def _prewarm_request(tmp_path, warmup_id="warmup-1", *, attempt=1):
+    recording = capture_request(tmp_path / "must-not-exist.wav")
+    return VePrewarmRequest.create(
+        warmup_id, recording.device, recording.channels, recording.sample_rate,
+        attempt=attempt,
+    )
+
+
+def test_prewarm_service_admission_is_atomic_and_uses_no_recording_pipeline(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(RecordingService, "_start_thread", lambda *args, **kwargs: None)
+    service = RecordingService()
+    request = _prewarm_request(tmp_path)
+    completions = []
+
+    assert service.prewarm_ve(request, completions.append) == "accepted"
+    assert not service.can_start_recording
+    assert service._capture_session is None
+    assert service._sessions == {}
+    assert not service.is_path_leased(tmp_path / "must-not-exist.wav")
+    assert service.release_ve(None) == "busy"
+    assert completions == []
+
+
+@pytest.mark.parametrize("state, expected", [("busy", "busy"), ("closing", "closing")])
+def test_prewarm_service_admission_rejects_without_mutating_state(
+        monkeypatch, tmp_path, state, expected):
+    monkeypatch.setattr(RecordingService, "_start_thread", lambda *args, **kwargs: None)
+    service = RecordingService()
+    if state == "busy":
+        service._ownership_uncertain = True
+    else:
+        service._closing = True
+    completions = []
+
+    assert service.prewarm_ve(_prewarm_request(tmp_path), completions.append) == expected
+    assert getattr(service, "_pending_ve_prewarm", None) is None
+    assert completions == []
 
 
 class _ServiceProcess:
@@ -49,6 +97,1148 @@ class _ServiceProcess:
 
     def close(self):
         self.closed += 1
+
+
+def _service_prewarm_probe(monkeypatch, tmp_path, *, ready=True, retained=None,
+                           **service_options):
+    monkeypatch.setattr(RecordingService, "_start_thread", lambda *args, **kwargs: None)
+    clock = DiscoveryClock()
+    service = RecordingService(monotonic=clock, **service_options)
+    process = _ServiceProcess()
+    worker = _Worker(1, process, SimpleNamespace(close=lambda: None),
+                     SimpleNamespace(close=lambda: None),
+                     clock() + service._ready_timeout)
+    worker.ready = ready
+    if ready:
+        worker.deadline = None
+    service._worker = worker
+    service._generation = 1
+    service._retained_ve_signature = retained
+    completions = []
+    request = _prewarm_request(tmp_path)
+    assert service.prewarm_ve(request, completions.append) == "accepted"
+    service._dispatch(service._inbox.get_nowait())
+    command = None if worker.outgoing.empty() else worker.outgoing.get_nowait()
+    return SimpleNamespace(service=service, worker=worker, process=process,
+                           clock=clock, request=request,
+                           completions=completions, command=command)
+
+
+def _prewarm_result(probe, *, success, attempt=1, stage=None, code=None,
+                    detail=None, frames=None, released=True,
+                    diagnostics=(), generation=None):
+    request = replace(probe.request, attempt=attempt)
+    return VePrewarmResult(
+        request.warmup_id, generation or probe.worker.generation, attempt,
+        request.signature, success, "completed" if success else (stage or "read"),
+        None if success else code, "" if success else (detail or "native failure"),
+        request.frames_per_channel if frames is None and success else (frames or 0),
+        released, diagnostics,
+        VeLifecycleCounts(1, 1, 1, 0, 0, 0),
+    )
+
+
+def _prewarm_started(probe, *, started_at=None):
+    pending = probe.service._pending_ve_prewarm
+    started_at = probe.clock() if started_at is None else started_at
+    payload = VePrewarmStarted(
+        probe.request.warmup_id, probe.worker.generation, pending.attempt,
+        probe.request.signature, started_at)
+    probe.service._event(probe.worker, RecordingEvent(
+        probe.worker.generation, probe.request.warmup_id,
+        "ve_prewarm_started", payload))
+
+
+def _prewarm_detaching(probe):
+    pending = probe.service._pending_ve_prewarm
+    started_at = pending.capture_deadline.snapshot().started_at
+    payload = VePrewarmProgress(
+        probe.request.warmup_id, probe.worker.generation, pending.attempt,
+        probe.request.signature, started_at,
+        probe.request.frames_per_channel, probe.clock())
+    probe.service._event(probe.worker, RecordingEvent(
+        probe.worker.generation, probe.request.warmup_id,
+        VE_PREWARM_PROGRESS, payload))
+    probe.service._event(probe.worker, RecordingEvent(
+        probe.worker.generation, probe.request.warmup_id,
+        VE_PREWARM_DETACHING, payload))
+
+
+def _prewarm_progress(probe, frames, *, attempt=None, at=None, generation=None):
+    pending = probe.service._pending_ve_prewarm
+    attempt = pending.attempt if attempt is None else attempt
+    at = probe.clock() if at is None else at
+    return VePrewarmProgress(
+        probe.request.warmup_id, generation or probe.worker.generation,
+        attempt, probe.request.signature, probe.clock(), frames, at)
+
+
+def test_prewarm_service_success_validates_identity_and_completes_once(
+        monkeypatch, tmp_path):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path)
+    assert probe.command.kind == "prewarm_ve"
+    _prewarm_started(probe)
+    _prewarm_detaching(probe)
+    result = _prewarm_result(probe, success=True)
+
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, "ve_prewarm_terminal", result))
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, "ve_prewarm_terminal", result))
+
+    assert len(probe.completions) == 1
+    completion = probe.completions[0]
+    assert completion.success and completion.ownership_safe
+    assert completion.signature == probe.request.signature
+    assert probe.service.retained_ve_signature == probe.request.signature
+    assert probe.service._capture_session is None and probe.service._sessions == {}
+    assert probe.service.can_start_recording
+
+
+def test_prewarm_first_native_failure_waits_for_death_and_exact_retry_deadline(
+        monkeypatch, tmp_path):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path)
+    _prewarm_started(probe)
+    first = _prewarm_result(
+        probe, success=False, stage="start_task", code=-12001,
+        detail="iio_device_create_multi_buffer: invalid argument",
+        released=False, diagnostics=("owner exited before binding",))
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, "ve_prewarm_terminal", first))
+    probe.service._event(probe.worker, RecordingEvent(
+        1, "", "worker_fatal",
+        WorkerFatal(1, "bind", "VE resource owner exited before binding")))
+    assert probe.process.terminates == 1 and probe.completions == []
+    assert probe.service._pending_ve_prewarm.first_fault == first
+
+    probe.process.alive = False
+    probe.service._tick()
+    pending = probe.service._pending_ve_prewarm
+    assert pending.phase == "retry_wait" and pending.retry_deadline == 100.75
+
+    spawned = []
+
+    def spawn():
+        process = _ServiceProcess(pid=456)
+        worker = _Worker(2, process, SimpleNamespace(close=lambda: None),
+                         SimpleNamespace(close=lambda: None), None)
+        worker.ready = True
+        probe.service._worker = worker
+        probe.service._generation = 2
+        spawned.append(worker)
+
+    monkeypatch.setattr(probe.service, "_spawn", spawn)
+    probe.clock.advance(.749)
+    probe.service._tick()
+    assert spawned == []
+    probe.clock.advance(.001)
+    probe.service._tick()
+    assert len(spawned) == 1
+    second_worker = spawned[0]
+    command = second_worker.outgoing.get_nowait()
+    assert command.payload.attempt == 2 and command.payload.signature == first.signature
+
+    probe.worker = second_worker
+    _prewarm_started(probe)
+    _prewarm_detaching(probe)
+    second = _prewarm_result(probe, success=True, attempt=2, generation=2)
+    probe.service._event(second_worker, RecordingEvent(
+        2, probe.request.warmup_id, "ve_prewarm_terminal", second))
+    assert len(probe.completions) == 1 and probe.completions[0].success
+    assert probe.completions[0].attempts == (first, second)
+
+
+def test_prewarm_two_failures_preserve_first_cause_and_never_create_third_attempt(
+        monkeypatch, tmp_path):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path)
+    pending = probe.service._pending_ve_prewarm
+    first = _prewarm_result(
+        probe, success=False, stage="start_task", code=-12001,
+        detail="first native failure", released=False,
+        diagnostics=("secondary bind diagnostic",))
+    pending.first_fault = first
+    pending.results = (first,)
+    pending.attempt = 2
+    pending.current_request = replace(probe.request, attempt=2)
+    _prewarm_started(probe)
+    second = _prewarm_result(
+        probe, success=False, attempt=2, stage="read", code=-7,
+        detail="second native failure", released=False)
+
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, "ve_prewarm_terminal", second))
+    assert probe.process.terminates == 1 and probe.completions == []
+    probe.process.alive = False
+    probe.service._tick()
+
+    assert len(probe.completions) == 1
+    completion = probe.completions[0]
+    assert not completion.success and completion.ownership_safe
+    assert (completion.stage, completion.code, completion.detail) == (
+        "start_task", -12001, "first native failure")
+    assert completion.attempts == (first, second)
+    assert probe.service._pending_ve_prewarm is None
+    probe.clock.advance(100)
+    probe.service._tick()
+    assert probe.service.generation == 1
+
+
+def test_prewarm_deterministic_request_validation_finishes_without_native_retry(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(RecordingService, "_start_thread", lambda *args, **kwargs: None)
+    service = RecordingService(monotonic=DiscoveryClock())
+    valid = _prewarm_request(tmp_path)
+    invalid = object.__new__(VePrewarmRequest)
+    for name in ("warmup_id", "device", "channels", "sample_rate", "frames_per_channel"):
+        object.__setattr__(invalid, name, getattr(valid, name))
+    object.__setattr__(invalid, "attempt", 3)
+    completions = []
+
+    assert service.prewarm_ve(invalid, completions.append) == "accepted"
+    service._dispatch(service._inbox.get_nowait())
+
+    assert len(completions) == 1
+    assert not completions[0].success and completions[0].stage == "validation"
+    assert completions[0].ownership_safe and completions[0].attempts == ()
+    assert service._worker is None and service.generation == 0
+
+
+@pytest.mark.parametrize("stage", ["capture_timeout", "detach"])
+def test_prewarm_read_and_detach_failures_retire_before_retry(
+        monkeypatch, tmp_path, stage):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path)
+    _prewarm_started(probe)
+    result = _prewarm_result(
+        probe, success=False, stage=stage, detail=f"{stage} failed",
+        released=stage != "detach")
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, "ve_prewarm_terminal", result))
+
+    assert probe.process.terminates == 1
+    assert probe.service._pending_ve_prewarm.phase == "retiring_retry"
+    assert probe.completions == []
+
+
+def test_prewarm_terminate_boundary_kills_and_reports_ownership_uncertain_once(
+        monkeypatch, tmp_path):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path, terminate_timeout=2)
+    _prewarm_started(probe)
+    failure = _prewarm_result(
+        probe, success=False, stage="start_task", code=-12001,
+        detail="native failed", released=False)
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, "ve_prewarm_terminal", failure))
+
+    probe.clock.advance(1.999)
+    probe.service._tick()
+    assert probe.process.kills == 0 and probe.completions == []
+    probe.clock.advance(.001)
+    probe.service._tick()
+    assert probe.process.kills == 1 and len(probe.completions) == 1
+    assert not probe.completions[0].ownership_safe
+    assert not probe.service.can_start_recording
+
+    probe.process.alive = False
+    probe.service._tick()
+    assert len(probe.completions) == 1 and probe.service.can_start_recording
+
+
+def test_prewarm_incompatible_retained_signature_releases_before_dispatch(
+        monkeypatch, tmp_path):
+    old = ("vkinging", "old-machine", (0,), 51200)
+    probe = _service_prewarm_probe(monkeypatch, tmp_path, retained=old)
+    assert probe.command.kind == "release_ve"
+    assert probe.service._pending_ve_prewarm.phase == "releasing"
+
+    probe.service._event(probe.worker, RecordingEvent(
+        1, "", "ve_released", VeReleaseOutcome(1, old)))
+
+    command = probe.worker.outgoing.get_nowait()
+    assert command.kind == "prewarm_ve" and command.payload.attempt == 1
+    assert probe.service._pending_ve_release is None
+
+
+def test_prewarm_release_admission_busy_creates_no_prewarms(monkeypatch, tmp_path):
+    monkeypatch.setattr(RecordingService, "_start_thread", lambda *args, **kwargs: None)
+    service = RecordingService(monotonic=DiscoveryClock())
+    service._pending_ve_release = object()
+    completions = []
+    assert service.prewarm_ve(_prewarm_request(tmp_path), completions.append) == "busy"
+    assert service._pending_ve_prewarm is None and completions == []
+
+
+@pytest.mark.parametrize("death_confirmed", [True, False])
+def test_prewarm_prerequisite_release_failure_never_dispatches_capture(
+        monkeypatch, tmp_path, death_confirmed):
+    old = ("vkinging", "old-machine", (0,), 51200)
+    probe = _service_prewarm_probe(
+        monkeypatch, tmp_path, retained=old, terminate_timeout=2)
+    outcome = VeReleaseOutcome(1, old, ("clear task failed",))
+    probe.service._event(probe.worker, RecordingEvent(
+        1, "", "ve_release_failed", outcome))
+    assert probe.worker.outgoing.empty()
+    if death_confirmed:
+        probe.process.alive = False
+        probe.service._tick()
+    else:
+        probe.clock.advance(2)
+        probe.service._tick()
+
+    assert len(probe.completions) == 1
+    completion = probe.completions[0]
+    assert not completion.success and completion.stage == "release_ve"
+    assert completion.signature == probe.request.signature
+    assert completion.ownership_safe is death_confirmed
+    assert not any(result.success for result in completion.attempts)
+
+
+def test_prewarm_release_timeout_fires_at_five_seconds_and_is_not_busy_discard(
+        monkeypatch, tmp_path):
+    old = ("vkinging", "old-machine", (0,), 51200)
+    probe = _service_prewarm_probe(
+        monkeypatch, tmp_path, retained=old, release_timeout=5)
+    probe.clock.advance(4.999)
+    probe.service._tick()
+    assert not probe.worker.retiring and probe.completions == []
+    probe.clock.advance(.001)
+    probe.service._tick()
+    assert probe.worker.retiring and probe.completions == []
+    probe.process.alive = False
+    probe.service._tick()
+    assert probe.completions[0].stage == "release_ve"
+    assert probe.completions[0].ownership_safe
+
+
+def test_prewarm_release_timeout_without_confirmed_death_never_dispatches_attempt(
+        monkeypatch, tmp_path):
+    old = ("vkinging", "old-machine", (0,), 51200)
+    probe = _service_prewarm_probe(
+        monkeypatch, tmp_path, retained=old,
+        release_timeout=5, terminate_timeout=2)
+    probe.clock.advance(5)
+    probe.service._tick()
+    assert probe.service._pending_ve_prewarm.phase == "retiring_release"
+    assert probe.worker.outgoing.empty()
+    probe.clock.advance(2)
+    probe.service._tick()
+    assert len(probe.completions) == 1
+    assert probe.completions[0].stage == "release_ve"
+    assert not probe.completions[0].ownership_safe
+    assert probe.service.generation == 1
+
+
+def test_prewarm_shutdown_deadline_cancels_silently_without_retry_or_resurrection(
+        monkeypatch, tmp_path):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path, shutdown_timeout=5)
+    probe.service.shutdown()
+    probe.service._dispatch(probe.service._inbox.get_nowait())
+    assert probe.service._pending_ve_prewarm is None
+    assert probe.completions == []
+    commands = [probe.worker.outgoing.get_nowait().kind
+                for _ in range(probe.worker.outgoing.qsize())]
+    assert commands == ["cancel", "shutdown"]
+
+    probe.clock.advance(4.999)
+    probe.service._tick()
+    assert not probe.worker.retiring
+    probe.clock.advance(.001)
+    probe.service._tick()
+    assert probe.worker.retiring and probe.completions == []
+    terminal = _prewarm_result(
+        probe, success=False, stage="cancelled", detail="shutdown")
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, "ve_prewarm_terminal", terminal))
+    assert probe.completions == []
+
+
+def test_prewarm_ready_timeout_fires_at_ten_seconds(monkeypatch, tmp_path):
+    monkeypatch.setattr(RecordingService, "_start_thread", lambda *args, **kwargs: None)
+    clock = DiscoveryClock()
+    service = RecordingService(monotonic=clock, ready_timeout=10)
+    process = _ServiceProcess()
+
+    def spawn():
+        worker = _Worker(
+            1, process, SimpleNamespace(close=lambda: None),
+            SimpleNamespace(close=lambda: None), clock() + 10)
+        service._worker = worker
+        service._generation = 1
+
+    monkeypatch.setattr(service, "_spawn", spawn)
+    completions = []
+    assert service.prewarm_ve(_prewarm_request(tmp_path), completions.append) == "accepted"
+    service._dispatch(service._inbox.get_nowait())
+    assert service._pending_ve_prewarm.phase == "waiting_ready"
+
+    clock.advance(9.999)
+    service._tick()
+    assert not service._worker.retiring
+    clock.advance(.001)
+    service._tick()
+    assert service._worker.retiring
+    assert service._pending_ve_prewarm.first_fault.stage == "ready_timeout"
+
+
+def test_prewarm_start_timeout_fires_at_ten_seconds_but_bind_at_three_owns_cause(
+        monkeypatch, tmp_path):
+    timeout = _service_prewarm_probe(monkeypatch, tmp_path, start_timeout=10)
+    timeout.clock.advance(9.999)
+    timeout.service._tick()
+    assert not timeout.worker.retiring
+    timeout.clock.advance(.001)
+    timeout.service._tick()
+    assert timeout.worker.retiring
+    assert timeout.service._pending_ve_prewarm.first_fault.stage == "start_timeout"
+
+    bind = _service_prewarm_probe(monkeypatch, tmp_path / "bind", start_timeout=10)
+    bind.clock.advance(3)
+    result = _prewarm_result(
+        bind, success=False, stage="bind", detail="controller bind deadline exceeded",
+        released=False)
+    bind.service._event(bind.worker, RecordingEvent(
+        1, bind.request.warmup_id, "ve_prewarm_terminal", result))
+    bind.clock.advance(7)
+    bind.service._tick()
+    assert bind.completions[0].stage == "bind"
+    assert bind.completions[0].detail == (
+        "controller bind deadline exceeded")
+
+
+def test_prewarm_terminal_attempt_or_signature_mismatch_retires_as_protocol_fault(
+        monkeypatch, tmp_path):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path)
+    _prewarm_started(probe)
+    mismatched = _prewarm_result(
+        probe, success=False, attempt=2, stage="read", detail="wrong attempt")
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, "ve_prewarm_terminal", mismatched))
+
+    assert probe.worker.retiring
+    assert probe.service._pending_ve_prewarm.first_fault.stage == "protocol"
+    assert probe.service._pending_ve_prewarm.phase == "retiring_final"
+
+
+@pytest.mark.parametrize("failure", ["broken", "dead"])
+def test_prewarm_prerequisite_release_owner_loss_never_becomes_capture_retry(
+        monkeypatch, tmp_path, failure):
+    old = ("vkinging", "old-machine", (0,), 51200)
+    probe = _service_prewarm_probe(monkeypatch, tmp_path, retained=old)
+    if failure == "broken":
+        probe.service._dispatch(("broken", probe.worker, "release IPC closed"))
+    else:
+        probe.process.alive = False
+        probe.service._tick()
+
+    pending = probe.service._pending_ve_prewarm
+    if pending is not None:
+        assert pending.phase == "retiring_release"
+        assert pending.first_fault.stage == "release_ve"
+    if failure == "broken":
+        probe.process.alive = False
+        probe.service._tick()
+    assert len(probe.completions) == 1
+    assert probe.completions[0].stage == "release_ve"
+    assert probe.completions[0].failed_signature == probe.request.signature
+    assert probe.completions[0].ownership_safe
+    assert not any(item.success for item in probe.completions[0].attempts)
+
+
+def test_prewarm_prerequisite_release_owner_loss_without_death_is_unsafe_terminal(
+        monkeypatch, tmp_path):
+    old = ("vkinging", "old-machine", (0,), 51200)
+    probe = _service_prewarm_probe(
+        monkeypatch, tmp_path, retained=old, terminate_timeout=2)
+    probe.service._dispatch(("broken", probe.worker, "release IPC closed"))
+    probe.clock.advance(2)
+    probe.service._tick()
+
+    assert len(probe.completions) == 1
+    assert probe.completions[0].stage == "release_ve"
+    assert not probe.completions[0].ownership_safe
+    assert not probe.service.can_start_recording
+
+
+@pytest.mark.parametrize("failure", ["malformed", "future", "service"])
+def test_prewarm_prerequisite_release_all_retirement_paths_are_release_failures(
+        monkeypatch, tmp_path, failure):
+    old = ("vkinging", "old-machine", (0,), 51200)
+    probe = _service_prewarm_probe(monkeypatch, tmp_path, retained=old)
+    if failure == "malformed":
+        event = object.__new__(RecordingEvent)
+        object.__setattr__(event, "generation", 1)
+        object.__setattr__(event, "request_id", "")
+        object.__setattr__(event, "kind", "ve_released")
+        object.__setattr__(event, "payload", "not-an-outcome")
+        object.__setattr__(event, "version", 1)
+        probe.service._event(probe.worker, event)
+    elif failure == "future":
+        probe.service._event(probe.worker, RecordingEvent(
+            2, "", "ve_release_failed",
+            VeReleaseOutcome(2, old, ("future release failure",))))
+    else:
+        probe.service._handle_supervisor_exception(
+            RuntimeError("injected service failure during release"))
+
+    pending = probe.service._pending_ve_prewarm
+    assert pending.phase == "retiring_release"
+    assert pending.first_fault.stage == "release_ve"
+    assert not any(event.kind == "prewarm_ve"
+                   for event in tuple(probe.worker.outgoing.queue))
+    probe.process.alive = False
+    probe.service._tick()
+    assert len(probe.completions) == 1
+    assert probe.completions[0].stage == "release_ve"
+
+
+def test_prewarm_prerequisite_release_send_exception_cannot_hang_or_retry(
+        monkeypatch, tmp_path):
+    old = ("vkinging", "old-machine", (0,), 51200)
+    probe = _service_prewarm_probe(monkeypatch, tmp_path, retained=old)
+    pending_release = probe.service._pending_ve_release
+    pending_release.sent = False
+    monkeypatch.setattr(
+        probe.service, "_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("injected release send failure")))
+    probe.service._send_ve_release(pending_release)
+    pending = probe.service._pending_ve_prewarm
+    assert pending.phase == "retiring_release"
+    assert pending.first_fault.stage == "release_ve"
+    probe.clock.advance(2)
+    probe.service._tick()
+    assert len(probe.completions) == 1
+    assert not probe.completions[0].ownership_safe
+
+
+def test_prewarm_retry_delay_is_validated_injected_and_exact(monkeypatch, tmp_path):
+    monkeypatch.setattr(RecordingService, "_start_thread", lambda *args, **kwargs: None)
+    for invalid in (0, -1, math.inf, math.nan, "0.75", True):
+        with pytest.raises(ValueError, match="retry"):
+            RecordingService(retry_delay=invalid)
+
+    probe = _service_prewarm_probe(monkeypatch, tmp_path, retry_delay=.125)
+    _prewarm_started(probe)
+    failure = _prewarm_result(
+        probe, success=False, stage="read", detail="retry me", released=False)
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, "ve_prewarm_terminal", failure))
+    probe.process.alive = False
+    probe.service._tick()
+    assert probe.service._pending_ve_prewarm.retry_deadline == 100.125
+
+
+def test_prewarm_partial_spawn_success_thread_failure_retires_registered_generation(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(RecordingService, "_start_thread", lambda *args, **kwargs: None)
+    clock = DiscoveryClock()
+    service = RecordingService(monotonic=clock)
+    process = _ServiceProcess()
+
+    def partial_spawn():
+        worker = _Worker(
+            1, process, SimpleNamespace(close=lambda: None),
+            SimpleNamespace(close=lambda: None), clock() + 10)
+        service._worker = worker
+        service._generation = 1
+        raise RuntimeError("sender thread failed after process start")
+
+    monkeypatch.setattr(service, "_spawn", partial_spawn)
+    completions = []
+    assert service.prewarm_ve(_prewarm_request(tmp_path), completions.append) == "accepted"
+    service._dispatch(service._inbox.get_nowait())
+
+    pending = service._pending_ve_prewarm
+    assert pending.generation == 1 and pending.phase == "retiring_retry"
+    assert pending.first_fault.stage == "service"
+    assert process.terminates == 1 and completions == []
+    process.alive = False
+    service._tick()
+    monkeypatch.setattr(
+        service, "_spawn",
+        lambda: (_ for _ in ()).throw(RuntimeError("second spawn failed")))
+    clock.advance(.75)
+    service._tick()
+    assert len(completions) == 1
+    assert not completions[0].success and completions[0].ownership_safe
+    assert service._pending_ve_prewarm is None and service.can_start_recording
+
+
+def test_prewarm_real_spawn_post_start_thread_failure_is_bounded(
+        monkeypatch, tmp_path):
+    real_start_thread = RecordingService._start_thread
+    monkeypatch.setattr(RecordingService, "_start_thread", lambda *args, **kwargs: None)
+    service = RecordingService(retry_delay=.01)
+    completions = []
+    injected = False
+
+    def start_thread(thread, *, start=None, worker=None):
+        nonlocal injected
+        if worker is not None and not injected:
+            injected = True
+            try:
+                (start or thread.start)()
+            finally:
+                service.threads.append(thread)
+                worker.threads.append(thread)
+            raise RuntimeError("injected parent IPC thread startup failure")
+        return real_start_thread(service, thread, start=start, worker=worker)
+
+    service._start_thread = start_thread
+    assert service.prewarm_ve(
+        _prewarm_request(tmp_path, "real-partial-spawn"),
+        completions.append) == "accepted"
+    service._dispatch(service._inbox.get_nowait())
+    worker = service._worker
+    assert worker is not None and worker.process.pid is not None
+    assert worker.retiring and worker.process.is_alive()
+    eventually(lambda: not worker.process.is_alive(), timeout=5)
+    service._tick()
+    monkeypatch.setattr(
+        service, "_spawn",
+        lambda: (_ for _ in ()).throw(RuntimeError("retry spawn failed")))
+    eventually(lambda: (service._tick() or bool(completions)), timeout=2)
+    assert len(completions) == 1 and completions[0].ownership_safe
+    assert service._pending_ve_prewarm is None and service.can_start_recording
+
+
+def test_prewarm_success_terminal_before_started_is_protocol_failure(
+        monkeypatch, tmp_path):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path)
+    success = _prewarm_result(probe, success=True)
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, "ve_prewarm_terminal", success))
+    assert probe.worker.retiring
+    assert probe.service._pending_ve_prewarm.first_fault.stage == "protocol"
+    assert probe.service.retained_ve_signature is None
+
+
+def test_prewarm_authenticated_progress_drives_independent_deadlines(
+        monkeypatch, tmp_path):
+    stalled = _service_prewarm_probe(monkeypatch, tmp_path / "stalled")
+    _prewarm_started(stalled)
+    started_at = stalled.clock()
+    stalled.clock.advance(.1)
+    progress = VePrewarmProgress(
+        stalled.request.warmup_id, 1, 1, stalled.request.signature,
+        started_at, 1, stalled.clock())
+    stalled.service._event(stalled.worker, RecordingEvent(
+        1, stalled.request.warmup_id, VE_PREWARM_PROGRESS, progress))
+    stalled.clock.advance(4.999)
+    stalled.service._tick()
+    assert not stalled.worker.retiring
+    stalled.clock.advance(.001)
+    stalled.service._tick()
+    assert "no progress" in stalled.service._pending_ve_prewarm.first_fault.detail
+
+    total = _service_prewarm_probe(monkeypatch, tmp_path / "total")
+    _prewarm_started(total)
+    started_at = total.clock()
+    total.clock.advance(1)
+    progress = VePrewarmProgress(
+        total.request.warmup_id, 1, 1, total.request.signature,
+        started_at, 1, total.clock())
+    total.service._event(total.worker, RecordingEvent(
+        1, total.request.warmup_id, VE_PREWARM_PROGRESS, progress))
+    total.clock.advance(4.499)
+    total.service._tick()
+    assert not total.worker.retiring
+    total.clock.advance(.001)
+    total.service._tick()
+    assert "total deadline" in total.service._pending_ve_prewarm.first_fault.detail
+
+
+def test_prewarm_zero_progress_deadline_originates_at_authenticated_native_start(
+        monkeypatch, tmp_path):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path)
+    probe.clock.advance(.5)
+    _prewarm_started(probe, started_at=100.0)
+    assert probe.service._pending_ve_prewarm.capture_deadline.snapshot().started_at == 100.0
+    probe.clock.advance(4.499)
+    probe.service._tick()
+    assert not probe.worker.retiring
+    probe.clock.advance(.001)
+    probe.service._tick()
+    assert probe.worker.retiring
+    assert "no progress" in probe.service._pending_ve_prewarm.first_fault.detail
+
+
+def test_prewarm_progress_regressing_observation_time_is_local_protocol_fault(
+        monkeypatch, tmp_path):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path)
+    _prewarm_started(probe)
+    probe.clock.advance(1)
+    first = VePrewarmProgress(
+        probe.request.warmup_id, 1, 1, probe.request.signature,
+        100.0, 1, 101.0)
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, VE_PREWARM_PROGRESS, first))
+    regressed = replace(first, frames_per_channel=2, observed_at=100.5)
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, VE_PREWARM_PROGRESS, regressed))
+    pending = probe.service._pending_ve_prewarm
+    assert pending.first_fault.stage == "protocol"
+    assert pending.phase == "retiring_final"
+    assert pending.attempt == 1 and pending.retry_deadline is None
+
+
+def test_prewarm_authenticated_detaching_event_arms_half_second_deadline(
+        monkeypatch, tmp_path):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path)
+    _prewarm_started(probe)
+    _prewarm_detaching(probe)
+    pending = probe.service._pending_ve_prewarm
+    assert pending.phase == "detaching"
+    assert pending.detach_deadline == 100.5
+    probe.clock.advance(.499)
+    probe.service._tick()
+    assert not probe.worker.retiring
+    probe.clock.advance(.001)
+    probe.service._tick()
+    assert pending.first_fault.stage == "detach"
+
+
+def test_prewarm_progress_attempt_identity_is_authenticated(monkeypatch, tmp_path):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path)
+    _prewarm_started(probe)
+    payload = VePrewarmProgress(
+        probe.request.warmup_id, 1, 2, probe.request.signature,
+        probe.clock(), 1, probe.clock())
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, VE_PREWARM_PROGRESS, payload))
+    assert probe.worker.retiring
+    assert probe.service._pending_ve_prewarm.first_fault.stage == "protocol"
+
+
+def test_prewarm_detaching_requires_ordered_target_progress(monkeypatch, tmp_path):
+    probe = _service_prewarm_probe(monkeypatch, tmp_path)
+    _prewarm_started(probe)
+    payload = VePrewarmProgress(
+        probe.request.warmup_id, 1, 1, probe.request.signature,
+        probe.clock(), probe.request.frames_per_channel, probe.clock())
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.request.warmup_id, VE_PREWARM_DETACHING, payload))
+    assert probe.worker.retiring
+    assert probe.service._pending_ve_prewarm.first_fault.stage == "protocol"
+
+
+def test_prewarm_service_real_worker_retries_once_in_fresh_generation(tmp_path):
+    trace_path = tmp_path / "service-prewarm-native.jsonl"
+    service = RecordingService(
+        backend_factory="unit_test.base.ve3668n_fakes:capture_dependencies",
+        backend_options={
+            "trace_path": str(trace_path),
+            "read_delay": 0,
+            "fail_operation": "start_task",
+            "first_only": True,
+        })
+    completions = queue.Queue()
+    request = _prewarm_request(tmp_path, "service-retry")
+    try:
+        assert service.prewarm_ve(request, completions.put) == "accepted"
+        completion = completions.get(timeout=20)
+        assert completion.success and completion.ownership_safe
+        assert len(completion.attempts) == 2
+        assert not completion.attempts[0].success
+        assert completion.attempts[1].success
+        assert completion.attempts[0].generation != completion.attempts[1].generation
+        assert service.retained_ve_signature == request.signature
+        assert service.can_start_recording
+        assert not (tmp_path / "must-not-exist.wav").exists()
+    finally:
+        service.shutdown()
+        assert service.closed.wait(12), service.diagnostics
+
+
+def _spawn_recording_worker(tmp_path, *, generation=1, options=None):
+    from base.recording_worker import recording_worker
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    context = mp.get_context("spawn")
+    parent_control, child_control = context.Pipe()
+    parent_preview, child_preview = context.Pipe()
+    trace_path = tmp_path / "prewarm-native.jsonl"
+    backend_options = dict(trace_path=str(trace_path), read_delay=0)
+    backend_options.update(options or {})
+    process = context.Process(
+        target=recording_worker,
+        args=(child_control, child_preview, generation,
+              "unit_test.base.ve3668n_fakes:capture_dependencies",
+              backend_options, .25, .01),
+    )
+    process.start()
+    child_control.close()
+    child_preview.close()
+    assert parent_control.poll(10), "worker did not publish ready"
+    ready = parent_control.recv()
+    assert ready.kind == "ready" and ready.generation == generation
+    return SimpleNamespace(
+        generation=generation, process=process, control=parent_control,
+        preview=parent_preview, trace_path=trace_path,
+    )
+
+
+def _blocked_prewarm_started_worker(
+        control, preview, generation, backend_factory, backend_options,
+        cancel_timeout, preview_interval):
+    """Hold the sender on prewarm-started while terminal/fatal are produced."""
+    from base.recording_worker import recording_worker
+
+    class Connection:
+        def __getattr__(self, name):
+            return getattr(control, name)
+
+        def send(self, event):
+            if event.kind == "ve_prewarm_started":
+                marker = Path(backend_options["trace_path"] + ".started-blocked")
+                release = Path(backend_options["trace_path"] + ".ipc-release")
+                marker.touch()
+                deadline = time.monotonic() + 10
+                while not release.exists():
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("test did not release prewarm sender")
+                    threading.Event().wait(.005)
+            control.send(event)
+
+    recording_worker(Connection(), preview, generation, backend_factory,
+                     backend_options, cancel_timeout, preview_interval)
+
+
+def _spawn_blocked_prewarm_worker(tmp_path, *, generation=1, options=None):
+    context = mp.get_context("spawn")
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    parent_control, child_control = context.Pipe()
+    parent_preview, child_preview = context.Pipe()
+    trace_path = tmp_path / "prewarm-native.jsonl"
+    backend_options = dict(trace_path=str(trace_path), read_delay=0)
+    backend_options.update(options or {})
+    process = context.Process(
+        target=_blocked_prewarm_started_worker,
+        args=(child_control, child_preview, generation,
+              "unit_test.base.ve3668n_fakes:capture_dependencies",
+              backend_options, 2.0, .01),
+    )
+    process.start()
+    child_control.close()
+    child_preview.close()
+    assert parent_control.poll(10)
+    assert parent_control.recv().kind == "ready"
+    return SimpleNamespace(
+        generation=generation, process=process, control=parent_control,
+        preview=parent_preview, trace_path=trace_path,
+    )
+
+
+def _recv_worker_event(worker, *, timeout=10):
+    assert worker.control.poll(timeout), "worker event timed out"
+    return worker.control.recv()
+
+
+def _recv_prewarm_terminal_sequence(worker, *, timeout=10):
+    events = []
+    while not events or events[-1].kind != "ve_prewarm_terminal":
+        events.append(_recv_worker_event(worker, timeout=timeout))
+    return events
+
+
+def _stop_spawned_worker(worker):
+    if worker.process.is_alive():
+        try:
+            worker.control.send(RecordingEvent(worker.generation, "", "shutdown"))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+        worker.process.join(3)
+    if worker.process.is_alive():
+        worker.process.terminate()
+        worker.process.join(3)
+    worker.process.close()
+    worker.control.close()
+    worker.preview.close()
+
+
+def test_prewarm_worker_reads_target_with_only_prewarm_events_and_no_file_pipeline(tmp_path):
+    worker = _spawn_recording_worker(tmp_path)
+    request = _prewarm_request(tmp_path)
+    try:
+        worker.control.send(RecordingEvent(
+            worker.generation, request.warmup_id, "prewarm_ve", request))
+        events = _recv_prewarm_terminal_sequence(worker)
+        kinds = [event.kind for event in events]
+        assert kinds[0] == "ve_prewarm_started"
+        assert kinds[-2:] == ["ve_prewarm_detaching", "ve_prewarm_terminal"]
+        assert "ve_prewarm_progress" in kinds[1:-2]
+        assert all(event.request_id == request.warmup_id for event in events)
+        assert events[0].payload.warmup_id == request.warmup_id
+        assert events[0].payload.attempt == request.attempt
+        assert events[0].payload.signature == request.signature
+        terminal = events[-1].payload
+        assert isinstance(terminal, VePrewarmResult)
+        assert terminal.success and terminal.stage == "completed"
+        assert terminal.frames_per_channel == request.frames_per_channel
+        assert terminal.handles_released
+        assert terminal.lifecycle_counts.task_create == 1
+        assert terminal.lifecycle_counts.task_start == 1
+        assert not worker.preview.poll(.1)
+        assert not (tmp_path / "must-not-exist.wav").exists()
+        assert {path.name for path in tmp_path.iterdir()} == {
+            worker.trace_path.name,
+        }
+        forbidden = {
+            "started", "progress", "preview", "finalizing", "completed",
+            "failed", "cancelled", "capture_slot_released",
+        }
+        assert forbidden.isdisjoint(event.kind for event in events)
+
+        # A second unique worker-only attempt proves no recording/result slot,
+        # finalizer, descriptor or acknowledgement capacity was consumed.
+        second = _prewarm_request(tmp_path, "warmup-2", attempt=2)
+        worker.control.send(RecordingEvent(
+            worker.generation, second.warmup_id, "prewarm_ve", second))
+        second_events = _recv_prewarm_terminal_sequence(worker)
+        assert second_events[0].kind == "ve_prewarm_started"
+        assert second_events[-2].kind == "ve_prewarm_detaching"
+        assert second_events[-1].kind == "ve_prewarm_terminal"
+        assert second_events[-1].payload.success
+        assert second_events[-1].payload.lifecycle_counts.task_create == 1
+    finally:
+        _stop_spawned_worker(worker)
+
+
+def test_prewarm_worker_first_structured_fault_precedes_generation_fatal(tmp_path):
+    worker = _spawn_recording_worker(tmp_path, options={"fail_operation": "start_task"})
+    request = _prewarm_request(tmp_path)
+    try:
+        worker.control.send(RecordingEvent(
+            worker.generation, request.warmup_id, "prewarm_ve", request))
+        events = [_recv_worker_event(worker), _recv_worker_event(worker)]
+        assert [event.kind for event in events] == [
+            "ve_prewarm_terminal", "worker_fatal",
+        ]
+        terminal = events[0].payload
+        assert not terminal.success
+        assert terminal.stage == "start_task"
+        assert terminal.code is None
+        assert terminal.detail == "injected native start_task"
+        assert terminal.handles_released
+        assert any("owner exited before binding" in item
+                   for item in terminal.diagnostics)
+        assert events[1].payload.stage == "start_task"
+        if worker.control.poll(.2):
+            with pytest.raises(EOFError):
+                worker.control.recv()
+    finally:
+        _stop_spawned_worker(worker)
+
+
+def test_prewarm_worker_rejects_active_recording_and_duplicate_warmup_ids(tmp_path):
+    worker = _spawn_recording_worker(tmp_path)
+    first = _prewarm_request(tmp_path)
+    try:
+        worker.control.send(RecordingEvent(
+            worker.generation, first.warmup_id, "prewarm_ve", first))
+        first_events = _recv_prewarm_terminal_sequence(worker)
+        assert first_events[0].kind == "ve_prewarm_started"
+        assert first_events[-1].kind == "ve_prewarm_terminal"
+        worker.control.send(RecordingEvent(
+            worker.generation, first.warmup_id, "prewarm_ve", first))
+        fatal = _recv_worker_event(worker)
+        assert fatal.kind == "worker_fatal"
+        assert fatal.payload.stage == "protocol/prewarm_ve"
+        assert "duplicate" in fatal.payload.message
+    finally:
+        _stop_spawned_worker(worker)
+
+    blocked = _spawn_recording_worker(
+        tmp_path / "blocked", options={"zero_reads": True})
+    recording = capture_request(tmp_path / "blocked.wav")
+    warmup = _prewarm_request(tmp_path, "overlap")
+    try:
+        blocked.control.send(RecordingEvent(
+            blocked.generation, recording.request_id, "start", recording))
+        assert _recv_worker_event(blocked).kind == "started"
+        blocked.control.send(RecordingEvent(
+            blocked.generation, warmup.warmup_id, "prewarm_ve", warmup))
+        fatal = _recv_worker_event(blocked)
+        assert fatal.kind == "worker_fatal"
+        assert fatal.payload.stage == "protocol/prewarm_ve"
+        assert "active capture" in fatal.payload.message
+    finally:
+        _stop_spawned_worker(blocked)
+
+    warming = _spawn_recording_worker(
+        tmp_path / "warming", options={"zero_reads": True})
+    recording = capture_request(tmp_path / "overlap-recording.wav", request_id="overlap-recording")
+    warmup = _prewarm_request(tmp_path, "active-prewarm")
+    try:
+        warming.control.send(RecordingEvent(
+            warming.generation, warmup.warmup_id, "prewarm_ve", warmup))
+        assert _recv_worker_event(warming).kind == "ve_prewarm_started"
+        warming.control.send(RecordingEvent(
+            warming.generation, recording.request_id, "start", recording))
+        terminal = _recv_worker_event(warming)
+        fatal = _recv_worker_event(warming)
+        assert terminal.kind == "ve_prewarm_terminal"
+        assert not terminal.payload.success
+        assert fatal.kind == "worker_fatal"
+        assert fatal.payload.stage == "protocol/start"
+        assert not Path(recording.path).exists()
+    finally:
+        _stop_spawned_worker(warming)
+
+
+def test_prewarm_worker_ignores_old_generation_and_shutdown_is_bounded(tmp_path):
+    worker = _spawn_recording_worker(
+        tmp_path, generation=2, options={"zero_reads": True})
+    stale = _prewarm_request(tmp_path, "stale")
+    current = _prewarm_request(tmp_path, "current")
+    try:
+        worker.control.send(RecordingEvent(1, stale.warmup_id, "prewarm_ve", stale))
+        assert not worker.control.poll(.1)
+        worker.control.send(RecordingEvent(
+            worker.generation, current.warmup_id, "prewarm_ve", current))
+        started = _recv_worker_event(worker)
+        assert started.kind == "ve_prewarm_started"
+        before = time.monotonic()
+        worker.control.send(RecordingEvent(worker.generation, "", "shutdown"))
+        terminal = _recv_worker_event(worker)
+        assert terminal.kind == "ve_prewarm_terminal"
+        assert not terminal.payload.success
+        assert terminal.payload.stage == "cancelled"
+        worker.process.join(3)
+        assert time.monotonic() - before < 3
+        assert not worker.process.is_alive()
+    finally:
+        _stop_spawned_worker(worker)
+
+
+def test_prewarm_worker_cancel_is_one_terminal_and_does_not_consume_pipeline(tmp_path):
+    worker = _spawn_recording_worker(tmp_path, options={"zero_reads": True})
+    request = _prewarm_request(tmp_path, "cancel-me")
+    try:
+        worker.control.send(RecordingEvent(
+            worker.generation, request.warmup_id, "prewarm_ve", request))
+        assert _recv_worker_event(worker).kind == "ve_prewarm_started"
+        before = time.monotonic()
+        worker.control.send(RecordingEvent(
+            worker.generation, request.warmup_id, "cancel"))
+        terminal = _recv_worker_event(worker)
+        assert time.monotonic() - before < 2
+        assert terminal.kind == "ve_prewarm_terminal"
+        assert terminal.payload.stage == "cancelled"
+        assert terminal.payload.handles_released
+
+        second = _prewarm_request(tmp_path, "after-cancel", attempt=2)
+        worker.control.send(RecordingEvent(
+            worker.generation, second.warmup_id, "prewarm_ve", second))
+        assert _recv_worker_event(worker).kind == "ve_prewarm_started"
+        worker.control.send(RecordingEvent(
+            worker.generation, second.warmup_id, "cancel"))
+        assert _recv_worker_event(worker).kind == "ve_prewarm_terminal"
+        assert not worker.control.poll(.1)
+    finally:
+        _stop_spawned_worker(worker)
+
+
+def test_prewarm_worker_late_cancel_for_terminal_id_is_idempotent_and_reusable(tmp_path):
+    worker = _spawn_recording_worker(tmp_path)
+    request = _prewarm_request(tmp_path, "already-terminal")
+    try:
+        worker.control.send(RecordingEvent(
+            worker.generation, request.warmup_id, "prewarm_ve", request))
+        first_events = _recv_prewarm_terminal_sequence(worker)
+        assert first_events[0].kind == "ve_prewarm_started"
+        assert first_events[-1].kind == "ve_prewarm_terminal"
+
+        worker.control.send(RecordingEvent(
+            worker.generation, request.warmup_id, "cancel"))
+        assert not worker.control.poll(.15), "late cancel must be an idempotent no-op"
+
+        next_request = _prewarm_request(tmp_path, "still-healthy", attempt=2)
+        worker.control.send(RecordingEvent(
+            worker.generation, next_request.warmup_id, "prewarm_ve", next_request))
+        next_events = _recv_prewarm_terminal_sequence(worker)
+        assert next_events[0].kind == "ve_prewarm_started"
+        terminal = next_events[-1]
+        assert terminal.kind == "ve_prewarm_terminal" and terminal.payload.success
+        assert worker.process.is_alive()
+    finally:
+        _stop_spawned_worker(worker)
+
+
+def test_prewarm_worker_detach_fault_terminal_precedes_fatal_under_send_backpressure(tmp_path):
+    worker = _spawn_blocked_prewarm_worker(
+        tmp_path, generation=4,
+        options={"block_operation": "read_task_data",
+                 "fail_operation": "read_task_data"},
+    )
+    request = _prewarm_request(tmp_path, "detach-race")
+    ipc_release = Path(str(worker.trace_path) + ".ipc-release")
+    native_release = Path(str(worker.trace_path) + ".release")
+    try:
+        worker.control.send(RecordingEvent(
+            worker.generation, request.warmup_id, "prewarm_ve", request))
+        eventually(lambda: Path(str(worker.trace_path) + ".started-blocked").exists())
+        worker.control.send(RecordingEvent(
+            worker.generation, request.warmup_id, "cancel"))
+        # The adapter detach deadline is 0.5 seconds. Keep both send and native
+        # boundaries blocked until the worker has produced the race outcomes.
+        time.sleep(.7)
+        assert not worker.control.poll(.05)
+        ipc_release.touch()
+
+        started = _recv_worker_event(worker)
+        first = _recv_worker_event(worker)
+        second = _recv_worker_event(worker)
+        assert started.kind == "ve_prewarm_started"
+        assert [first.kind, second.kind] == [
+            "ve_prewarm_terminal", "worker_fatal",
+        ]
+        terminal = first.payload
+        assert first.generation == second.generation == terminal.generation == 4
+        assert terminal.warmup_id == request.warmup_id
+        assert not terminal.success and terminal.stage == "detach"
+        assert terminal.detail == "VE adapter detach confirmation timed out"
+        assert not terminal.handles_released
+        assert second.payload.stage == "detach"
+        assert not worker.control.poll(.1), "terminal/fatal pair must be exactly once"
+
+        native_release.touch()
+        worker.process.join(3)
+        try:
+            has_more = worker.control.poll(.2)
+        except (BrokenPipeError, OSError):
+            has_more = False
+        if has_more:
+            with pytest.raises(EOFError):
+                worker.control.recv()
+    finally:
+        ipc_release.touch()
+        native_release.touch()
+        _stop_spawned_worker(worker)
+
+
+def test_prewarm_worker_protocol_events_bind_warmup_identity_and_payload(tmp_path):
+    request = _prewarm_request(tmp_path, "wire-id")
+    command = RecordingEvent(3, request.warmup_id, "prewarm_ve", request)
+    started = RecordingEvent(
+        3, request.warmup_id, "ve_prewarm_started",
+        VePrewarmStarted(
+            request.warmup_id, 3, request.attempt, request.signature, 10.0))
+    progress_payload = VePrewarmProgress(
+        request.warmup_id, 3, request.attempt, request.signature,
+        10.0, 1, 10.1)
+    progress = RecordingEvent(
+        3, request.warmup_id, VE_PREWARM_PROGRESS, progress_payload)
+    detaching_payload = replace(
+        progress_payload, frames_per_channel=request.frames_per_channel)
+    detaching = RecordingEvent(
+        3, request.warmup_id, VE_PREWARM_DETACHING, detaching_payload)
+    wire = (command, started, progress, detaching)
+    assert pickle.loads(pickle.dumps(wire)) == wire
+
+    with pytest.raises(ValueError, match="warmup ID"):
+        RecordingEvent(3, "different", "prewarm_ve", request)
+    with pytest.raises(ValueError, match="payload"):
+        RecordingEvent(3, request.warmup_id, "ve_prewarm_terminal", request)
 
 
 def read_trace(path):
@@ -116,6 +1306,63 @@ def services(tmp_path, monkeypatch):
         assert service.closed.wait(12), service.diagnostics
         eventually(lambda: not any(thread.is_alive() for thread in service.threads))
         assert service.worker_pid is None
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("preview", ["none", "withheld"])
+@pytest.mark.parametrize("rate", [44100, 48000, 51200])
+def test_spawn_progress_without_preview_consumption(tmp_path, services, streaming, preview, rate):
+    service, received, trace_path = services()
+    events = Events()
+    if preview == "none":
+        events.callbacks = RecordingCallbacks(
+            result_ready=lambda session, audio: events.results.put(audio))
+    req = capture_request(tmp_path / "volts.wav", target_samples=12288, streaming=streaming, sample_rate=rate)
+    session = service.start(req, events.callbacks)
+    audio = events.results.get(timeout=10)
+    session.accept_result()
+    assert session.released.wait(5)
+    progress = [event for _, event in received if event.kind == "progress"]
+    assert progress, "ordinary and streaming capture must report progress without previews"
+    assert progress[-1].payload.frames == req.target_samples
+    assert all(event.generation == session.generation and event.request_id == req.request_id
+               and event.payload.generation == session.generation
+               and event.payload.request_id == req.request_id for event in progress)
+    counts = [event.payload.frames for event in progress]
+    assert counts == sorted(set(counts))
+    started = next(event.payload for _, event in received if event.kind == "started")
+    trace = [item for item in read_trace(trace_path) if item["operation"] != "owner_join"]
+    before = next(item["at"] for item in trace if item["operation"] == "start_task")
+    after = next(item["at"] for item in trace if item["operation"] == "verify_actual_sample_rate")
+    assert before <= started <= after
+    assert all(started <= event.payload.last_frame_at <= at
+               for at, event in received if event.kind == "progress")
+    assert len({item["thread_id"] for item in trace}) == 1
+    assert {item["pid"] for item in trace} == {session.worker_pid}
+    assert session.worker_pid != os.getpid()
+    assert not any(item["operation"] in ("stop_task", "clear_task", "close")
+                   for item in trace), "compatible native ownership remains retained"
+    expected = np.tile(np.array([8.25, 2.5], dtype=np.float32), (req.target_samples - 2, 1))
+    np.testing.assert_array_equal(audio.multi, expected)
+    saved, rate = sf.read(req.path, dtype="float32", always_2d=True)
+    assert rate == req.sample_rate and session.descriptor.raw_frames == req.target_samples
+    np.testing.assert_array_equal(saved, expected)
+    assert session.state == "completed"
+    assert events.failed.empty()
+    if not streaming or preview == "none":
+        assert events.preview.empty()
+    else:
+        assert events.preview.qsize() == 1  # Credit was never returned.
+        rolling = events.preview.get_nowait()
+        assert rolling.time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
+        assert 0 < rolling.sample_stop <= req.target_samples - 2
+        for waveform in rolling.waveforms:
+            assert waveform.time[-1] == 0.0
+            assert waveform.time[0] >= (
+                -MAIN_RECORDING_LIVE_WINDOW_SECONDS - PREVIEW_TIME_LOWER_BOUND_TOLERANCE
+            )
+        assert max(rolling.waveforms[0].amplitude) == 8.25
+        assert max(rolling.waveforms[1].amplitude) == 2.5
 
 
 @pytest.fixture
@@ -471,6 +1718,104 @@ def test_spawn_broken_preview_reducer_cannot_hide_progress_or_lose_audio(tmp_pat
     assert events.failed.empty()
     session.accept_result()
     assert session.released.wait(5)
+
+
+def test_spawn_all_preview_fault_phases_preserve_ve_progress_audio_and_success(
+        tmp_path, services):
+    def run(preview_fault):
+        options = dict(read_delay=.06)
+        if preview_fault is not None:
+            options["preview_fault"] = preview_fault
+        service, received, trace_path = services(options)
+        events = Events()
+        suffix = "baseline" if preview_fault is None else preview_fault
+        request = capture_request(
+            tmp_path / f"preview-{suffix}.wav",
+            target_samples=8192,
+            streaming=True,
+            preview_time_mode=PREVIEW_TIME_MODE_CUMULATIVE,
+        )
+        session = service.start(request, events.callbacks)
+        audio = events.results.get(timeout=10)
+
+        session_events = [
+            event for _, event in received
+            if event.request_id == request.request_id
+        ]
+        final_progress = [
+            event for event in session_events
+            if event.kind == "progress" and event.payload.frames == request.target_samples
+        ]
+        assert len(final_progress) == 1
+        assert session_events.index(final_progress[0]) < next(
+            index for index, event in enumerate(session_events)
+            if event.kind == "completed"
+        )
+        assert session._capture_deadline.complete
+        assert session._capture_deadline.snapshot().frames == request.target_samples
+
+        saved, rate = sf.read(request.path, dtype="float32", always_2d=True)
+        trace = read_trace(trace_path)
+        session.accept_result()
+        assert events.accepted.get(timeout=5) is audio
+        assert session.released.wait(5)
+        assert session.state == "completed"
+        assert events.failed.empty() and events.cancelled.empty()
+        return dict(
+            progress_frames=tuple(
+                event.payload.frames for event in session_events
+                if event.kind == "progress"
+            ),
+            multi=audio.multi.copy(),
+            mono=audio.mono.copy(),
+            descriptor=audio.descriptor,
+            saved=saved,
+            rate=rate,
+            trace=trace,
+        )
+
+    baseline = run(None)
+    for preview_fault in ("construct", "begin", "append", "snapshot"):
+        actual = run(preview_fault)
+        assert actual["progress_frames"][-1] == baseline["progress_frames"][-1] == 8192
+        np.testing.assert_array_equal(actual["multi"], baseline["multi"])
+        np.testing.assert_array_equal(actual["mono"], baseline["mono"])
+        np.testing.assert_array_equal(actual["saved"], baseline["saved"])
+        assert actual["rate"] == baseline["rate"] == 51200
+        assert (
+            actual["descriptor"].purpose,
+            actual["descriptor"].sample_rate,
+            actual["descriptor"].channels,
+            actual["descriptor"].raw_frames,
+            actual["descriptor"].final_frames,
+            actual["descriptor"].metadata_appended,
+            actual["descriptor"].handles_released,
+            actual["descriptor"].cleanup_paths,
+        ) == (
+            baseline["descriptor"].purpose,
+            baseline["descriptor"].sample_rate,
+            baseline["descriptor"].channels,
+            baseline["descriptor"].raw_frames,
+            baseline["descriptor"].final_frames,
+            baseline["descriptor"].metadata_appended,
+            baseline["descriptor"].handles_released,
+            baseline["descriptor"].cleanup_paths,
+        )
+        preview_trace = [
+            item for item in actual["trace"]
+            if item["operation"].startswith("preview_")
+        ]
+        assert sum(item["operation"] == "preview_session_construct" for item in preview_trace) == 1
+        assert next(
+            item for item in preview_trace
+            if item["operation"] == "preview_session_construct"
+        )["rolling_window_seconds"] is None
+        assert any(
+            item["operation"] == "preview_fault"
+            and item["phase"] == preview_fault
+            for item in preview_trace
+        )
+        assert not any(item["operation"] == "preview_fallback" for item in preview_trace)
 
 
 def test_spawn_progress_rate_is_bounded_and_final_is_forced(tmp_path, services):

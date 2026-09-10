@@ -25,6 +25,13 @@ from consts.recording_preview_consts import (
 from consts.ve3668n_consts import VE_BACKEND
 
 
+VE_PREWARM_COMMAND = "prewarm_ve"
+VE_PREWARM_STARTED = "ve_prewarm_started"
+VE_PREWARM_PROGRESS = "ve_prewarm_progress"
+VE_PREWARM_DETACHING = "ve_prewarm_detaching"
+VE_PREWARM_TERMINAL = "ve_prewarm_terminal"
+
+
 @dataclass(frozen=True)
 class FrozenConfig(Mapping):
     """Picklable deep snapshot without mutable references to caller configuration."""
@@ -386,6 +393,158 @@ def _acquisition_signature(value):
 
 
 @dataclass(frozen=True)
+class VePrewarmRequest:
+    """Frozen, no-file request for one half-second VE acquisition attempt."""
+    warmup_id: str
+    device: Mapping
+    channels: tuple[int, ...]
+    sample_rate: int
+    frames_per_channel: int
+    attempt: int
+
+    @classmethod
+    def create(cls, warmup_id, device, channels, sample_rate, *, attempt):
+        rate = validate_sample_rate(sample_rate)
+        selected = validate_physical_channels(channels)
+        return cls(warmup_id, device, selected, rate,
+                   max(1, math.ceil(rate * 0.5)), attempt)
+
+    def __post_init__(self):
+        if type(self.warmup_id) is not str or not self.warmup_id:
+            raise ValueError("warmup_id is required")
+        if self.attempt not in (1, 2) or type(self.attempt) is not int:
+            raise ValueError("attempt must be 1 or 2")
+        rate = validate_sample_rate(self.sample_rate)
+        channels = validate_physical_channels(self.channels)
+        snapshot = _device(self.device, channels, "input")
+        if snapshot.get("backend") != VE_BACKEND:
+            raise ValueError("VE prewarm requires the vkinging backend")
+        if snapshot["input_config"]["sample_rate"] != rate:
+            raise ValueError("sample_rate must match device.input_config.sample_rate")
+        expected_frames = max(1, math.ceil(rate * 0.5))
+        if (type(self.frames_per_channel) is not int
+                or self.frames_per_channel != expected_frames):
+            raise ValueError("frames_per_channel must equal half the sample rate")
+        object.__setattr__(self, "device", FrozenConfig.snapshot(snapshot))
+        object.__setattr__(self, "channels", channels)
+
+    @property
+    def target_samples(self):
+        return self.frames_per_channel
+
+    @property
+    def signature(self):
+        return _acquisition_signature((
+            VE_BACKEND, self.device["machine_id"], self.channels, self.sample_rate))
+
+
+@dataclass(frozen=True)
+class VePrewarmStarted:
+    """Authenticated native adapter start boundary for one prewarm attempt."""
+    warmup_id: str
+    generation: int
+    attempt: int
+    signature: tuple
+    started_at: float
+
+    def __post_init__(self):
+        if type(self.warmup_id) is not str or not self.warmup_id:
+            raise ValueError("warmup_id is required")
+        _integer("generation", self.generation, 1)
+        if self.attempt not in (1, 2) or type(self.attempt) is not int:
+            raise ValueError("attempt must be 1 or 2")
+        object.__setattr__(self, "signature", _acquisition_signature(self.signature))
+        _monotonic_time("started_at", self.started_at)
+
+
+@dataclass(frozen=True)
+class VePrewarmProgress:
+    """Authenticated cumulative per-channel progress for one prewarm attempt."""
+    warmup_id: str
+    generation: int
+    attempt: int
+    signature: tuple
+    started_at: float
+    frames_per_channel: int
+    observed_at: float
+
+    def __post_init__(self):
+        if type(self.warmup_id) is not str or not self.warmup_id:
+            raise ValueError("warmup_id is required")
+        _integer("generation", self.generation, 1)
+        if self.attempt not in (1, 2) or type(self.attempt) is not int:
+            raise ValueError("attempt must be 1 or 2")
+        signature = _acquisition_signature(self.signature)
+        object.__setattr__(self, "signature", signature)
+        _monotonic_time("started_at", self.started_at)
+        _integer("frames_per_channel", self.frames_per_channel)
+        target = max(1, math.ceil(signature[3] * 0.5))
+        if self.frames_per_channel > target:
+            raise ValueError("prewarm progress exceeds its per-channel target")
+        _monotonic_time("observed_at", self.observed_at)
+        if self.observed_at < self.started_at:
+            raise ValueError("prewarm observation precedes native start")
+
+
+@dataclass(frozen=True)
+class VePrewarmResult:
+    """Structured worker terminal preserving a native first cause verbatim."""
+    warmup_id: str
+    generation: int
+    attempt: int
+    signature: tuple
+    success: bool
+    stage: str
+    code: int | None
+    detail: str
+    frames_per_channel: int
+    handles_released: bool
+    diagnostics: tuple[str, ...]
+    lifecycle_counts: VeLifecycleCounts
+
+    def __post_init__(self):
+        if type(self.warmup_id) is not str or not self.warmup_id:
+            raise ValueError("warmup_id is required")
+        _integer("generation", self.generation, 1)
+        if self.attempt not in (1, 2) or type(self.attempt) is not int:
+            raise ValueError("attempt must be 1 or 2")
+        signature = _acquisition_signature(self.signature)
+        object.__setattr__(self, "signature", signature)
+        if type(self.success) is not bool:
+            raise ValueError("success must be a boolean")
+        if type(self.stage) is not str or not self.stage:
+            raise ValueError("stage is required")
+        if self.code is not None and type(self.code) is not int:
+            raise ValueError("code must be an integer or None")
+        if type(self.detail) is not str:
+            raise ValueError("detail must be a string")
+        _integer("frames_per_channel", self.frames_per_channel)
+        if type(self.handles_released) is not bool:
+            raise ValueError("handles_released must be a boolean")
+        if (type(self.diagnostics) is not tuple
+                or any(type(item) is not str for item in self.diagnostics)):
+            raise ValueError("diagnostics must be a tuple of strings")
+        if not isinstance(self.lifecycle_counts, VeLifecycleCounts):
+            raise ValueError("lifecycle_counts must be a VeLifecycleCounts snapshot")
+        VeLifecycleCounts.__post_init__(self.lifecycle_counts)
+        target_frames = max(1, math.ceil(signature[3] * 0.5))
+        if self.success:
+            if self.stage != "completed":
+                raise ValueError("successful prewarm stage must be completed")
+            if self.code is not None or self.detail:
+                raise ValueError("successful prewarm cannot carry a native error")
+            if not self.handles_released:
+                raise ValueError("successful prewarm must release its adapter handles")
+            if self.frames_per_channel < target_frames:
+                raise ValueError("successful prewarm must meet its frame target")
+        else:
+            if self.stage == "completed":
+                raise ValueError("failed prewarm stage cannot be completed")
+            if not self.detail:
+                raise ValueError("failed prewarm detail is required")
+
+
+@dataclass(frozen=True)
 class VeReleaseOutcome:
     generation: int
     released_signature: tuple | None
@@ -432,7 +591,9 @@ class RecordingEvent:
         if self.kind not in ("start", "cancel", "preview_ack", "result_ack", "shutdown",
                              "ready", "started", "finalizing", "preview", "progress",
                              "completed", "failed", "cancelled", "capture_slot_released",
-                             "release_ve", "ve_released", "ve_release_failed", "worker_fatal"):
+                             "release_ve", "ve_released", "ve_release_failed", "worker_fatal",
+                             VE_PREWARM_COMMAND, VE_PREWARM_STARTED, VE_PREWARM_PROGRESS,
+                             VE_PREWARM_DETACHING, VE_PREWARM_TERMINAL):
             raise ValueError("unknown recording event kind")
         if (self.kind in ("release_ve", "ve_released", "ve_release_failed", "worker_fatal")
                 and self.request_id != ""):
@@ -443,13 +604,28 @@ class RecordingEvent:
                           "capture_slot_released": CaptureSlotReleased,
                           "ve_released": VeReleaseOutcome,
                           "ve_release_failed": VeReleaseOutcome,
-                          "worker_fatal": WorkerFatal}
+                          "worker_fatal": WorkerFatal,
+                          VE_PREWARM_COMMAND: VePrewarmRequest,
+                          VE_PREWARM_STARTED: VePrewarmStarted,
+                          VE_PREWARM_PROGRESS: VePrewarmProgress,
+                          VE_PREWARM_DETACHING: VePrewarmProgress,
+                          VE_PREWARM_TERMINAL: VePrewarmResult}
         expected = typed_payloads.get(self.kind)
         if expected is not None:
             if not isinstance(self.payload, expected):
                 raise ValueError(f"{self.kind} payload must match its type and session")
-            if expected in (CaptureSlotReleased, VeReleaseOutcome, WorkerFatal):
+            if expected in (CaptureSlotReleased, VeReleaseOutcome, WorkerFatal,
+                            VePrewarmRequest, VePrewarmStarted, VePrewarmProgress,
+                            VePrewarmResult):
                 expected.__post_init__(self.payload)
+            if expected in (VePrewarmRequest, VePrewarmStarted,
+                            VePrewarmProgress, VePrewarmResult):
+                if self.request_id != self.payload.warmup_id:
+                    raise ValueError(f"{self.kind} warmup ID must match its event")
+            if (self.kind == VE_PREWARM_DETACHING
+                    and self.payload.frames_per_channel != max(
+                        1, math.ceil(self.payload.signature[3] * 0.5))):
+                raise ValueError("VE prewarm detaching requires its full frame target")
             payload_request_id = getattr(self.payload, "request_id", self.request_id)
             if payload_request_id != self.request_id:
                 raise ValueError(f"{self.kind} payload must match its type and session")
