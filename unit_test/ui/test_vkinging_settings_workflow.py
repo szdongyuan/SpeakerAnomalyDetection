@@ -136,8 +136,8 @@ def test_discovery_queue_edit_shared_save_condition_capture(
 
         def decide_shared(dialog):
             shown.append(dialog.details.toPlainText())
-            assert "First／Port／A" in shown[-1] and "Second／Port／A" in shown[-1]
-            assert "First／Port／B" not in shown[-1]
+            assert "First/Port/A" in shown[-1] and "Second/Port/A" in shown[-1]
+            assert "First/Port/B" not in shown[-1]
             button = dialog.save_button if next(decisions) else dialog.cancel_button
             QTimer.singleShot(0, button.click)
             return real_exec(dialog)
