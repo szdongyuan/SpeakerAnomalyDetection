@@ -2,6 +2,8 @@ import copy
 import json
 
 import pytest
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QPushButton
 
 from base.load_config import LoadUiConfig
@@ -271,15 +273,72 @@ def test_dialog_long_list_and_incomplete_details_are_readable(editor):
     assert "Condition 100" in dialog.details.toPlainText()
     assert str(products) not in dialog.details.toPlainText()
     assert dialog.details.verticalScrollBar().maximum() > 0
-    assert dialog.save_button.text() == "保存并影响以上工况"
+    assert dialog.save_button.text() == "确认"
     assert dialog.cancel_button.text() == "取消"
     dialog.reject()
 
     (products / "one.json").write_text("{", encoding="utf-8")
     dialog = SharedQueueSaveDialog(str(target), window.reference_scanner.find_references(str(target)))
-    assert "one.json" in dialog.details.toPlainText()
-    assert "未列出的工况" in dialog.save_button.text()
+    dialog.show()
+    QApplication.processEvents()
+    assert dialog.details.toPlainText() == ""
+    assert not dialog.details.isVisible()
+    assert "未列出的工况" in dialog.text()
+    assert "one.json" in dialog.toolTip()
     dialog.reject()
+
+
+def test_dialog_paths_deduplicate_saved_draft_but_keep_renames(editor):
+    from ui.shared_queue_save_dialog import SharedQueueSaveDialog
+    window, target, _, products, _ = editor
+    saved = project("Q", "Q", name="<b>Product</b>")
+    saved["test_groups"][0]["test_conditions"][1]["condition_name"] = "A"
+    write_json(products / "one.json", saved)
+    draft = copy.deepcopy(saved)
+    draft["test_groups"][0]["test_conditions"][1]["condition_name"] = "Renamed"
+    result = window.reference_scanner.find_references(str(target), drafts=(
+        QueueReferenceDraft(draft, products / "one.json"),))
+    dialog = SharedQueueSaveDialog(str(target), result)
+    assert dialog.details.toPlainText().splitlines() == [
+        "<b>Product</b>/Port/A", "<b>Product</b>/Port/Renamed"]
+    assert dialog.informativeText() == "此队列的修改将同时影响以上所有工况。建议另存为后重新选择。"
+    assert len(result.references) == 2
+    dialog.close()
+
+
+@pytest.mark.parametrize("action", ["confirm", "cancel", "enter", "escape", "close"])
+@pytest.mark.parametrize("incomplete", [False, True])
+def test_real_shared_message_decision_controls_queue_write(editor, action, incomplete):
+    from ui.shared_queue_save_dialog import SharedQueueSaveDialog
+    window, target, registry, products, _ = editor
+    if incomplete:
+        (products / "one.json").write_text("{", encoding="utf-8")
+    before = target.read_bytes(), registry.read_bytes()
+    change(window)
+    window.confirm_shared_save = window._confirm_shared_save
+    window.show()
+    observed = []
+
+    def decide():
+        dialog = QApplication.activeModalWidget()
+        observed.append(isinstance(dialog, SharedQueueSaveDialog))
+        if action == "confirm":
+            QTest.mouseClick(dialog.save_button, Qt.LeftButton)
+        elif action == "cancel":
+            QTest.mouseClick(dialog.cancel_button, Qt.LeftButton)
+        elif action == "close":
+            dialog.close()
+        else:
+            QTest.keyClick(dialog, Qt.Key_Return if action == "enter" else Qt.Key_Escape)
+
+    QTimer.singleShot(0, decide)
+    window.ok_btn_clicked()
+    assert observed == [True]
+    assert (target.read_bytes() != before[0]) is (action == "confirm")
+    assert registry.read_bytes() == before[1]
+    if action != "confirm":
+        assert window.dirty and window.isVisible()
+        assert window.select_list.config[0].detail["sample_rate"] == 48000
 
 
 def test_auto_analysis_checkbox_marks_shared_draft_dirty(editor):

@@ -191,7 +191,7 @@ class AnalysisModelSelect(ConfigDialogBase):
             self._save_queue(self.using_config_path, explicit=False)
 
     def _confirm_shared_save(self, target_path, result):
-        return SharedQueueSaveDialog(target_path, result, self).exec_() == QDialog.Accepted
+        return SharedQueueSaveDialog(target_path, result, self).exec_() == QMessageBox.Ok
 
     def _save_queue(self, target_path, *, explicit, activate_default=False):
         """The only queue write boundary; cancellation leaves the draft intact."""
