@@ -122,40 +122,29 @@ def test_record_only_callback_emits_queue_ready_for_processor():
     fake_sign.stream_audio_queue_ready_signal.emit.assert_called_once_with(processor)
 
 
-def test_monitored_duplex_callback_emits_queue_ready_for_processor():
+def test_legacy_recording_dictionary_ignores_monitor_and_emits_input_queue():
+    from base.play_and_record import stream_record_without_play
     created_streams = []
-
     def create_stream(**kwargs):
         stream = _FakeInputStream(**kwargs)
         created_streams.append(stream)
         return stream
-
-    processor = StreamingAudioProcessor()
     fake_sign = _fake_streaming_signals()
-
     with (
         mock.patch("base.streaming_audio_processor.sign", fake_sign),
-        mock.patch("base.streaming_audio_processor.sd.Stream", side_effect=create_stream),
+        mock.patch("base.streaming_audio_processor.sd.InputStream", side_effect=create_stream),
+        mock.patch("base.streaming_audio_processor.sd.Stream", side_effect=AssertionError("monitor output")),
+        mock.patch("base.streaming_audio_processor.sd.OutputStream", side_effect=AssertionError("monitor output")),
     ):
-        code, _ = processor.start_streaming_rec(
-            sample_rate=44100,
-            target_samples=10,
-            device={"index": 7, "max_input_channels": 1},
-            input_channels=[0],
-            output_device={"index": 8, "max_output_channels": 2},
-            output_channels=[0, 1],
-            monitor_playback=True,
-        )
-        callback = created_streams[0].kwargs["callback"]
-        callback(
-            np.array([[1.0], [2.0]], dtype=np.float32),
-            np.empty((2, 2), dtype=np.float32),
-            2,
-            None,
-            None,
-        )
-
-    assert code == error_code.OK
+        processor, rate = stream_record_without_play(
+            {"sample_rate": 44100, "num_frames": 10,
+             "device": {"index": 7, "max_input_channels": 1}, "input_channels": [0],
+             "monitor_playback": True, "monitor_gain_db": "corrupt",
+             "monitor_fade_in_samples": {}, "output_device": None}, "unused.wav", {})
+        created_streams[0].kwargs["callback"](
+            np.array([[1.0], [2.0]], dtype=np.float32), 2, None, None)
+        processor.stop_streaming()
+    assert rate == 44100
     fake_sign.stream_audio_queue_ready_signal.emit.assert_called_once_with(processor)
 
 
@@ -216,21 +205,14 @@ def test_cleanup_attempts_all_owned_operations_when_input_stop_fails(
         stop=failing_input_stop,
         close=lambda: events.append("input_close"),
     )
-    processor.output_stream = SimpleNamespace(
-        stop=lambda: events.append("output_stop"),
-        close=lambda: events.append("output_close"),
-    )
 
     processor.stop_streaming()
 
     assert events == [
         "input_stop",
         "input_close",
-        "output_stop",
-        "output_close",
     ]
     assert processor.stream is None
-    assert processor.output_stream is None
     assert any(
         "input stop failed" in call.args[0]
         for call in isolated_logger.error.call_args_list
@@ -464,26 +446,8 @@ def test_stream_open_failure_resets_recording_state():
     fake_sign.stream_audio_recording_finished_signal.emit.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    ("monitor_playback", "stream_factory_name", "extra_kwargs"),
-    [
-        (False, "InputStream", {}),
-        (
-            True,
-            "Stream",
-            {
-                "output_device": {"index": 8, "max_output_channels": 2},
-                "output_channels": [0, 1],
-            },
-        ),
-    ],
-    ids=["input", "duplex"],
-)
-def test_stream_start_failure_synchronously_cleans_partial_stream_without_messages(
-    monitor_playback,
-    stream_factory_name,
-    extra_kwargs,
-):
+def test_stream_start_failure_synchronously_cleans_partial_stream_without_messages():
+    stream_factory_name = "InputStream"
     events = []
     fake_sign = _fake_streaming_signals()
     processor = StreamingAudioProcessor()
@@ -512,8 +476,6 @@ def test_stream_start_failure_synchronously_cleans_partial_stream_without_messag
             target_samples=10,
             device={"index": 7, "max_input_channels": 1},
             input_channels=[0],
-            monitor_playback=monitor_playback,
-            **extra_kwargs,
         )
 
     assert code == error_code.INVALID_RECORD

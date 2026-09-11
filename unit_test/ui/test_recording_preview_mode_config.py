@@ -60,7 +60,6 @@ def test_soundcard_visibility_tracks_effective_preview_without_resetting_choice(
     window.preview_time_mode_combo.setCurrentIndex(
         window.preview_time_mode_combo.findData(PREVIEW_TIME_MODE_CUMULATIVE)
     )
-    window.monitor_checkbox.setChecked(True)
     assert not window.preview_time_mode_label.isHidden()
 
     window.streaming_recording_checkbox.setChecked(False)
@@ -71,7 +70,7 @@ def test_soundcard_visibility_tracks_effective_preview_without_resetting_choice(
     assert window.preview_time_mode_combo.currentData() == PREVIEW_TIME_MODE_CUMULATIVE
 
 
-def test_soundcard_preserves_persisted_monitoring_only_state_on_open_and_save(ui_qapp):
+def test_soundcard_ignores_persisted_monitoring_state_on_open_and_save(ui_qapp):
     window = _soundcard_window(
         {
             "total_time": 2.0,
@@ -83,13 +82,12 @@ def test_soundcard_preserves_persisted_monitoring_only_state_on_open_and_save(ui
         }
     )
 
-    assert window.monitor_checkbox.isChecked() is True
-    assert not window.preview_time_mode_label.isHidden()
+    assert not hasattr(window, "monitor_checkbox")
+    assert window.preview_time_mode_label.isHidden()
 
     window.on_click_ok_btn()
 
-    assert window.final_data["monitor_playback"] is True
-    assert window.final_data["monitor_gain_db"] == 4.5
+    assert not any(key.startswith("monitor_") for key in window.final_data)
     assert window.final_data["use_streaming_recording"] is False
     assert (
         window.final_data[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY]
@@ -97,7 +95,7 @@ def test_soundcard_preserves_persisted_monitoring_only_state_on_open_and_save(ui
     )
 
 
-def test_soundcard_explicit_streaming_toggle_clears_monitor_but_preserves_mode(ui_qapp):
+def test_soundcard_explicit_streaming_toggle_preserves_mode_with_legacy_monitor(ui_qapp):
     window = _soundcard_window(
         {
             "total_time": 2.0,
@@ -109,10 +107,10 @@ def test_soundcard_explicit_streaming_toggle_clears_monitor_but_preserves_mode(u
     )
 
     window.streaming_recording_checkbox.setChecked(True)
-    assert window.monitor_checkbox.isChecked() is True
+    assert not hasattr(window, "monitor_checkbox")
     window.streaming_recording_checkbox.setChecked(False)
 
-    assert window.monitor_checkbox.isChecked() is False
+    assert not hasattr(window, "monitor_checkbox")
     assert window.preview_time_mode_label.isHidden()
 
     window.streaming_recording_checkbox.setChecked(True)
@@ -152,7 +150,7 @@ def test_ve_ignores_legacy_monitor_state_when_streaming_preview_is_disabled(ui_q
         mic=device_info(),
     )
 
-    assert window.monitor_checkbox.isChecked() is True
+    assert not hasattr(window, "monitor_checkbox")
     assert window.preview_time_mode_label.isHidden()
 
 
@@ -236,7 +234,9 @@ def test_closing_repair_dialog_does_not_mutate_invalid_input(ui_qapp):
 def test_operation_sequence_load_defaults_only_when_field_is_missing(
     ui_qapp, tmp_path, persisted, expected
 ):
-    detail = {"total_time": 1.0, "sample_rate": 48000}
+    detail = {"total_time": 1.0, "sample_rate": 48000, "monitor_playback": True,
+              "monitor_gain_db": "corrupt", "monitor_output_channel": {},
+              "monitor_fade_in_ms": "corrupt"}
     if persisted is not None:
         detail[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] = persisted
     path = tmp_path / "queue.json"
@@ -250,6 +250,7 @@ def test_operation_sequence_load_defaults_only_when_field_is_missing(
     options = OptionList(logger, str(path))
 
     assert options.config[0].detail[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] == expected
+    assert not any(key.startswith("monitor_") for key in options.config[0].detail)
 
 
 @pytest.mark.parametrize("invalid_detail", [None, []])
@@ -290,6 +291,7 @@ def test_new_recording_sequence_contains_default_mode(ui_qapp):
     options = OptionList(logger, "")
 
     options.set_sound_item("录制音频")
+    assert not any(key.startswith("monitor_") for key in options.config[0].detail)
 
     assert (
         options.config[0].detail[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY]

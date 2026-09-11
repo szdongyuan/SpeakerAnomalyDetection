@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +8,7 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QComboBox, QLabel, QMessageBox
 
 from base.load_config import LoadUiConfig
+from base.sequence_queue_references import SequenceQueueReferenceScanner
 from base.product_test_project_config import ProductTestProjectConfigManager
 from consts import ui_style_const
 from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
@@ -33,6 +35,47 @@ def make_manager(tmp_path):
         str(program_dir / "program_registry.json"),
         str(queue_dir / "sequence_config_registry.json"),
     )
+
+
+def test_contextual_queue_editor_collects_visible_draft_without_saving(app, tmp_path):
+    manager = make_manager(tmp_path)
+    queue = register_queue(manager)
+    data = project_data(tmp_path)
+    success, file_name = manager.save_project(None, data)
+    assert success
+    calls = []
+    dialog = ProductTestProjectConfigDialog(
+        manager, contextual_queue_editor_callback=lambda path, provider: calls.append((path, provider))
+    )
+    dialog._show_project(data, file_name)
+    before = Path(manager.program_dir, file_name).read_bytes()
+    dialog.project_name_input.setText("Renamed draft")
+    dialog.condition_table.item(0, 1).setText("Visible draft condition")
+    _, button = dialog._queue_controls_for_row(0)
+    assert button.isEnabled()
+    dialog._edit_queue_for_button(button)
+    path, provider = calls[0]
+    first = provider()[0]
+    assert first.product_path == os.path.join(manager.program_dir, file_name)
+    assert first.data["project_name"] == "Renamed draft"
+    assert first.data["test_groups"][0]["test_conditions"][0]["condition_name"] == "Visible draft condition"
+    assert provider()[0] is first
+    assert Path(manager.program_dir, file_name).read_bytes() == before
+    scanner = SequenceQueueReferenceScanner(manager.program_dir, manager.registry_path, manager.queue_registry_path)
+    result = scanner.find_references(path, drafts=provider())
+    assert len(result.references) == 2
+    assert all(ref.sources == {"saved", "draft"} for ref in result.references)
+    dialog._show_project(data, None)
+    unsaved = provider()[0]
+    assert unsaved.product_path is None
+    assert provider()[0] is unsaved
+    other = ProductTestProjectConfigDialog(manager)
+    other._show_project(data, None)
+    assert other._queue_reference_drafts()[0] is not unsaved
+    other._dirty = False
+    other.close()
+    dialog._dirty = False
+    dialog.close()
 
 
 def make_queue_config(duration=600.0):
@@ -629,7 +672,7 @@ def test_project_condition_display_uses_group_and_composite_key():
     recent_conditions = RecentSessionPanel._normalize_conditions(conditions)
 
     assert waveform_conditions == [
-        {"key": "group_1:condition_1", "name": "USB-C输出口 / 档位1"}
+        {"key": "group_1:condition_1", "name": "USB-C输出口 / 档位1", "test_queue": "低噪声基础测试"}
     ]
     assert recent_conditions == [
         {"key": "group_1:condition_1", "name": "USB-C输出口 / 档位1"}

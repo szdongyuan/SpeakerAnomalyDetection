@@ -1,4 +1,5 @@
 import os
+from base.sequence_queue_references import QueueReferenceDraft
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
@@ -53,10 +54,12 @@ class _RefreshingQueueComboBox(QComboBox):
 class ProductTestProgramConfigDialog(ConfigDialogBase):
     programs_changed = pyqtSignal()
 
-    def __init__(self, manager=None, queue_editor_callback=None, parent=None):
+    def __init__(self, manager=None, queue_editor_callback=None, parent=None, *, contextual_queue_editor_callback=None):
         super().__init__(parent)
         self.manager = manager or ProductTestProgramConfigManager()
         self.queue_editor_callback = queue_editor_callback
+        self.contextual_queue_editor_callback = contextual_queue_editor_callback
+        self._queue_reference_draft = None
         self.current_file = None
         self.queue_catalog = {}
         self.trigger_states = []
@@ -451,7 +454,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             tooltip = "引用的测试队列不存在，请新建或重新选择"
         edit_button.setText(button_text)
         edit_button.setToolTip(tooltip)
-        edit_button.setEnabled(callable(self.queue_editor_callback))
+        edit_button.setEnabled(self._has_queue_editor())
 
     def _on_config_activated(self, index):
         file_name = self.config_combobox.itemData(index)
@@ -530,8 +533,8 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         queue_name = self._combobox_value(self._queue_combobox(row))
         queue_info = self.queue_catalog.get(queue_name, {})
         queue_path = queue_info.get("path")
-        if callable(self.queue_editor_callback):
-            self.queue_editor_callback(queue_path)
+        if self._has_queue_editor():
+            self._open_queue_editor(queue_path)
             self._refresh_queue_options()
 
     def _refresh_queue_options(self):
@@ -714,6 +717,24 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self.pdf_save_dir_input.setToolTip(
             os.path.abspath(os.path.normpath(effective_dir))
         )
+
+    def _has_queue_editor(self):
+        return callable(self.contextual_queue_editor_callback) or callable(self.queue_editor_callback)
+
+    def _queue_reference_drafts(self):
+        path = os.path.join(self.manager.program_dir, self.current_file) if self.current_file else None
+        if self._queue_reference_draft is None or self._queue_reference_draft.product_path != path:
+            self._queue_reference_draft = QueueReferenceDraft({}, product_path=path)
+        data = self.collect_program()
+        self._queue_reference_draft.data.clear()
+        self._queue_reference_draft.data.update(data)
+        return (self._queue_reference_draft,)
+
+    def _open_queue_editor(self, queue_path):
+        if callable(self.contextual_queue_editor_callback):
+            self.contextual_queue_editor_callback(queue_path, self._queue_reference_drafts)
+        elif callable(self.queue_editor_callback):
+            self.queue_editor_callback(queue_path)
 
     def collect_program(self):
         sub_configs = []

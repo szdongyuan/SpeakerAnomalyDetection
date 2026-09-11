@@ -345,7 +345,7 @@ def test_prewarm_terminate_boundary_kills_and_reports_ownership_uncertain_once(
 
 def test_prewarm_incompatible_retained_signature_releases_before_dispatch(
         monkeypatch, tmp_path):
-    old = ("vkinging", "old-machine", (0,), 51200)
+    old = ("vkinging", "old-machine", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     probe = _service_prewarm_probe(monkeypatch, tmp_path, retained=old)
     assert probe.command.kind == "release_ve"
     assert probe.service._pending_ve_prewarm.phase == "releasing"
@@ -370,7 +370,7 @@ def test_prewarm_release_admission_busy_creates_no_prewarms(monkeypatch, tmp_pat
 @pytest.mark.parametrize("death_confirmed", [True, False])
 def test_prewarm_prerequisite_release_failure_never_dispatches_capture(
         monkeypatch, tmp_path, death_confirmed):
-    old = ("vkinging", "old-machine", (0,), 51200)
+    old = ("vkinging", "old-machine", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     probe = _service_prewarm_probe(
         monkeypatch, tmp_path, retained=old, terminate_timeout=2)
     outcome = VeReleaseOutcome(1, old, ("clear task failed",))
@@ -394,7 +394,7 @@ def test_prewarm_prerequisite_release_failure_never_dispatches_capture(
 
 def test_prewarm_release_timeout_fires_at_five_seconds_and_is_not_busy_discard(
         monkeypatch, tmp_path):
-    old = ("vkinging", "old-machine", (0,), 51200)
+    old = ("vkinging", "old-machine", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     probe = _service_prewarm_probe(
         monkeypatch, tmp_path, retained=old, release_timeout=5)
     probe.clock.advance(4.999)
@@ -411,7 +411,7 @@ def test_prewarm_release_timeout_fires_at_five_seconds_and_is_not_busy_discard(
 
 def test_prewarm_release_timeout_without_confirmed_death_never_dispatches_attempt(
         monkeypatch, tmp_path):
-    old = ("vkinging", "old-machine", (0,), 51200)
+    old = ("vkinging", "old-machine", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     probe = _service_prewarm_probe(
         monkeypatch, tmp_path, retained=old,
         release_timeout=5, terminate_timeout=2)
@@ -521,7 +521,7 @@ def test_prewarm_terminal_attempt_or_signature_mismatch_retires_as_protocol_faul
 @pytest.mark.parametrize("failure", ["broken", "dead"])
 def test_prewarm_prerequisite_release_owner_loss_never_becomes_capture_retry(
         monkeypatch, tmp_path, failure):
-    old = ("vkinging", "old-machine", (0,), 51200)
+    old = ("vkinging", "old-machine", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     probe = _service_prewarm_probe(monkeypatch, tmp_path, retained=old)
     if failure == "broken":
         probe.service._dispatch(("broken", probe.worker, "release IPC closed"))
@@ -545,7 +545,7 @@ def test_prewarm_prerequisite_release_owner_loss_never_becomes_capture_retry(
 
 def test_prewarm_prerequisite_release_owner_loss_without_death_is_unsafe_terminal(
         monkeypatch, tmp_path):
-    old = ("vkinging", "old-machine", (0,), 51200)
+    old = ("vkinging", "old-machine", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     probe = _service_prewarm_probe(
         monkeypatch, tmp_path, retained=old, terminate_timeout=2)
     probe.service._dispatch(("broken", probe.worker, "release IPC closed"))
@@ -561,7 +561,7 @@ def test_prewarm_prerequisite_release_owner_loss_without_death_is_unsafe_termina
 @pytest.mark.parametrize("failure", ["malformed", "future", "service"])
 def test_prewarm_prerequisite_release_all_retirement_paths_are_release_failures(
         monkeypatch, tmp_path, failure):
-    old = ("vkinging", "old-machine", (0,), 51200)
+    old = ("vkinging", "old-machine", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     probe = _service_prewarm_probe(monkeypatch, tmp_path, retained=old)
     if failure == "malformed":
         event = object.__new__(RecordingEvent)
@@ -592,7 +592,7 @@ def test_prewarm_prerequisite_release_all_retirement_paths_are_release_failures(
 
 def test_prewarm_prerequisite_release_send_exception_cannot_hang_or_retry(
         monkeypatch, tmp_path):
-    old = ("vkinging", "old-machine", (0,), 51200)
+    old = ("vkinging", "old-machine", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     probe = _service_prewarm_probe(monkeypatch, tmp_path, retained=old)
     pending_release = probe.service._pending_ve_release
     pending_release.sent = False

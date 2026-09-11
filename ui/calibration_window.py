@@ -49,11 +49,12 @@ from consts.running_consts import DEFAULT_DIR
 class CalibrationWindow(QDialog):
 
     def __init__(self, input_device=None, input_channels=None, *, recording_bridge=None,
-                 ve_profile_store=None, ve_calibration_store=None):
+                 ve_profile_store=None, ve_calibration_store=None, ve_queue_config_provider=None):
         super().__init__()
         self.recording_bridge = recording_bridge
         self.ve_profile_store = ve_profile_store
         self.ve_calibration_store = ve_calibration_store
+        self.ve_queue_config_provider = ve_queue_config_provider
         self.input_device = input_device
         self.input_channels = list(input_channels or [])
         self.init_ui()
@@ -82,6 +83,7 @@ class CalibrationWindow(QDialog):
             recording_bridge=self.recording_bridge,
             ve_profile_store=self.ve_profile_store,
             ve_calibration_store=self.ve_calibration_store,
+            ve_queue_config_provider=self.ve_queue_config_provider,
         )
         self.input_cal_wnd.calibration_finished.connect(
             self._on_input_calibration_finished
@@ -654,11 +656,12 @@ class InputCalibration(QWidget):
     calibration_availability_changed = pyqtSignal()
 
     def __init__(self, input_device=None, input_channels=None, *, recording_bridge=None,
-                 ve_profile_store=None, ve_calibration_store=None):
+                 ve_profile_store=None, ve_calibration_store=None, ve_queue_config_provider=None):
         super().__init__()
         self.recording_bridge = recording_bridge
         self.ve_profile_store = ve_profile_store
         self.ve_calibration_store = ve_calibration_store
+        self.ve_queue_config_provider = ve_queue_config_provider
         self._ve_input = (input_device or {}).get("backend") == "vkinging"
         self._ve_capture_context = None
         self._ve_accepted_audio = None
@@ -754,6 +757,20 @@ class InputCalibration(QWidget):
             raise ValueError("VE 输入校准需要共享设备配置和校准存储")
         if not isinstance(self.input_device, Mapping):
             raise ValueError("VE 输入设备身份无效")
+        if self.ve_queue_config_provider is not None:
+            from base.ve3668n_recording_config import resolve_ve_recording_device
+
+            context = self._ve_capture_context
+            if context is not None:
+                # Active capture owns its complete config. Only live identity and
+                # channel availability remain subject to the stale-result checks.
+                return validate_device_snapshot({
+                    **self.input_device, "input_config": context.request.device["input_config"],
+                })
+            detail = self.ve_queue_config_provider()
+            fallback = (self.ve_profile_store.load(self.input_device, self.ve_calibration_store)
+                        if "sample_rate" not in detail else None)
+            return resolve_ve_recording_device(self.input_device, detail, fallback_profile=fallback)
         identity = calibration_fingerprint(self.input_device, 0, self.input_device.get("input_config"))
         try:
             self.ve_calibration_store.observe(self.input_device)
@@ -778,8 +795,9 @@ class InputCalibration(QWidget):
     def refresh_ve_calibration_state(self):
         """Refresh shared VE state without resetting selection or provenance.
 
-        The hardware profile is the only sampling-rate source. A rate-only
-        refresh neither writes calibration nor produces a recalibration popup.
+        The active queue supplies recording parameters; standalone calibration
+        uses the hardware profile. A rate-only refresh neither writes
+        calibration nor produces a recalibration popup.
         """
         if (not self._ve_input or self._recording_closed or self.streaming_processor is not None
                 or not self._can_start_recording_workflow()):
@@ -1367,7 +1385,7 @@ class InputCalibration(QWidget):
         # invalidation is sticky, even if an external editor restores the values.
         device = self._current_ve_device()
         if (not device["available"] or channel not in device["physical_channels"]
-                or current != expected
+                or (self.ve_queue_config_provider is None and current != expected)
                 or calibration_fingerprint(device, channel, device["input_config"]) != expected):
             raise ValueError("输入校准配置已变更，需重新校准")
 

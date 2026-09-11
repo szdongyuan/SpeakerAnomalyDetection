@@ -8,7 +8,7 @@ import json
 
 import pytest
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QDialog
+from PyQt5.QtWidgets import QDialog, QComboBox
 from PyQt5.QtCore import QPoint
 from PyQt5.QtWidgets import QMainWindow, QAction, QApplication, QLabel
 from PyQt5.QtTest import QTest
@@ -23,6 +23,7 @@ from base.recording_service import VePrewarmCompletion
 from unit_test.base.ve3668n_fakes import device_info
 from unit_test.base.test_ve3668n_stores import save_measurement
 from unit_test.base.test_ve3668n_hardware_selection import fake_soundcards
+from unit_test.ui.test_ve3668n_recording import host_factory, capture_audio, finish_ve_capture
 from ui.acquisition_config_window import RecordConfigWindow
 from consts.recording_preview_consts import (
     PREVIEW_TIME_MODE_CUMULATIVE,
@@ -112,23 +113,172 @@ def confirm(controller, ui_qapp, *devices):
     ui_qapp.processEvents()
 
 
-def test_panel_fixed_rates_actual_ains_and_input_without_speaker(controls, ui_qapp):
+
+def select_device(controller, machine_id):
+    model = controller.view.mic_device_table.model()
+    for row in range(model.rowCount()):
+        item = model.item(row)
+        if item.data(Qt.UserRole).get("machine_id") == machine_id:
+            if item.checkState() == Qt.Checked:
+                item.setCheckState(Qt.Unchecked)
+            model.item(row).setCheckState(Qt.Checked)
+            return
+    raise AssertionError(f"No discovered device {machine_id}")
+
+
+def test_driver_selects_vk_inventory_and_gates_channels(controls, ui_qapp):
+    controller = controls.create(hardware_ui.HardwareSelectionState(api_name="MME",
+        mic_device=controls.old_mic, mic_channels=[1], speaker_device=controls.speaker,
+        speaker_channels=[1, 0]))
+    view = controller.view
+    assert view.driver_combo.findData("vkinging") >= 0
+    assert view.findChildren(QComboBox) == [view.driver_combo]
+    view.driver_combo.setCurrentIndex(view.driver_combo.findData("vkinging"))
+    assert not view.mic_channel_table.isEnabled()
+    confirm(controller, ui_qapp, device_info(), device_info(machine_id="two", name="Second"))
+    table = view.mic_device_table.model()
+    assert table.rowCount() == 2
+    assert "test-machine-1" in table.item(0).text()
+    assert "Second" in table.item(1).text() and "two" in table.item(1).text()
+    assert view.mic_device_table.checked_payload() is None
+    assert view.mic_channel_table.model().rowCount() == 0
+    table.item(0).setCheckState(Qt.Checked)
+    assert view.mic_channel_table.isEnabled()
+    view.mic_channel_table.model().item(0).setCheckState(Qt.Checked)
+    table.item(1).setCheckState(Qt.Checked)
+    assert controller.model.state.mic_device["machine_id"] == "two"
+    assert controller.model.state.mic_channels == []
+    table.item(1).setCheckState(Qt.Unchecked)
+    assert view.mic_channel_table.model().rowCount() == 0
+    assert not view.mic_channel_table.isEnabled()
+    assert controller.model.state.mic_channels == []
+    assert not view.speaker_device_table.isEnabled()
+    assert controller.model.state.speaker_device == controls.speaker
+    assert controller.model.state.speaker_channels == [1, 0]
+
+
+def test_refresh_discards_unsaved_device_and_cancel_returns_entry_snapshot(controls, ui_qapp, monkeypatch):
+    initial = hardware_ui.HardwareSelectionState(api_name="MME", mic_device=controls.old_mic,
+        mic_channels=[1], speaker_device=controls.speaker, speaker_channels=[1, 0])
+    controller = controls.create(initial)
+    view = controller.view
+    view.driver_combo.setCurrentText("vkinging")
+    confirm(controller, ui_qapp)
+    select_device(controller, "test-machine-1")
+    view.mic_channel_table.model().item(0).setCheckState(Qt.Checked)
+    view.refresh_btn.click()
+    assert controller.model.state.mic_device is None
+    assert controller.model.state.mic_channels == []
+    assert not view.mic_channel_table.isEnabled()
+    confirm(controller, ui_qapp)
+    assert view.mic_device_table.checked_payload() is None
+    controller._on_ok_clicked()
+    assert view.result() != QDialog.Accepted and controls.warnings
+    monkeypatch.setattr(view, "on_exec", lambda: QDialog.Rejected)
+    assert controller.on_exec() == (False, controls.speaker, [1, 0], controls.old_mic, [1])
+    assert not controls.path.exists() and not controls.profiles.path.exists()
+
+
+def test_busy_deferred_discovery_cannot_override_after_driver_switch(controls, ui_qapp):
+    controller = controls.create(hardware_ui.HardwareSelectionState(api_name="MME",
+        mic_device=controls.old_mic, mic_channels=[1], speaker_device=controls.speaker))
+    view = controller.view
+    view.driver_combo.setCurrentText("vkinging")
+    controls.busy.value = True
+    confirm(controller, ui_qapp)
+    controls.busy.value = False
+    view.driver_combo.setCurrentText("MME")
+    controller._update_busy_state()
+    assert_old_soundcard_visible(controller, controls)
+    assert view.mic_channel_table.isEnabled()
+    assert view.speaker_device_table.isEnabled()
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_soundcard_refresh_updates_output_snapshot_or_clears_missing_device(controls, missing):
+    controller = controls.create(hardware_ui.HardwareSelectionState(api_name="MME",
+        mic_device=controls.old_mic, mic_channels=[1], speaker_device=controls.speaker,
+        speaker_channels=[1, 0]))
+    refreshed = {**controls.speaker, "index": 22}
+    controls.audio.devices["MME"]["output"] = [] if missing else [refreshed]
+
+    controller.view.refresh_btn.click()
+
+    expected = None if missing else refreshed
+    assert controller.view.speaker_device_table.checked_payload() == expected
+    assert controller.model.state.speaker_device == expected
+    assert controller.model.state.speaker_channels == ([] if missing else [1, 0])
+    assert not controls.defaults.calls
+    controller.view.ok_btn.click()
+    if missing:
+        assert controller.view.result() != QDialog.Accepted
+        assert controls.warnings and not controls.defaults.calls
+    else:
+        assert controller.view.result() == QDialog.Accepted
+        assert controls.defaults.calls == [(1, 22)]
+    assert controls.speaker["index"] == 2
+
+
+@pytest.mark.parametrize("missing", [False, True])
+@pytest.mark.parametrize("enter_from_soundcard", [False, True])
+@pytest.mark.parametrize("switch_back", [False, True])
+def test_vk_refresh_reconciles_output_identity_and_switchback_before_accept(
+        controls, ui_qapp, missing, enter_from_soundcard, switch_back):
+    from base import hardware_selection
+    hardware_selection.save_if_changed(controls.old_mic, controls.speaker, [1], [1, 0],
+        path=controls.path)
+    initial = hardware_ui.HardwareSelectionState(api_name="MME",
+        mic_device=controls.old_mic if enter_from_soundcard else device_info(),
+        mic_channels=[1] if enter_from_soundcard else [7, 1],
+        speaker_device=controls.speaker, speaker_channels=[1, 0])
+    controller = controls.create(initial)
+    view = controller.view
+    view.driver_combo.setCurrentText("vkinging")
+    confirm(controller, ui_qapp)
+    refreshed = {**controls.speaker, "index": 22}
+    controls.audio.devices["MME"]["output"] = [] if missing else [refreshed]
+
+    view.refresh_btn.click()
+    confirm(controller, ui_qapp)
+
+    expected = None if missing else refreshed
+    assert view.speaker_device_table.checked_payload() == expected
+    assert controller.model.state.speaker_device == expected
+    assert controller.model.state.speaker_channels == ([] if missing else [1, 0])
+    assert not view.speaker_device_table.isEnabled()
+    assert not controls.defaults.pair.writes and not controls.defaults.calls
+
+    if switch_back:
+        view.driver_combo.setCurrentText("MME")
+        assert view.speaker_device_table.isEnabled()
+        assert view.speaker_device_table.checked_payload() == expected
+        assert controller.model.state.speaker_device == expected
+        assert controller.model.state.mic_device == controls.old_mic
+        assert controller.model.state.mic_channels == [1]
+        view.driver_combo.setCurrentText("vkinging")
+        confirm(controller, ui_qapp)
+    select_device(controller, "test-machine-1")
+    view.mic_channel_table.model().item(0).setCheckState(Qt.Checked)
+    view.ok_btn.click()
+    assert view.result() == QDialog.Accepted
+    assert controls.defaults.pair.writes == ([] if missing else [(1, 22)])
+    assert not controls.defaults.calls
+    assert controls.speaker["index"] == 2
+
+
+def test_saved_device_restores_only_after_discovery_without_profile_write(controls, ui_qapp):
     controller = controls.create()
     panel = controller.view.ve_controls
-    combo = panel.sample_rate_combo
-    assert not combo.isEditable()
-    assert [combo.itemData(index) for index in range(combo.count())] == [44100, 48000, 51200]
-    assert all(type(combo.itemData(index)) is int for index in range(combo.count()))
-    assert "IEPE" in panel.fixed_label.text() and "±10" in panel.fixed_label.text()
+    assert controller.view.findChildren(QComboBox) == [controller.view.driver_combo]
     assert not controller.model.state.mic_device["available"]
+    assert controller.model.state.mic_channels == []
     confirm(controller, ui_qapp)
-    assert combo.currentData() == 51200
     table = controller.view.mic_channel_table.model()
     assert [table.item(i).data(Qt.UserRole) for i in range(table.rowCount())] == [7, 1]
     controller._on_ok_clicked()
     assert controller.view.result() == QDialog.Accepted
     assert controller.model.state.mic_channels == [7, 1]
-    assert controls.path.exists() and controls.profiles.path.exists()
+    assert controls.path.exists() and not controls.profiles.path.exists()
     assert panel.discovery.service.closed
 
 
@@ -162,9 +312,9 @@ def test_channel_click_order_and_open_boundary_do_not_sort_ve(controls, ui_qapp,
     assert controller.model.state.mic_channels == [7, 1]
     assert initial.mic_channels == []
     def inspect(self):
-        assert self.model.state.mic_channels == [7, 1]
+        assert self.model.state.mic_channels == []
         self.view.reject()
-        return False, None, [], self.model.state.mic_device, self.model.state.mic_channels
+        return False, None, [], self._initial_state.mic_device, self._initial_state.mic_channels
     monkeypatch.setattr(hardware_ui.HardwareSelectionController, "on_exec", inspect)
     result = hardware_ui.open_hardware_selection_window(mic_device=device, mic_channels=[7, 1],
         profile_store=controls.profiles, calibration_store=controls.calibrations,
@@ -173,60 +323,57 @@ def test_channel_click_order_and_open_boundary_do_not_sort_ve(controls, ui_qapp,
     assert hardware_ui._normalize_channel_indices([7, 1]) == [1, 7]
 
 
-def test_staged_rate_cancel_failure_and_ok_preserve_calibration(controls, ui_qapp, monkeypatch):
+def test_cancel_failure_and_ok_never_write_profile_or_calibration(controls, ui_qapp, monkeypatch):
     device = device_info()
-    controls.profiles.set_sample_rate(device, 51200, controls.calibrations)
+    controls.profiles.set_sample_rate(device, 48000, controls.calibrations)
     save_measurement(controls.calibrations, device, 7)
-    raw = controls.calibrations.path.read_bytes()
     before_profile = controls.profiles.path.read_bytes()
+    before_calibration = controls.calibrations.path.read_bytes()
+    def forbidden(*args):
+        raise AssertionError("Hardware selection must never write a profile")
+    monkeypatch.setattr(controls.profiles, "set_sample_rate", forbidden)
     initial = hardware_ui.HardwareSelectionState(mic_device=device, mic_channels=[7, 1])
     controller = controls.create(initial)
     confirm(controller, ui_qapp)
-    panel = controller.view.ve_controls
-    panel.sample_rate_combo.setCurrentIndex(panel.sample_rate_combo.findData(44100))
-    assert panel.selected_device["input_config"]["sample_rate"] == 44100
-    assert controls.profiles.path.read_bytes() == before_profile
-    assert initial.mic_device == device
     controller.view.reject()
-    assert controls.profiles.path.read_bytes() == before_profile and not controls.path.exists()
+    assert not controls.path.exists()
     controller = controls.create(initial)
     confirm(controller, ui_qapp)
-    panel = controller.view.ve_controls
-    panel.sample_rate_combo.setCurrentIndex(panel.sample_rate_combo.findData(48000))
     from base import hardware_selection
     write = hardware_selection._atomic_write_json
     monkeypatch.setattr(hardware_selection, "_atomic_write_json", lambda *args: False)
     controller._on_ok_clicked()
     assert controller.view.result() != QDialog.Accepted
-    assert controls.warnings and "未保存" in panel.diagnostic_label.text()
-    assert controls.profiles.path.read_bytes() == before_profile
-    assert initial.mic_device == device and not controls.path.exists()
+    assert controls.warnings and "未保存" in controller.view.ve_status_label.text()
+    assert not controls.path.exists()
     monkeypatch.setattr(hardware_selection, "_atomic_write_json", write)
     controller._on_ok_clicked()
     assert controller.view.result() == QDialog.Accepted
-    assert controls.profiles.load(device, controls.calibrations)["sample_rate"] == 48000
-    assert controls.calibrations.path.read_bytes() == raw
+    assert controller.model.state.mic_device["input_config"] == device["input_config"]
+    assert controls.profiles.path.read_bytes() == before_profile
+    assert controls.calibrations.path.read_bytes() == before_calibration
+    assert initial.mic_device == device
 
 
-def test_multiple_device_rates_and_output_driver_are_independent(controls, ui_qapp):
+def test_switching_devices_keeps_discovery_snapshots_without_reading_profiles(controls, ui_qapp, monkeypatch):
+    from unittest.mock import Mock
+
     one, two = device_info(), device_info(machine_id="two", name="Dev2")
     controls.profiles.set_sample_rate(one, 44100, controls.calibrations)
     controls.profiles.set_sample_rate(two, 48000, controls.calibrations)
+    before = controls.profiles.path.read_bytes()
+    load = Mock(wraps=controls.profiles.load)
+    monkeypatch.setattr(controls.profiles, "load", load)
     controller = controls.create()
     confirm(controller, ui_qapp, one, two)
-    panel = controller.view.ve_controls
-    assert panel.sample_rate_combo.currentData() == 44100
-    controller.view.driver_combo.setCurrentText("ASIO")
-    assert controller.model.state.mic_channels == [7, 1]
-    assert panel.sample_rate_combo.currentData() == 44100
-    panel.device_combo.setCurrentIndex(panel.device_combo.findData("two"))
-    assert panel.sample_rate_combo.currentData() == 48000
-    panel.sample_rate_combo.setCurrentIndex(panel.sample_rate_combo.findData(51200))
-    panel.device_combo.setCurrentIndex(panel.device_combo.findData(one["machine_id"]))
-    assert panel.sample_rate_combo.currentData() == 44100
-    panel.device_combo.setCurrentIndex(panel.device_combo.findData("two"))
-    assert panel.sample_rate_combo.currentData() == 51200
-    assert controls.profiles.load(two, controls.calibrations)["sample_rate"] == 48000
+    assert controller.model.state.mic_device == validate_device_snapshot(one)
+    select_device(controller, "two")
+    assert controller.model.state.mic_device == validate_device_snapshot(two)
+    assert controller.model.state.mic_channels == []
+    select_device(controller, one["machine_id"])
+    assert controller.model.state.mic_device == validate_device_snapshot(one)
+    load.assert_not_called()
+    assert controls.profiles.path.read_bytes() == before
 
 
 def test_busy_after_dialog_open_disables_edits_and_rechecks_ok(controls, ui_qapp):
@@ -235,7 +382,7 @@ def test_busy_after_dialog_open_disables_edits_and_rechecks_ok(controls, ui_qapp
     controls.busy.value = True
     QTest.qWait(150)
     panel = controller.view.ve_controls
-    for widget in (panel.backend_combo, panel.device_combo, panel.sample_rate_combo,
+    for widget in (controller.view.mic_device_table,
                    controller.view.mic_channel_table, controller.view.driver_combo,
                    controller.view.ok_btn):
         assert not widget.isEnabled()
@@ -243,7 +390,7 @@ def test_busy_after_dialog_open_disables_edits_and_rechecks_ok(controls, ui_qapp
     assert controller.view.result() != QDialog.Accepted and not controls.path.exists()
     controls.busy.value = False
     QTest.qWait(150)
-    assert panel.sample_rate_combo.isEnabled()
+    assert controller.view.mic_channel_table.isEnabled()
 
 
 def test_unreleased_discovery_is_unavailable_not_busy_forever(controls, ui_qapp):
@@ -252,31 +399,91 @@ def test_unreleased_discovery_is_unavailable_not_busy_forever(controls, ui_qapp)
     panel.discovery.service.deliver([device_info()], released=False, diagnostics=("launch pending",))
     ui_qapp.processEvents()
     assert not controller.model.state.mic_device["available"]
-    assert "launch pending" in panel.diagnostic_label.text()
+    assert "launch pending" in controller.view.ve_status_label.text()
     controller._on_ok_clicked()
     assert controller.view.result() != QDialog.Accepted
 
 
-def test_unknown_rate_is_blank_and_requires_explicit_repair(controls, ui_qapp):
+@pytest.mark.parametrize("restored", [False, True])
+@pytest.mark.parametrize("failure", ["unreadable", "malformed", "invalid_rate"])
+def test_bad_profile_does_not_disable_discovered_hardware_or_explicit_queue(
+        controls, ui_qapp, host_factory, monkeypatch, restored, failure):
+    from unittest.mock import Mock
+    from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
+
+    host = host_factory()
     device = device_info()
-    controls.profiles.path.write_text(json.dumps({"schema_version": 1, "devices": {
-        device["machine_id"]: {**device["input_config"], "sample_rate": 102400}}}), encoding="utf-8")
-    controller = controls.create()
+    save_measurement(controls.calibrations, device, 7)
+    if failure == "unreadable":
+        load = Mock(side_effect=OSError("profile denied"))
+    else:
+        if failure == "malformed":
+            controls.profiles.path.write_text("{", encoding="utf-8")
+        else:
+            controls.profiles.path.write_text(json.dumps({"schema_version": 1, "devices": {
+                device["machine_id"]: {**device["input_config"], "sample_rate": 102401}}}), encoding="utf-8")
+        load = Mock(wraps=controls.profiles.load)
+    monkeypatch.setattr(controls.profiles, "load", load)
+    before = controls.profiles.path.read_bytes()
+    calibration_before = controls.calibrations.path.read_bytes()
+    initial = (hardware_ui.HardwareSelectionState(
+        mic_device=device_info(available=False, input_config=None), mic_channels=[7, 1])
+        if restored else hardware_ui.HardwareSelectionState(
+            api_name="MME", mic_device=controls.old_mic, mic_channels=[1]))
+    controller = controls.create(initial)
+    controller.view.driver_combo.setCurrentText("vkinging")
     confirm(controller, ui_qapp)
-    panel = controller.view.ve_controls
-    assert panel.sample_rate_combo.currentIndex() == -1
-    assert "sample_rate" in panel.diagnostic_label.text()
-    controller._on_ok_clicked()
-    assert controller.view.result() != QDialog.Accepted
-    panel.sample_rate_combo.setCurrentIndex(panel.sample_rate_combo.findData(48000))
+    if not restored:
+        assert controller.view.mic_device_table.checked_payload() is None
+        select_device(controller, device["machine_id"])
+    assert controller.model.state.mic_device["available"]
+    assert controller.view.mic_channel_table.isEnabled()
+    assert controller.view.mic_channel_table.model().rowCount() == 2
+    for row in range(2):
+        controller.view.mic_channel_table.model().item(row).setCheckState(Qt.Checked)
     controller._on_ok_clicked()
     assert controller.view.result() == QDialog.Accepted
-    assert controls.profiles.load(device, controls.calibrations)["sample_rate"] == 48000
+    assert controller.model.state.mic_channels == [7, 1]
+    saved_selection = json.loads(controls.path.read_text(encoding="utf-8"))["input_selection"]
+    assert saved_selection["machine_id"] == device["machine_id"]
+    assert saved_selection["physical_channels"] == [7, 1]
+    load.assert_not_called()
+    assert controls.profiles.path.read_bytes() == before
+    assert controls.calibrations.path.read_bytes() == calibration_before
+
+    host.mic = deepcopy(controller.model.state.mic_device)
+    host.mic_channels = list(controller.model.state.mic_channels)
+    host.ve_profile_store, host.ve_calibration_store = controls.profiles, controls.calibrations
+    host.refresh_channel_windows()
+    detail = host.sequence_config[0]["seq1"]["acq"]["detail"]
+    detail.update(sample_rate=96000, ve_range_index=5)
+    host.judge_play_and_record()
+    session = host._recording_process_session
+    request = session.request
+    assert request.sample_rate == 96000 and request.device["input_config"]["range_max"] == .1
+    assert request.calibration_metadata["recorded_channels"][0]["v2pa_factor"] == 10
+    _, audio = capture_audio(request)
+    finish_ve_capture(host, session, audio)
+    load.assert_not_called()
+    assert host.mic["available"]
+    assert controls.calibrations.get_factor(request.device, 7) == 10
+    assert controls.calibrations.get_factor(request.device, 1) is None
+    assert controls.calibrations.path.read_bytes() == calibration_before
+    assert controls.profiles.path.read_bytes() == before
+
+    # The bad profile still fails at the boundary that actually needs it.
+    del detail["sample_rate"]
+    with pytest.raises((OSError, ValueError)):
+        SequenceWidgetConfigOpsMixin._current_ve_recording_device(host, host.mic)
+    load.assert_called_once()
+    assert host.mic["available"]
+    assert controls.profiles.path.read_bytes() == before
+    assert controls.calibrations.path.read_bytes() == calibration_before
 
 
 @pytest.mark.parametrize("rate", [44100, 48000, 51200])
 @pytest.mark.parametrize("monitor", [False, True])
-def test_record_config_effective_rate_preserves_product_rate_and_monitor(ui_qapp, monkeypatch, rate, monitor):
+def test_record_config_effective_rate_preserves_product_rate_and_ignores_monitor(ui_qapp, monkeypatch, rate, monitor):
     from base.sound_device_manager import SoundDeviceManager
     def forbidden(*args, **kwargs):
         raise AssertionError("No automatic output/mic fallback for VE")
@@ -288,16 +495,14 @@ def test_record_config_effective_rate_preserves_product_rate_and_monitor(ui_qapp
                RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: PREVIEW_TIME_MODE_CUMULATIVE}
     original = deepcopy(product)
     window = RecordConfigWindow(product, mic=device)
-    assert str(rate) in window.samplerate_combo.currentText()
-    assert not window.samplerate_combo.isEnabled()
-    assert "硬件" in window.ve_hint_label.text() and "普通声卡" in window.ve_hint_label.text()
-    assert not window.monitor_checkbox.isEnabled() and not window.monitor_gain_db_input.isEnabled()
+    assert window.samplerate_combo.currentText() == "96000"
+    assert window.samplerate_combo.isEnabled() and window.samplerate_combo.isEditable()
+    assert not hasattr(window, "ve_hint_label")
+    assert not hasattr(window, "monitor_checkbox") and not hasattr(window, "monitor_gain_db_input")
     window.streaming_recording_checkbox.setChecked(False)
-    assert window.monitor_checkbox.isChecked() is monitor
     window.on_click_ok_btn()
     assert window.final_data["sample_rate"] == 96000
-    assert window.final_data["monitor_playback"] is monitor
-    assert window.final_data["monitor_gain_db"] == 4.5
+    assert not any(key.startswith("monitor_") for key in window.final_data)
     assert window.final_data[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] == PREVIEW_TIME_MODE_CUMULATIVE
     assert product == original
     window.close()
@@ -522,7 +727,7 @@ def test_main_real_qt_bridge_release_failure_terminalizes_with_original_ownershi
             window.mic, window.mic_channels)) == "allowed"
 
 
-def test_main_rate_only_accept_and_cancel_do_not_reset_calibration(main_window_harness, controls, ui_qapp, monkeypatch):
+def test_main_hardware_accept_and_cancel_do_not_reset_calibration(main_window_harness, controls, ui_qapp, monkeypatch):
     device = device_info()
     controls.profiles.set_sample_rate(device, 51200, controls.calibrations)
     save_measurement(controls.calibrations, device, 7)
@@ -533,14 +738,13 @@ def test_main_rate_only_accept_and_cancel_do_not_reset_calibration(main_window_h
     def accept(controller):
         confirm(controller, ui_qapp)
         panel = controller.view.ve_controls
-        panel.sample_rate_combo.setCurrentIndex(panel.sample_rate_combo.findData(44100))
         controller._on_ok_clicked()
         assert controller.view.result() == QDialog.Accepted
         state = controller.model.state
         return True, state.speaker_device, state.speaker_channels, state.mic_device, state.mic_channels
     monkeypatch.setattr(hardware_ui.HardwareSelectionController, "on_exec", accept)
     window.on_hardware_window_init()
-    assert window.mic["input_config"]["sample_rate"] == 44100
+    assert window.mic["input_config"]["sample_rate"] == 51200
     assert window.sequence_window.mic_channels == [7, 1]
     assert controls.calibrations.path.read_bytes() == raw
     assert "legacy calibration refresh" not in main_window_harness.events
@@ -756,8 +960,11 @@ def test_main_accepted_native_signature_change_publishes_then_releases(
     main_window_harness.bridge.release_ve = lambda signature, callback: (
         observed.append((signature, window.mic, list(window.mic_channels),
                          controls.path.read_bytes(), callback)) or "pending")
-    monkeypatch.setitem(main_window_harness.namespace, "open_hardware_selection_window",
-        lambda **kwargs: (True, window.speaker, window.speaker_channels, new_mic, new_channels))
+    def accept_selection(**kwargs):
+        if change == "rate":
+            window.sequence_window.sequence_config = [{"seq1": {"acq": {"detail": {"sample_rate": 44100}}}}]
+        return True, window.speaker, window.speaker_channels, new_mic, new_channels
+    monkeypatch.setitem(main_window_harness.namespace, "open_hardware_selection_window", accept_selection)
 
     window.on_hardware_window_init()
 
@@ -784,8 +991,10 @@ def test_main_release_failure_warns_without_rolling_back_persisted_setting(
         profile_store=controls.profiles, calibration_store=controls.calibrations,
         path=controls.path)
     persisted = controls.path.read_bytes()
-    monkeypatch.setitem(main_window_harness.namespace, "open_hardware_selection_window",
-        lambda **kwargs: (True, window.speaker, window.speaker_channels, replacement, [7, 1]))
+    def accept_selection(**kwargs):
+        window.sequence_window.sequence_config = [{"seq1": {"acq": {"detail": {"sample_rate": 44100}}}}]
+        return True, window.speaker, window.speaker_channels, replacement, [7, 1]
+    monkeypatch.setitem(main_window_harness.namespace, "open_hardware_selection_window", accept_selection)
 
     window.on_hardware_window_init()
     main_window_harness.bridge.hardware_busy = True  # Retirement is still pending.
@@ -803,16 +1012,18 @@ def test_backend_round_trip_retains_unsaved_soundcard_choice_and_then_saves_old_
         mic_channels=[1], speaker_device=controls.speaker)
     controller = controls.create(initial)
     panel = controller.view.ve_controls
-    panel.backend_combo.setCurrentIndex(1)
+    controller.view.driver_combo.setCurrentText("vkinging")
     confirm(controller, ui_qapp)
-    panel.device_combo.setCurrentIndex(0)
+    select_device(controller, "test-machine-1")
     for row in range(controller.view.mic_channel_table.model().rowCount()):
         controller.view.mic_channel_table.model().item(row).setCheckState(Qt.Checked)
-    panel.backend_combo.setCurrentIndex(0)
+    controller.view.driver_combo.setCurrentText("MME")
     assert controller.model.state.mic_device == controls.old_mic
     assert controller.view.mic_channel_table.checked_payloads() == [1]
-    panel.backend_combo.setCurrentIndex(1)
+    controller.view.driver_combo.setCurrentText("vkinging")
     confirm(controller, ui_qapp)
+    select_device(controller, "test-machine-1")
+    controller.view.mic_channel_table.model().item(0).setCheckState(Qt.Checked)
     controller._on_ok_clicked()
     assert controller.view.result() == QDialog.Accepted
     payload = json.loads(controls.path.read_text(encoding="utf-8"))
@@ -826,7 +1037,7 @@ def test_switch_back_write_failure_keeps_explicit_ve_selection(controls, ui_qapp
                             "machine_id": "test-machine-1", "physical_channels": [7, 1]}}), encoding="utf-8")
     before = controls.path.read_bytes()
     controller = controls.create()
-    controller.view.ve_controls.backend_combo.setCurrentIndex(0)
+    controller.view.driver_combo.setCurrentText("MME")
     controller.view.speaker_device_table.set_checked_by_predicate(lambda item: True)
     monkeypatch.setattr(hardware_selection, "_atomic_write_json", lambda *args: False)
     controller._on_ok_clicked()
@@ -852,7 +1063,7 @@ def test_disconnect_reconnect_retains_id_order_without_other_device_fallback(con
     controller.refresh_and_render(try_restore=True)
     confirm(controller, ui_qapp, device_info(machine_id="other", name="Dev2"))
     assert not controller.model.state.mic_device["available"]
-    assert controller.model.state.mic_channels == [7, 1]
+    assert controller.model.state.mic_channels == []
     assert controller.view.mic_channel_table.model().rowCount() == 0
     controller.refresh_and_render(try_restore=True)
     confirm(controller, ui_qapp, device_info(name="new-alias", physical_channels=list(range(8))))
@@ -875,7 +1086,10 @@ def test_closing_repeated_dialogs_closes_every_discovery_owner(controls, ui_qapp
 
 @pytest.mark.parametrize("corrupt", [{"physical_channels": [None]}, {"physical_channels": ["bad"]},
                                    {"machine_id": {"invalid": "object"}}])
-def test_corrupt_saved_record_renders_unavailable_without_coercion(controls, corrupt):
+def test_corrupt_saved_record_renders_unavailable_without_coercion(controls, corrupt, monkeypatch):
+    import sys
+    errors = []
+    monkeypatch.setattr(sys, "excepthook", lambda *details: errors.append(details[1]))
     from base.hardware_selection import unavailable_ve_selection
     raw = {"schema_version": 1, "backend": "vkinging", "machine_id": "test-machine-1",
            "physical_channels": [7, 1], **corrupt}
@@ -887,10 +1101,11 @@ def test_corrupt_saved_record_renders_unavailable_without_coercion(controls, cor
                            DiscoveryResult((device_info(),)), None, 0, True)
     panel._on_discovered(event)
     assert not controller.model.state.mic_device["available"]
-    assert controller.model.state.mic_channels == raw["physical_channels"]
-    assert "损坏" in panel.diagnostic_label.text() or "不可用" in panel.diagnostic_label.text()
+    assert controller.model.state.mic_channels == []
+    assert "损坏" in controller.view.ve_status_label.text() or "不可用" in controller.view.ve_status_label.text()
     controller._on_ok_clicked()
     assert controller.view.result() != QDialog.Accepted
+    assert errors == []
 
 
 def test_explicit_reselect_same_device_repairs_corrupt_selection(controls, ui_qapp):
@@ -901,7 +1116,7 @@ def test_explicit_reselect_same_device_repairs_corrupt_selection(controls, ui_qa
     confirm(controller, ui_qapp)
     panel = controller.view.ve_controls
     assert not controller.model.state.mic_device["available"]
-    panel.device_combo.activated[int].emit(panel.device_combo.currentIndex())
+    select_device(controller, "test-machine-1")
     assert controller.model.state.mic_device["available"]
     assert controller.model.state.mic_channels == []
     controller.view.mic_channel_table.model().item(0).setCheckState(Qt.Checked)
@@ -935,7 +1150,7 @@ def test_main_close_ignores_late_discovery_and_does_not_wait(main_window_harness
     assert window.mic is original and service.closed
 
 
-@pytest.mark.parametrize("edit", ["rate", "device", "backend", "channel_add", "channel_remove", "driver", "speaker"])
+@pytest.mark.parametrize("edit", ["device", "backend", "channel_add", "channel_remove", "driver", "speaker"])
 def test_busy_pre_timer_rejected_edit_renders_exact_staged_snapshot(controls, ui_qapp, edit):
     one = device_info(physical_channels=list(range(8)))
     two = device_info(machine_id="two", name="Dev2", physical_channels=list(range(8)))
@@ -948,8 +1163,7 @@ def test_busy_pre_timer_rejected_edit_renders_exact_staged_snapshot(controls, ui
         api_name="MME", mic_device=one, mic_channels=[7, 1], speaker_device=controls.speaker))
     confirm(controller, ui_qapp, one, two)
     view, panel = controller.view, controller.view.ve_controls
-    panel.device_combo.setCurrentIndex(panel.device_combo.findData("two"))
-    panel.sample_rate_combo.setCurrentIndex(panel.sample_rate_combo.findData(48000))
+    select_device(controller, "two")
     table = view.mic_channel_table.model()
     table.item(6).setCheckState(Qt.Checked)
     table.item(2).setCheckState(Qt.Checked)
@@ -957,12 +1171,10 @@ def test_busy_pre_timer_rejected_edit_renders_exact_staged_snapshot(controls, ui
     assert staged.mic_channels == [6, 2]
     controller._busy_timer.stop()  # No timer tick or event processing can repair the signal for us.
     controls.busy.value = True
-    if edit == "rate":
-        panel.sample_rate_combo.setCurrentIndex(panel.sample_rate_combo.findData(44100))
-    elif edit == "device":
-        panel.device_combo.setCurrentIndex(panel.device_combo.findData(one["machine_id"]))
+    if edit == "device":
+        select_device(controller, one["machine_id"])
     elif edit == "backend":
-        panel.backend_combo.setCurrentIndex(0)
+        controller.view.driver_combo.setCurrentText("MME")
     elif edit == "channel_add":
         table.item(7).setCheckState(Qt.Checked)
     elif edit == "channel_remove":
@@ -971,16 +1183,13 @@ def test_busy_pre_timer_rejected_edit_renders_exact_staged_snapshot(controls, ui
         view.driver_combo.setCurrentText("ASIO")
     else:
         view.speaker_device_table.model().item(0).setCheckState(Qt.Unchecked)
-    assert panel.sample_rate_combo.currentData() == 48000
-    assert panel.device_combo.currentData() == "two"
-    assert panel.backend_combo.currentData() == "vkinging"
-    assert not panel.sample_rate_combo.isHidden()
-    assert view.driver_combo.currentText() == "MME"
+    assert view.mic_device_table.checked_payload()["machine_id"] == "two"
+    assert view.driver_combo.currentData() == "vkinging"
     assert view.speaker_device_table.checked_payload() == controls.speaker
     assert view.mic_channel_table.checked_payloads() == [2, 6]
     assert controller.model.state == staged
     assert panel.selected_device == staged.mic_device and panel.selected_channels == [6, 2]
-    for widget in (panel.backend_combo, panel.device_combo, panel.sample_rate_combo,
+    for widget in (controller.view.mic_device_table,
                    view.driver_combo, view.mic_channel_table, view.speaker_device_table, view.ok_btn):
         assert not widget.isEnabled()
     assert not controls.defaults.pair.writes and not controls.path.exists()
@@ -993,7 +1202,7 @@ def test_busy_pre_timer_rejected_edit_renders_exact_staged_snapshot(controls, ui
     # The strict save boundary canonicalizes inventory lists to tuples.
     staged.mic_device = validate_device_snapshot(staged.mic_device)
     assert controller.model.state == staged
-    assert controls.profiles.load(two, controls.calibrations)["sample_rate"] == panel.sample_rate_combo.currentData() == 48000
+    assert controls.profiles.load(two, controls.calibrations)["sample_rate"] == 51200
     assert json.loads(controls.path.read_text(encoding="utf-8"))["input_selection"] == {
         "schema_version": 1, "backend": "vkinging", "machine_id": "two", "physical_channels": [6, 2]}
     assert controls.calibrations.path.read_bytes() == before_calibration
@@ -1011,8 +1220,8 @@ def test_busy_pre_timer_soundcard_edits_keep_view_and_accepted_values(controls, 
     elif edit == "channel":
         view.mic_channel_table.model().item(0).setCheckState(Qt.Checked)
     else:
-        view.ve_controls.backend_combo.setCurrentIndex(1)
-    assert view.ve_controls.backend_combo.currentData() == "sounddevice"
+        view.driver_combo.setCurrentText("vkinging")
+    assert view.driver_combo.currentData() == "MME"
     assert view.mic_device_table.checked_payload() == controls.old_mic
     assert view.mic_channel_table.checked_payloads() == [1]
     assert not view.mic_channel_table.isEnabled() and not view.mic_device_table.isEnabled()
@@ -1029,10 +1238,9 @@ def test_busy_pre_timer_soundcard_edits_keep_view_and_accepted_values(controls, 
 @pytest.mark.parametrize("outcome", ["accept", "absent", "cancel", "failed_save"])
 def test_ve_output_is_applied_only_after_successful_accept(controls, ui_qapp, monkeypatch, outcome):
     from base import hardware_selection
-    controller = controls.create()
+    controller = controls.create(hardware_ui.HardwareSelectionState(mic_device=device_info(),
+        mic_channels=[7, 1], speaker_device=controls.speaker if outcome != "absent" else None))
     confirm(controller, ui_qapp)
-    if outcome != "absent":
-        controller.view.speaker_device_table.model().item(0).setCheckState(Qt.Checked)
     assert controls.defaults.pair.raw == [None, 9] and not controls.defaults.pair.writes
     if outcome == "cancel":
         controller.view.reject()
@@ -1059,7 +1267,7 @@ def test_ve_to_soundcard_draft_never_applies_defaults_before_accept(controls, mo
     controller = controls.create(hardware_ui.HardwareSelectionState(api_name="MME",
         mic_device=device_info(), mic_channels=[7, 1], speaker_device=controls.speaker))
     assert controller._soundcard_state is None
-    controller.view.ve_controls.backend_combo.setCurrentIndex(0)
+    controller.view.driver_combo.setCurrentText("MME")
     assert controller.model.state.mic_device == controls.old_mic
     assert controller.view.mic_channel_table.checked_payloads() == [1]
     assert controls.defaults.pair.raw == [None, 9]
@@ -1098,31 +1306,31 @@ def test_cross_api_backend_roundtrip_restores_legacy_driver_and_visible_devices(
     before = controls.path.read_bytes() if persisted else None
     controller = controls.create(hardware_ui.HardwareSelectionState(api_name="MME",
         mic_device=controls.old_mic, mic_channels=[1], speaker_device=controls.speaker))
-    panel = controller.view.ve_controls
-    panel.backend_combo.setCurrentIndex(1)
+    controller.view.driver_combo.setCurrentText("vkinging")
     confirm(controller, ui_qapp)
-    panel.device_combo.setCurrentIndex(0)
-    for row in range(controller.view.mic_channel_table.model().rowCount()):
-        controller.view.mic_channel_table.model().item(row).setCheckState(Qt.Checked)
+    select_device(controller, "test-machine-1")
+    controller.view.mic_channel_table.model().item(0).setCheckState(Qt.Checked)
+    service = controller.view.ve_controls.discovery.service
+    generation = service.generation
     controller.view.driver_combo.setCurrentText("ASIO")
+    assert controller.model.state.mic_device is None
+    assert controller.model.state.mic_channels == []
+    assert controller.view.mic_device_table.model().item(0).text() == controls.audio.asio_mic["name"]
+    service.deliver([device_info(name="stale")], generation=generation)
+    ui_qapp.processEvents()
+    assert controller.model.state.mic_device is None
+    controller.view.driver_combo.setCurrentText("MME")
+    controller.view.mic_device_table.model().item(0).setCheckState(Qt.Checked)
+    controller.view.mic_channel_table.model().item(1).setCheckState(Qt.Checked)
     controller.view.speaker_device_table.model().item(0).setCheckState(Qt.Checked)
-    assert controller.model.state.speaker_device == controls.audio.asio_speaker
-    assert controller.model.state.mic_channels == [7, 1]
-    panel.backend_combo.setCurrentIndex(0)
+    controller.view.driver_combo.setCurrentText("vkinging")
+    confirm(controller, ui_qapp)
+    select_device(controller, "test-machine-1")
+    controller.view.mic_channel_table.model().item(0).setCheckState(Qt.Checked)
+    controller.view.driver_combo.setCurrentText("MME")
     assert_old_soundcard_visible(controller, controls)
     assert not controls.defaults.calls and not controls.defaults.pair.writes and not controls.audio.queries
     assert (controls.path.read_bytes() if controls.path.exists() else None) == before
-    # Save VE from an unsaved soundcard draft, with a different ordinary output.
-    panel.backend_combo.setCurrentIndex(1)
-    confirm(controller, ui_qapp)
-    controller.view.driver_combo.setCurrentText("ASIO")
-    controller.view.speaker_device_table.model().item(0).setCheckState(Qt.Checked)
-    controller._on_ok_clicked()
-    assert controller.view.result() == QDialog.Accepted
-    assert hardware_selection.restore_or_default(path=controls.path, soundcard_only=True,
-        apply_defaults=False) == (controls.old_mic, controls.speaker, [1], [])
-    assert controls.defaults.pair.raw == [None, 4] and controls.defaults.pair.writes == [(1, 4)]
-    assert not controls.defaults.calls and not controls.audio.queries
 
 
 @pytest.mark.parametrize("outcome", ["cancel", "accept", "failed_save"])
@@ -1145,9 +1353,10 @@ def test_cross_api_restart_main_dialog_restores_legacy_context_before_accept(
     def interact(controller):
         view = controller.view
         assert controller._soundcard_state is None
-        assert view.driver_combo.currentText() == controller.model.state.api_name == "ASIO"
+        assert view.driver_combo.currentText() == "vkinging"
+        assert controller.model.state.api_name == "ASIO"
         assert view.speaker_device_table.checked_payload() == controls.audio.asio_speaker
-        view.ve_controls.backend_combo.setCurrentIndex(0)
+        view.driver_combo.setCurrentText("MME")
         assert_old_soundcard_visible(controller, controls)
         assert controls.defaults.pair.raw == [None, 4] and controls.defaults.pair.writes == [(1, 4)]
         assert not controls.defaults.calls and not controls.defaults.pair.reads and not controls.audio.queries
@@ -1179,50 +1388,37 @@ def test_cross_api_restart_main_dialog_restores_legacy_context_before_accept(
 
 
 @pytest.mark.parametrize("inventory", [[1], [1, 7]])
-@pytest.mark.parametrize("draft_rate", [False, True])
-def test_explicit_qt_reselect_replaces_hidden_routes_but_discovery_never_does(controls, ui_qapp, inventory, draft_rate):
+def test_explicit_table_reselect_clears_routes_and_reopen_restores_saved_only(controls, ui_qapp, inventory):
     from base import hardware_selection
     original = device_info()
-    controls.profiles.set_sample_rate(original, 51200, controls.calibrations)
+    controls.profiles.set_sample_rate(original, 44100, controls.calibrations)
     for channel in (7, 1):
         save_measurement(controls.calibrations, original, channel)
     calibration_bytes = controls.calibrations.path.read_bytes()
+    profile_bytes = controls.profiles.path.read_bytes()
     controller = controls.create()
-    panel = controller.view.ve_controls
-    if draft_rate:
-        confirm(controller, ui_qapp)
-        panel.sample_rate_combo.setCurrentIndex(panel.sample_rate_combo.findData(44100))
-        controller.refresh_and_render(try_restore=True)
     confirm(controller, ui_qapp, device_info(physical_channels=inventory))
-    assert controller.model.state.mic_channels == panel.selected_channels == [7, 1]
     assert controller.model.state.mic_device["available"] is (7 in inventory)
+    assert controller.model.state.mic_channels == ([7, 1] if 7 in inventory else [])
     if 7 not in inventory:
         controller._on_ok_clicked()
         assert controller.view.result() != QDialog.Accepted and not controls.path.exists()
-    # Real activated[int] on the unchanged combo index is a user choice, not discovery.
-    panel.device_combo.activated[int].emit(panel.device_combo.currentIndex())
-    selected = [channel for channel in (7, 1) if channel in inventory]
-    assert controller.model.state.mic_channels == panel.selected_channels == selected
-    assert controller.model.state.mic_device["available"]
-    assert sorted(controller.view.mic_channel_table.checked_payloads()) == sorted(selected)
+    select_device(controller, "test-machine-1")
+    assert controller.model.state.mic_channels == []
     table = controller.view.mic_channel_table.model()
     ain2 = next(table.item(row) for row in range(table.rowCount()) if table.item(row).data(Qt.UserRole) == 1)
-    ain2.setCheckState(Qt.Unchecked)
     ain2.setCheckState(Qt.Checked)
-    assert controller.model.state.mic_channels == panel.selected_channels == selected
-    panel.sample_rate_combo.setCurrentIndex(panel.sample_rate_combo.findData(44100))
     controller._on_ok_clicked()
     assert controller.view.result() == QDialog.Accepted
-    assert json.loads(controls.path.read_text(encoding="utf-8"))["input_selection"]["physical_channels"] == selected
-    assert controls.calibrations.path.read_bytes() == calibration_bytes
     restored, output, channels, output_channels = hardware_selection.restore_or_default(
         path=controls.path, apply_defaults=False)
     reopened = controls.create(hardware_ui.HardwareSelectionState(mic_device=restored, mic_channels=channels,
         speaker_device=output, speaker_channels=output_channels))
+    assert reopened.model.state.mic_channels == []
     confirm(reopened, ui_qapp, device_info(name="reconnected", physical_channels=list(range(8))))
-    assert reopened.model.state.mic_channels == selected
+    assert reopened.model.state.mic_channels == [1]
     assert reopened.model.state.mic_device["available"]
-    assert reopened.view.ve_controls.sample_rate_combo.currentData() == 44100
+    assert controls.profiles.path.read_bytes() == profile_bytes
     assert controls.calibrations.path.read_bytes() == calibration_bytes
     assert not controls.defaults.pair.writes and not controls.defaults.calls and not controls.defaults.pair.reads
     assert "mic" not in controls.audio.queries

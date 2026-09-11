@@ -66,8 +66,8 @@ def host_factory(ui_qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(streaming, "RecordingManager", lambda: SimpleNamespace(save_signal_info_to_db=save))
     hosts = []
 
-    def make(rate=51200, live=False):
-        host = RecordingHost({}, [])
+    def make(rate=51200, live=False, *, host_type=RecordingHost):
+        host = host_type({}, [])
         host.recording_bridge = RecordingBridgeFake()
         host.mic = device_info(input_config=input_config(rate))
         host.speaker = None  # VE input never requires an output device.
@@ -138,7 +138,7 @@ def test_effective_rate_is_resolved_before_target_trim_and_timeline(host_factory
     assert actual_rate == rate
     assert host.data_struct.sample_rate == recorded["sample_rate"] == recorded["sr"] == rate
     assert recorded["num_frames"] == int(.04 * rate) + round(.01 * rate)
-    assert recorded["monitor_mute_leading_samples"] == round(.01 * rate)
+    assert recorded["startup_trim_samples"] == round(.01 * rate)
     # Isolate the rate contract before the next TDD cycle wires the UI builder.
     host._recording_wav_calibration_metadata = build_recording_wav_calibration_metadata(
         host._recording_input_channels, recorded["device"], ve_calibration_store=host.ve_calibration_store)
@@ -284,8 +284,9 @@ def test_legacy_rate_coercion_does_not_change_trim_calculation(host_factory):
     request = host._recording_process_session.request
     assert request.sample_rate == 48000  # legacy request coercion remains
     assert request.trim_samples == resolve_startup_trim_samples(detail, raw_rate)
-    assert request.trim_samples == recorded["monitor_mute_leading_samples"]
-    assert request.monitor["enabled"] is True and request.effective_streaming
+    assert request.trim_samples == recorded["startup_trim_samples"]
+    assert dict(request.monitor) == {}
+    assert request.effective_streaming is host._should_use_streaming_recording()
 
 
 def test_legacy_snapshot_value_error_still_restores_controls_before_raising(host_factory, monkeypatch):
@@ -339,13 +340,10 @@ def test_imported_file_keeps_rate_outside_ve_whitelist(host_factory, tmp_path):
     np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, samples)
 
 
-@pytest.mark.parametrize("failure", ["monitor", "unavailable", "profile_io", "profile_type", "calibration_io", "snapshot_invalid"])
+@pytest.mark.parametrize("failure", ["unavailable", "profile_io", "profile_type", "calibration_io", "snapshot_invalid"])
 def test_invalid_ve_initialization_is_actionable_and_restores_controls(host_factory, monkeypatch, failure):
     host = host_factory()
-    if failure == "monitor":
-        host.sequence_config[0]["seq1"]["acq"]["detail"]["monitor_playback"] = True
-        host.speaker = {"hostapi": 3, "name": "legacy output", "max_output_channels": 2}
-    elif failure == "unavailable":
+    if failure == "unavailable":
         host.mic["available"] = False
     elif failure == "profile_io":
         monkeypatch.setattr(host.ve_profile_store, "load", mock.Mock(side_effect=OSError("profile denied")))
@@ -365,8 +363,6 @@ def test_invalid_ve_initialization_is_actionable_and_restores_controls(host_fact
     assert host._recording_wav_calibration_metadata is None
     warning = analysis.QMessageBox.warning.call_args.args[-1]
     assert warning
-    if failure == "monitor":
-        assert "监听" in warning and "关闭" in warning and "Host API" not in warning
 
 
 def started_audio(host):
@@ -401,6 +397,7 @@ def test_soundcard_admission_after_ve_uses_product_rate(
         host_factory, rate, live, outcome, configured_product_rate):
     from unit_test.base.recording_process_fakes import device_info as soundcard
     host = host_factory(rate, live)
+    ve_rate = configured_product_rate if configured_product_rate is not None else rate
     detail = host.sequence_config[0]["seq1"]["acq"]["detail"]
     if configured_product_rate is not None:
         detail["sample_rate"] = configured_product_rate
@@ -414,16 +411,16 @@ def test_soundcard_admission_after_ve_uses_product_rate(
     host.refresh_channel_windows()
     assert host.channel_workspace.all_subwindows()[0] is window
     # Hardware selection must not reinterpret the previous VE audio/timebase.
-    assert host.data_struct.sample_rate == rate
-    assert sf.info(session.request.path).samplerate == rate
+    assert host.data_struct.sample_rate == ve_rate
+    assert sf.info(session.request.path).samplerate == ve_rate
     if outcome == "success":
         np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, audio.multi)
-        assert window.plot_item.getData()[0][-1] == pytest.approx((len(audio.multi) - 1) / rate)
+        assert window.plot_item.getData()[0][-1] == pytest.approx((len(audio.multi) - 1) / ve_rate)
     recorded, actual_rate = host.reset_work_pram("not_labeled")
     assert actual_rate == recorded["sample_rate"] == recorded["sr"] == 32000
     assert host.data_struct.sample_rate == 32000
     assert recorded["num_frames"] == 1600
-    assert recorded["monitor_mute_leading_samples"] == 320
+    assert recorded["startup_trim_samples"] == 320
     host._recording_wav_calibration_metadata = None
     host._start_process_recording(recorded, actual_rate)
     request = host._recording_process_session.request
@@ -433,9 +430,9 @@ def test_soundcard_admission_after_ve_uses_product_rate(
     host.mic = ve_device
     host.refresh_channel_windows()
     recorded, actual_rate = host.reset_work_pram("not_labeled")
-    assert actual_rate == recorded["sr"] == rate
-    assert recorded["num_frames"] == int(.04 * rate) + round(.01 * rate)
-    assert recorded["monitor_mute_leading_samples"] == round(.01 * rate)
+    assert actual_rate == recorded["sr"] == ve_rate
+    assert recorded["num_frames"] == int(.04 * ve_rate) + round(.01 * ve_rate)
+    assert recorded["startup_trim_samples"] == round(.01 * ve_rate)
 
 
 @pytest.mark.parametrize("rate", [44100, 48000, 51200])
@@ -454,14 +451,14 @@ def test_current_product_rate_change_during_ve_wins_at_next_soundcard_admission(
     # A product configuration change cannot modify the admitted VE request.
     detail["sample_rate"] = 22050
     host.init_data_struct_stimulus_config()
-    assert session.request.sample_rate == rate
+    assert session.request.sample_rate == 32000
     finish_ve_capture(host, session, audio, outcome)
     host.mic = soundcard()
     host.refresh_channel_windows()
     recorded, actual_rate = host.reset_work_pram("not_labeled")
     assert actual_rate == recorded["sr"] == recorded["sample_rate"] == 22050
     assert recorded["num_frames"] == int(.04 * 22050) + round(.01 * 22050)
-    assert recorded["monitor_mute_leading_samples"] == round(.01 * 22050)
+    assert recorded["startup_trim_samples"] == round(.01 * 22050)
 
 
 @pytest.mark.parametrize("after_ve", [False, True])
@@ -486,7 +483,7 @@ def test_soundcard_admission_uses_product_rate_not_imported_file_rate(host_facto
     acq.pop("mode")
     recorded, actual_rate = host.reset_work_pram("not_labeled")
     assert actual_rate == recorded["sr"] == 32000
-    assert recorded["num_frames"] == 1600 and recorded["monitor_mute_leading_samples"] == 320
+    assert recorded["num_frames"] == 1600 and recorded["startup_trim_samples"] == 320
 
 
 @pytest.mark.parametrize("fault", [
@@ -782,3 +779,20 @@ def test_real_service_bridge_ve_lifecycle(host_factory, ui_qapp, tmp_path, outco
         bridge.shutdown()
         pump(ui_qapp, service.closed.is_set)
         assert all(not thread.is_alive() for thread in service.threads)
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_ve_records_with_corrupt_legacy_monitor_without_output(host_factory, streaming):
+    host = host_factory()
+    host.speaker = None
+    detail = host.sequence_config[0]["seq1"]["acq"]["detail"]
+    detail.update(monitor_playback=True, monitor_gain_db="corrupt",
+                  monitor_fade_in_ms={}, use_streaming_recording=streaming)
+    host.judge_play_and_record()
+    request = host._recording_process_session.request
+    assert dict(request.monitor) == {}
+    assert request.effective_streaming is streaming
+    capture, audio = capture_audio(request)
+    assert isinstance(capture.outcome, RecordingResult)
+    assert (capture.snapshot(generation=1, sequence=1) is not None) is streaming
+    assert len(audio.multi) == request.target_samples - request.trim_samples

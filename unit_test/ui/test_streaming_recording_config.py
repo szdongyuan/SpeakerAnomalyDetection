@@ -67,12 +67,11 @@ def test_record_config_defaults_to_blocking_and_persists_streaming_choice(qapp):
     )
 
     assert window.streaming_recording_checkbox.isChecked() is False
-    assert window.monitor_checkbox.isChecked() is False
-    assert window.monitor_checkbox.isEnabled() is False
+    assert not hasattr(window, "monitor_checkbox")
+    assert not hasattr(window, "monitor_gain_db_input")
     assert window.preview_time_mode_combo.currentData() == PREVIEW_TIME_MODE_RELATIVE_LATEST
 
     window.streaming_recording_checkbox.setChecked(True)
-    assert window.monitor_checkbox.isEnabled() is True
     window.on_click_ok_btn()
 
     assert window.final_data["use_streaming_recording"] is True
@@ -88,7 +87,7 @@ def test_record_config_defaults_to_blocking_and_persists_streaming_choice(qapp):
         ({}, False),
         ({"use_streaming_recording": False}, False),
         ({"use_streaming_recording": True}, True),
-        ({"use_streaming_recording": False, "monitor_playback": True}, True),
+        ({"use_streaming_recording": False, "monitor_playback": True}, False),
     ],
 )
 def test_streaming_runtime_flag_is_opt_in(detail, expected):
@@ -111,26 +110,19 @@ def test_recording_entry_routes_all_modes_to_process():
     assert "_start_blocking_recording" not in calls
 
 
-def test_disabling_streaming_disables_live_monitoring(qapp):
+def test_legacy_corrupt_monitor_fields_are_ignored_on_open_and_save(qapp):
     window = RecordConfigWindow(
-        {
-            "total_time": 2.0,
-            "sample_rate": 48000,
-            "monitor_playback": True,
-            "use_streaming_recording": True,
-        },
-        mic={"name": "input"},
-        speaker={"name": "output", "max_output_channels": 2},
+        {"total_time": 2.0, "sample_rate": 48000, "monitor_playback": True,
+         "monitor_gain_db": "corrupt", "monitor_fade_in_ms": {},
+         "use_streaming_recording": False},
+        mic={"name": "input"}, speaker=None,
     )
-
-    assert window.monitor_checkbox.isChecked() is True
-    assert window.monitor_checkbox.isEnabled() is True
-
-    window.streaming_recording_checkbox.setChecked(False)
-
-    assert window.monitor_checkbox.isChecked() is False
-    assert window.monitor_checkbox.isEnabled() is False
-    assert window.monitor_gain_db_input.isEnabled() is False
+    assert not hasattr(window, "monitor_checkbox")
+    assert not hasattr(window, "monitor_gain_db_input")
+    assert not window.streaming_recording_checkbox.isChecked()
+    window.on_click_ok_btn()
+    assert not any(key.startswith("monitor_") for key in window.final_data)
+    assert window.final_data["use_streaming_recording"] is False
 
 
 def test_blocking_recording_reuses_the_existing_completion_pipeline():

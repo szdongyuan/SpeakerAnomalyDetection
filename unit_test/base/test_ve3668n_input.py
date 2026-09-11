@@ -14,15 +14,18 @@ def test_ve_acquisition_signature_is_exact_hashable_and_ordered():
     from base.ve3668n_input import ve_acquisition_signature
     from consts.ve3668n_consts import VE_BACKEND
 
-    device = device_info(machine_id=" test-machine-1 ", physical_channels=[0, 2, 7])
+    device = device_info(machine_id=" test-machine-1 ", physical_channels=[0, 2, 7],
+                         input_config=input_config(48000))
     first = ve_acquisition_signature(device, (0, 2), 48000)
 
-    assert first == (VE_BACKEND, "test-machine-1", (0, 2), 48000)
+    assert first == (VE_BACKEND, "test-machine-1", (0, 2), 48000, "IEPE", "V", -10.0, 10.0)
     assert hash(first) == hash(tuple(first))
     assert ve_acquisition_signature(device, (2, 0), 48000) != first
-    assert ve_acquisition_signature(device_info(machine_id="other", physical_channels=[0, 2, 7]),
+    assert ve_acquisition_signature(device_info(machine_id="other", physical_channels=[0, 2, 7],
+                                                     input_config=input_config(48000)),
                                     (0, 2), 48000) != first
     assert ve_acquisition_signature(device, (0, 7), 48000) != first
+    device["input_config"] = input_config(51200)
     assert ve_acquisition_signature(device, (0, 2), 51200) != first
 
 
@@ -48,7 +51,7 @@ def test_ve_acquisition_signature_ignores_request_and_software_metadata(tmp_path
 @pytest.mark.parametrize("device,channels,rate", [
     (device_info(physical_channels=[0, 2]), (0, 7), 48000),
     (device_info(), (), 48000),
-    (device_info(), (7, 1), 96000),
+    (device_info(), (7, 1), 102401),
 ])
 def test_ve_acquisition_signature_rejects_incomplete_or_invalid_acquisition(
         device, channels, rate):
@@ -65,10 +68,10 @@ def test_ve_acquisition_signature_rejects_incomplete_or_invalid_acquisition(
 
 @pytest.mark.parametrize(
     "value, accepted",
-    [(44100, True), (48000, True), (51200, True)]
+    [(value, True) for value in (8000, 32000, 44100, 48000, 51200, 96000, 102400,
+                                44099, 44101, 47999, 48001, 51199, 51201)]
     + [(value, False) for value in (
-        None, True, False, 44100.0, "48000", 1, 44099, 44101,
-        47999, 48001, 51199, 51201, 96000, 102400,
+        None, True, False, 44100.0, 48000.5, "48000", 1, 7999, 102401,
     )],
 )
 def test_rate_validation_is_strict(value, accepted):
@@ -110,7 +113,7 @@ def test_new_config_defaults_only_at_creation():
     assert create_input_config() == input_config(51200)
 
 
-@pytest.mark.parametrize("rate", [44100, 48000, 51200])
+@pytest.mark.parametrize("rate", [8000, 32000, 44100, 48000, 51200, 96000, 102400])
 def test_existing_configs_restore_exact_rate(rate):
     from base.ve3668n_input import create_input_config, validate_input_config
 
@@ -120,8 +123,7 @@ def test_existing_configs_restore_exact_rate(rate):
 
 
 @pytest.mark.parametrize("rate", [
-    None, True, False, 44100.0, "48000", 1, 44099, 44101,
-    47999, 48001, 51199, 51201, 96000, 102400,
+    None, True, False, 44100.0, 48000.5, "48000", 1, 7999, 102401,
 ])
 def test_invalid_rate_never_falls_back_to_default(rate):
     from base.ve3668n_input import (
@@ -240,7 +242,7 @@ def test_routing_display_and_selection_do_not_change_calibration_identity(overri
     )
 
 
-@pytest.mark.parametrize("rate", [None, True, 44100.0, "48000", 1, 96000, 102400])
+@pytest.mark.parametrize("rate", [None, True, 44100.0, "48000", 1, 7999, 102401])
 def test_invalid_rate_is_not_a_calibration_applicability_condition(rate):
     from base.ve3668n_input import calibration_fingerprint, validate_input_config
 
@@ -431,7 +433,7 @@ def test_soundcard_effective_rate_is_returned_untouched(device, rate):
     assert resolve_effective_input_rate(device, rate) is rate
 
 
-@pytest.mark.parametrize("rate", [44100, 48000, 51200])
+@pytest.mark.parametrize("rate", [8000, 32000, 44100, 48000, 51200, 96000, 102400])
 @pytest.mark.parametrize("product_rate", [22050, 96000, None])
 def test_ve_effective_rate_uses_only_its_input_config(rate, product_rate):
     from base.ve3668n_input import resolve_effective_input_rate
@@ -441,8 +443,7 @@ def test_ve_effective_rate_uses_only_its_input_config(rate, product_rate):
 
 
 @pytest.mark.parametrize("rate", [
-    None, True, False, 44100.0, "48000", 1, 44099, 44101,
-    47999, 48001, 51199, 51201, 96000, 102400,
+    None, True, False, 44100.0, 48000.5, "48000", 1, 7999, 102401,
 ])
 def test_effective_rate_never_substitutes_a_product_or_default_rate(rate):
     from base.ve3668n_input import resolve_effective_input_rate
@@ -581,7 +582,7 @@ def test_snapshots_freeze_and_round_trip_through_json_and_pickle():
 
 @pytest.mark.parametrize("overrides", [
     {"input_config": input_config(sensitivity=1000.0)},
-    {"input_config": input_config(102400)}, {"physical_channels": [7, 7]},
+    {"input_config": input_config(102401)}, {"physical_channels": [7, 7]},
     {"machine_id": " "}, {"model": "prefix VE3668N"},
 ])
 def test_failed_validation_also_leaves_caller_data_unchanged(overrides):
@@ -623,3 +624,49 @@ def test_shared_schema_constants_and_fake_data_do_not_share_mutable_state():
     first["input_config"]["sample_rate"] = 44100
     first["physical_channels"].reverse()
     assert second == device_info()
+
+
+@pytest.mark.parametrize("index,limit,label", [
+    (0, 10.0, "±10 V"), (1, 5.0, "±5 V"), (2, 2.5, "±2.5 V"),
+    (3, 1.0, "±1 V"), (4, 0.5, "±500 mV"), (5, 0.1, "±100 mV"),
+    (6, 0.02, "±20 mV"),
+])
+def test_seven_ranges_map_to_voltage_configs(index, limit, label):
+    from base.ve3668n_input import (
+        create_input_config, validate_input_config, validate_range_index,
+        voltage_limits_for_range,
+    )
+    from consts.ve3668n_consts import VE_RANGE_LABELS, VE_RANGE_LIMITS
+
+    assert VE_RANGE_LIMITS[index] == limit
+    assert VE_RANGE_LABELS[index] == label
+    assert len(VE_RANGE_LIMITS) == len(VE_RANGE_LABELS) == 7
+    assert validate_range_index(index) == index
+    assert voltage_limits_for_range(index) == (-limit, limit)
+    expected = input_config(96000, range_min=-limit, range_max=limit)
+    assert create_input_config(96000, range_index=index) == expected
+    assert validate_input_config(expected) == expected
+
+
+@pytest.mark.parametrize("bad", [-1, 7, True, False, 1.0, 1.5, "1", None])
+def test_range_index_is_a_strict_enumeration(bad):
+    from base.ve3668n_input import (
+        create_input_config, validate_range_index, voltage_limits_for_range,
+    )
+
+    for validate in (validate_range_index, voltage_limits_for_range,
+                     lambda value: create_input_config(range_index=value)):
+        with pytest.raises(ValueError, match="ve_range_index"):
+            validate(bad)
+
+
+@pytest.mark.parametrize("minimum,maximum", [
+    (-5, 10), (-10, 5), (-3, 3), (0, 0), (1, -1),
+    (-float("inf"), float("inf")), (float("nan"), 10),
+    (-10, float("nan")), (-10, 10 ** 400), (False, True),
+])
+def test_ranges_require_a_listed_symmetric_finite_pair(minimum, maximum):
+    from base.ve3668n_input import validate_input_config
+
+    with pytest.raises(ValueError, match="range_min|range_max"):
+        validate_input_config(input_config(range_min=minimum, range_max=maximum))

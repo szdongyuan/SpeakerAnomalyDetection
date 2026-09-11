@@ -431,7 +431,7 @@ def test_main_workflow_routes_start_through_event_completion(monkeypatch, monito
 
     request = host.recording_bridge.request
     assert request.channels == (0, 1)
-    assert request.monitor["enabled"] is monitor_playback
+    assert dict(request.monitor) == {}
     assert host.streaming_processor.session is host._recording_process_session
     assert not hasattr(host, "streaming_poll_timer")
     assert host._streaming_completion_processor is None

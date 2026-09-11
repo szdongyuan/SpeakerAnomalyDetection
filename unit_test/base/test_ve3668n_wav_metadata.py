@@ -12,6 +12,7 @@ from scipy.io import wavfile
 
 from base import wav_calibration_metadata as wav_metadata_io
 from base.recording_process_protocol import FrozenConfig
+from consts.ve3668n_consts import VE_RANGE_LIMITS
 from unit_test.base.ve3668n_fakes import wav_metadata
 from unit_test.base.test_wav_calibration_metadata import (
     _append_raw_chunk, _chunk, _install_bounded_open, _metadata_list_chunk,
@@ -20,8 +21,10 @@ from unit_test.base.test_wav_calibration_metadata import (
 
 @pytest.mark.parametrize("sources", [("none", "none"), ("measured", "measured"),
                                      ("measured", "none")])
-def test_none_measured_mixed_round_trip_preserves_voltage_and_original_rate(tmp_path, sources):
+@pytest.mark.parametrize("limit", VE_RANGE_LIMITS)
+def test_none_measured_mixed_round_trip_preserves_voltage_and_original_rate(tmp_path, sources, limit):
     payload = wav_metadata(sources)
+    payload["acquisition"].update(range_min=-limit, range_max=limit)
     path = tmp_path / "voltage.wav"
     audio = np.array([[2.5, -7.0], [-4.0, 1.5], [0.125, 9.0]], dtype=np.float32)
     wavfile.write(path, 44100, audio)  # IEEE FLOAT format 3, not Python wave PCM.
@@ -119,7 +122,7 @@ def test_duplicate_channel_identity_is_rejected(field):
     assert wav_metadata_io.normalize_wav_calibration_metadata(payload) is None
 
 
-@pytest.mark.parametrize("capture_rate,calibration_rate", [(16000, 96000), (96000, 22050)])
+@pytest.mark.parametrize("capture_rate,calibration_rate", [(4000, 192000), (192000, 4000)])
 def test_historical_positive_rates_are_not_new_acquisition_whitelist(tmp_path, capture_rate,
                                                                   calibration_rate):
     payload = wav_metadata(sample_rate=capture_rate)

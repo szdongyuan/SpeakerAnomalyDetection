@@ -119,19 +119,29 @@ class SequenceWidgetRecordingProcessOpsMixin:
         signature = None
         mic = getattr(self, "mic", None)
         if (mic or {}).get("backend") == "vkinging":
+            from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
             try:
                 from base.ve3668n_input import ve_acquisition_signature
+                mic = SequenceWidgetConfigOpsMixin._current_ve_recording_device(self, mic)
+                if not mic["available"]:
+                    raise ValueError("VE 输入设备不可用，请在硬件设置中刷新")
                 signature = ve_acquisition_signature(
                     mic,
                     getattr(self, "mic_channels", ()),
                     (mic.get("input_config") or {}).get("sample_rate"),
                 )
-            except (TypeError, ValueError, AttributeError, OverflowError):
-                signature = None
+            except (ValueError, OSError) as exc:
+                diagnostic = str(exc)
+                if diagnostic != getattr(self, "_ve_recording_config_error", None):
+                    import logging
+                    logging.getLogger(__name__).warning("VE recording configuration: %s", diagnostic)
+                self._ve_recording_config_error = diagnostic
+                return False
+        self._ve_recording_config_error = None
         return lifetime.admission_for(signature) == "allowed"
 
-    def _can_start_recording_workflow(self):
-        """Combine local non-capture blockers with the service's atomic admission state."""
+    def _can_prepare_recording_workflow(self):
+        """Check ownership before selecting a target condition's queue."""
         if any(bool(getattr(self, name, False)) for name in (
                 "_recording_closed", "_closing", "_shutdown_started", "_close_in_progress",
                 "_test_metadata_validation_open", "_product_test_program_config_dialog_open",
@@ -146,7 +156,8 @@ class SequenceWidgetRecordingProcessOpsMixin:
         for controller in controllers:
             if controller is not None and controller.is_audio_playing():
                 return False
-        if not SequenceWidgetRecordingProcessOpsMixin._ve_prewarm_admission_available(self):
+        lifetime = getattr(self, "ve_prewarm_lifetime", None)
+        if lifetime is not None and lifetime.admission_for(None) != "allowed":
             return False
         if (getattr(self, "_recording_publication_in_progress", False)
                 or getattr(self, "_recording_process_contexts", None)
@@ -156,6 +167,13 @@ class SequenceWidgetRecordingProcessOpsMixin:
         bridge = getattr(self, "recording_bridge", None)
         return bridge is None or bool(getattr(
             bridge.service, "can_start_recording", not getattr(bridge.service, "busy", False)))
+
+    def _can_start_recording_workflow(self):
+        """Validate the selected queue after ownership allows preparation."""
+        return (
+            SequenceWidgetRecordingProcessOpsMixin._can_prepare_recording_workflow(self)
+            and SequenceWidgetRecordingProcessOpsMixin._ve_prewarm_admission_available(self)
+        )
 
     def _can_start_calibration_workflow(self):
         return self._can_start_recording_workflow()
@@ -203,19 +221,18 @@ class SequenceWidgetRecordingProcessOpsMixin:
         else:
             request_rate = int(sample_rate)
         channels = tuple(self._recording_input_channels)
-        monitor = {
-            "enabled": bool(recorded_dict.get("monitor_playback", False)),
-            "device": recorded_dict.get("output_device"),
-            "channels": tuple(recorded_dict.get("output_channels") or ()),
-            "gain_db": float(recorded_dict.get("monitor_gain_db", 0)),
-            "mute_leading_samples": int(recorded_dict.get("monitor_mute_leading_samples", 0)),
-            "fade_in_samples": int(recorded_dict.get("monitor_fade_in_samples", 0)),
-        }
+        # Normalize the former mute field only at the legacy dictionary boundary.
+        if "startup_trim_samples" in recorded_dict:
+            startup_trim_samples = recorded_dict["startup_trim_samples"]
+        elif "monitor_mute_leading_samples" in recorded_dict:
+            startup_trim_samples = recorded_dict["monitor_mute_leading_samples"]
+        else:
+            startup_trim_samples = resolve_startup_trim_samples(detail, sample_rate)
         request = RecordingRequest(
             uuid4().hex, "main", request_rate, int(recorded_dict["num_frames"]),
             channels, recorded_dict["device"], os.path.abspath(self.recorded_path),
             bool(self._should_use_streaming_recording()),
-            resolve_startup_trim_samples(detail, sample_rate), monitor,
+            startup_trim_samples, {},
             getattr(self, "_recording_wav_calibration_metadata", None),
             merge_audio_validation_thresholds(detail),
             preview_time_mode)

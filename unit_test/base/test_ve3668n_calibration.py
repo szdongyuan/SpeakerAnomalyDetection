@@ -64,7 +64,7 @@ def test_verify_rejects_descriptor_mismatch(tmp_path, field, value):
 @pytest.mark.parametrize("field,value", [
     ("request_id", ""), ("purpose", "main"), ("sample_rate", 44100),
     ("target_samples", 1200), ("trim_samples", 1), ("channels", (8,)),
-    ("channels", (7, 1)), ("monitor", FrozenConfig.snapshot({"enabled": True})),
+    ("channels", (7, 1)),
     ("streaming", True),
 ])
 def test_verify_revalidates_frozen_request_contract(tmp_path, field, value):
@@ -205,3 +205,12 @@ def sine_capture_dependencies(*, standard=94, parent_pid=None):
             return buffer, count
 
     return {"ve_sdk_factory": SineSDK}
+
+
+def test_calibration_verification_ignores_legacy_monitor_fields(tmp_path):
+    from base.ve3668n_calibration import verify_ve_calibration_result
+    request = calibration_request(tmp_path)
+    object.__setattr__(request, "monitor", FrozenConfig.snapshot({"enabled": True, "gain_db": "corrupt"}))
+    audio = sine_volts()
+    result = verify_ve_calibration_result(request, descriptor_for(request), audio)
+    np.testing.assert_array_equal(result, audio)

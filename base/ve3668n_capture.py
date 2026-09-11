@@ -185,7 +185,9 @@ class Ve3668nInputStream:
                 return
             stage = "create_iepe_voltage_channel"
             routes = ",".join(f"{fresh['name']}/AIN{channel + 1}" for channel in self.request.channels)
-            self._sdk.create_iepe_voltage_channel(self._task, routes)
+            config = self.request.device["input_config"]
+            self._sdk.create_iepe_voltage_channel(
+                self._task, routes, range_min=config["range_min"], range_max=config["range_max"])
             if self.stop_event.is_set():
                 return
             stage = "configure_sample_clock"

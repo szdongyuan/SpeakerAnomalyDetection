@@ -7,6 +7,32 @@ from unit_test.base.recording_process_fakes import device_info as legacy_device
 from unit_test.base.ve3668n_fakes import capture_request, device_info, input_config, wav_metadata
 
 
+@pytest.mark.parametrize("limit", [10.0, 5.0, 2.5, 1.0, .5, .1, .02])
+def test_full_signature_and_prewarm_wire_round_trip(limit):
+    from base.ve3668n_input import ve_acquisition_signature
+    from base.recording_process_protocol import VePrewarmRequest, VeReleaseOutcome
+
+    device = device_info(input_config=input_config(96000, range_min=-limit, range_max=limit))
+    expected = ("vkinging", device["machine_id"], (7, 1), 96000, "IEPE", "V", -limit, limit)
+    signature = ve_acquisition_signature(device, (7, 1), 96000)
+    assert signature == expected
+    assert ve_acquisition_signature(device, (7, 1), 96000) == signature
+    if limit != 10:
+        assert signature != ve_acquisition_signature(
+            device_info(input_config=input_config(96000)), (7, 1), 96000)
+    request = VePrewarmRequest.create("range", device, (7, 1), 96000, attempt=1)
+    assert request.signature == signature
+    outcome = VeReleaseOutcome(1, signature)
+    assert pickle.loads(pickle.dumps(outcome)).released_signature == signature
+
+
+def test_signature_rejects_request_rate_different_from_snapshot():
+    from base.ve3668n_input import ve_acquisition_signature
+
+    with pytest.raises(ValueError, match="sample_rate.*match"):
+        ve_acquisition_signature(device_info(), (7, 1), 48000)
+
+
 @pytest.mark.parametrize("rate", [44100, 48000, 51200])
 @pytest.mark.parametrize("streaming", [False, True])
 def test_ve_main_freezes_valid_none_snapshot(tmp_path, rate, streaming):
@@ -39,8 +65,7 @@ def test_unknown_explicit_backend_rejects_legacy_shaped_device(tmp_path, backend
     assert list(tmp_path.iterdir()) == []
 
 
-@pytest.mark.parametrize("rate", [None, True, False, 44100.0, "48000", 1, 96000, 102400,
-                                  44099, 44101, 47999, 48001, 51199, 51201])
+@pytest.mark.parametrize("rate", [None, True, False, 44100.0, "48000", 1, 7999, 102401])
 def test_ve_request_rejects_illegal_rate(tmp_path, rate):
     with pytest.raises(ValueError, match="sample_rate"):
         capture_request(tmp_path / "bad.wav", sample_rate=rate)
@@ -80,9 +105,10 @@ def test_ve_selected_channels_must_be_an_ordered_sequence(tmp_path, channels):
 
 @pytest.mark.parametrize("monitor", [{"enabled": True}, {"enabled": 1},
                                       {"enabled": "false"}, {"sensitivity": 2}])
-def test_ve_rejects_monitoring_before_output_device_validation(tmp_path, monitor):
-    with pytest.raises(ValueError, match="monitor"):
-        capture_request(tmp_path / "bad.wav", monitor=monitor)
+def test_ve_ignores_legacy_monitor_fields(tmp_path, monitor):
+    request = capture_request(tmp_path / "record.wav", monitor=monitor, streaming=False)
+    assert dict(request.monitor) == {}
+    assert request.effective_streaming is False
 
 
 @pytest.mark.parametrize("metadata", [None, {}, {"recorded_channels": []}])
@@ -290,7 +316,7 @@ def test_release_payloads_and_private_event_kinds_are_typed_and_serializable():
     from consts.ve3668n_consts import VE_BACKEND
 
     assert hasattr(protocol, "VeReleaseOutcome"), "missing VE release wire contract"
-    signature = (VE_BACKEND, "test-machine-1", (7, 1), 51200)
+    signature = (VE_BACKEND, "test-machine-1", (7, 1), 51200, "IEPE", "V", -10.0, 10.0)
     outcome = protocol.VeReleaseOutcome(2, signature, ("released",))
     fatal = protocol.WorkerFatal(2, "native_read", "device lost")
     events = (
@@ -325,9 +351,9 @@ def test_generation_lifecycle_events_require_canonical_empty_request_id(kind, re
     payloads = {
         "release_ve": None,
         "ve_released": protocol.VeReleaseOutcome(
-            2, (VE_BACKEND, "test-machine-1", (7, 1), 51200)),
+            2, (VE_BACKEND, "test-machine-1", (7, 1), 51200, "IEPE", "V", -10.0, 10.0)),
         "ve_release_failed": protocol.VeReleaseOutcome(
-            2, (VE_BACKEND, "test-machine-1", (7, 1), 51200), ("failure",)),
+            2, (VE_BACKEND, "test-machine-1", (7, 1), 51200, "IEPE", "V", -10.0, 10.0), ("failure",)),
         "worker_fatal": protocol.WorkerFatal(2, "native_read", "device lost"),
     }
 
@@ -339,9 +365,15 @@ def test_generation_lifecycle_events_require_canonical_empty_request_id(kind, re
 @pytest.mark.parametrize("values", [
     dict(generation=True), dict(generation=0), dict(generation=1.0),
     dict(released_signature=[]),
-    dict(released_signature=("vkinging", "machine", (7, 1), 96000)),
-    dict(released_signature=("vkinging", "machine", (7, 7), 51200)),
-    dict(released_signature=("vkinging", " machine ", (7, 1), 51200)),
+    dict(released_signature=("vkinging", "machine", (7, 1), 51200)),
+    dict(released_signature=("vkinging", "machine", (7, 1), 51200, "voltage", "V", -10, 10)),
+    dict(released_signature=("vkinging", "machine", (7, 1), 51200, "IEPE", "g", -10, 10)),
+    dict(released_signature=("vkinging", "machine", (7, 1), 51200, "IEPE", "V", -5, 10)),
+    dict(released_signature=("vkinging", "machine", (7, 1), 51200, "IEPE", "V", -3, 3)),
+    dict(released_signature=("vkinging", "machine", (7, 1), 51200, "IEPE", "V", -10, float("nan"))),
+    dict(released_signature=("vkinging", "machine", (7, 1), 102401, "IEPE", "V", -10.0, 10.0)),
+    dict(released_signature=("vkinging", "machine", (7, 7), 51200, "IEPE", "V", -10.0, 10.0)),
+    dict(released_signature=("vkinging", " machine ", (7, 1), 51200, "IEPE", "V", -10.0, 10.0)),
     dict(diagnostics=["failed"]), dict(diagnostics=(1,)),
 ])
 def test_release_outcome_scalar_and_signature_contract(values):
@@ -349,7 +381,7 @@ def test_release_outcome_scalar_and_signature_contract(values):
     from consts.ve3668n_consts import VE_BACKEND
 
     valid = dict(generation=1,
-                 released_signature=(VE_BACKEND, "machine", (7, 1), 51200),
+                 released_signature=(VE_BACKEND, "machine", (7, 1), 51200, "IEPE", "V", -10.0, 10.0),
                  diagnostics=())
     valid.update(values)
     with pytest.raises(ValueError):
@@ -386,7 +418,7 @@ def _prewarm_result(**changes):
 
     values = dict(
         warmup_id="warm-1", generation=2, attempt=1,
-        signature=(VE_BACKEND, "test-machine-1", (7, 1), 51200),
+        signature=(VE_BACKEND, "test-machine-1", (7, 1), 51200, "IEPE", "V", -10.0, 10.0),
         success=True, stage="completed", code=None, detail="",
         frames_per_channel=25600, handles_released=True, diagnostics=(),
         lifecycle_counts=_lifecycle_counts(task_stop=1),
@@ -402,7 +434,7 @@ def test_ve_prewarm_request_is_half_second_per_channel_and_frozen():
     assert request.frames_per_channel == 25600
     assert request.target_samples == 25600
     assert request.channels == (7, 1)
-    assert request.signature == ("vkinging", device["machine_id"], (7, 1), 51200)
+    assert request.signature == ("vkinging", device["machine_id"], (7, 1), 51200, "IEPE", "V", -10.0, 10.0)
     device["machine_id"] = "changed"
     assert request.device["machine_id"] == "test-machine-1"
     with pytest.raises(TypeError):
@@ -494,7 +526,7 @@ def test_ve_prewarm_failure_preserves_valid_staged_faults(changes):
     {"generation": 0}, {"generation": True}, {"generation": 1.0},
     {"attempt": 0}, {"attempt": 3}, {"attempt": True},
     {"signature": ("sounddevice", "test-machine-1", (7, 1), 51200)},
-    {"signature": ("vkinging", "test-machine-1", (1, 7), 96000)},
+    {"signature": ("vkinging", "test-machine-1", (1, 7), 102401, "IEPE", "V", -10.0, 10.0)},
     {"success": 1}, {"stage": ""}, {"stage": 1},
     {"code": True}, {"code": 1.0}, {"detail": 1},
     {"frames_per_channel": -1}, {"frames_per_channel": True},

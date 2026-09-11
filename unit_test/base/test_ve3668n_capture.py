@@ -56,6 +56,22 @@ def finish_stream(stream):
     stream.close()
 
 
+@pytest.mark.parametrize("limit", [10.0, 5.0, 2.5, 1.0, .5, .1, .02])
+def test_single_capture_applies_requested_voltage_range(tmp_path, limit):
+    from unit_test.base.ve3668n_fakes import device_info, input_config
+
+    config = input_config(range_min=-limit, range_max=limit)
+    metadata = wav_metadata(("none", "none"), sample_rate=51200)
+    metadata["acquisition"].update(config, machine_id="test-machine-1")
+    stream, sdk, _, _, failures = make_stream(
+        tmp_path, device=device_info(input_config=config), calibration_metadata=metadata)
+    assert stream.start()
+    finish_stream(stream)
+    assert failures == []
+    call = next(item for item in sdk.trace if item["operation"] == "create_iepe_voltage_channel")
+    assert call["kwargs"] == {"range_min": -limit, "range_max": limit}
+
+
 def cleanup_log_records(caplog):
     return [record for record in caplog.records
             if record.name == "base.ve3668n_capture"
@@ -742,18 +758,28 @@ def test_main_metadata_is_required_and_cannot_damage_raw_audio(tmp_path, mode):
     assert outcome.handles_released is (mode not in ("unreleased", "retained"))
 
 
-def test_quality_gate_uses_only_temporary_tenth_scale_and_leaves_raw_voltage(tmp_path, monkeypatch):
+@pytest.mark.parametrize("limit", [10.0, 5.0, 2.5, 1.0, 0.5, 0.1, 0.02])
+def test_quality_gate_uses_only_temporary_full_scale_and_leaves_raw_voltage(tmp_path, monkeypatch, limit):
     from base import recording_capture
     inspected = []
     def validate(audio, thresholds):
         inspected.append(audio.copy())
         return True, "", ""
     monkeypatch.setattr(recording_capture, "validate_recorded_audio", validate)
-    capture, _, _, _ = start_capture(tmp_path, request_options={"validation_thresholds": {"enabled": True}})
+    request = capture_request(tmp_path / "capture.wav")
+    device = request.device.to_dict()
+    device["input_config"].update(range_min=-limit, range_max=limit)
+    metadata = request.calibration_metadata.to_dict()
+    metadata["acquisition"].update(range_min=-limit, range_max=limit)
+    capture, _, _, _ = start_capture(tmp_path, request_options={
+        "validation_thresholds": {"enabled": True},
+        "device": device, "calibration_metadata": metadata,
+    })
     outcome = capture.wait(3)
     assert isinstance(outcome, RecordingResult)
     expected = np.tile(np.array([8.25, 2.5], dtype=np.float32), (7, 1))
-    np.testing.assert_array_equal(inspected[0], expected / 10)
+    assert len(inspected) == 1
+    np.testing.assert_array_equal(inspected[0], expected / limit)
     np.testing.assert_array_equal(sf.read(outcome.path, dtype="float32")[0], expected)
 
 

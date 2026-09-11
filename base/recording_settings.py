@@ -31,7 +31,6 @@ from consts import model_consts
 
 _HARDCODE_DEFAULTS: Dict[str, Any] = {
     "startup_trim_ms": 100.0,
-    "monitor_fade_in_ms": 1.0,
     "audio_validation": {
         "enabled": False,
         "min_rms_dbfs": -65.0,
@@ -80,7 +79,6 @@ def _read_settings_file(path: str) -> Dict[str, Any]:
     """Read the JSON; any error path falls back to ``_HARDCODE_DEFAULTS``."""
     merged: Dict[str, Any] = {
         "startup_trim_ms": _HARDCODE_DEFAULTS["startup_trim_ms"],
-        "monitor_fade_in_ms": _HARDCODE_DEFAULTS["monitor_fade_in_ms"],
         "audio_validation": dict(_HARDCODE_DEFAULTS["audio_validation"]),
     }
     if not path or not os.path.isfile(path):
@@ -95,8 +93,6 @@ def _read_settings_file(path: str) -> Dict[str, Any]:
 
     if "startup_trim_ms" in raw and raw["startup_trim_ms"] is not None:
         merged["startup_trim_ms"] = raw["startup_trim_ms"]
-    if "monitor_fade_in_ms" in raw and raw["monitor_fade_in_ms"] is not None:
-        merged["monitor_fade_in_ms"] = raw["monitor_fade_in_ms"]
     merged["audio_validation"] = _coerce_audio_validation(
         raw.get("audio_validation")
     )
@@ -150,24 +146,6 @@ def resolve_startup_trim_ms(acq_detail: Any) -> float:
     if global_value is not None:
         return global_value
     return float(_HARDCODE_DEFAULTS["startup_trim_ms"])
-
-
-def resolve_monitor_fade_in_ms(acq_detail: Any) -> float:
-    """Resolve ``monitor_fade_in_ms`` (same precedence as startup trim).
-
-    ``0`` means "hard cut, no fade" -- accepts whatever click the
-    hardware produces; only useful for diagnostics.
-    """
-    if isinstance(acq_detail, dict) and "monitor_fade_in_ms" in acq_detail:
-        local = _coerce_positive_ms(acq_detail.get("monitor_fade_in_ms"))
-        if local is not None:
-            return local
-    global_value = _coerce_positive_ms(
-        get_global_settings().get("monitor_fade_in_ms")
-    )
-    if global_value is not None:
-        return global_value
-    return float(_HARDCODE_DEFAULTS["monitor_fade_in_ms"])
 
 
 def resolve_audio_validation_thresholds(acq_detail: Any) -> Dict[str, Any]:

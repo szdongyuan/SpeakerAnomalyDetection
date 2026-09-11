@@ -151,25 +151,22 @@ def test_input_overflow_fails_but_output_warning_does_not(tmp_path, captures, ov
         assert any("output underflow" in text for text in result.warnings)
 
 
-@pytest.mark.parametrize("streaming,monitor", [(False, False), (True, False), (False, True), (True, True)])
-def test_effective_mode_and_monitor_gain_mute_fade(tmp_path, captures, streaming, monitor):
-    settings = dict(enabled=monitor, device=device_info(), channels=(1,), gain_db=6.020599913279624,
-                    mute_leading_samples=3, fade_in_samples=4)
-    capture, backend = captures(request(tmp_path, streaming=streaming, monitor=settings, trim_samples=0))
-    assert capture.request.effective_streaming is (streaming or monitor)
-    outputs = []
-    expected = known_audio()
-    for chunk in (expected[:2], expected[2:5], expected[5:]):
-        outputs.append(backend.stream.feed(chunk))
-    assert isinstance(capture.wait(3), RecordingResult)
-    if monitor:
-        actual = np.concatenate(outputs)
-        mono = expected[:9, [0, 2]].mean(axis=1)
-        play = np.pad(np.clip(mono * 2, -1, 1), (0, 3))
-        play[:3] = 0
-        play[3:5] *= np.array([0, .5], dtype=np.float32)
-        np.testing.assert_allclose(actual[:, 1], play, atol=1e-7)
-        np.testing.assert_array_equal(actual[:, 0], 0)
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("settings", [
+    {"enabled": True, "device": device_info(), "channels": (1,), "gain_db": 6.0},
+    {"enabled": True, "device": None, "gain_db": "corrupt", "fade_in_samples": {}},
+    {"enabled": False, "gain_db": "corrupt", "fade_in_samples": float("nan")},
+])
+def test_legacy_monitor_settings_never_activate_output_or_preview(tmp_path, captures, streaming, settings):
+    capture, backend = captures(request(tmp_path, streaming=streaming, monitor=settings))
+    assert dict(capture.request.monitor) == {}
+    assert capture.request.effective_streaming is streaming
+    assert isinstance(backend.stream.config["channels"], int)
+    expected = feed_all(backend)[:9, [0, 2]][2:]
+    result = capture.wait(3)
+    assert isinstance(result, RecordingResult)
+    np.testing.assert_array_equal(sf.read(result.path, dtype="float32")[0], expected)
+    assert (capture.snapshot(generation=1, sequence=1) is not None) is streaming
 
 
 @pytest.mark.parametrize("fail_at", ["write", "close"])
@@ -812,18 +809,3 @@ def test_non_live_capture_does_not_construct_preview_and_keeps_full_audio(
     assert capture.snapshot(generation=1, sequence=1) is None
     saved, _ = sf.read(outcome.path, dtype="float32", always_2d=True)
     np.testing.assert_array_equal(saved, data[:9, (0, 2)][2:])
-
-
-@pytest.mark.parametrize("sizes,mute,fade", [((2, 3, 7), 3, 4), ((3, 3, 6), 3, 4), ((4, 8), 0, 4)])
-def test_legacy_monitor_characterization(sizes, mute, fade):
-    from base.recording_capture import apply_monitor_startup_mute
-    from base.streaming_audio_processor import StreamingAudioProcessor
-    processor = StreamingAudioProcessor()
-    processor._monitor_mute_leading_samples = mute
-    offset = 0
-    for size in sizes:
-        data = np.ones(size, dtype=np.float32)
-        actual = processor._apply_monitor_startup_mute(data, fade)
-        shared = apply_monitor_startup_mute(data, mute_total=mute, emitted_before=offset, fade_len=fade)
-        np.testing.assert_array_equal(shared, actual)
-        offset += size

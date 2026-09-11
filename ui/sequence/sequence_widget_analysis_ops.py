@@ -20,7 +20,7 @@ from base.excel_result_exporter import (
 from base.load_config import LoadUiConfig
 from base.analysis_artifact_paths import AnalysisStorageContext
 from base.recording_process_protocol import FrozenConfig
-from base.ve3668n_input import resolve_effective_input_rate, validate_device_snapshot
+from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from base.product_test_project_config import (
     classify_project_trigger_mode,
     is_manual_project_play_allowed,
@@ -31,7 +31,6 @@ from base.recording_calibration_snapshot import (
 
 from base.play_and_record import (
     get_recorded_info,
-    resolve_monitor_fade_in_samples,
     resolve_startup_trim_samples,
     stream_record_without_play,
 )
@@ -1086,7 +1085,8 @@ class SequenceWidgetAnalysisOpsMixin(
         if getattr(self, "_round_reset_delete_failed", False):
             QMessageBox.warning(self, "删除未完成", "请先点击重置，完成剩余数据的删除。")
             return None
-        can_start = getattr(self, "_can_start_recording_workflow", None)
+        can_start = getattr(self, "_can_prepare_recording_workflow",
+                            getattr(self, "_can_start_recording_workflow", None))
         if callable(can_start):
             if not can_start():
                 return None
@@ -1142,6 +1142,13 @@ class SequenceWidgetAnalysisOpsMixin(
         ok, message = load_condition_config(condition)
         if not ok:
             QMessageBox.warning(self, "提示", message or "当前工况测试队列配置不可用。")
+            return None
+
+        can_start = getattr(self, "_can_start_recording_workflow", None)
+        if not self._is_import_audio_mode() and callable(can_start) and not can_start():
+            config_error = getattr(self, "_ve_recording_config_error", None)
+            if config_error:
+                QMessageBox.warning(self, "VE 录制配置错误", config_error)
             return None
 
         validate_analysis_channels = getattr(
@@ -2752,19 +2759,24 @@ class SequenceWidgetAnalysisOpsMixin(
         # Triggering a second silent run here clears those window references immediately.
 
     def start_this_play(self, label="not_labeled"):
-        cancel_pending_serial_trigger = getattr(self, "_cancel_pending_serial_trigger_delay", None)
-        if callable(cancel_pending_serial_trigger):
-            cancel_pending_serial_trigger()
-        can_start = getattr(self, "_can_start_recording_workflow", None)
+        can_start = getattr(self, "_can_prepare_recording_workflow",
+                            getattr(self, "_can_start_recording_workflow", None))
         if callable(can_start) and not can_start():
             return
         if not callable(can_start) and (getattr(self, "_record_workflow_busy", False)
                                         or getattr(self, "player_status_flag", False)):
             return
+        cancel_pending_serial_trigger = getattr(self, "_cancel_pending_serial_trigger_delay", None)
+        if callable(cancel_pending_serial_trigger):
+            cancel_pending_serial_trigger()
         if self.checked_work_status_message():
             cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
             if callable(cancel_metadata):
                 cancel_metadata()
+            return
+
+        can_start = getattr(self, "_can_start_recording_workflow", None)
+        if callable(can_start) and not can_start():
             return
 
         tcp_completion_address = None
@@ -2926,24 +2938,15 @@ class SequenceWidgetAnalysisOpsMixin(
             "sample_rate", getattr(self, "_recording_product_sample_rate", self.data_struct.sample_rate))
         recording_device = self.mic
         if recording_device and recording_device.get("backend") == "vkinging":
-            profiles = getattr(self, "ve_profile_store", None)
-            calibrations = getattr(self, "ve_calibration_store", None)
-            if profiles is None or calibrations is None:
-                raise ValueError("VE recording requires the shared profile and calibration stores")
-            recording_device = validate_device_snapshot({
-                **recording_device,
-                "input_config": profiles.load(recording_device, calibrations),
-            })
+            recording_device = SequenceWidgetConfigOpsMixin._current_ve_recording_device(
+                self, recording_device)
             if not recording_device["available"]:
                 raise ValueError("VE 输入设备不可用，请检查连接并在硬件设置中刷新")
-            if self._resolve_recording_acq_detail().get("monitor_playback", False):
-                raise ValueError("VE 不支持实时监听，请在采集配置中关闭监听后重试")
             self._recording_ve_device = FrozenConfig.snapshot(recording_device)
             # clear_data intentionally retains fs. Resolve before LoadUiConfig
-            # computes any frame counts, and retain this profile for the run.
+            # computes any frame counts, and retain this queue snapshot for the run.
             self._recording_product_sample_rate = product_sample_rate
-            self.data_struct.sample_rate = resolve_effective_input_rate(
-                recording_device, product_sample_rate)
+            self.data_struct.sample_rate = recording_device["input_config"]["sample_rate"]
         else:
             self.data_struct.sample_rate = product_sample_rate
         self._excel_export_cache = None
@@ -2977,42 +2980,18 @@ class SequenceWidgetAnalysisOpsMixin(
         if name_suffix:
             self.recorded_signal_info["record_name_suffix"] = name_suffix
         total_time = float(acq_detail.get("total_time", 5.0))
-        monitor_playback = acq_detail.get("monitor_playback", False)
-        monitor_gain_db = float(acq_detail.get("monitor_gain_db", 0.0))
         sample_rate = self.data_struct.sample_rate
         _, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(self.data_struct, total_time)
         # Keep both keys for compatibility across legacy/streaming code paths.
         recorded_dict["sample_rate"] = sample_rate
 
-        # Startup-trim compensation: resolve the shared default plus any
-        # product-level ``startup_trim_ms`` override. The same sample count
-        # drives three places so the pop is
-        # suppressed everywhere it could be heard or stored:
-        #
-        # 1. ``num_frames`` is extended so the streaming-completion
-        #    handler can drop the leading pop and still hand analysis a
-        #    buffer that is exactly ``total_time`` seconds long (keeps
-        #    fixed-length AI models stable).
-        # 2. ``monitor_mute_leading_samples`` is forwarded to the
-        #    processor so the duplex monitor output stays silent during
-        #    the pop window -- otherwise the operator would hear the
-        #    captured pop live through the speakers regardless of the
-        #    post-recording WAV trim.
-        # 3. The post-recording handler uses the same value again to
-        #    trim the in-memory buffer and rewrite the WAV on disk.
+        # Capture the startup transient in addition to the requested duration,
+        # then trim the same frozen sample count from the final recording.
         startup_trim_samples = resolve_startup_trim_samples(acq_detail, sample_rate)
+        recorded_dict["startup_trim_samples"] = startup_trim_samples
         if startup_trim_samples > 0:
             recorded_dict["num_frames"] = (
                 int(recorded_dict.get("num_frames", 0) or 0) + startup_trim_samples
-            )
-            recorded_dict["monitor_mute_leading_samples"] = startup_trim_samples
-            # Fade-in length is only forwarded when there is actually a
-            # mute window; without a mute window the processor never
-            # ramps anything, so resolving the fade would be wasted work
-            # and could mask a config typo (operator setting a fade
-            # length on a product that has trimming disabled).
-            recorded_dict["monitor_fade_in_samples"] = (
-                resolve_monitor_fade_in_samples(acq_detail, sample_rate)
             )
 
         # Add device information for streaming mode
@@ -3022,18 +3001,6 @@ class SequenceWidgetAnalysisOpsMixin(
         # The UI refresh owns normalization. Recording consumes one immutable
         # tuple snapshot and only converts to lists at existing API boundaries.
         run_channels = self._snapshot_recording_input_channels(recorded_dict)
-
-        if monitor_playback:
-            recorded_dict["monitor_playback"] = True
-            recorded_dict["monitor_gain_db"] = monitor_gain_db
-            recorded_dict["output_device"] = self.speaker
-            max_out = 0
-            try:
-                if self.speaker:
-                    max_out = int(self.speaker.get("max_output_channels") or 0)
-            except Exception:
-                max_out = 0
-            recorded_dict["output_channels"] = list(range(max_out)) if max_out > 0 else []
 
         # Keep the active input channels for downstream analysis mapping.
         self._active_input_channels = list(run_channels)
@@ -3058,10 +3025,7 @@ class SequenceWidgetAnalysisOpsMixin(
             detail = self.sequence_config[0]["seq1"]["acq"].get("detail", {})
         except (IndexError, KeyError, TypeError):
             detail = {}
-        return bool(
-            detail.get("use_streaming_recording", False)
-            or detail.get("monitor_playback", False)
-        )
+        return bool(detail.get("use_streaming_recording", False))
 
     @staticmethod
     def _normalize_blocking_recorded_data(recorded_data, recorded_dict):
@@ -3205,6 +3169,9 @@ class SequenceWidgetAnalysisOpsMixin(
     def judge_play_and_record(self, label="not_labeled", is_replay=False, *, tcp_completion_address=None):
         can_start = getattr(self, "_can_start_recording_workflow", None)
         if callable(can_start) and not can_start():
+            config_error = getattr(self, "_ve_recording_config_error", None)
+            if config_error:
+                QMessageBox.warning(self, "VE 录制配置错误", config_error)
             return
         if not callable(can_start) and getattr(self, "_record_workflow_busy", False):
             return

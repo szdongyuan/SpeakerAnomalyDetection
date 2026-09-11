@@ -185,7 +185,7 @@ def test_unknown_saved_rate_is_unavailable_not_defaulted(hardware, tmp_path):
     profiles = VEInputProfileStore(tmp_path / "profiles.json")
     calibrations = VECalibrationStore(tmp_path / "calibrations.json")
     profiles.path.write_text(json.dumps({"schema_version": 1, "devices": {
-        mic["machine_id"]: {**device_info()["input_config"], "sample_rate": 102400}}}), encoding="utf-8")
+        mic["machine_id"]: {**device_info()["input_config"], "sample_rate": 102401}}}), encoding="utf-8")
     before = profiles.path.read_bytes()
     resolved = selection.resolve_ve_input(mic, channels, [device_info()],
         profile_store=profiles, calibration_store=calibrations)
@@ -202,12 +202,12 @@ def test_strict_ve_save_retains_old_mic_fields_and_no_duplicate_rate(hardware, t
     calibrations = VECalibrationStore(tmp_path / "calibrations.json")
     device = device_info()
     saved = selection.save_ve_selection(device, None, [7, 1], [], profile_store=profiles,
-        calibration_store=calibrations, path=path, sample_rate=44100, api_name="MME")
+        calibration_store=calibrations, path=path, api_name="MME")
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["input_selection"] == saved_record()
     assert payload["mic_name"] == old["mic_name"] and payload["mic_channels"] == old["mic_channels"]
     assert payload["speaker_name"] is None
-    assert saved["input_config"]["sample_rate"] == 44100
+    assert saved["input_config"]["sample_rate"] == 51200
     assert device["input_config"]["sample_rate"] == 51200
     assert not defaults and not applied
     # Explicit soundcard switch recovers old mic, without writing anything.
@@ -216,8 +216,7 @@ def test_strict_ve_save_retains_old_mic_fields_and_no_duplicate_rate(hardware, t
 
 
 @pytest.mark.parametrize("existing", [False, True])
-@pytest.mark.parametrize("failure", ["profile", "selection"])
-def test_failed_save_keeps_profile_selection_and_calibration_bytes(hardware, tmp_path, monkeypatch, existing, failure):
+def test_failed_save_keeps_profile_selection_and_calibration_bytes(hardware, tmp_path, monkeypatch, existing):
     path, mic, speaker, *_ = hardware
     selection.save_if_changed(mic, speaker, [1], [])
     profiles = VEInputProfileStore(tmp_path / "profiles.json")
@@ -229,15 +228,13 @@ def test_failed_save_keeps_profile_selection_and_calibration_bytes(hardware, tmp
     before_profile = profiles.path.read_bytes() if existing else None
     before_hardware, before_calibration = path.read_bytes(), calibrations.path.read_bytes()
     before_device = deepcopy(device)
-    if failure == "profile":
-        def fail(*args):
-            raise OSError("profile write denied")
-        monkeypatch.setattr(profiles, "set_sample_rate", fail)
-    else:
-        monkeypatch.setattr(selection, "_atomic_write_json", lambda *args: False)
+    def forbidden(*args):
+        raise AssertionError("Hardware selection must not write profiles")
+    monkeypatch.setattr(profiles, "set_sample_rate", forbidden)
+    monkeypatch.setattr(selection, "_atomic_write_json", lambda *args: False)
     with pytest.raises(OSError, match="profile|selection"):
         selection.save_ve_selection(device, speaker, [7, 1], [], profile_store=profiles,
-            calibration_store=calibrations, path=path, sample_rate=48000)
+            calibration_store=calibrations, path=path)
     assert (profiles.path.read_bytes() if profiles.path.exists() else None) == before_profile
     assert path.read_bytes() == before_hardware
     assert calibrations.path.read_bytes() == before_calibration
@@ -252,23 +249,33 @@ def test_successful_unchanged_selection_is_not_a_write_failure(hardware, tmp_pat
     for channel in (7, 1):
         save_measurement(calibrations, device, channel)
     before = calibrations.path.read_bytes()
-    for rate in (44100, 48000, 51200, 44100):
+    for _ in range(4):
         saved = selection.save_ve_selection(device, None, [7, 1], [], profile_store=profiles,
-            calibration_store=calibrations, path=path, sample_rate=rate)
-        assert saved["input_config"]["sample_rate"] == rate
+            calibration_store=calibrations, path=path)
+        assert saved["input_config"]["sample_rate"] == 51200
         assert calibrations.path.read_bytes() == before
         # No new hardware write is required; False here would mean failure if called.
         monkeypatch.setattr(selection, "_atomic_write_json", lambda *args: False)
 
 
-def test_profiles_stay_independent_between_machine_ids(hardware, tmp_path):
+def test_selection_saves_leave_existing_profiles_and_ranges_unchanged(hardware, tmp_path, monkeypatch):
     path, *_ = hardware
     profiles = VEInputProfileStore(tmp_path / "profiles.json")
     calibrations = VECalibrationStore(tmp_path / "calibrations.json")
-    for machine_id, rate in (("one", 44100), ("two", 48000), ("one", 51200)):
-        selection.save_ve_selection(device_info(machine_id=machine_id), None, [7, 1], [],
-            profile_store=profiles, calibration_store=calibrations, path=path, sample_rate=rate)
-    assert profiles.load(device_info(machine_id="one"), calibrations)["sample_rate"] == 51200
+    profiles.set_sample_rate(device_info(machine_id="one"), 44100, calibrations)
+    profiles.set_sample_rate(device_info(machine_id="two"), 48000, calibrations)
+    before = profiles.path.read_bytes()
+    def forbidden(*args):
+        raise AssertionError("Hardware selection must not write profiles")
+    monkeypatch.setattr(profiles, "set_sample_rate", forbidden)
+    for machine_id in ("one", "two", "one"):
+        device = device_info(machine_id=machine_id)
+        device["input_config"].update(range_min=-0.5, range_max=0.5)
+        saved = selection.save_ve_selection(device, None, [7, 1], [],
+            profile_store=profiles, calibration_store=calibrations, path=path)
+        assert saved["input_config"] == device["input_config"]
+        assert profiles.path.read_bytes() == before
+    assert profiles.load(device_info(machine_id="one"), calibrations)["sample_rate"] == 44100
     assert profiles.load(device_info(machine_id="two"), calibrations)["sample_rate"] == 48000
 
 

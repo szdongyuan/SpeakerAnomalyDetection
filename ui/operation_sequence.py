@@ -1,4 +1,6 @@
 from collections.abc import Mapping
+import copy
+import json
 import os
 import re
 import sys
@@ -22,6 +24,10 @@ from base.data_struct.data_deal_struct import DataDealStruct
 from base.data_struct.sequence_data import SequenceData
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
+from base.sequence_queue_references import SequenceQueueReferenceScanner, queue_path_key
+from base.ve3668n_recording_config import resolve_ve_recording_config
+from consts.ve3668n_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY
+from ui.shared_queue_save_dialog import SharedQueueSaveDialog
 from base.recording_preview_config import resolve_recording_preview_time_mode
 from consts import model_consts, ui_style_const
 from consts.recording_preview_consts import (
@@ -83,6 +89,12 @@ def _recording_preview_validation_error(config_data):
             continue
         try:
             resolve_recording_preview_time_mode(item.detail)
+            if "sample_rate" in item.detail:
+                rate = item.detail["sample_rate"]
+                if type(rate) is not int or rate <= 0:
+                    raise ValueError("sample_rate 必须是正整数")
+            if VE_RANGE_INDEX_CONFIG_KEY in item.detail:
+                resolve_ve_recording_config(item.detail)
         except ValueError as exc:
             return str(exc)
     return None
@@ -90,7 +102,7 @@ def _recording_preview_validation_error(config_data):
 
 class AnalysisModelSelect(ConfigDialogBase):
 
-    def __init__(self, using_config_path, mic=None, speaker=None, mic_channels=None, speaker_channels=None):
+    def __init__(self, using_config_path, mic=None, speaker=None, mic_channels=None, speaker_channels=None, *, reference_scanner=None, parent_draft_provider=None, confirm_shared_save=None, ve_profile_provider=None):
         super().__init__()
         # When main window has no active config selected ("无配置"), using_config_path can be None.
         # Fall back to the built-in default sequence config so the test-queue window can still open.
@@ -100,6 +112,14 @@ class AnalysisModelSelect(ConfigDialogBase):
         # When user selects a target path via “新建”, confirm should save to that path
         # without touching main window's using_config_path registry.
         self._new_target_path_selected = False
+        self.reference_scanner = reference_scanner or SequenceQueueReferenceScanner()
+        self.parent_draft_provider = parent_draft_provider
+        self.confirm_shared_save = confirm_shared_save or self._confirm_shared_save
+        self.last_persisted_payload = None
+        self.dirty = False
+        self._allow_close = False
+        self._saving = False
+        self._pending_registration = set()
 
         self.analysis_list = QTreeView()
         self.analysis_list.setSelectionMode(QTreeView.SingleSelection)
@@ -111,6 +131,7 @@ class AnalysisModelSelect(ConfigDialogBase):
             speaker=speaker,
             mic_channels=mic_channels,
             speaker_channels=speaker_channels,
+            ve_profile_provider=ve_profile_provider,
         )
         self.select_list.set_change_notifier(self._persist_current_config_silently)
         self.analysis_list.setEditTriggers(QTreeView.NoEditTriggers)
@@ -118,6 +139,7 @@ class AnalysisModelSelect(ConfigDialogBase):
 
         self.drag_drop_function()
         self.init_ui()
+        self.auto_analysis_box.toggled.connect(self._persist_current_config_silently)
 
     def _get_using_config_display_name(self) -> str:
         """
@@ -160,23 +182,139 @@ class AnalysisModelSelect(ConfigDialogBase):
         return True
 
     def _persist_current_config_silently(self) -> None:
-        if not self._can_persist_current_config():
-            return
-        validation_error = _recording_preview_validation_error(
-            self.select_list.config
-        )
+        self.dirty = True
+        validation_error = _recording_preview_validation_error(self.select_list.config)
         if validation_error:
             self.default_logger.warning(validation_error)
             return
-        save_config = self.format_config_data(self.select_list.config)
-        if not save_config:
-            return
-        if not LoadUiConfig.save_sequence_config_to_json(save_config, self.using_config_path):
-            self.default_logger.warning(
-                f"Failed to auto-persist the current sequence config: {self.using_config_path}"
+        if self._can_persist_current_config():
+            self._save_queue(self.using_config_path, explicit=False)
+
+    def _confirm_shared_save(self, target_path, result):
+        return SharedQueueSaveDialog(target_path, result, self).exec_() == QDialog.Accepted
+
+    def _save_queue(self, target_path, *, explicit, activate_default=False):
+        """The only queue write boundary; cancellation leaves the draft intact."""
+        if self._saving:
+            return "deferred"
+        self._saving = True
+        try:
+            return self._save_queue_once(
+                target_path, explicit=explicit, activate_default=activate_default
             )
-            return
-        LoadUiConfig.append_sequence_config_registry_entry(self.using_config_path)
+        finally:
+            self._saving = False
+
+    def _save_queue_once(self, target_path, *, explicit, activate_default=False):
+        self.dirty = True
+        error = _recording_preview_validation_error(self.select_list.config)
+        if error:
+            QMessageBox.warning(self, "警告", error)
+            return "failed"
+        payload = self.format_config_data(self.select_list.config)
+        if not payload:
+            if explicit:
+                QMessageBox.warning(self, "警告", "没有配置测试内容")
+            return "failed"
+        try:
+            try:
+                with open(target_path, encoding="utf-8") as stream:
+                    persisted = json.load(stream)
+            except FileNotFoundError:
+                persisted = None
+            if payload == persisted:
+                if explicit or target_path in self._pending_registration:
+                    self._pending_registration.add(target_path)
+                    self._register_saved_queue(target_path, activate_default=activate_default)
+                self.last_persisted_payload = copy.deepcopy(payload)
+                self.dirty = False
+                return "unchanged"
+            drafts = self.parent_draft_provider() if self.parent_draft_provider else ()
+            result = self.reference_scanner.find_references(target_path, drafts=drafts)
+            if len(result.references) >= 2 or result.issues:
+                if not explicit:
+                    return "deferred"
+                if not self.confirm_shared_save(target_path, result):
+                    return "cancelled"
+            if not LoadUiConfig.save_sequence_config_to_json(payload, target_path):
+                raise OSError("保存配置文件失败")
+            self._pending_registration.add(target_path)
+            self._register_saved_queue(target_path, activate_default=activate_default)
+            self.last_persisted_payload = copy.deepcopy(payload)
+            self.dirty = False
+            return "saved"
+        except (OSError, UnicodeError, ValueError, TypeError) as error:
+            # File/serialization boundary; retain draft and never report success.
+            self.default_logger.error(f"Failed to save queue {target_path}: {error}")
+            QMessageBox.warning(self, "保存失败", str(error))
+            return "failed"
+
+    def _register_saved_queue(self, target_path, *, activate_default=False):
+        # Retry an incomplete registration without rewriting an unchanged queue.
+        registry_path = self.reference_scanner.queue_registry_path
+        try:
+            with open(registry_path, encoding="utf-8") as stream:
+                registry = json.load(stream)
+        except FileNotFoundError:
+            registry = {}
+        if not isinstance(registry, dict):
+            raise ValueError("测试队列注册表必须是对象")
+        updated = dict(registry)
+        registry_dir = os.path.dirname(registry_path)
+        target_key = queue_path_key(target_path, registry_dir)
+        registered = any(
+            isinstance(path, str) and queue_path_key(path, registry_dir) == target_key
+            for name, path in registry.items() if name != "using_config_path"
+        )
+        if not registered:
+            base_name = os.path.splitext(os.path.basename(target_path))[0]
+            alias = base_name
+            suffix = 2
+            # Existing aliases belong to their original files and conditions.
+            # The selection key is reserved even in a first-use registry.
+            while alias in updated or alias == "using_config_path":
+                alias = f"{base_name} ({suffix})"
+                suffix += 1
+            updated[alias] = target_path
+        if activate_default:
+            updated.setdefault("默认配置", target_path)
+            updated["using_config_path"] = target_path
+        if updated != registry and not LoadUiConfig.save_data_to_json(updated, registry_path):
+            raise OSError("队列已保存，但更新测试队列注册表失败")
+        self._pending_registration.discard(target_path)
+
+    def _resolve_unsaved_changes(self):
+        if not self.dirty:
+            return True
+        choice = QMessageBox.question(
+            self, "未保存的测试队列", "测试队列有未保存的修改，是否保存？",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if choice == QMessageBox.Cancel:
+            return False
+        if choice == QMessageBox.Save:
+            target_path = self._explicit_target_path()
+            return self._save_queue(
+                target_path, explicit=True,
+                activate_default=(not self._new_target_path_selected and target_path != self.using_config_path),
+            ) in {"saved", "unchanged"}
+        return True
+
+    def _explicit_target_path(self):
+        if str(self.using_config_path).replace("\\", "/").endswith("/none_path.json"):
+            return DEFAULT_DIR + "ui/ui_config/sequence_config.json"
+        return self.using_config_path
+
+    def closeEvent(self, event):
+        if self._allow_close or self._resolve_unsaved_changes():
+            event.accept()
+        else:
+            event.ignore()
+
+    def reject(self):
+        if self._allow_close or self._resolve_unsaved_changes():
+            super().reject()
 
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
@@ -323,7 +461,7 @@ class AnalysisModelSelect(ConfigDialogBase):
             QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/clear_icon.png")
         )
         clear_btn.setIconSize(QSize(26, 26))
-        clear_btn.clicked.connect(self.select_list.clear_option_list)
+        clear_btn.clicked.connect(lambda: self.select_list.clear_option_list(notify=True))
 
         layout = QVBoxLayout()
         layout.addWidget(top_btn)
@@ -383,6 +521,8 @@ class AnalysisModelSelect(ConfigDialogBase):
 
 
     def load_btn_clicked(self):
+        if not self._resolve_unsaved_changes():
+            return
         default_dir = os.path.normpath(
             os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
         )
@@ -400,17 +540,34 @@ class AnalysisModelSelect(ConfigDialogBase):
             try:
                 file_path = file_path.replace("\\", "/")
                 self.select_list.load_model_config(file_path)
+                signals_blocked = self.auto_analysis_box.blockSignals(True)
+                self.auto_analysis_box.setChecked(
+                    self.select_list.config[0].auto_analysis if self.select_list.config else True
+                )
+                self.auto_analysis_box.blockSignals(signals_blocked)
                 # Make "当前配置" reflect the real save target for 保存/确定.
                 self.using_config_path = file_path
                 self._new_target_path_selected = False
+                self.dirty = False
+                self.last_persisted_payload = None
+                self._pending_registration.add(file_path)
+                try:
+                    self._register_saved_queue(file_path)
+                except (OSError, UnicodeError, ValueError) as error:
+                    # The imported queue is already on disk. Retain its draft
+                    # and retry registration on Save without rewriting it.
+                    self.dirty = True
+                    self.default_logger.error(f"Failed to register imported queue {file_path}: {error}")
+                    QMessageBox.warning(self, "导入队列注册失败", str(error))
                 self._update_current_config_label()
-                LoadUiConfig.append_sequence_config_registry_entry(file_path)
             except Exception as e:
                 self.default_logger.error(
                     f"Unable to parse JSON data in {file_path}. {e}"
                 )
 
     def new_btn_clicked(self):
+        if not self._resolve_unsaved_changes():
+            return
         default_dir = os.path.normpath(
             os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
         )
@@ -446,8 +603,11 @@ class AnalysisModelSelect(ConfigDialogBase):
 
         # Start from empty config
         self.select_list.clear_option_list()
+        self.dirty = False
+        self.last_persisted_payload = None
 
     def format_config_data(self, config_data):
+        config_data = copy.deepcopy(config_data)
         for item in config_data:
             item.auto_analysis = self.auto_analysis_box.isChecked()
 
@@ -497,64 +657,30 @@ class AnalysisModelSelect(ConfigDialogBase):
             filter="JSON Files (*.json)",
         )
         if file_path:
-            if not LoadUiConfig.save_sequence_config_to_json(save_config, file_path):
-                QMessageBox.warning(self, "警告", "保存配置文件失败")
-                self.close()
-                return
-            # Append the saved config path into registry json (filename as key)
-            LoadUiConfig.append_sequence_config_registry_entry(file_path)
+            if self._save_queue(file_path, explicit=True) in {"saved", "unchanged"}:
+                self.using_config_path = file_path
+                self._new_target_path_selected = False
+                self._update_current_config_label()
 
     def ok_btn_clicked(self):
-        validation_error = _recording_preview_validation_error(
-            self.select_list.config
-        )
+        validation_error = _recording_preview_validation_error(self.select_list.config)
         if validation_error:
             QMessageBox.warning(self, "警告", validation_error)
             return
-        save_config = self.format_config_data(self.select_list.config)
-
-        if not save_config:
-            QMessageBox.warning(self, "警告", "没有配置测试内容")
+        target_path = self._explicit_target_path()
+        if self._save_queue(
+            target_path, explicit=True,
+            activate_default=(not self._new_target_path_selected and target_path != self.using_config_path),
+        ) not in {"saved", "unchanged"}:
             return
-
-        if not self._new_target_path_selected:
-            # If registry contains only using_config_path (no saved/imported entries),
-            # add the built-in default config mapping on confirm.
-            registry = LoadUiConfig._load_sequence_config_registry()
-            other_keys = [
-                k for k in (registry or {}).keys() if k != "using_config_path"
-            ]
-
-            if len(other_keys) == 0:
-                if self.select_list.config:
-                    LoadUiConfig.ensure_sequence_config_registry_field(
-                        "默认配置",
-                        DEFAULT_DIR + "ui/ui_config/sequence_config.json",
-                    )
-                    LoadUiConfig.update_using_config_path(
-                        DEFAULT_DIR + "ui/ui_config/sequence_config.json"
-                    )
-                    self.using_config_path = (
-                        DEFAULT_DIR + "ui/ui_config/sequence_config.json"
-                    )
-        if not LoadUiConfig.save_sequence_config_to_json(
-            save_config, self.using_config_path
-        ):
-            QMessageBox.warning(self, "警告", "保存配置文件失败")
-            self.close()
-            return
-        # If the target path was chosen via “新建”, register it for future selection,
-        # but do NOT switch main window's current using_config_path.
-        if self._new_target_path_selected:
-            LoadUiConfig.append_sequence_config_registry_entry(self.using_config_path)
-
-        # No forced mode switch / model sync here.
-        # Main window will refresh the active config after this dialog closes.
+        self.using_config_path = target_path
+        self._allow_close = True
         self.close()
+        self._allow_close = False
 
 class OptionList(QListView):
 
-    def __init__(self, logger, using_config_path, mic=None, speaker=None, mic_channels=None, speaker_channels=None):
+    def __init__(self, logger, using_config_path, mic=None, speaker=None, mic_channels=None, speaker_channels=None, *, ve_profile_provider=None):
         super().__init__()
         self.data_struct = DataDealStruct()
         self.select_analysis_model = QStandardItemModel()
@@ -565,6 +691,7 @@ class OptionList(QListView):
 
         self.default_logger = logger
         self.mic = mic
+        self.ve_profile_provider = ve_profile_provider
         self.speaker = speaker
         self.mic_channels = self._normalize_channels(mic_channels)
         self.speaker_channels = self._normalize_channels(speaker_channels)
@@ -738,6 +865,7 @@ class OptionList(QListView):
                     mic=self.mic,
                     speaker=self.speaker,
                     speaker_channels=self.speaker_channels,
+                    ve_profile_provider=self.ve_profile_provider,
                 )
             elif self.config[0].mode == "IMPORT_AUDIO":
                 model = ImportAudioConfigWindow(self.config[0].detail, mic=self.mic)
@@ -751,6 +879,7 @@ class OptionList(QListView):
                     self.signal_len = int(result["total_time"] * result["sample_rate"])
                 else:
                     self.signal_len = 0
+                self._notify_config_changed()
             return
 
         if name in self.config[0].display_sequence:
@@ -876,9 +1005,6 @@ class OptionList(QListView):
                 sequence_config.detail = {
                     "total_time": 4.0,
                     "sample_rate": 44100,
-                    "monitor_playback": False,
-                    "monitor_output_channel": 0,
-                    "monitor_gain_db": 0.0,
                     "use_streaming_recording": False,
                     RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: PREVIEW_TIME_MODE_RELATIVE_LATEST,
                     model_consts.RECORDING_ROOT_CONFIG_KEY: "",
@@ -899,24 +1025,19 @@ class OptionList(QListView):
                         preview_time_mode = sequence_config.detail.get(
                             RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
                         )
-                    sequence_config.detail = {
-                        "total_time": float(sequence_config.detail.get("total_time", 4.0)),
-                        "sample_rate": int(sequence_config.detail.get("sample_rate", 44100)),
-                        "monitor_playback": bool(sequence_config.detail.get("monitor_playback", False)),
-                        "monitor_output_channel": int(sequence_config.detail.get("monitor_output_channel", 0)),
-                        "monitor_gain_db": float(sequence_config.detail.get("monitor_gain_db", 0.0)),
-                        "use_streaming_recording": bool(
-                            sequence_config.detail.get("use_streaming_recording", False)
-                        ),
-                        RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: preview_time_mode,
-                        model_consts.RECORDING_ROOT_CONFIG_KEY: str(
-                            sequence_config.detail.get(
-                                model_consts.RECORDING_ROOT_CONFIG_KEY,
-                                "",
-                            )
-                            or ""
-                        ).strip(),
-                    }
+                    # Own the loaded detail and retain fields belonging to other
+                    # recording features. Invalid explicit values remain repairable.
+                    detail = copy.deepcopy(sequence_config.detail)
+                    detail.setdefault("total_time", 4.0)
+                    if (self.mic or {}).get("backend") != VE_BACKEND:
+                        detail.setdefault("sample_rate", 44100)
+                    detail.setdefault("use_streaming_recording", False)
+                    detail[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] = preview_time_mode
+                    detail.setdefault(model_consts.RECORDING_ROOT_CONFIG_KEY, "")
+                    for key in tuple(detail):
+                        if key.startswith("monitor_"):
+                            del detail[key]
+                    sequence_config.detail = detail
                 elif sequence_config.mode == "IMPORT_AUDIO":
                     sequence_config.detail = {
                         "sample_rate": int(sequence_config.detail.get("sample_rate", 44100))
@@ -952,14 +1073,15 @@ class OptionList(QListView):
             sequence_config.display_sequence = filtered_display
             self.config.append(sequence_config)
 
-            if sequence_config.mode != "IMPORT_AUDIO":
-                self.signal_len = sequence_config.detail.get(
-                    "total_time", 4.0
-                ) * sequence_config.detail.get("sample_rate", 44100)
+            rate = sequence_config.detail.get("sample_rate", 44100)
+            duration = sequence_config.detail.get("total_time", 4.0)
+            if (sequence_config.mode != "IMPORT_AUDIO"
+                    and type(rate) is int and isinstance(duration, (int, float))):
+                self.signal_len = duration * rate
             else:
                 self.signal_len = 0
 
-    def clear_option_list(self):
+    def clear_option_list(self, *, notify=False):
         self.config = list()
         self.data_struct.clear_fft_and_stft_flag()
         self.model().clear()
@@ -967,6 +1089,8 @@ class OptionList(QListView):
         self.all_ai_item = []
         self.sound_item_type = None
         self.drop_is_accept = True
+        if notify:
+            self._notify_config_changed()
 
     def load_model_config(self, config_path):
         if not config_path or not isinstance(config_path, (str, bytes, os.PathLike)):
@@ -1035,7 +1159,7 @@ class OptionList(QListView):
 
     def delete_item(self, index):
         if index.data().lstrip() == self.sound_item_type:
-            self.clear_option_list()
+            self.clear_option_list(notify=True)
             return
         if self.config[0].default_ai == index.data():
             self.config[0].display_sequence.remove(self.config[0].default_ai)
@@ -1370,9 +1494,6 @@ class OptionList(QListView):
             seq_item.detail = {
                 "total_time": 4.0,
                 "sample_rate": 44100,
-                "monitor_playback": False,
-                "monitor_output_channel": 0,
-                "monitor_gain_db": 0.0,
                 "use_streaming_recording": False,
                 RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: PREVIEW_TIME_MODE_RELATIVE_LATEST,
                 model_consts.RECORDING_ROOT_CONFIG_KEY: "",

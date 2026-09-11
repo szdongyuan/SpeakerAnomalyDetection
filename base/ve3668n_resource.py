@@ -524,7 +524,9 @@ class VeResourceController:
             routes = ",".join(
                 f"{fresh['name']}/AIN{channel + 1}" for channel in adapter.request.channels)
             stage = "create_iepe_voltage_channel"
-            self._sdk.create_iepe_voltage_channel(self._task, routes)
+            config = adapter.request.device["input_config"]
+            self._sdk.create_iepe_voltage_channel(
+                self._task, routes, range_min=config["range_min"], range_max=config["range_max"])
             stage = "configure_sample_clock"
             self._sdk.configure_sample_clock(self._task, adapter.request.sample_rate)
             stage = "start_task"

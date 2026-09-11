@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtTest import QTest
@@ -734,6 +735,32 @@ def test_inline_edit_button_opens_current_queue(tmp_path):
     app.processEvents()
 
     assert opened_paths == [manager.load_queue_catalog()["queue_6000"]["path"]]
+    dialog._dirty = False
+    dialog.close()
+
+
+def test_contextual_queue_editor_gets_stable_live_program_draft(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    manager = make_manager(tmp_path)
+    prepare_program(manager)
+    calls = []
+    dialog = ProductTestProgramConfigDialog(
+        manager, contextual_queue_editor_callback=lambda path, provider: calls.append((path, provider))
+    )
+    original = os.path.join(manager.program_dir, dialog.current_file)
+    before = Path(original).read_bytes()
+    dialog.config_combobox.setEditText("Renamed draft")
+    dialog.program_table.item(0, 1).setText("Live condition")
+    cell = dialog.program_table.cellWidget(0, 3)
+    assert cell.edit_button.isEnabled()
+    cell.edit_button.click()
+    path, provider = calls[0]
+    draft = provider()[0]
+    assert draft.product_path == original
+    assert draft.data["name"] == "Renamed draft"
+    assert draft.data["sub_configs"][0]["condition_name"] == "Live condition"
+    assert provider()[0] is draft
+    assert Path(original).read_bytes() == before
     dialog._dirty = False
     dialog.close()
 

@@ -15,7 +15,7 @@ Matching uses ``(api_name, device_name)`` rather than the raw
 ``sounddevice`` index, because indices shuffle whenever the user
 plugs/unplugs anything. Legacy JSON remains opportunistic. Explicit VE input
 records instead retain their stable identity and ordered routes as unavailable
-until discovery confirms them. Their rate lives only in the profile store.
+until discovery confirms them. Recording parameters belong to test queues.
 """
 
 import json
@@ -263,8 +263,8 @@ def unavailable_ve_selection(record):
 
 
 def resolve_ve_input(device, channels, discovered_devices, *, profile_store,
-                     calibration_store, diagnostic=""):
-    """Reconcile a retained choice with this discovery generation and its profile.
+                     calibration_store, diagnostic="", load_profile=True):
+    """Reconcile physical discovery, optionally applying the standalone profile.
 
     Diagnostics belong to unavailable UI descriptors, never verified snapshots.
     This does not enumerate native hardware or write profile defaults.
@@ -282,7 +282,8 @@ def resolve_ve_input(device, channels, discovered_devices, *, profile_store,
         current = validate_device_snapshot(matches[0])
         if not current["available"] or not set(channels).issubset(current["physical_channels"]):
             raise ValueError(f"MachineId {machine_id} 所选 AIN 通道不可用")
-        current["input_config"] = profile_store.load(current, calibration_store)
+        if load_profile:
+            current["input_config"] = profile_store.load(current, calibration_store)
         return current
     except (ValueError, OSError) as exc:
         # Config/identity boundary: retain the exact choice, never substitute a
@@ -437,7 +438,7 @@ def save_if_changed(
     Returns ``True`` when a write was performed. ``False`` covers both
     "no change" and "write failed" for existing callers. ``strict=True`` raises
     on failure (False then means unchanged); it is used when explicitly leaving
-    VE. VE profile + selection acceptance uses save_ve_selection instead.
+    VE. VE selection acceptance uses save_ve_selection instead.
     """
     path = str(path) if path is not None else _HARDWARE_SELECTION_PATH
     with _io_lock:
@@ -496,42 +497,19 @@ def _ve_selection_payload(device, speaker, channels, speaker_channels, existing,
     return payload
 
 
-def _restore_profile_bytes(path, previous):
-    """Compensate only this dialog's profile write if selection publication fails."""
-    if previous is None:
-        path.unlink()
-        return
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(previous)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-
-
 def save_ve_selection(mic_device, speaker_device, mic_channels, speaker_channels, *,
-                      profile_store, calibration_store, path=None, sample_rate=None,
+                      profile_store, calibration_store, path=None,
                       api_name=None, legacy_mic_device=None, legacy_mic_channels=None,
                       legacy_soundcard_selection=None):
-    """Strict VE OK boundary: return the committed snapshot, or raise.
+    """Save only identity, ordered routes and ordinary output on explicit OK.
 
-    Unlike save_if_changed, an unchanged selection is success. Profile and
-    selection are separate files: publish selection last, compensating the
-    profile bytes on failure. Calibration is never rolled back; observed
-    condition invalidations must remain sticky. Call only on explicit OK with
-    one instance owner per store and after the recording busy guard.
-    ``legacy_soundcard_selection`` optionally supplies the dialog's unsaved
-    five-field ordinary selection; it never includes VE configuration or fs.
+    Return the validated input snapshot unchanged. Hardware selection never
+    writes recording parameters to the shared profile or calibration stores.
     """
     current = validate_device_snapshot(mic_device)
     channels = validate_physical_channels(mic_channels)
     if not current["available"] or not set(channels).issubset(current["physical_channels"]):
         raise ValueError("VE input or selected physical_channels unavailable")
-    rate = current["input_config"]["sample_rate"] if sample_rate is None else sample_rate
     path = str(path) if path is not None else _HARDWARE_SELECTION_PATH
     with _io_lock:
         existing = _read_saved_selection(path) or {}
@@ -539,18 +517,6 @@ def save_ve_selection(mic_device, speaker_device, mic_channels, speaker_channels
             existing, api_name=api_name, legacy_mic_device=legacy_mic_device,
             legacy_mic_channels=legacy_mic_channels,
             legacy_soundcard_selection=legacy_soundcard_selection)
-        try:
-            previous = profile_store.path.read_bytes()
-        except FileNotFoundError:
-            previous = None
-        config = profile_store.set_sample_rate(current, rate, calibration_store)
         if existing != payload and not _atomic_write_json(path, payload):
-            error = OSError(f"Could not save VE hardware selection: {path}")
-            try:
-                _restore_profile_bytes(profile_store.path, previous)
-            except OSError as rollback_error:
-                # The UI remains uncommitted; explicitly diagnose an uncertain
-                # disk profile instead of pretending cross-file atomicity.
-                raise OSError(f"{error}; profile rollback failed: {rollback_error}") from rollback_error
-            raise error
-        return {**current, "input_config": config}
+            raise OSError(f"Could not save VE hardware selection: {path}")
+        return current

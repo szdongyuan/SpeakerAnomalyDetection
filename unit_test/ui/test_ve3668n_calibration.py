@@ -483,7 +483,9 @@ def test_invalid_math_never_saves_or_emits_success(setup, raw_level, factor, mon
     assert setup.calibrations.path.read_bytes() == before
 
 
-def test_main_dialog_handoff_reaches_input_child_before_initialization(setup, monkeypatch):
+@pytest.mark.parametrize("queue_detail,rate,limit", [(None, 48000, 10),
+                                                       ({"sample_rate": 96000, "ve_range_index": 5}, 96000, .1)])
+def test_main_dialog_handoff_reaches_input_child_before_initialization(setup, monkeypatch, queue_detail, rate, limit):
     from unit_test.test_input_calibration_runtime import ROOT, _load_method
 
     monkeypatch.setattr(calibration, "OutputCalibration", QWidget)
@@ -495,7 +497,8 @@ def test_main_dialog_handoff_reaches_input_child_before_initialization(setup, mo
         assert child.recording_bridge is setup.bridge
         assert child.calibration_available
         assert child.clicked_calibration()
-        assert child.streaming_processor.session.request.sample_rate == 48000
+        assert child.streaming_processor.session.request.sample_rate == rate
+        assert child.streaming_processor.session.request.device["input_config"]["range_max"] == limit
         dialog.reject()
         dialog.done(0)
         opened.append(dialog)
@@ -505,7 +508,10 @@ def test_main_dialog_handoff_reaches_input_child_before_initialization(setup, mo
     window = SimpleNamespace(
         mic=device, mic_channels=[7, 1], speaker=None, recording_bridge=setup.bridge,
         ve_profile_store=setup.profiles, ve_calibration_store=setup.calibrations,
-        sequence_window=SimpleNamespace(update_v2pa_factor=setup.forbidden),
+        sequence_window=SimpleNamespace(
+            update_v2pa_factor=setup.forbidden, ve_profile_store=setup.profiles,
+            ve_calibration_store=setup.calibrations,
+            sequence_config=([{"seq1": {"acq": {"detail": queue_detail}}}] if queue_detail else [])),
         _calibration_admission_available=lambda: True)
     open_dialog = _load_method(ROOT / "main_window.py", "MainWindow", "on_calibration_window_init",
                               {"CalibrationWindow": calibration.CalibrationWindow})

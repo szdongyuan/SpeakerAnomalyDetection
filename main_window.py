@@ -148,6 +148,8 @@ class MainWindow(QMainWindow):
         """
         lifetime = self.ve_prewarm_lifetime
         signature = self._ve_signature(self.mic, self.mic_channels)
+        if (self.mic or {}).get("backend") == "vkinging" and signature is None:
+            return False
         if lifetime.admission_for(signature) != "allowed":
             return False
         bridge = getattr(self, "recording_bridge", None)
@@ -165,26 +167,27 @@ class MainWindow(QMainWindow):
             return not self._hardware_busy()
         return bool(can_start())
 
-    @staticmethod
-    def _ve_signature(mic, channels):
+    def _ve_signature(self, mic, channels):
+        from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
         if (mic or {}).get("backend") != "vkinging":
+            return None
+        if not mic.get("available"):
             return None
         try:
             from base.ve3668n_input import ve_acquisition_signature
-            config = mic.get("input_config") or {}
-            return ve_acquisition_signature(mic, channels, config.get("sample_rate"))
-        except (TypeError, ValueError):
-            # An unavailable/incomplete restored choice could not have been
-            # newly acquired.  Accepted transitions away from it are handled
-            # conservatively by the caller's old-VE check.
+            mic = SequenceWidgetConfigOpsMixin._current_ve_recording_device(self.sequence_window, mic)
+            return ve_acquisition_signature(mic, channels, mic["input_config"]["sample_rate"])
+        except (ValueError, OSError) as exc:
+            # Timer and late-result callers cannot propagate configuration I/O
+            # into Qt. None blocks VK calibration and cannot authorize capture.
+            self._show_ve_prewarm_status(f"VE 采集配置错误：{exc}")
             return None
 
-    @classmethod
-    def _ve_prewarm_signature(cls, mic, channels):
+    def _ve_prewarm_signature(self, mic, channels):
         """Return a capture-ready VE signature, never an unavailable choice."""
         if (mic or {}).get("backend") != "vkinging" or not mic.get("available"):
             return None
-        return cls._ve_signature(mic, channels)
+        return self._ve_signature(mic, channels)
 
     def _show_ve_prewarm_status(self, message):
         statusbar = self.statusBar()
@@ -201,11 +204,10 @@ class MainWindow(QMainWindow):
 
     def _try_start_ve_prewarm(self, device, channels, source):
         """Validate and atomically consume the process's one prewarm chance."""
+        from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
         if (device or {}).get("backend") != "vkinging":
             return "not_ve"
-
-        signature = self._ve_prewarm_signature(device, channels)
-        if signature is None:
+        if not device.get("available"):
             return "invalid"
         from uuid import uuid4
         from base.recording_process_protocol import VePrewarmRequest
@@ -213,10 +215,14 @@ class MainWindow(QMainWindow):
         token = f"ve-selection-{uuid4().hex}"
         warmup_id = f"ve-prewarm-{uuid4().hex}"
         try:
+            device = SequenceWidgetConfigOpsMixin._current_ve_recording_device(
+                self.sequence_window, device)
             request = VePrewarmRequest.create(
-                warmup_id, device, channels, signature[3], attempt=1)
-        except (TypeError, ValueError, AttributeError, OverflowError):
+                warmup_id, device, channels, device["input_config"]["sample_rate"], attempt=1)
+        except (TypeError, ValueError, OSError) as exc:
+            self._show_ve_prewarm_status(f"VE 设备初始化配置错误：{exc}")
             return "invalid"
+        signature = request.signature
         if not self.ve_prewarm_lifetime.claim(token, signature):
             return "consumed"
 
@@ -357,10 +363,12 @@ class MainWindow(QMainWindow):
         if (self.mic or {}).get("backend") != "vkinging":
             return
         from base.hardware_selection import resolve_ve_input
+        # Physical availability survives an invalid queue or unreadable fallback
+        # profile. Prewarm/admission resolve the queue and report its own error.
         self.mic = resolve_ve_input(self.mic, self.mic_channels,
             event.result.devices if event.handles_released else (),
             profile_store=self.ve_profile_store, calibration_store=self.ve_calibration_store,
-            diagnostic="; ".join(event.result.diagnostics))
+            diagnostic="; ".join(event.result.diagnostics), load_profile=False)
         self.sequence_window.mic = self.mic
         self.sequence_window.mic_channels = list(self.mic_channels)
         self.update_statusbar()
@@ -594,13 +602,18 @@ class MainWindow(QMainWindow):
             return
         self._open_analysis_model_select(self.sequence_window.using_config_path)
 
-    def _open_analysis_model_select(self, using_config_path):
+    def _open_analysis_model_select(self, using_config_path, parent_draft_provider=None):
+        context = ({"parent_draft_provider": parent_draft_provider}
+                   if parent_draft_provider is not None else {})
         analysis_model_select_dialog = AnalysisModelSelect(
             using_config_path,
             mic=self.mic,
             speaker=self.speaker,
             mic_channels=self.mic_channels,
             speaker_channels=self.speaker_channels,
+            ve_profile_provider=lambda device: self.ve_profile_store.load(
+                device, self.ve_calibration_store),
+            **context,
         )
         analysis_model_select_dialog.exec()
         # Refresh active sequence config without forcing mode switch
@@ -624,6 +637,7 @@ class MainWindow(QMainWindow):
                 None,
                 self._open_analysis_model_select,
                 self,
+                contextual_queue_editor_callback=self._open_analysis_model_select,
             )
             dialog.programs_changed.connect(
                 self.sequence_window.on_product_test_program_updated
@@ -753,7 +767,7 @@ class MainWindow(QMainWindow):
             if (self.mic or {}).get("backend") == "vkinging" and not self.mic.get("available"):
                 self.ve_discovery.start()
             return
-        # VE OK already strictly persisted both profile and selection in the
+        # VE OK already strictly persisted the hardware selection in the
         # dialog. Do not route it through the legacy ambiguous False contract.
         if (mic or {}).get("backend") != "vkinging":
             save_options = {"path": self.hardware_selection_path} if hasattr(self, "hardware_selection_path") else {}
@@ -793,11 +807,23 @@ class MainWindow(QMainWindow):
             return
         # calibration the mic and speaker
         calibration_options = {}
+        input_device = self.mic
         if (self.mic or {}).get("backend") == "vkinging":
+            from base.recording_process_protocol import FrozenConfig
+            from consts.ve3668n_consts import VE_RANGE_LIMITS
+            from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
+            input_device = SequenceWidgetConfigOpsMixin._current_ve_recording_device(
+                self.sequence_window, self.mic)
+            config = input_device["input_config"]
+            queue_config = FrozenConfig.snapshot({
+                "sample_rate": config["sample_rate"],
+                "ve_range_index": VE_RANGE_LIMITS.index(config["range_max"]),
+            })
             calibration_options = dict(ve_profile_store=self.ve_profile_store,
-                                       ve_calibration_store=self.ve_calibration_store)
+                                       ve_calibration_store=self.ve_calibration_store,
+                                       ve_queue_config_provider=lambda: queue_config)
         dlg = CalibrationWindow(
-            input_device=self.mic,
+            input_device=input_device,
             input_channels=self.mic_channels,
             recording_bridge=getattr(self, "recording_bridge", None),
             **calibration_options,

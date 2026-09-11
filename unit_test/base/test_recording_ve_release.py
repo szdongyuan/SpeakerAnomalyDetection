@@ -1,5 +1,6 @@
 """Parent-side retained VE release and preparing-start supervision."""
 from types import SimpleNamespace
+import json
 import queue
 import threading
 import time
@@ -11,6 +12,18 @@ from base.recording_service import RecordingService, _Worker
 from base.ve3668n_input import ve_acquisition_signature
 from unit_test.base.ve3668n_fakes import capture_request
 from unit_test.base.test_recording_service import Events, eventually, request as ordinary_request
+
+
+def changed_request(tmp_path, change):
+    from unit_test.base.ve3668n_fakes import device_info, input_config, wav_metadata
+
+    if change == "rate":
+        return capture_request(tmp_path / "B.wav", request_id="B", sample_rate=48000)
+    config = input_config(range_min=-.5, range_max=.5)
+    metadata = wav_metadata(("none", "none"), sample_rate=51200)
+    metadata["acquisition"].update(config, machine_id="test-machine-1")
+    return capture_request(tmp_path / "B.wav", request_id="B",
+                           device=device_info(input_config=config), calibration_metadata=metadata)
 
 
 @pytest.fixture
@@ -47,7 +60,7 @@ def test_release_rejects_retirement_before_immediate_or_pending_paths(
     service, retained, retirement,
 ):
     if retained:
-        service._retained_ve_signature = ("vkinging", "old", (0,), 51200)
+        service._retained_ve_signature = ("vkinging", "old", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     if retirement == "uncertain":
         service._ownership_uncertain = True
         service._worker = None
@@ -65,7 +78,7 @@ def test_release_rejects_retirement_before_immediate_or_pending_paths(
 def test_pending_release_racing_retirement_is_consumed_once_and_admission_recovers(
     service, retained_at_retirement, cleanup,
 ):
-    service._retained_ve_signature = ("vkinging", "old", (0,), 51200)
+    service._retained_ve_signature = ("vkinging", "old", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     callbacks = []
     assert service.release_ve(None, lambda *result: callbacks.append(result)) == "pending"
     pending = service._pending_ve_release
@@ -94,11 +107,12 @@ def test_pending_release_racing_retirement_is_consumed_once_and_admission_recove
     assert pending is not service._pending_ve_release
 
 
-def test_incompatible_start_prepares_then_arms_start_deadline_only_after_release(service, tmp_path):
+@pytest.mark.parametrize("change", ["rate", "range"])
+def test_incompatible_start_prepares_then_arms_start_deadline_only_after_release(service, tmp_path, change):
     first = capture_request(tmp_path / "A.wav")
     service._retained_ve_signature = ve_acquisition_signature(
         first.device, first.channels, first.sample_rate)
-    second = capture_request(tmp_path / "B.wav", request_id="B", sample_rate=48000)
+    second = changed_request(tmp_path, change)
     session = service.start(second)
     service._dispatch(service._inbox.get_nowait())
     release_command = service._worker.outgoing.get_nowait()
@@ -113,9 +127,12 @@ def test_incompatible_start_prepares_then_arms_start_deadline_only_after_release
     assert session.state == "starting" and session._deadline is not None
 
 
-def test_release_failure_preserves_first_release_stage_and_retires(service, tmp_path):
-    request = capture_request(tmp_path / "B.wav")
-    service._retained_ve_signature = ("vkinging", "old", (0,), 51200)
+@pytest.mark.parametrize("change", ["rate", "range"])
+def test_release_failure_preserves_first_release_stage_and_retires(service, tmp_path, change):
+    request = changed_request(tmp_path, change)
+    first = capture_request(tmp_path / "A.wav")
+    service._retained_ve_signature = ve_acquisition_signature(
+        first.device, first.channels, first.sample_rate)
     session = service.start(request)
     service._dispatch(service._inbox.get_nowait())
     service._worker.outgoing.get_nowait()
@@ -124,13 +141,14 @@ def test_release_failure_preserves_first_release_stage_and_retires(service, tmp_
     assert service._worker.retiring and service._ownership_uncertain
     assert session.failure.stage == "release_ve"
     assert "clear failed" in session.failure.message
+    assert all(command.kind != "start" for command in list(service._worker.outgoing.queue))
 
 
 @pytest.mark.parametrize("failure", ["terminal", "timeout"])
 def test_release_failure_closes_admission_before_reentrant_callback(
     service, tmp_path, failure,
 ):
-    service._retained_ve_signature = ("vkinging", "old", (0,), 51200)
+    service._retained_ve_signature = ("vkinging", "old", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     callback_observations = []
 
     def callback(status, diagnostics):
@@ -174,7 +192,7 @@ def test_release_failure_closes_admission_before_reentrant_callback(
 
 
 def test_preparing_release_timeout_never_consumes_start_timeout(service, tmp_path):
-    service._retained_ve_signature = ("vkinging", "old", (0,), 51200)
+    service._retained_ve_signature = ("vkinging", "old", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     session = service.start(capture_request(tmp_path / "B.wav"))
     service._dispatch(service._inbox.get_nowait())
     service._worker.outgoing.get_nowait()
@@ -188,7 +206,7 @@ def test_preparing_release_timeout_never_consumes_start_timeout(service, tmp_pat
 def test_cancel_before_preparing_begin_clears_unsent_release_and_restores_admission(
     service, tmp_path,
 ):
-    service._retained_ve_signature = ("vkinging", "old", (0,), 51200)
+    service._retained_ve_signature = ("vkinging", "old", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     session = service.start(capture_request(tmp_path / "B.wav"))
     session.cancel()
     assert service._pending_ve_release is None
@@ -207,7 +225,7 @@ def test_cancel_during_slow_begin_never_transfers_child_or_path_ownership(
 ):
     from base import recording_service as module
 
-    service._retained_ve_signature = ("vkinging", "old", (0,), 51200)
+    service._retained_ve_signature = ("vkinging", "old", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     entered = threading.Event()
     release_setup = threading.Event()
     real_mkdtemp = module.tempfile.mkdtemp
@@ -246,7 +264,7 @@ def test_cancel_preparing_while_waiting_ready_clears_unsent_release(
     worker = service._worker
     service._worker = None
     worker.ready = False
-    service._retained_ve_signature = ("vkinging", "old", (0,), 51200)
+    service._retained_ve_signature = ("vkinging", "old", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     monkeypatch.setattr(service, "_spawn", lambda: setattr(service, "_worker", worker))
     session = service.start(capture_request(tmp_path / "B.wav"))
     service._dispatch(service._inbox.get_nowait())
@@ -270,7 +288,7 @@ def test_cancel_preparing_while_waiting_ready_clears_unsent_release(
 def test_cancel_after_preparing_release_sent_keeps_release_terminal_but_never_starts(
     service, tmp_path,
 ):
-    service._retained_ve_signature = ("vkinging", "old", (0,), 51200)
+    service._retained_ve_signature = ("vkinging", "old", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     session = service.start(capture_request(tmp_path / "B.wav"))
     service._dispatch(service._inbox.get_nowait())
     release = service._worker.outgoing.get_nowait()
@@ -293,7 +311,7 @@ def test_cancel_after_preparing_release_sent_keeps_release_terminal_but_never_st
 
 
 def test_unexpected_current_release_terminal_retires_but_old_generation_is_ignored(service):
-    signature = ("vkinging", "old", (0,), 51200)
+    signature = ("vkinging", "old", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     service._retained_ve_signature = signature
     service._worker.generation = 2
     service._event(service._worker, RecordingEvent(1, "", "ve_released",
@@ -305,7 +323,7 @@ def test_unexpected_current_release_terminal_retires_but_old_generation_is_ignor
 
 
 def test_release_before_first_slot_advances_all_six_expected_lifecycle_counts(service):
-    signature = ("vkinging", "old", (0,), 51200)
+    signature = ("vkinging", "old", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     service._retained_ve_signature = signature
     service._expected_next_lifecycle_counts = VeLifecycleCounts(1, 1, 1, 0, 0, 0)
     assert service.release_ve(None) == "pending"
@@ -343,6 +361,42 @@ def test_spawn_idle_release_reinitializes_lazily_in_same_worker(tmp_path):
         second_events.results.get_nowait()
         second.accept_result()
         assert second.released.wait(5) and second.worker_pid == pid
+    finally:
+        service.shutdown()
+        assert service.closed.wait(12), service.diagnostics
+
+
+@pytest.mark.parametrize("failure", [None, "clear_task"])
+def test_spawn_range_change_releases_before_new_native_task(tmp_path, failure):
+    trace_dir = tmp_path / "range-trace"
+    service = RecordingService(
+        backend_factory="unit_test.base.recording_process_fakes:persistent_ve_worker_dependencies",
+        backend_options={"trace_dir": str(trace_dir), "fail_release_operation": failure})
+    try:
+        first_events = Events()
+        first = service.start(capture_request(tmp_path / "A.wav", request_id="A"), first_events.callbacks)
+        first_events.results.get(timeout=10)
+        first.accept_result()
+        assert first.released.wait(5)
+        second_events = Events()
+        second = service.start(changed_request(tmp_path, "range"), second_events.callbacks)
+        eventually(lambda: not second_events.results.empty() or not second_events.failed.empty())
+        if failure is None:
+            assert second_events.failed.empty()
+            second_events.results.get_nowait()
+            second.accept_result()
+            assert second.released.wait(5)
+            assert second.worker_pid == first.worker_pid
+        else:
+            assert second_events.results.empty()
+            assert second_events.failed.get_nowait().stage == "release_ve"
+        operations = [json.loads(line)["operation"]
+                      for line in (trace_dir / "native.jsonl").read_text(encoding="utf-8").splitlines()]
+        creations = [i for i, operation in enumerate(operations) if operation == "create_task"]
+        assert len(creations) == (2 if failure is None else 1)
+        if failure is None:
+            between = operations[creations[0] + 1:creations[1]]
+            assert between.index("stop_task") < between.index("clear_task") < between.index("close")
     finally:
         service.shutdown()
         assert service.closed.wait(12), service.diagnostics

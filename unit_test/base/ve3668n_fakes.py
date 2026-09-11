@@ -280,8 +280,9 @@ class CaptureSDK:
     def create_task(self, task):
         self._call("create_task", task)
 
-    def create_iepe_voltage_channel(self, task, channels):
-        self._call("create_iepe_voltage_channel", task, channels)
+    def create_iepe_voltage_channel(self, task, channels, *, range_min=-10.0, range_max=10.0):
+        self._call("create_iepe_voltage_channel", task, channels,
+                   range_min=range_min, range_max=range_max)
         self._selected_physical_channels = tuple(
             int(route.rsplit("AIN", 1)[1]) - 1 for route in channels.split(",")
         )

@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import re
 
-from base.ve3668n_input import validate_sample_rate
+from base.ve3668n_input import validate_sample_rate, validate_voltage_range
 from consts.ve3668n_consts import VE_MAX_INPUT_CHANNELS, VE_RANGE_MAX, VE_RANGE_MIN
 
 
@@ -273,12 +273,14 @@ class VkDaqClient:
     def clear_task(self, task):
         return self._call("VkDaqClearTask", _text_argument(task, "task"))
 
-    def create_iepe_voltage_channel(self, task, physical_channels):
+    def create_iepe_voltage_channel(self, task, physical_channels, *,
+                                    range_min=VE_RANGE_MIN, range_max=VE_RANGE_MAX):
         """Create IEPE channels returning V; sensor settings are not exposed."""
+        minimum, maximum = validate_voltage_range(range_min, range_max)
         return self._call(
             "VkDaqCreateAIAccelChan", _text_argument(task, "task"),
             _text_argument(physical_channels, "physical_channels"), b"", 0,
-            VE_RANGE_MIN, VE_RANGE_MAX, 4, 1000.0, 0, b"",
+            minimum, maximum, 4, 1000.0, 0, b"",
         )
 
     def configure_sample_clock(self, task, sample_rate):

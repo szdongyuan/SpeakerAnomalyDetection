@@ -82,7 +82,7 @@ def test_bridge_immediate_no_worker_completion_is_queued_on_gui_thread(ui_qapp):
     gui_thread = QThread.currentThread()
     completions = []
 
-    status = bridge.release_ve(("vkinging", "machine", (7, 1), 51200),
+    status = bridge.release_ve(("vkinging", "machine", (7, 1), 51200, "IEPE", "V", -10.0, 10.0),
         lambda result, diagnostics: completions.append(
             (result, diagnostics, QThread.currentThread())))
 
