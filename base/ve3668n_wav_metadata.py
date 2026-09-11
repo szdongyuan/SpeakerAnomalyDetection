@@ -168,7 +168,7 @@ class VEWavCalibrationResolution:
 
 
 def resolve_ve_wav_channel_v2pa_factor(metadata, wav_channel_index):
-    """Resolve only file-local provenance; missing/invalid factors are never 1."""
+    """Resolve file-local provenance; valid uncalibrated voltage uses factor 1."""
     try:
         normalized = validate_ve_wav_metadata(metadata)
     except ValueError as exc:
@@ -180,5 +180,5 @@ def resolve_ve_wav_channel_v2pa_factor(metadata, wav_channel_index):
     channel = next(item for item in normalized["recorded_channels"]
                    if item["wav_channel_index"] == wav_channel_index)
     if channel["factor_source"] == "none":
-        return VEWavCalibrationResolution(None, "none", "uncalibrated voltage data; no measured Pa/V")
+        return VEWavCalibrationResolution(1.0, "none", "uncalibrated voltage data; no measured Pa/V")
     return VEWavCalibrationResolution(channel["v2pa_factor"], "measured")

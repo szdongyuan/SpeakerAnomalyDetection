@@ -188,7 +188,7 @@ def resolve_wav_channel_v2pa_factor(
         resolution = resolve_ve_wav_channel_v2pa_factor(payload, wav_channel_index)
         if resolution.factor is None:
             raise ValueError(f"VE calibration {resolution.state}: {resolution.diagnostic}")
-        return WavCalibrationResolution(resolution.factor, True, True)
+        return WavCalibrationResolution(resolution.factor, True, resolution.state == "measured")
     normalized = normalize_wav_calibration_metadata(metadata)
     try:
         selected_index = _coerce_wav_channel_index(wav_channel_index)

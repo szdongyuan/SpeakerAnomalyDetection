@@ -159,12 +159,15 @@ def test_ve_factor_resolution_is_file_local_and_explicit():
     assert measured.factor == 10.0
     assert measured.state == 'measured'
     none = ve3668n_wav_metadata.resolve_ve_wav_channel_v2pa_factor(payload, 1)
-    assert none.factor is None
+    assert none.factor == 1.0
     assert none.state == 'none'
     assert none.diagnostic
     assert wav_metadata_io.resolve_wav_channel_v2pa_factor(payload, 0).factor == 10.0
-    with pytest.raises(ValueError, match='VE.*none'):
-        wav_metadata_io.resolve_wav_channel_v2pa_factor(payload, 1)
+    resolution = wav_metadata_io.resolve_wav_channel_v2pa_factor(payload, 1)
+    assert resolution.factor == 1.0
+    assert resolution.has_valid_metadata
+    assert not resolution.used_file_metadata
+    assert payload.to_dict() == wav_metadata()
 
 
 @pytest.mark.parametrize('index', [2, -1, True, 0.0, '0'])
@@ -643,11 +646,10 @@ def test_two_argument_read_result_with_ve_payload_is_still_known_ve(source):
     result = wav_metadata_io.WavCalibrationMetadataReadResult(
         wav_metadata_io.WavCalibrationMetadataReadStatus.VALID, wav_metadata((source,)),
     )
-    if source == 'none':
-        with pytest.raises(ValueError, match='VE.*none'):
-            wav_metadata_io.resolve_wav_channel_v2pa_factor(result, 0)
-    else:
-        assert wav_metadata_io.resolve_wav_channel_v2pa_factor(result, 0).factor == 10.0
+    resolution = wav_metadata_io.resolve_wav_channel_v2pa_factor(result, 0)
+    assert resolution.factor == (10.0 if source == 'measured' else 1.0)
+    assert resolution.has_valid_metadata
+    assert resolution.used_file_metadata is (source == 'measured')
 
 
 @pytest.mark.parametrize('stage', ['source', 'temporary', 'validation'])

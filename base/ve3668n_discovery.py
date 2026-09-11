@@ -503,8 +503,6 @@ class DiscoveryService:
                 self._unreaped = resources
             if cleanup:
                 result = DiscoveryResult(diagnostics=(*result.diagnostics, *cleanup))
-        if not result.devices and not result.diagnostics:
-            result = DiscoveryResult(diagnostics=("no verified VE3668N inputs found",))
         return DiscoveryEvent(generation, "completed" if result.devices else "unavailable",
                               result, pid, size, self._unreaped is None)
 
