@@ -485,7 +485,7 @@ def test_bridge_real_spawn_delivers_on_gui_thread_and_child_writes(
     assert events.count("accepted") == 1
     assert events.index("offer") < events.index("accepted") < events.index("released")
     assert all(thread is ui_qapp.thread() for thread in threads)
-    if not streaming and not monitor:
+    if not streaming:
         assert "preview" not in events
     trace = json.loads((tmp_path / "trace.json").read_text())
     assert trace["capture_pid"] == trace["writer_pid"] != os.getpid()
@@ -521,7 +521,7 @@ def main_host(service, tmp_path, *, streaming=True, monitor=False):
         "startup_trim_ms": 20, "audio_validation": {"enabled": False}}
     host.sequence_config = [{"seq1": {"acq": {"detail": detail}}}]
     host._resolve_recording_acq_detail = lambda: detail
-    host._should_use_streaming_recording = lambda: streaming or monitor
+    host._should_use_streaming_recording = lambda: streaming
     host.reset_work_pram = lambda *a, **k: (recorded, 100)
     host._recording_process_id = None
     def begin_recent_session():

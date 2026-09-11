@@ -565,8 +565,12 @@ class SequenceWidgetUiOpsMixin:
             self.player_btn.setToolTip(tooltip)
         else:
             can_start = bool(getattr(self, "sequence_config", None))
+            self.player_btn.setToolTip("开始录制")
 
         recording_admission = getattr(self, "_can_start_recording_workflow", None)
+        if workflow_enabled:
+            recording_admission = getattr(
+                self, "_can_prepare_recording_workflow", recording_admission)
         if callable(recording_admission):
             can_start = can_start and recording_admission()
         else:
@@ -579,3 +583,6 @@ class SequenceWidgetUiOpsMixin:
             False,
         )
         self.player_btn.setDisabled(not can_start)
+        config_error = getattr(self, "_ve_recording_config_error", None)
+        if config_error:
+            self.player_btn.setToolTip(f"VE 录制配置错误：{config_error}")

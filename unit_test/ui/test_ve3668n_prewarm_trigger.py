@@ -47,7 +47,7 @@ class _SynchronousBridge(_Bridge):
 
 
 class _WindowHarness:
-    _ve_signature = staticmethod(MainWindow._ve_signature)
+    _ve_signature = MainWindow._ve_signature
     _ve_prewarm_signature = MainWindow._ve_prewarm_signature
     _show_ve_prewarm_status = MainWindow._show_ve_prewarm_status
     _try_start_ve_prewarm = MainWindow._try_start_ve_prewarm
@@ -81,8 +81,10 @@ class _WindowHarness:
         self.speaker_channels = []
         self.ve_discovery = SimpleNamespace(cancel=lambda: None, start=lambda: None)
         self.ve_profile_store = SimpleNamespace(
-            load=lambda _device, _calibrations: input_config())
+            load=lambda _device, _calibrations: _device.get("input_config") or input_config())
         self.ve_calibration_store = object()
+        self.sequence_window.ve_profile_store = self.ve_profile_store
+        self.sequence_window.ve_calibration_store = self.ve_calibration_store
         self.ve_discovery_factory = None
         self.hardware_selection_path = None
         self._status = _StatusBar()
@@ -313,7 +315,7 @@ def test_first_ve_confirmation_lets_prewarm_own_incompatible_release(monkeypatch
     window.on_hardware_window_init()
 
     assert len(window.recording_bridge.calls) == 1
-    assert window.recording_bridge.calls[0].signature[-1] == 44100
+    assert window.recording_bridge.calls[0].signature[3] == 44100
     assert window.recording_bridge.release_calls == []
 
 

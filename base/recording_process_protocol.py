@@ -11,8 +11,10 @@ from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
 from base.ve3668n_input import (
     normalize_machine_id,
     validate_device_snapshot,
+    validate_input_config,
     validate_physical_channels,
     validate_sample_rate,
+    ve_acquisition_signature,
 )
 from base.ve3668n_wav_metadata import validate_ve_wav_metadata
 from consts.recording_preview_consts import (
@@ -123,12 +125,6 @@ def _ve_request(request):
     profile = request.device["input_config"]
     if request.sample_rate != profile["sample_rate"]:
         raise ValueError("sample_rate must match device.input_config.sample_rate")
-    monitor = request.monitor
-    if (set(monitor) - {"enabled", "device", "channels", "gain_db",
-                       "mute_leading_samples", "fade_in_samples"}
-            or type(monitor.get("enabled", False)) is not bool
-            or monitor.get("enabled", False)):
-        raise ValueError("VE monitor must be disabled and contain only known fields")
     if request.purpose == "calibration":
         if request.target_samples != 10 * request.sample_rate or request.trim_samples != 0:
             raise ValueError("VE calibration requires ten seconds and trim_samples=0")
@@ -186,7 +182,11 @@ class RecordingRequest:
             "preview_time_mode",
             validate_recording_preview_time_mode(self.preview_time_mode),
         )
-        for name in ("device", "monitor", "validation_thresholds"):
+        # Historical monitor fields are an inert compatibility shell.
+        if not isinstance(self.monitor, Mapping):
+            raise ValueError("monitor must be a mapping")
+        object.__setattr__(self, "monitor", FrozenConfig.snapshot({}))
+        for name in ("device", "validation_thresholds"):
             value = getattr(self, name)
             if not isinstance(value, Mapping):
                 raise ValueError(f"{name} must be a mapping")
@@ -198,18 +198,9 @@ class RecordingRequest:
         object.__setattr__(self, "channels", channels)
         if self.device.get("backend") == VE_BACKEND:
             _ve_request(self)
-        if self.monitor.get("enabled", False):
-            output_channels = _channels(self.monitor.get("channels", ()))
-            _device(self.monitor.get("device"), output_channels, "output")
-            gain = self.monitor.get("gain_db", 0.0)
-            if isinstance(gain, bool) or not isinstance(gain, (int, float)) or not math.isfinite(gain):
-                raise ValueError("monitor gain_db must be finite")
-            for key in ("mute_leading_samples", "fade_in_samples"):
-                _integer(key, self.monitor.get(key, 0))
-
     @property
     def effective_streaming(self):
-        return self.purpose == "main" and bool(self.streaming or self.monitor.get("enabled", False))
+        return self.purpose == "main" and self.streaming
 
 
 @dataclass(frozen=True)
@@ -377,9 +368,9 @@ class CaptureSlotReleased:
 
 
 def _acquisition_signature(value):
-    if type(value) is not tuple or len(value) != 4:
+    if type(value) is not tuple or len(value) != 8:
         raise ValueError("released_signature must be an acquisition signature or None")
-    backend, machine_id, channels, sample_rate = value
+    backend, machine_id, channels, sample_rate, mode, unit, minimum, maximum = value
     if backend != VE_BACKEND:
         raise ValueError(f"signature backend must be {VE_BACKEND}")
     normalized_machine_id = normalize_machine_id(machine_id)
@@ -388,8 +379,12 @@ def _acquisition_signature(value):
     selected = validate_physical_channels(channels)
     if type(channels) is not tuple or selected != channels:
         raise ValueError("signature channels must be an ordered tuple")
-    rate = validate_sample_rate(sample_rate)
-    return backend, normalized_machine_id, selected, rate
+    config = validate_input_config({
+        "sample_rate": sample_rate, "input_mode": mode, "unit": unit,
+        "range_min": minimum, "range_max": maximum,
+    })
+    return (backend, normalized_machine_id, selected, config["sample_rate"],
+            config["input_mode"], config["unit"], config["range_min"], config["range_max"])
 
 
 @dataclass(frozen=True)
@@ -434,8 +429,7 @@ class VePrewarmRequest:
 
     @property
     def signature(self):
-        return _acquisition_signature((
-            VE_BACKEND, self.device["machine_id"], self.channels, self.sample_rate))
+        return ve_acquisition_signature(self.device, self.channels, self.sample_rate)
 
 
 @dataclass(frozen=True)

@@ -59,6 +59,8 @@ def stream(controller, tmp_path, name="A", *, target=4, callback=None, **request
     metadata = wav_metadata(("none", "none"), request_options.get("sample_rate", 51200))
     metadata["acquisition"]["machine_id"] = (
         device["machine_id"] if device is not None else "test-machine-1")
+    if device is not None:
+        metadata["acquisition"].update(device["input_config"])
     by_physical = {entry["physical_input_channel"]: entry
                    for entry in metadata["recorded_channels"]}
     metadata["recorded_channels"] = []
@@ -110,6 +112,40 @@ def wait_failed(controller, timeout=2):
     while not controller.failed and time.monotonic() < deadline:
         time.sleep(.002)
     assert controller.failed
+
+
+@pytest.mark.parametrize("limit", [10.0, 5.0, 2.5, 1.0, .5, .1, .02])
+def test_retained_resource_applies_requested_voltage_range(limit):
+    from unit_test.base.ve3668n_fakes import input_config
+
+    sdk = CaptureSDK(hooks={"read_task_data": lambda *a, **k: time.sleep(.001)})
+    controller, _ = controller_for(lambda: sdk)
+    request = VePrewarmRequest.create(
+        "range", device_info(input_config=input_config(range_min=-limit, range_max=limit)),
+        (7, 1), 51200, attempt=1)
+    adapter = controller.prewarm(request=request, fail=lambda *args: None)
+    try:
+        assert adapter.start()
+        assert adapter.completed.wait(2)
+        call = next(item for item in sdk.trace if item["operation"] == "create_iepe_voltage_channel")
+        assert call["kwargs"] == {"range_min": -limit, "range_max": limit}
+    finally:
+        assert controller.release(.5).success
+
+
+@pytest.mark.parametrize("actual", [48000, 51200.0, True])
+def test_retained_rate_mismatch_never_publishes_started(actual):
+    sdk = CaptureSDK()
+    sdk.verify_actual_sample_rate = lambda *args: actual
+    controller, _ = controller_for(lambda: sdk)
+    failures = []
+    adapter = controller.prewarm(
+        request=prewarm_request(sample_rate=51200), fail=lambda *args: failures.append(args))
+    assert not adapter.start()
+    assert not adapter.started.is_set()
+    assert not controller.close(.5).success
+    assert failures[0][0] == "verify_actual_sample_rate"
+    assert sdk.operations()[-3:] == ("stop_task", "clear_task", "close")
 
 
 def test_prewarm_discards_partial_multichannel_reads_and_retains_task(tmp_path):
@@ -723,6 +759,7 @@ def test_target_detaches_automatically_and_discards_overread(tmp_path):
     {"channels": (1, 7)},
     {"sample_rate": 48000},
     {"device": "different"},
+    {"range": .5},
 ])
 def test_incompatible_signature_requires_successful_release(tmp_path, change):
     delay = {"read_task_data": lambda *a, **k: time.sleep(.001)}
@@ -739,6 +776,10 @@ def test_incompatible_signature_requires_successful_release(tmp_path, change):
         device["machine_id"] = "different-machine"
         options["device"] = device
         sdks[-1].record["MachineId"] = "different-machine"
+    if "range" in options:
+        from unit_test.base.ve3668n_fakes import input_config
+        limit = options.pop("range")
+        options["device"] = device_info(input_config=input_config(range_min=-limit, range_max=limit))
     with pytest.raises(VeResourceConfigurationError):
         stream(controller, tmp_path, "B", **options)
 

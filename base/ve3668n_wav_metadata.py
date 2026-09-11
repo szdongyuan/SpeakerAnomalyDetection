@@ -1,7 +1,7 @@
 """Closed VE v1 voltage/provenance schema, independent of current registries.
 
 Validation accepts frozen Mapping snapshots and returns owned JSON-ready data.
-Historical file rates are positive integers, not the new-acquisition whitelist.
+Historical file rates are positive integers, independent of acquisition bounds.
 """
 from collections.abc import Mapping
 from copy import deepcopy
@@ -11,10 +11,10 @@ import math
 
 from base.ve3668n_input import (
     validate_device_snapshot, validate_input_config, validate_physical_channel,
-    validate_physical_channels,
+    validate_physical_channels, validate_voltage_range,
 )
 from consts.ve3668n_consts import (
-    VE_BACKEND, VE_INPUT_MODE, VE_MODEL, VE_RANGE_MAX, VE_RANGE_MIN, VE_UNIT,
+    VE_BACKEND, VE_INPUT_MODE, VE_MODEL, VE_UNIT,
 )
 
 
@@ -70,12 +70,11 @@ def validate_ve_wav_metadata(payload):
     _fields(acquisition, ("model", "machine_id", "input_mode", "unit", "range_min",
                           "range_max", "sample_rate"), "acquisition")
     for name, expected in (("model", VE_MODEL), ("input_mode", VE_INPUT_MODE),
-                           ("unit", VE_UNIT), ("range_min", VE_RANGE_MIN),
-                           ("range_max", VE_RANGE_MAX)):
+                           ("unit", VE_UNIT)):
         value = acquisition[name]
-        types = (str,) if isinstance(expected, str) else (int, float)
-        if type(value) not in types or value != expected:
+        if type(value) is not str or value != expected:
             raise ValueError(f"{name} must be {expected!r}")
+    validate_voltage_range(acquisition["range_min"], acquisition["range_max"])
     machine_id = acquisition["machine_id"]
     if not isinstance(machine_id, str) or not machine_id.strip():
         raise ValueError("machine_id must be a nonempty string")

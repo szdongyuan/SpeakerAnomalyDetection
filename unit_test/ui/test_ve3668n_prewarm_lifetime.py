@@ -11,8 +11,8 @@ import pytest
 from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
 
 
-def signature(machine_id="test-machine-1", channels=(7, 1), rate=51200):
-    return ("vkinging", machine_id, channels, rate)
+def signature(machine_id="test-machine-1", channels=(7, 1), rate=51200, limit=10.0):
+    return ("vkinging", machine_id, channels, rate, "IEPE", "V", -limit, limit)
 
 
 class MutableHashable:
@@ -58,11 +58,11 @@ def test_claim_rejects_noncanonical_or_caller_mutable_tokens(token):
 @pytest.mark.parametrize(
     "selected",
     [
-        ["vkinging", "test-machine-1", (7, 1), 51200],
+        ["vkinging", "test-machine-1", (7, 1), 51200, "IEPE", "V", -10.0, 10.0],
         ("soundcard", "test-machine-1", (7, 1), 51200),
-        ("vkinging", " test-machine-1 ", (7, 1), 51200),
-        ("vkinging", "test-machine-1", [7, 1], 51200),
-        ("vkinging", "test-machine-1", (7, 1), 96000),
+        ("vkinging", " test-machine-1 ", (7, 1), 51200, "IEPE", "V", -10.0, 10.0),
+        ("vkinging", "test-machine-1", [7, 1], 51200, "IEPE", "V", -10.0, 10.0),
+        ("vkinging", "test-machine-1", (7, 1), 102401, "IEPE", "V", -10.0, 10.0),
         MutableHashable("signature"),
     ],
 )
@@ -93,7 +93,7 @@ def test_terminal_and_admission_boundaries_require_canonical_signatures():
     lifetime = VePrewarmLifetime()
     selected = signature()
     assert lifetime.claim("selection", selected)
-    malformed = ("vkinging", "test-machine-1", [7, 1], 51200)
+    malformed = ("vkinging", "test-machine-1", [7, 1], 51200, "IEPE", "V", -10.0, 10.0)
     for terminal in (
         lambda: lifetime.mark_succeeded("selection", malformed),
         lambda: lifetime.mark_skipped_busy("selection", malformed, "busy"),
@@ -121,6 +121,8 @@ def test_succeeded_and_skipped_busy_consume_without_blocking_any_signature():
         assert lifetime.snapshot().failed_signature is None
         assert lifetime.admission_for(selected) == "allowed"
         assert lifetime.admission_for(signature(machine_id="other")) == "allowed"
+        assert lifetime.admission_for(signature(limit=.5)) == "allowed"
+        assert not lifetime.claim("changed-range", signature(limit=.5))
         assert not lifetime.claim("later", signature(machine_id="other"))
 
 
@@ -145,6 +147,8 @@ def test_failure_blocks_only_exact_signature_and_freezes_diagnostics():
     assert snapshot.ownership_safe is False
     assert lifetime.admission_for(selected) == "failed_signature"
     assert lifetime.admission_for(signature(machine_id="other")) == "allowed"
+    assert lifetime.admission_for(signature(limit=.5)) == "allowed"
+    assert not lifetime.claim("changed-range", signature(limit=.5))
     assert lifetime.admission_for(None) == "allowed"
 
 

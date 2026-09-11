@@ -76,6 +76,28 @@ def test_iepe_voltage_call_uses_fixed_native_arguments(monkeypatch):
     assert len(fake.trace) == 1
 
 
+@pytest.mark.parametrize("limit", [10.0, 5.0, 2.5, 1.0, .5, .1, .02])
+def test_iepe_voltage_range_reaches_native_arguments(limit):
+    from base.vkinging_sdk import VkDaqClient
+
+    fake = FakeVkDaqDLL()
+    VkDaqClient(dll=fake).create_iepe_voltage_channel(
+        "task", "Dev1/AIN1", range_min=-limit, range_max=limit)
+    assert fake.trace[0]["args"][4:6] == (-limit, limit)
+
+
+@pytest.mark.parametrize("minimum,maximum", [(-5, 10), (-3, 3), (True, 1),
+                                              (-10, float("nan")), (-float("inf"), 10)])
+def test_iepe_invalid_range_rejected_before_native_io(minimum, maximum):
+    from base.vkinging_sdk import VkDaqClient
+
+    fake = FakeVkDaqDLL()
+    with pytest.raises(ValueError, match="range"):
+        VkDaqClient(dll=fake).create_iepe_voltage_channel(
+            "task", "Dev1/AIN1", range_min=minimum, range_max=maximum)
+    assert fake.trace == []
+
+
 def abi_signatures():
     char = ctypes.c_char_p
     output = ctypes.POINTER(ctypes.c_char)
@@ -487,10 +509,9 @@ def test_clock_configuration_uses_continuous_vendor_arguments_without_readback(r
     ("verify_actual_sample_rate", ("Dev1",)),
 ])
 @pytest.mark.parametrize("rate", [
-    None, True, False, 44100.0, "48000", 1, 44099, 44101, 47999, 48001,
-    51199, 51201, 96000, 102400,
+    None, True, False, 44100.0, "48000", 1, 7999, 102401,
 ])
-def test_rate_inputs_use_strict_existing_whitelist_before_io(method, args, rate):
+def test_rate_inputs_use_strict_integer_interval_before_io(method, args, rate):
     from base.vkinging_sdk import VkDaqClient
 
     fake = FakeVkDaqDLL()

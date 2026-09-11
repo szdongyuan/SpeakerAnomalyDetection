@@ -143,18 +143,21 @@ def _ve_store(tmp_path):
     return device, store
 
 
-def test_ve_route_uses_explicit_store_and_current_profile_without_legacy_lookup(tmp_path):
+@pytest.mark.parametrize("limit", [10.0, 5.0, 2.5, 1.0, 0.5, 0.1, 0.02])
+def test_ve_route_uses_explicit_store_and_current_profile_without_legacy_lookup(tmp_path, limit):
     from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
 
     device, store = _ve_store(tmp_path)
-    device['input_config'] = input_config(44100)
+    device['input_config'] = input_config(44100, range_min=-limit, range_max=limit)
     original = store.path.read_bytes()
     with mock.patch('base.recording_calibration_snapshot.load_mic_channel_calibrations') as legacy:
         actual = build_recording_wav_calibration_metadata(
             (7, 1), FrozenConfig.snapshot(device), ve_calibration_store=store,
         )
     legacy.assert_not_called()
-    assert actual == wav_metadata()
+    expected = wav_metadata()
+    expected['acquisition'].update(range_min=-limit, range_max=limit)
+    assert actual == expected
     assert store.path.read_bytes() == original
 
 
@@ -236,7 +239,7 @@ def test_ve_builder_rejects_invalid_or_unavailable_physical_channels(tmp_path, c
         ve3668n_wav_metadata.build_ve_recording_metadata(device, channels, input_config(), store)
 
 
-@pytest.mark.parametrize('profile', [input_config(16000), input_config(True),
+@pytest.mark.parametrize('profile', [input_config(7999), input_config(True),
                                    input_config(sensitivity=1000), None])
 def test_ve_builder_requires_a_valid_current_profile_even_though_file_rates_are_historical(
     tmp_path, profile,

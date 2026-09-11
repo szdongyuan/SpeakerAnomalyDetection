@@ -1,6 +1,7 @@
 import copy
 import ntpath
 import os
+from base.sequence_queue_references import QueueReferenceDraft
 
 from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
@@ -374,10 +375,12 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
     projects_changed = pyqtSignal()
     programs_changed = pyqtSignal()
 
-    def __init__(self, manager=None, queue_editor_callback=None, parent=None):
+    def __init__(self, manager=None, queue_editor_callback=None, parent=None, *, contextual_queue_editor_callback=None):
         super().__init__(parent)
         self.manager = manager or ProductTestProjectConfigManager()
         self.queue_editor_callback = queue_editor_callback
+        self.contextual_queue_editor_callback = contextual_queue_editor_callback
+        self._queue_reference_draft = None
         self.current_file = None
         self.project_data = self.manager.default_project()
         self.queue_catalog = {}
@@ -853,6 +856,24 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             TEST_CONDITIONS_KEY: conditions,
         }
 
+    def _has_queue_editor(self):
+        return callable(self.contextual_queue_editor_callback) or callable(self.queue_editor_callback)
+
+    def _queue_reference_drafts(self):
+        path = os.path.join(self.manager.program_dir, self.current_file) if self.current_file else None
+        if self._queue_reference_draft is None or self._queue_reference_draft.product_path != path:
+            self._queue_reference_draft = QueueReferenceDraft({}, product_path=path)
+        data = self.collect_project()
+        self._queue_reference_draft.data.clear()
+        self._queue_reference_draft.data.update(data)
+        return (self._queue_reference_draft,)
+
+    def _open_queue_editor(self, queue_path):
+        if callable(self.contextual_queue_editor_callback):
+            self.contextual_queue_editor_callback(queue_path, self._queue_reference_drafts)
+        elif callable(self.queue_editor_callback):
+            self.queue_editor_callback(queue_path)
+
     def collect_project(self):
         self._collect_visible_group()
         project_data = copy.deepcopy(self.project_data)
@@ -1010,7 +1031,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         operation_button.setToolTip(
             "编辑当前测试队列" if queue_available else "新建测试队列"
         )
-        operation_button.setEnabled(callable(self.queue_editor_callback))
+        operation_button.setEnabled(self._has_queue_editor())
 
     def _on_table_item_changed(self, item):
         if not self._loading:
@@ -1212,7 +1233,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             if operation_button is button:
                 row = candidate_row
                 break
-        if row < 0 or not callable(self.queue_editor_callback):
+        if row < 0 or not self._has_queue_editor():
             return
         queue_combobox, _operation_button = self._queue_controls_for_row(row)
         queue_name = self._combobox_value(queue_combobox)
@@ -1223,7 +1244,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             else None
         )
         queue_names_before = set(self.queue_catalog)
-        self.queue_editor_callback(queue_path)
+        self._open_queue_editor(queue_path)
         self._refresh_queue_options()
         if not queue_name:
             added_queues = set(self.queue_catalog) - queue_names_before

@@ -18,6 +18,21 @@ from consts.running_consts import DEFAULT_DIR
 
 class SequenceWidgetConfigOpsMixin:
 
+    def _current_ve_recording_device(self, device):
+        """Resolve the loaded queue, reading the injected profile only for a missing rate."""
+        from base.ve3668n_recording_config import resolve_ve_recording_device
+
+        sequence = getattr(self, "sequence_config", None)
+        detail = sequence[0]["seq1"]["acq"]["detail"] if sequence else {}
+        fallback = None
+        if "sample_rate" not in detail:
+            profiles = getattr(self, "ve_profile_store", None)
+            calibrations = getattr(self, "ve_calibration_store", None)
+            if profiles is None or calibrations is None:
+                raise ValueError("VE recording requires the shared profile and calibration stores")
+            fallback = profiles.load(device, calibrations)
+        return resolve_ve_recording_device(device, detail, fallback_profile=fallback)
+
     def _is_sequence_config_path(self, path) -> bool:
         if not path or not isinstance(path, (str, bytes, os.PathLike)):
             return False

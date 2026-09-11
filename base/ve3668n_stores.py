@@ -33,6 +33,7 @@ import tempfile
 from threading import RLock
 
 from base.ve3668n_input import (
+    calibration_applicability_key,
     calibration_fingerprint,
     create_input_config,
     normalize_machine_id,
@@ -43,7 +44,7 @@ from base.ve3668n_input import (
     validate_sample_rate,
 )
 from consts import model_consts
-from consts.ve3668n_consts import VE_BACKEND, VE_INPUT_SCHEMA_VERSION
+from consts.ve3668n_consts import VE_BACKEND, VE_INPUT_SCHEMA_VERSION, VE_RANGE_LIMITS
 
 
 class VEStoreFormatError(ValueError):
@@ -319,6 +320,8 @@ class VECalibrationStore(_JsonStore):
         Returns independent records keyed by physical integer channel.
         """
         identity = _device_fingerprint(device)
+        legal_range = (identity["range_max"] in VE_RANGE_LIMITS
+                       and identity["range_min"] == -identity["range_max"])
         with self._lock:
             registry = self._read()
             channels = registry["devices"].get(identity["machine_id"], {"channels": {}})["channels"]
@@ -326,7 +329,13 @@ class VECalibrationStore(_JsonStore):
             for channel, record in channels.items():
                 expected = {**identity, "physical_channel": int(channel)}
                 key = (identity["machine_id"], int(channel))
-                if record["status"] == "valid" and record["fingerprint"] != expected:
+                # Only legal acquisition ranges are interchangeable. Preserve
+                # sticky diagnostics for malformed/unsupported changed ranges.
+                mismatch = (calibration_applicability_key(record["fingerprint"])
+                            != calibration_applicability_key(expected))
+                if not legal_range:
+                    mismatch = record["fingerprint"] != expected
+                if record["status"] == "valid" and mismatch:
                     self._pending_invalidations.add(key)
                 if record["status"] == "valid" and key in self._pending_invalidations:
                     record["status"] = "invalidated"

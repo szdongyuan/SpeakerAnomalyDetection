@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from base import ve3668n_stores as stores
+from consts.ve3668n_consts import VE_RANGE_LIMITS
 from unit_test.base.ve3668n_fakes import device_info, input_config
 
 
@@ -101,6 +102,36 @@ def test_rate_change_does_not_write_or_mutate_calibration(
     assert profile_writes
 
 
+@pytest.mark.parametrize("initial_limit", VE_RANGE_LIMITS)
+def test_all_legal_ranges_and_rates_retain_calibration_without_writes(tmp_path, monkeypatch, initial_limit):
+    profiles, calibrations = make_stores(tmp_path)
+    device = device_info(input_config=input_config(range_min=-initial_limit, range_max=initial_limit))
+    original = save_measurement(calibrations, device, 7)
+    save_measurement(calibrations, device, 1)
+    saved = read_json(calibrations.path)
+    saved["devices"][device["machine_id"]]["channels"]["1"]["status"] = "invalidated"
+    write_json(calibrations.path, saved)
+    before = calibrations.path.read_bytes()
+
+    def no_write(*args):
+        pytest.fail("legal range/rate changes must not write calibration")
+
+    monkeypatch.setattr(stores.os, "replace", no_write)
+    for limit in VE_RANGE_LIMITS:
+        for rate in (8000, 32000, 44100, 48000, 51200, 96000, 102400):
+            config = input_config(rate, range_min=-limit, range_max=limit)
+            current = {**device, "input_config": config}
+            write_json(profiles.path, {"schema_version": 1, "devices": {device["machine_id"]: config}})
+            assert profiles.load(current, calibrations) == config
+            assert calibrations.observe(current)[7] == original
+            assert calibrations.get_factor(current, 7) == 10.0
+            assert calibrations.get_record(current, 7)["status"] == "valid"
+            assert calibrations.get_factor(current, 1) is None
+            assert calibrations.get_record(current, 1)["status"] == "invalidated"
+            assert calibrations.get_factor(current, 0) is None
+            assert calibrations.path.read_bytes() == before
+
+
 @pytest.mark.parametrize("change", [
     {"input_mode": "VOLTAGE"}, {"unit": "g"},
     {"range_min": -5.0}, {"range_max": 5.0},
@@ -182,8 +213,7 @@ def test_routing_name_channel_selection_and_normalized_identity_do_not_invalidat
 
 
 @pytest.mark.parametrize("invalid_rate", [
-    None, True, False, 44100.0, "48000", 1, 44099, 44101, 47999,
-    48001, 51199, 51201, 96000, 102400,
+    None, True, False, 44100.0, "48000", 1, 7999, 102401,
 ])
 def test_pure_rate_errors_never_invalidate_and_explicit_selection_repairs_saved_rate(tmp_path, invalid_rate):
     profiles, calibrations = make_stores(tmp_path)
@@ -332,7 +362,7 @@ def test_record_and_fingerprint_are_closed_schemas(tmp_path, level, mutation):
 ] + [
     ("standard_spl", value) for value in (None, True, "94", 0, 95, float("nan"), float("inf"))
 ] + [
-    ("calibration_sample_rate", value) for value in (None, True, "44100", 44100.0, 0, -1, 102400)
+    ("calibration_sample_rate", value) for value in (None, True, "44100", 44100.0, 0, -1, 102401)
 ] + [
     ("calibration_duration_seconds", value) for value in (None, True, "10", 0, -1, float("nan"), float("inf"))
 ] + [

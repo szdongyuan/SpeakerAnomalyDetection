@@ -5,7 +5,6 @@ from datetime import datetime
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.file_ops import FileOps
 from base.recording_settings import (
-    resolve_monitor_fade_in_ms,
     resolve_startup_trim_ms,
 )
 from base.system_intervction.hardware_intervction import get_mac_address
@@ -54,29 +53,6 @@ def resolve_startup_trim_samples(acq_detail, sample_rate) -> int:
     if sr <= 0:
         return 0
     return int(round(trim_ms * sr / 1000.0))
-
-
-def resolve_monitor_fade_in_samples(acq_detail, sample_rate) -> int:
-    """Return the linear-ramp length, in samples, for monitor fade-in.
-
-    The fade smooths the 0 -> signal transition at the end of the
-    monitor-mute window (see ``startup_trim_ms``) so the operator does
-    not hear a click when live monitoring resumes. Resolved with the
-    same precedence as :func:`resolve_startup_trim_samples`.
-
-    Returns ``0`` only when the resolver produced zero (operator
-    explicitly opted out) or the sample rate is invalid. A positive
-    value below the one-sample threshold is rounded up to ``1`` so a
-    user setting e.g. ``monitor_fade_in_ms: 0.01`` still gets at least
-    one ramped sample rather than silently degrading to a hard cut.
-    """
-    fade_ms = resolve_monitor_fade_in_ms(acq_detail)
-    if fade_ms <= 0:
-        return 0
-    sr = _coerce_sample_rate(sample_rate)
-    if sr <= 0:
-        return 0
-    return max(1, int(round(fade_ms * sr / 1000.0)))
 
 
 def get_recorded_info(
@@ -188,44 +164,6 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
     num_frames = recorded_dict.get("num_frames", 441000)
     device = recorded_dict.get("device")
     input_channels = recorded_dict.get("input_channels")
-    output_device = recorded_dict.get("output_device")
-    raw_output_channels = recorded_dict.get("output_channels")
-    if isinstance(raw_output_channels, (list, tuple)):
-        output_channels = []
-        for ch in raw_output_channels:
-            try:
-                output_channels.append(int(ch))
-            except Exception:
-                continue
-    elif raw_output_channels is None:
-        output_channels = []
-    else:
-        try:
-            output_channels = [int(raw_output_channels)]
-        except Exception:
-            output_channels = []
-    monitor_playback = recorded_dict.get("monitor_playback", False)
-    monitor_gain_db = float(recorded_dict.get("monitor_gain_db", 0.0))
-    # Mute the first N samples on the monitor output so the operator does
-    # not hear the sound-card power-on pop during real-time monitoring.
-    # Same sample count the caller uses for the post-recording WAV trim
-    # (both derived from ``startup_trim_ms`` via
-    # :func:`resolve_startup_trim_samples`), so monitor and stored WAV stay
-    # consistent: if the config opts in to trimming, the pop is suppressed
-    # everywhere it could be heard or read.
-    monitor_mute_leading_samples = int(
-        recorded_dict.get("monitor_mute_leading_samples", 0) or 0
-    )
-    # Linear-ramp length applied at the very end of the mute window. See
-    # :func:`resolve_monitor_fade_in_samples` for the resolution rules and
-    # ``StreamingAudioProcessor._apply_monitor_startup_mute`` for the
-    # actual ramp logic. Forwarded here (rather than re-resolved inside
-    # the processor) so the caller controls the precise sample count and
-    # so the processor stays free of config-loading concerns.
-    monitor_fade_in_samples = int(
-        recorded_dict.get("monitor_fade_in_samples", 0) or 0
-    )
-
     # Create streaming processor
     processor = StreamingAudioProcessor()
 
@@ -235,12 +173,6 @@ def stream_record_without_play(recorded_dict, recorded_path, recorded_signal_inf
         target_samples=num_frames,  # Use exact sample count instead of duration
         device=device,
         input_channels=input_channels,
-        output_device=output_device,
-        output_channels=output_channels,
-        monitor_playback=monitor_playback,
-        monitor_gain_db=monitor_gain_db,
-        monitor_mute_leading_samples=monitor_mute_leading_samples,
-        monitor_fade_in_samples=monitor_fade_in_samples,
     )
 
     if record_code == error_code.OK:

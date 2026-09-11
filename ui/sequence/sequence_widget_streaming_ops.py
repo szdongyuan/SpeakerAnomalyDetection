@@ -854,7 +854,10 @@ class SequenceWidgetStreamingOpsMixin:
         if not self.sequence_config:
             return
         acq_config = self.sequence_config[0]["seq1"]["acq"]
-        self.data_struct.sample_rate = acq_config["detail"]["sample_rate"]
+        # Startup may load a legacy queue before hardware/stores are injected.
+        # Admission resolves a missing VK rate before computing capture frames.
+        if "sample_rate" in acq_config["detail"]:
+            self.data_struct.sample_rate = acq_config["detail"]["sample_rate"]
         self.data_struct.stimulus_data = None
         self.data_struct.stimulus_info = None
 

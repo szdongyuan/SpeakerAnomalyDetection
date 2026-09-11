@@ -45,20 +45,6 @@ def capture_queue_capacity(sample_rate, channels, *, blocksize=2048, seconds=2.0
     return frames, frames * channels * np.dtype(np.float32).itemsize
 
 
-def apply_monitor_startup_mute(play, *, mute_total, emitted_before, fade_len):
-    """Legacy monitor math, including the ramp confined to the mute-ending block."""
-    if mute_total > 0 and emitted_before < mute_total:
-        remaining_mute = mute_total - emitted_before
-        play = play.copy()
-        hard_mute = min(remaining_mute, len(play))
-        play[:hard_mute] = 0.0
-        if hard_mute < len(play) and fade_len > 0:
-            ramp_len = min(fade_len, len(play) - hard_mute)
-            ramp = np.linspace(0.0, 1.0, ramp_len, endpoint=False, dtype=np.float32)
-            play[hard_mute:hard_mute + ramp_len] *= ramp
-    return play
-
-
 def sounddevice_backend():
     # Set before the child first imports sounddevice; never use parent sd.default.
     os.environ["SD_ENABLE_ASIO"] = "1"
@@ -156,8 +142,6 @@ class RecordingCapture:
             except Exception as exc:
                 # Preview setup is optional and cannot own authoritative capture.
                 self._disable_preview(exc)
-        self._monitor_emitted = 0
-        self._monitor_gain = 10 ** (float(request.monitor.get("gain_db", 0.0)) / 20.0)
 
     @property
     def queued_frames(self):
@@ -273,38 +257,12 @@ class RecordingCapture:
         return owned
 
     def _input_callback(self, indata, frames, time_info, status):
-        self._dispatch_callback(indata, frames, status)
-
-    def _monitor_callback(self, indata, outdata, frames, time_info, status):
-        self._dispatch_callback(indata, frames, status, outdata)
-
-    def _dispatch_callback(self, indata, frames, status, outdata=None):
         try:
-            if outdata is None:
-                self._accept(indata, frames, status)
-            else:
-                self._render_monitor(indata, outdata, frames, status)
+            self._accept(indata, frames, status)
         except Exception as exc:
             # PortAudio otherwise suppresses callback exceptions. Record once and
             # wake the owner to stop/close; never log or send IPC on this thread.
             self._fail("capture", f"audio callback failed: {exc}")
-
-    def _render_monitor(self, indata, outdata, frames, status):
-        outdata.fill(0)
-        owned = self._accept(indata, frames, status)
-        if owned is None:
-            return
-        mono = owned.mean(axis=1).astype(np.float32, copy=False)
-        play = np.zeros(frames, dtype=np.float32)
-        play[:len(mono)] = mono
-        play = np.clip(play * self._monitor_gain, -1.0, 1.0).astype(np.float32, copy=False)
-        monitor = self.request.monitor
-        play = apply_monitor_startup_mute(play, mute_total=monitor.get("mute_leading_samples", 0),
-                                          emitted_before=self._monitor_emitted,
-                                          fade_len=monitor.get("fade_in_samples", 0))
-        self._monitor_emitted += frames
-        for channel in monitor["channels"]:
-            outdata[:, channel] = play
 
     def _validate_device(self, snapshot, channels, direction):
         current = self._backend.query_devices(snapshot["index"])
@@ -334,25 +292,12 @@ class RecordingCapture:
         if self._backend is None:
             self._backend = sounddevice_backend()
         self._validate_device(req.device, req.channels, "input")
-        monitor = req.monitor
-        enabled = req.purpose == "main" and monitor.get("enabled", False)
-        if enabled:
-            self._validate_device(monitor["device"], monitor["channels"], "output")
         self._stage = "open_wav"
         self._writer = self._writer_factory(req.path, sample_rate=req.sample_rate, channels=len(req.channels))
         self._stage = "device"
         config = dict(samplerate=req.sample_rate, dtype="float32", blocksize=self._blocksize)
-        if enabled:
-            output = monitor["device"]
-            out_count = max(monitor["channels"]) + 1
-            if output["max_output_channels"] >= 2:
-                out_count = max(out_count, 2)
-            selector = req.device["index"] if req.device["index"] == output["index"] else (req.device["index"], output["index"])
-            self._stream = self._backend.Stream(**config, channels=(max(req.channels) + 1, out_count),
-                                                device=selector, callback=self._monitor_callback)
-        else:
-            self._stream = self._backend.InputStream(**config, channels=max(req.channels) + 1,
-                                                     device=req.device["index"], callback=self._input_callback)
+        self._stream = self._backend.InputStream(**config, channels=max(req.channels) + 1,
+                                                 device=req.device["index"], callback=self._input_callback)
         if not self._cancelled.is_set():
             self._stream.start()
             self.started.set()
@@ -537,7 +482,7 @@ class RecordingCapture:
             return
         if req.purpose == "main":
             self._stage = "validation"
-            quality_audio = audio / 10.0 if self._is_ve else audio
+            quality_audio = audio / req.device["input_config"]["range_max"] if self._is_ve else audio
             ok, reason, detail = validate_recorded_audio(quality_audio, req.validation_thresholds.to_dict())
             if not ok:
                 raise ValueError(f"{reason} {detail}")

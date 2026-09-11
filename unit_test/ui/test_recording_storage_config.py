@@ -57,7 +57,7 @@ def test_record_config_uses_concise_default_path_placeholder(qapp):
     recording_root_layout = (
         window.recording_root_input.parentWidget()
         .layout()
-        .itemAtPosition(6, 1)
+        .itemAtPosition(3, 1)
         .layout()
     )
 

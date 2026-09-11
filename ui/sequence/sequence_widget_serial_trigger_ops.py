@@ -225,7 +225,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
             else str(condition.get("trigger_state") or "").strip()
         )
         executing = bool(getattr(self, "_serial_product_condition_executing", False))
-        can_start = getattr(self, "_can_start_recording_workflow", None)
+        can_start = getattr(self, "_can_prepare_recording_workflow",
+                            getattr(self, "_can_start_recording_workflow", None))
         admission_blocked = (
             not can_start() if callable(can_start)
             else bool(getattr(self, "_record_workflow_busy", False)))
@@ -377,7 +378,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
         )
 
     def _start_serial_product_condition(self, received_frame):
-        can_start = getattr(self, "_can_start_recording_workflow", None)
+        can_start = getattr(self, "_can_prepare_recording_workflow",
+                            getattr(self, "_can_start_recording_workflow", None))
         if callable(can_start) and not can_start():
             self.default_logger.info(
                 f"serial_product_start_rejected_busy frame={received_frame}"
