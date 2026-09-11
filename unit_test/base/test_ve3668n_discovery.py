@@ -922,14 +922,16 @@ def test_unconfirmed_death_retains_ownership_and_does_not_claim_idle(tmp_path, m
         close_service(service)
 
 
-def test_empty_inventory_returns_actionable_unavailable_diagnostic(tmp_path):
+def test_empty_inventory_is_unavailable_without_synthetic_diagnostic(tmp_path):
     service = fake_service(tmp_path, "empty")
     try:
         service.start()
         assert service.wait_idle(3)
         event = service.poll_result()
         assert event.status == "unavailable"
-        assert "no verified" in " ".join(event.result.diagnostics)
+        assert event.result.devices == ()
+        assert event.result.diagnostics == ()
+        assert event.handles_released
     finally:
         close_service(service)
 

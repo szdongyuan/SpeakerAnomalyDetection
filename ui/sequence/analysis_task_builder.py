@@ -21,6 +21,7 @@ from base.wav_calibration_metadata import (
     resolve_wav_channel_v2pa_factor,
 )
 from base.wav_channel_mapping import resolve_wav_plot_channels
+from consts.ve3668n_consts import VE_BACKEND
 from ui.ui_analysis_config.config_normalization import normalize_analysis_channels
 
 
@@ -59,6 +60,7 @@ def build_analysis_task_request(
     metadata_result = inspect_wav_calibration_metadata(absolute_path)
     if metadata_result.status is WavCalibrationMetadataReadStatus.INVALID:
         raise AnalysisTaskBuildError("WAV 通道或校准元数据无效")
+    is_ve_wav = (metadata_result.metadata or {}).get("backend") == VE_BACKEND
     try:
         raw_channels = resolve_wav_plot_channels(
             metadata_result,
@@ -108,12 +110,12 @@ def build_analysis_task_request(
             )
             factor = (
                 calibration.factor
-                if calibration.used_file_metadata
+                if is_ve_wav or calibration.used_file_metadata
                 else fallback_factors.get(raw_channel, 1.0)
             )
             calibration_available = bool(
                 calibration.used_file_metadata
-                or raw_channel in fallback_factors
+                or (not is_ve_wav and raw_channel in fallback_factors)
             )
             runtime_parameters = copy.deepcopy(parameters)
             runtime_parameters["analysis_channel"] = source_column

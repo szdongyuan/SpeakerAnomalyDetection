@@ -82,11 +82,7 @@ class VE3668NHardwareControls(QObject):
 
     @property
     def devices(self):
-        devices = list(deepcopy(self._devices).values())
-        machine_id = (self._current or {}).get("machine_id")
-        if self._current and (not isinstance(machine_id, str) or machine_id not in self._devices):
-            devices.append(deepcopy(self._current))
-        return devices
+        return list(deepcopy(self._devices).values())
 
     @property
     def inventory(self):
@@ -150,10 +146,11 @@ class VE3668NHardwareControls(QObject):
                 load_profile=False)
             if self._current.get("available"):
                 self.selected_channels = list(self._saved_channels)
-            diagnostic = self._current.get("diagnostic", diagnostic)
+            if self._devices or diagnostic:
+                diagnostic = self._current.get("diagnostic", diagnostic)
         else:
             self._current = None
-        self._publish(diagnostic or ("请选择 VK 设备" if self._devices else "未发现 VK 设备"))
+        self._publish(diagnostic or ("请选择 VK 设备" if self._devices else ""))
 
     def select_device(self, machine_id):
         if self._closed or self.backend != "vkinging" or self._busy_check():

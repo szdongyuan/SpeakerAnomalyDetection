@@ -282,6 +282,60 @@ def test_saved_device_restores_only_after_discovery_without_profile_write(contro
     assert panel.discovery.service.closed
 
 
+@pytest.mark.parametrize("saved_vk", [False, True])
+def test_empty_vk_scan_clears_rows_and_status_without_changing_saved_selection(controls, ui_qapp, saved_vk):
+    from base import hardware_selection
+
+    mic = device_info() if saved_vk else controls.old_mic
+    channels = [7, 1] if saved_vk else [1]
+    hardware_selection.save_if_changed(mic, controls.speaker, channels, [1, 0], path=controls.path)
+    original = controls.path.read_bytes()
+    controller = controls.create(hardware_ui.HardwareSelectionState(
+        api_name="MME", mic_device=mic, mic_channels=channels,
+        speaker_device=controls.speaker, speaker_channels=[1, 0]))
+    view = controller.view
+    view.driver_combo.setCurrentText("vkinging")
+    assert view.ve_status_label.text()
+    view.ve_controls.discovery.service.deliver()
+    ui_qapp.processEvents()
+
+    assert view.mic_device_table.model().rowCount() == 0
+    assert view.mic_device_table.checked_payload() is None
+    assert view.mic_channel_table.model().rowCount() == 0
+    assert not view.mic_channel_table.isEnabled()
+    assert controller.model.state.mic_channels == []
+    assert view.ve_status_label.text() == ""
+    assert controls.warnings == []
+    assert controls.path.read_bytes() == original
+    assert not controls.profiles.path.exists() and not controls.calibrations.path.exists()
+
+    # A later scan restores the retained identity and channel order only if saved.
+    view.refresh_btn.click()
+    confirm(controller, ui_qapp, device_info(name="reconnected"))
+    assert view.mic_device_table.model().rowCount() == 1
+    assert controller.model.state.mic_channels == ([7, 1] if saved_vk else [])
+    assert view.mic_channel_table.isEnabled() is saved_vk
+    if saved_vk:
+        assert view.mic_device_table.checked_payload()["name"] == "reconnected"
+    assert controls.path.read_bytes() == original
+    view.reject()
+    assert controls.path.read_bytes() == original
+
+
+@pytest.mark.parametrize("released", [False, True])
+def test_empty_vk_scan_preserves_real_sdk_or_release_diagnostics(controls, ui_qapp, released):
+    controller = controls.create()
+    view = controller.view
+    diagnostic = "fake SDK enumeration failure" if released else "fake SDK close failure"
+    view.ve_controls.discovery.service.deliver(diagnostics=(diagnostic,), released=released)
+    ui_qapp.processEvents()
+    assert view.mic_device_table.model().rowCount() == 0
+    assert view.mic_channel_table.model().rowCount() == 0
+    assert not view.mic_channel_table.isEnabled()
+    assert diagnostic in view.ve_status_label.text()
+    assert not controls.path.exists()
+
+
 def test_async_refresh_close_and_late_generations_are_ignored(controls, ui_qapp):
     controller = controls.create()
     panel = controller.view.ve_controls

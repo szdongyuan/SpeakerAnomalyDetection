@@ -340,6 +340,41 @@ def test_imported_file_keeps_rate_outside_ve_whitelist(host_factory, tmp_path):
     np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, samples)
 
 
+@pytest.mark.parametrize("sources", [("none", "none"), ("measured", "none"),
+                                     ("none", "measured"), ("measured", "measured")])
+def test_imported_vk_wav_analysis_keeps_uncalibrated_provenance_and_voltage(host_factory, tmp_path, sources):
+    from base.wav_calibration_metadata import append_wav_calibration_metadata
+    from unit_test.base.ve3668n_fakes import wav_metadata
+
+    host = host_factory()
+    host.sequence_config[0]["seq1"]["acq"]["mode"] = "IMPORT_AUDIO"
+    path = tmp_path / "existing-v1.wav"
+    samples = np.tile(np.float32([8.25, 2.5]), (320, 1))
+    sf.write(path, samples, 44100, subtype="FLOAT")
+    metadata = wav_metadata(sources)
+    assert append_wav_calibration_metadata(path, metadata)
+    original = path.read_bytes()
+    host._load_audio_file_to_data_struct(str(path), sample_rate=44100)
+    host.analysis_config = {
+        "display_sequence": ["first", "second"],
+        "first": {"type": "SPL", "analysis_channel": 0},
+        "second": {"type": "SPL", "analysis_channel": 1},
+    }
+    host._analysis_channel_local_columns = {"first": 0, "second": 1}
+    host._live_mic_channel_v2pa_factors = {7: 99.0, 1: 42.0}
+
+    fallback = host._prepare_imported_wav_calibration_batch(["first", "second"])
+
+    assert fallback is ("none" in sources)
+    assert host._imported_wav_channel_v2pa_factors == {
+        key: 10.0 if source == "measured" else 1.0
+        for key, source in zip(("first", "second"), sources)
+    }
+    assert host.data_struct.wav_calibration_metadata == metadata
+    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, samples)
+    assert path.read_bytes() == original
+
+
 @pytest.mark.parametrize("failure", ["unavailable", "profile_io", "profile_type", "calibration_io", "snapshot_invalid"])
 def test_invalid_ve_initialization_is_actionable_and_restores_controls(host_factory, monkeypatch, failure):
     host = host_factory()
@@ -387,6 +422,84 @@ def finish_ve_capture(host, session, audio, outcome="success"):
         host._on_process_recording_failed(session, SimpleNamespace(stage="read", message="failed"))
     assert not host.player_status_flag and not host._record_workflow_busy
     assert host._recording_input_channels is None
+
+
+@pytest.mark.parametrize("calibration_state", ["absent", "valid", "invalidated"])
+@pytest.mark.parametrize("automatic", [False, True])
+def test_completed_vk_capture_reaches_analysis_entry_with_file_local_factors(
+        host_factory, monkeypatch, calibration_state, automatic):
+    from collections import deque
+    from copy import deepcopy
+    from pathlib import Path
+    from ui.sequence.sequence_widget_analysis_process_ops import SequenceWidgetAnalysisProcessOpsMixin
+
+    class AnalysisRecordingHost(RecordingHost, SequenceWidgetAnalysisProcessOpsMixin):
+        pass
+
+    host = host_factory(host_type=AnalysisRecordingHost)
+    host._refresh_analysis_action_state = mock.Mock()
+    if calibration_state != "absent":
+        save_calibration(host)
+    if calibration_state == "invalidated":
+        changed = deepcopy(host.mic)
+        changed["input_config"]["unit"] = "Pa"
+        with pytest.raises(ValueError, match="unit"):
+            host.ve_calibration_store.observe(changed)
+        assert host.ve_calibration_store.get_record(host.mic, 7)["status"] == "invalidated"
+    session, _, audio = started_audio(host)
+    path = Path(session.request.path)
+    original = path.read_bytes()
+    metadata = session.request.calibration_metadata.to_dict()
+    store_before = (host.ve_calibration_store.path.read_bytes()
+                    if host.ve_calibration_store.path.exists() else None)
+    host.analysis_config = {
+        "display_sequence": ["spl"],
+        "spl": {"type": "SPL", "analysis_channels": [7, 1]},
+    }
+    host._live_mic_channel_v2pa_factors = {7: 99.0, 1: 42.0}
+    host._analysis_task_queue = deque()
+    host._analysis_task_records = {}
+    host._analysis_manual_requested_at = {}
+    host._analysis_manual_source_labels = {}
+    host._analysis_active_request = None
+    admitted = []
+    host._analysis_process_service = SimpleNamespace(active=False, start=lambda request: admitted.append(request) or 123)
+    host._should_run_silent_analysis_after_recording = lambda: automatic
+    host._get_active_product_condition_key = lambda: "condition-1"
+    host._selected_analysis_condition_key = lambda: "condition-1"
+    host._resolve_condition_record = lambda key: {"recorded_path": str(path)}
+    host._analysis_record_wav_path = lambda record: record["recorded_path"]
+    host._set_condition_analysis_stage = mock.Mock()
+    host._refresh_analysis_action_state = mock.Mock()
+    host._analysis_has_pending_tasks = lambda: False
+    host._show_pending_manual_analysis_view = lambda: False
+    host._manual_analysis_target_is_recording = lambda *args: False
+    host._analysis_condition_display_name = lambda *args: "condition-1"
+    host._set_manual_analysis_button_state = mock.Mock()
+    warning = mock.Mock()
+    monkeypatch.setattr("ui.sequence.sequence_widget_analysis_process_ops.QMessageBox.warning", warning)
+
+    finish_ve_capture(host, session, audio)
+    if not automatic:
+        assert host._start_selected_condition_manual_analysis()
+    assert len(admitted) == 1
+    request = admitted[0]
+    assert request.source == ("自动分析" if automatic else "手动查看")
+    by_channel = {item.raw_channel: item for item in request.instances}
+    measured = calibration_state == "valid"
+    assert (by_channel[7].source_wav_column, by_channel[7].v2pa_factor) == (0, 10.0 if measured else 1.0)
+    assert by_channel[7].calibration_available is measured
+    assert (by_channel[1].source_wav_column, by_channel[1].v2pa_factor) == (1, 1.0)
+    assert not by_channel[1].calibration_available
+    assert metadata["recorded_channels"][0]["factor_source"] == ("measured" if measured else "none")
+    assert metadata["recorded_channels"][1]["v2pa_factor"] is None
+    warning.assert_called_once()
+    assert "结果仅供参考" in warning.call_args.args[-1]
+    assert path.read_bytes() == original
+    assert inspect_wav_calibration_metadata(path).metadata == metadata
+    np.testing.assert_array_equal(sf.read(path, dtype="float32")[0], audio.multi)
+    assert (host.ve_calibration_store.path.read_bytes()
+            if host.ve_calibration_store.path.exists() else None) == store_before
 
 
 @pytest.mark.parametrize("rate", [44100, 48000, 51200])
