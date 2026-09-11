@@ -1,13 +1,12 @@
-import os
 import sys
 from collections.abc import Mapping
 from copy import deepcopy
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QIntValidator
-from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout
-from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QStyle, QVBoxLayout
-from PyQt5.QtWidgets import QToolButton, QWidget
+from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout
+from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
+from PyQt5.QtWidgets import QWidget
 
 from base.sound_device_manager import SoundDeviceManager
 from base.ve3668n_input import validate_range_index
@@ -16,7 +15,6 @@ from base.recording_preview_config import (
     resolve_recording_preview_time_mode,
     validate_recording_preview_time_mode,
 )
-from consts import model_consts
 from consts.recording_preview_consts import (
     PREVIEW_TIME_MODE_CUMULATIVE,
     PREVIEW_TIME_MODE_RELATIVE_LATEST,
@@ -92,6 +90,11 @@ class RecordConfigWindow(BaseConfigWindow):
         in_group_box = self.create_in_group()
         btn_layout = self.create_cancel_ok_buttons()
         self.main_layout.addWidget(in_group_box)
+        # Capture child-layout defaults only after the group joins the dialog.
+        self._input_group_margins = in_group_box.layout().contentsMargins()
+        margins = self._input_group_margins
+        in_group_box.layout().setContentsMargins(
+            margins.left(), margins.top(), margins.right(), margins.bottom() + 3)
         self.main_layout.addStretch()
         self.main_layout.addLayout(btn_layout)
 
@@ -158,12 +161,11 @@ class RecordConfigWindow(BaseConfigWindow):
         else:
             self.input_device_display.setPlaceholderText(f"{self.mic.get('name')}")
 
-        self.recording_advanced_toggle = QToolButton()
+        self.recording_advanced_toggle = QPushButton()
         self.recording_advanced_toggle.setObjectName("recording_advanced_toggle")
-        self.recording_advanced_toggle.setText("高级设置")
-        self.recording_advanced_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.recording_advanced_toggle.setArrowType(Qt.RightArrow)
+        self.recording_advanced_toggle.setText("▼ 高级设置")
         self.recording_advanced_toggle.setCheckable(True)
+        self.recording_advanced_toggle.setAutoDefault(False)
         self.recording_advanced_panel = QWidget()
         self.recording_advanced_panel.setObjectName("recording_advanced_panel")
         advanced_layout = QGridLayout(self.recording_advanced_panel)
@@ -206,29 +208,6 @@ class RecordConfigWindow(BaseConfigWindow):
         self.preview_time_mode_combo.currentIndexChanged.connect(
             self._on_preview_time_mode_changed
         )
-        label_recording_root = QLabel("音频保存根目录:")
-        self.recording_root_input = QLineEdit()
-        self.recording_root_input.setText(
-            str(self.input_data.get(model_consts.RECORDING_ROOT_CONFIG_KEY, "") or "")
-        )
-        self.recording_root_input.setPlaceholderText("audio_data/stored_data")
-        self.select_recording_root_action = self.recording_root_input.addAction(
-            self.style().standardIcon(QStyle.SP_DirIcon),
-            QLineEdit.TrailingPosition,
-        )
-        self.select_recording_root_action.setToolTip("选择音频保存根目录")
-        self.select_recording_root_action.triggered.connect(self._select_recording_root)
-        self.recording_root_input.textChanged.connect(
-            self._update_recording_root_tooltip
-        )
-        self._update_recording_root_tooltip(self.recording_root_input.text())
-        self.default_recording_root_btn = QPushButton("默认路径")
-        self.default_recording_root_btn.clicked.connect(self.recording_root_input.clear)
-        recording_root_layout = QHBoxLayout()
-        recording_root_layout.setContentsMargins(0, 0, 0, 0)
-        recording_root_layout.setSpacing(8)
-        recording_root_layout.addWidget(self.recording_root_input)
-        recording_root_layout.addWidget(self.default_recording_root_btn)
         self.streaming_recording_checkbox.toggled.connect(self._on_streaming_recording_toggled)
 
         self._on_streaming_recording_toggled(self.streaming_recording_checkbox.isChecked())
@@ -244,8 +223,6 @@ class RecordConfigWindow(BaseConfigWindow):
         advanced_layout.addWidget(self.preview_time_mode_label, 1, 0)
         advanced_layout.addWidget(self.preview_time_mode_combo, 1, 1)
         advanced_layout.addWidget(self.preview_time_mode_error_label, 2, 0, 1, 2)
-        advanced_layout.addWidget(label_recording_root, 3, 0)
-        advanced_layout.addLayout(recording_root_layout, 3, 1)
         self.ve_range_combo = QComboBox()
         self.ve_range_combo.setObjectName("ve_range_combo")
         for index, label in enumerate(VE_RANGE_LABELS):
@@ -259,11 +236,11 @@ class RecordConfigWindow(BaseConfigWindow):
                 self.ve_range_combo.setToolTip(str(exc))
             else:
                 self.ve_range_combo.setCurrentIndex(self.ve_range_combo.findData(range_index))
-        advanced_layout.addWidget(range_label, 4, 0)
-        advanced_layout.addWidget(self.ve_range_combo, 4, 1)
+        advanced_layout.addWidget(range_label, 3, 0)
+        advanced_layout.addWidget(self.ve_range_combo, 3, 1)
         range_label.setVisible(self._is_vk)
         self.ve_range_combo.setVisible(self._is_vk)
-        grid_layout.addWidget(self.recording_advanced_toggle, 3, 0, 1, 2)
+        grid_layout.addWidget(self.recording_advanced_toggle, 3, 0, 1, 2, Qt.AlignLeft)
         grid_layout.addWidget(self.recording_advanced_panel, 4, 0, 1, 2)
 
         in_group_box.setLayout(grid_layout)
@@ -309,11 +286,6 @@ class RecordConfigWindow(BaseConfigWindow):
             self._focus_advanced_field(self.preview_time_mode_combo)
             QMessageBox.warning(self, "设置警告", str(exc))
             return
-        recording_root = str(self.recording_root_input.text() or "").strip()
-        if recording_root and not os.path.isdir(recording_root):
-            self._focus_advanced_field(self.recording_root_input)
-            QMessageBox.warning(self, "设置警告", "音频保存根目录不存在，请重新选择。")
-            return
         self.final_data = deepcopy(self.input_data)
         for key in tuple(self.final_data):
             if key.startswith("monitor_"):
@@ -323,9 +295,6 @@ class RecordConfigWindow(BaseConfigWindow):
             "sample_rate": sample_rate,
             "use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked()),
             RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: preview_time_mode,
-            model_consts.RECORDING_ROOT_CONFIG_KEY: (
-                os.path.abspath(recording_root) if recording_root else ""
-            ),
         })
         if self._is_vk:
             self.final_data[VE_RANGE_INDEX_CONFIG_KEY] = range_index
@@ -337,7 +306,11 @@ class RecordConfigWindow(BaseConfigWindow):
 
     def _set_advanced_visible(self, visible):
         self.recording_advanced_panel.setVisible(visible)
-        self.recording_advanced_toggle.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
+        self.recording_advanced_toggle.setText("▲ 高级设置" if visible else "▼ 高级设置")
+        margins = self._input_group_margins
+        self.recording_advanced_panel.parentWidget().layout().setContentsMargins(
+            margins.left(), margins.top(), margins.right(),
+            margins.bottom() + (0 if visible else 3))
         self._resize_for_advanced_settings()
 
     def _resize_for_advanced_settings(self):
@@ -348,28 +321,6 @@ class RecordConfigWindow(BaseConfigWindow):
     def _focus_advanced_field(self, field):
         self.recording_advanced_toggle.setChecked(True)
         field.setFocus()
-
-    def _select_recording_root(self):
-        current_root = str(self.recording_root_input.text() or "").strip()
-        initial_root = (
-            current_root
-            if os.path.isdir(current_root)
-            else model_consts.STORED_RECORDED_PATH
-        )
-        selected_root = QFileDialog.getExistingDirectory(
-            self,
-            "选择音频保存根目录",
-            initial_root,
-        )
-        if selected_root:
-            self.recording_root_input.setText(os.path.normpath(selected_root))
-
-    def _update_recording_root_tooltip(self, recording_root):
-        selected_root = str(recording_root or "").strip()
-        effective_root = selected_root or model_consts.STORED_RECORDED_PATH
-        self.recording_root_input.setToolTip(
-            os.path.abspath(os.path.normpath(effective_root))
-        )
 
     def _on_streaming_recording_toggled(self, checked: bool):
         self._refresh_preview_time_mode_visibility()

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from PyQt5.QtGui import QIntValidator
-from PyQt5.QtWidgets import QComboBox, QToolButton, QWidget
+from PyQt5.QtWidgets import QComboBox, QPushButton, QWidget
 
 from consts import model_consts
 from consts.recording_preview_consts import (
@@ -41,13 +41,12 @@ def windows(ui_qapp, monkeypatch):
 @pytest.mark.parametrize("vk", [False, True])
 def test_advanced_controls_belong_to_collapsed_panel_in_spec_order(windows, ui_qapp, vk):
     window = windows({"use_streaming_recording": True}, vk=vk)
-    toggle = window.findChild(QToolButton, "recording_advanced_toggle")
+    toggle = window.findChild(QPushButton, "recording_advanced_toggle")
     panel = window.findChild(QWidget, "recording_advanced_panel")
     assert toggle is not None and panel is not None
     assert toggle.isCheckable() and not toggle.isChecked()
     assert panel.isHidden()
-    controls = [window.streaming_recording_checkbox, window.preview_time_mode_combo,
-                window.recording_root_input]
+    controls = [window.streaming_recording_checkbox, window.preview_time_mode_combo]
     assert all(panel.isAncestorOf(control) for control in controls)
     assert all(not panel.isAncestorOf(control) for control in (
         window.time_input, window.samplerate_combo, window.input_device_display))
@@ -162,34 +161,31 @@ def test_invalid_range_expands_and_focuses_repair(windows, ui_qapp, bad):
     assert window.final_data["ve_range_index"] == 4
 
 
-@pytest.mark.parametrize("field", [RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY, model_consts.RECORDING_ROOT_CONFIG_KEY])
-def test_hidden_error_expands_and_focuses_field_even_with_realtime_off(windows, ui_qapp, tmp_path, field):
-    raw = {field: "broken" if field == RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY else str(tmp_path / "absent"),
+def test_hidden_error_expands_and_focuses_field_even_with_realtime_off(windows, ui_qapp):
+    raw = {RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: "broken",
            "use_streaming_recording": False}
     window = windows(raw)
     window.on_click_ok_btn()
     ui_qapp.processEvents()
-    control = (window.preview_time_mode_combo if field == RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
-               else window.recording_root_input)
+    control = window.preview_time_mode_combo
     assert window.final_data is None and control.isVisible() and control.hasFocus()
-    if field == RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY:
-        assert window.preview_time_mode_error_label.isVisible()
-        window.preview_time_mode_combo.setCurrentIndex(1)
-    else:
-        window.default_recording_root_btn.click()
+    assert window.preview_time_mode_error_label.isVisible()
+    window.preview_time_mode_combo.setCurrentIndex(1)
     window.on_click_ok_btn()
     assert window.final_data is not None
     assert window.final_data["use_streaming_recording"] is False
 
 
 def test_cancel_preserves_input_and_returns_no_result(windows):
-    raw = {"sample_rate": 48000, "ve_range_index": 1}
+    raw = {"sample_rate": 48000, "ve_range_index": 1,
+           model_consts.RECORDING_ROOT_CONFIG_KEY: "  relative/absent/audio  "}
+    original = copy.deepcopy(raw)
     window = windows(raw)
     window.samplerate_combo.setEditText("96000")
     window.ve_range_combo.setCurrentIndex(5)
     window.on_click_cancel_btn()
     assert window.final_data is None
-    assert raw == {"sample_rate": 48000, "ve_range_index": 1}
+    assert raw == original
 
 
 def test_soundcard_unsupported_loaded_rate_remains_visible_until_repaired(windows):
@@ -208,7 +204,7 @@ def test_soundcard_unsupported_loaded_rate_remains_visible_until_repaired(window
 def test_expansion_resizes_dialog_to_fit_advanced_control_minimums(windows, ui_qapp, initial_live):
     window = windows({"use_streaming_recording": initial_live})
     controls = [window.streaming_recording_checkbox, window.preview_time_mode_combo,
-                window.recording_root_input, window.ve_range_combo]
+                window.ve_range_combo]
     for control in controls:
         control.setMinimumHeight(50)
     window.recording_advanced_toggle.click()
