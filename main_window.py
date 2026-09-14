@@ -19,6 +19,7 @@ from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
 from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
 from ui.sequence.sequence_widget import SequenceWindow
+from ui.vkinging_presentation import device_display_name, ve_failure_text
 
 
 class MainWindow(QMainWindow):
@@ -176,12 +177,20 @@ class MainWindow(QMainWindow):
         try:
             from base.ve3668n_input import ve_acquisition_signature
             mic = SequenceWidgetConfigOpsMixin._current_ve_recording_device(self.sequence_window, mic)
-            return ve_acquisition_signature(mic, channels, mic["input_config"]["sample_rate"])
+            signature = ve_acquisition_signature(mic, channels, mic["input_config"]["sample_rate"])
         except (ValueError, OSError) as exc:
             # Timer and late-result callers cannot propagate configuration I/O
             # into Qt. None blocks VK calibration and cannot authorize capture.
-            self._show_ve_prewarm_status(f"VE 采集配置错误：{exc}")
+            error_context = (mic.get("machine_id"), str(exc))
+            if error_context != getattr(self, "_ve_signature_error_context", None):
+                import logging
+                logging.getLogger(__name__).warning(
+                    "VE acquisition configuration failed machine_id=%s: %s", *error_context)
+            self._ve_signature_error_context = error_context
+            self._show_ve_prewarm_status(ve_failure_text("configuration"))
             return None
+        self._ve_signature_error_context = None
+        return signature
 
     def _ve_prewarm_signature(self, mic, channels):
         """Return a capture-ready VE signature, never an unavailable choice."""
@@ -220,7 +229,11 @@ class MainWindow(QMainWindow):
             request = VePrewarmRequest.create(
                 warmup_id, device, channels, device["input_config"]["sample_rate"], attempt=1)
         except (TypeError, ValueError, OSError) as exc:
-            self._show_ve_prewarm_status(f"VE 设备初始化配置错误：{exc}")
+            import logging
+            logging.getLogger(__name__).error(
+                "VE prewarm configuration failed machine_id=%s: %s",
+                device.get("machine_id"), exc)
+            self._show_ve_prewarm_status(ve_failure_text("configuration"))
             return "invalid"
         signature = request.signature
         if not self.ve_prewarm_lifetime.claim(token, signature):
@@ -276,6 +289,9 @@ class MainWindow(QMainWindow):
             token, signature, fault, ownership_safe=True)
         self._ve_prewarm_context = None
         self._refresh_ve_admission_controls()
+        import logging
+        logging.getLogger(__name__).error(
+            "VE prewarm admission failed signature=%s: %s", signature, fault.detail)
         self._render_ve_prewarm_failure(fault, ownership_safe=True)
         return str(status)
 
@@ -303,6 +319,16 @@ class MainWindow(QMainWindow):
         self._ve_prewarm_context = None
         self._refresh_ve_admission_controls()
 
+        if not completion.success:
+            import logging
+            logging.getLogger(__name__).error(
+                "VE prewarm failed signature=%s: %s", signature, "; ".join((
+                    f"{completion.stage}"
+                    + (f" (code={completion.code})" if completion.code is not None else "")
+                    + f": {completion.detail}",
+                    *tuple(completion.diagnostics),
+                )))
+
         # Shutdown terminals still consume the opportunity, but must never
         # mutate visible UI or raise a modal while the window is closing.
         if (getattr(self, "_recording_close_requested", False)
@@ -313,24 +339,13 @@ class MainWindow(QMainWindow):
             self.update_statusbar()
             return
 
-        import logging
-        logging.getLogger(__name__).error(
-            "VE prewarm failed: %s", "; ".join((
-                f"{completion.stage}"
-                + (f" (code={completion.code})" if completion.code is not None else "")
-                + f": {completion.detail}",
-                *tuple(completion.diagnostics),
-            )))
         self.update_statusbar()
         self._show_ve_prewarm_status("VE 设备初始化失败")
         self._render_ve_prewarm_failure(
             completion, ownership_safe=completion.ownership_safe)
 
     def _render_ve_prewarm_failure(self, fault, *, ownership_safe):
-        code = getattr(fault, "code", None)
-        cause = getattr(fault, "detail", "VE 设备初始化失败")
-        if code is not None:
-            cause = f"{cause} (code={code})"
+        cause = ve_failure_text("prewarm", code=getattr(fault, "code", None))
         if ownership_safe:
             guidance = "请进入硬件设置重新选择设备或采集配置。"
         else:
@@ -338,18 +353,19 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(
             self, "Vkinging 设备初始化失败", f"{cause}\n{guidance}")
 
-    def _on_ve_hardware_release_complete(self, status, diagnostics):
+    def _on_ve_hardware_release_complete(self, status, diagnostics, *, machine_id=None):
         if status in ("released", "unchanged"):
             return
-        detail = "; ".join(str(item) for item in diagnostics if item)[:240]
+        import logging
+        logging.getLogger(__name__).warning(
+            "VE hardware release status=%s machine_id=%s: %s", status, machine_id,
+            "; ".join(str(item) for item in diagnostics if item))
         if status == "failed":
             message = "新硬件设置已保存。旧 VE 资源回收失败，正在强制回收；完成前无法录音。"
         elif status == "busy":
             message = "新硬件设置已保存，但 VE 资源正在使用或回收；请等待完成后再录音。"
         else:
             message = "新硬件设置已保存；程序正在关闭，VE 资源由关闭流程回收。"
-        if detail:
-            message = f"{message}\n{detail}"
         QMessageBox.warning(self, "VE 资源回收", message)
 
     def _update_hardware_busy_state(self):
@@ -363,12 +379,21 @@ class MainWindow(QMainWindow):
         if (self.mic or {}).get("backend") != "vkinging":
             return
         from base.hardware_selection import resolve_ve_input
+        import logging
+        diagnostic = "; ".join(event.result.diagnostics)
         # Physical availability survives an invalid queue or unreadable fallback
         # profile. Prewarm/admission resolve the queue and report its own error.
         self.mic = resolve_ve_input(self.mic, self.mic_channels,
             event.result.devices if event.handles_released else (),
             profile_store=self.ve_profile_store, calibration_store=self.ve_calibration_store,
-            diagnostic="; ".join(event.result.diagnostics), load_profile=False)
+            diagnostic=diagnostic, load_profile=False)
+        if diagnostic:
+            logging.getLogger(__name__).warning(
+                "VE discovery failed for MachineId %s: %s", self.mic.get("machine_id"), diagnostic)
+        input_diagnostic = self.mic.get("diagnostic", "")
+        if (event.result.devices or diagnostic) and input_diagnostic and input_diagnostic != diagnostic:
+            logging.getLogger(__name__).warning(
+                "VE input unavailable for MachineId %s: %s", self.mic.get("machine_id"), input_diagnostic)
         self.sequence_window.mic = self.mic
         self.sequence_window.mic_channels = list(self.mic_channels)
         self.update_statusbar()
@@ -665,12 +690,12 @@ class MainWindow(QMainWindow):
 
     def update_statusbar(self):
         # update the status bar data
-        mic_name = self.mic["name"] if self.mic else "无可用输入设备"
         if (self.mic or {}).get("backend") == "vkinging":
             status = "可用" if self.mic.get("available") else "不可用"
-            mic_name = f"VE3668N · {self.mic.get('machine_id')} · {status}"
-            self.device_label.setToolTip(self.mic.get("diagnostic", ""))
+            mic_name = f"{device_display_name(self.mic)} · {status}"
+            self.device_label.setToolTip(ve_failure_text("unavailable") if self.mic.get("diagnostic") else "")
         else:
+            mic_name = self.mic["name"] if self.mic else "无可用输入设备"
             self.device_label.setToolTip("")
         speaker_name = self.speaker["name"] if self.speaker else "无可用输出设备"
         device_txt = "麦克风：{mic}  扬声器：{speaker}".format(mic=mic_name, speaker=speaker_name)
@@ -733,6 +758,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "播放或录音进行中，请等待完成后再修改硬件设置")
             return
         old_was_ve = (self.mic or {}).get("backend") == "vkinging"
+        old_ve_machine_id = (self.mic or {}).get("machine_id") if old_was_ve else None
         old_ve_signature = self._ve_signature(self.mic, self.mic_channels)
         # 将当前驱动/设备/通道作为初始值回填到硬件选择窗口
         driver_name = None
@@ -796,14 +822,20 @@ class MainWindow(QMainWindow):
                 or old_ve_signature != new_ve_signature)
                 and not prewarm_owns_transition):
             self.recording_bridge.release_ve(
-                new_ve_signature, self._on_ve_hardware_release_complete)
+                new_ve_signature,
+                lambda status, diagnostics: self._on_ve_hardware_release_complete(
+                    status, diagnostics, machine_id=old_ve_machine_id))
 
     def on_calibration_window_init(self):
         if not self._calibration_admission_available():
             QMessageBox.warning(self, "提示", "录音或校准进行中，请等待完成后再修改校准")
             return
         if (self.mic or {}).get("backend") == "vkinging" and not self.mic.get("available"):
-            QMessageBox.warning(self, "VE 输入不可用", self.mic.get("diagnostic", "请在硬件设置中刷新设备"))
+            import logging
+            logging.getLogger(__name__).warning(
+                "VE calibration input unavailable for MachineId %s: %s",
+                self.mic.get("machine_id"), self.mic.get("diagnostic", ""))
+            QMessageBox.warning(self, "VE 输入不可用", ve_failure_text("unavailable"))
             return
         # calibration the mic and speaker
         calibration_options = {}
@@ -960,9 +992,12 @@ class MainWindow(QMainWindow):
             # The bounded service callback confirms worker death, not every
             # parent reader/path release. Report honestly and permit app exit;
             # no pending audio is moved/deleted and no lease is fabricated.
-            diagnostics = "\n".join(self.recording_bridge.service.diagnostics[-5:])
+            import logging
+            logging.getLogger(__name__).warning(
+                "Recording shutdown cleanup incomplete: %s",
+                "\n".join(self.recording_bridge.service.diagnostics))
             QMessageBox.warning(self, "录音资源清理未完成",
-                "录音进程已停止，部分文件资源尚未释放。退出后请检查这些文件；本次不再移动或删除它们。\n" + diagnostics)
+                "录音进程已停止，部分文件资源尚未释放。退出后请检查这些文件；本次不再移动或删除它们。")
         self.close()
 
     def mousepressevent(self, event):

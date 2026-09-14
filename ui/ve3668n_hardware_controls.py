@@ -1,10 +1,12 @@
 """Instance-owned asynchronous VK discovery and device selection."""
 from copy import deepcopy
+import logging
 
 from PyQt5.QtCore import QObject, Qt, pyqtSignal, pyqtSlot
 
 from base.hardware_selection import is_ve_input, resolve_ve_input
 from base.ve3668n_discovery import DiscoveryService
+from ui.vkinging_presentation import ve_failure_text
 
 
 class VEDiscoveryBridge(QObject):
@@ -137,6 +139,7 @@ class VE3668NHardwareControls(QObject):
             return
         self._devices = {item["machine_id"]: deepcopy(item) for item in event.result.devices} if event.handles_released else {}
         diagnostic = "; ".join(event.result.diagnostics)
+        discovery_diagnostic = diagnostic
         self.selected_channels = []
         if self._saved_device:
             channels = self._saved_channels or self._saved_device.get("physical_channels")
@@ -150,7 +153,21 @@ class VE3668NHardwareControls(QObject):
                 diagnostic = self._current.get("diagnostic", diagnostic)
         else:
             self._current = None
-        self._publish(diagnostic or ("请选择 VK 设备" if self._devices else ""))
+        if discovery_diagnostic:
+            logging.getLogger(__name__).warning(
+                "VE discovery failed for MachineId %s: %s",
+                (self._current or {}).get("machine_id"), discovery_diagnostic)
+        if diagnostic and diagnostic != discovery_diagnostic:
+            logging.getLogger(__name__).warning(
+                "VE input unavailable for MachineId %s: %s",
+                (self._current or {}).get("machine_id"), diagnostic)
+        if discovery_diagnostic:
+            ui_text = ve_failure_text("discovery")
+        elif diagnostic:
+            ui_text = ve_failure_text("unavailable")
+        else:
+            ui_text = "请选择 VK 设备" if self._devices else ""
+        self._publish(ui_text)
 
     def select_device(self, machine_id):
         if self._closed or self.backend != "vkinging" or self._busy_check():
@@ -161,9 +178,14 @@ class VE3668NHardwareControls(QObject):
             device, device["physical_channels"], [device],
             profile_store=self.profile_store, calibration_store=self.calibration_store,
             load_profile=False)
-        self._publish((self._current or {}).get("diagnostic", ""))
+        diagnostic = (self._current or {}).get("diagnostic", "")
+        if diagnostic:
+            logging.getLogger(__name__).warning(
+                "VE input unavailable for MachineId %s: %s", machine_id, diagnostic)
+        self._publish(ve_failure_text("unavailable") if diagnostic else "")
 
-    def _publish(self, diagnostic):
+    def _publish(self, ui_text):
+        """Publish safe GUI text independently from the complete input payload."""
         self.inventory_changed.emit()
         self.input_changed.emit(self.selected_device)
-        self.status_changed.emit(diagnostic)
+        self.status_changed.emit(ui_text)

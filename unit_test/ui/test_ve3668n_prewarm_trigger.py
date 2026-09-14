@@ -233,7 +233,8 @@ def test_completion_requires_exact_context_and_failure_uses_ownership_modal(monk
     assert snapshot.ownership_safe is False
     assert len(warnings) == 1
     assert warnings[0][0] == "Vkinging 设备初始化失败"
-    assert "ClearTask failed" in warnings[0][1] and "重启" in warnings[0][1]
+    assert "code=-9" in warnings[0][1] and "重启" in warnings[0][1]
+    assert "ClearTask failed" not in warnings[0][1]
     assert window._status.messages[-1] == "VE 设备初始化失败"
     assert window._try_start_ve_prewarm(
         device_info(machine_id="later-machine"), [7, 1], "later") == "consumed"
@@ -347,3 +348,84 @@ def test_cancel_does_not_consume_and_consumed_or_ordinary_switch_keeps_release(m
     window.on_hardware_window_init()
     assert len(window.recording_bridge.release_calls) == 2
     assert lifetime.snapshot().state == "succeeded"
+
+
+@pytest.mark.parametrize("code", [-9, None])
+@pytest.mark.parametrize("ownership_safe", [False, True])
+def test_prewarm_fault_popup_is_safe_but_original_and_identity_are_logged(
+        monkeypatch, caplog, code, ownership_safe):
+    from ui.vkinging_presentation import ve_failure_text
+    warnings = []
+    monkeypatch.setattr("main_window.QMessageBox.critical", lambda *args: warnings.append(args[-1]))
+    window = _WindowHarness()
+    window.mic, window.mic_channels = device_info(), [7, 1]
+    window._try_start_ve_prewarm(window.mic, [7, 1], "startup")
+    request = window.recording_bridge.calls[0]
+    failure = _completion(request, success=False, stage="other-private-machine-id",
+                          code=code, detail="unknown fault", ownership_safe=ownership_safe,
+                          diagnostics=("test-machine-1 and other-private-machine-id",))
+    before = deepcopy(failure)
+    window.recording_bridge.callback(failure)
+    window.recording_bridge.callback(failure)
+    assert len(warnings) == 1
+    assert ve_failure_text("prewarm", code=code) in warnings[0]
+    assert "test-machine-1" not in warnings[0] and "other-private-machine-id" not in warnings[0]
+    assert ("重启" in warnings[0]) is (not ownership_safe)
+    assert failure == before
+    assert "unknown fault" in caplog.text and failure.diagnostics[0] in caplog.text
+    assert window.ve_prewarm_lifetime.snapshot().state == "failed"
+
+
+@pytest.mark.parametrize("boundary", ["configuration", "admission", "completion", "closing", "stale"])
+def test_prewarm_failure_logs_context_even_without_id_in_detail(monkeypatch, caplog, boundary):
+    monkeypatch.setattr("main_window.QMessageBox.critical", lambda *args: None)
+    window = _WindowHarness(bridge=_Bridge("rejected" if boundary == "admission" else "accepted"))
+    window.mic, window.mic_channels = device_info(), [7, 1]
+    if boundary == "configuration":
+        window.ve_profile_store.load = lambda *args: (_ for _ in ()).throw(ValueError("unknown config fault"))
+    window._try_start_ve_prewarm(window.mic, [7, 1], "startup")
+    if boundary in ("completion", "closing", "stale"):
+        request = window.recording_bridge.calls[0]
+        window._recording_close_requested = boundary == "closing"
+        if boundary == "stale":
+            window.mic = {"backend": "sounddevice", "name": "ordinary"}
+        window.recording_bridge.callback(_completion(request, success=False, detail="unknown fault"))
+    assert "test-machine-1" in caplog.text
+    assert "fault" in caplog.text or "rejected" in caplog.text
+    assert all("test-machine-1" not in message for message in window._status.messages)
+
+
+def test_prewarm_renderer_ignores_untrusted_string_code_without_logging(monkeypatch, caplog):
+    from ui.vkinging_presentation import ve_failure_text
+    warnings = []
+    monkeypatch.setattr("main_window.QMessageBox.critical", lambda *args: warnings.append(args[-1]))
+    window = _WindowHarness()
+    fault = SimpleNamespace(code="other-private-machine-id", stage="test-machine-1",
+                            detail="test-machine-1 and other-private-machine-id")
+    window._render_ve_prewarm_failure(fault, ownership_safe=False)
+    assert ve_failure_text("prewarm") in warnings[0]
+    assert "test-machine-1" not in warnings[0] and "other-private-machine-id" not in warnings[0]
+    assert "重启" in warnings[0]
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("diagnostic", ["unknown configuration fault", "test-machine-1 and other-private-machine-id"])
+def test_signature_status_hides_errors_and_logs_identity_once_until_repaired(
+        monkeypatch, caplog, diagnostic):
+    from ui.vkinging_presentation import ve_failure_text
+    window = _WindowHarness()
+    window.mic, window.mic_channels = device_info(), [7, 1]
+    original_load = window.ve_profile_store.load
+    def fail(*args):
+        raise OSError(diagnostic)
+    monkeypatch.setattr(window.ve_profile_store, "load", fail)
+    for _ in range(3):
+        assert window._ve_signature(window.mic, window.mic_channels) is None
+    assert window._status.messages[-1] == ve_failure_text("configuration")
+    errors = [record.getMessage() for record in caplog.records if diagnostic in record.getMessage()]
+    assert len(errors) == 1 and "test-machine-1" in errors[0]
+    monkeypatch.setattr(window.ve_profile_store, "load", original_load)
+    assert window._ve_signature(window.mic, window.mic_channels) is not None
+    monkeypatch.setattr(window.ve_profile_store, "load", fail)
+    assert window._ve_signature(window.mic, window.mic_channels) is None
+    assert len([record for record in caplog.records if diagnostic in record.getMessage()]) == 2

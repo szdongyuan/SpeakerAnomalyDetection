@@ -20,6 +20,7 @@ from base.save_data import save_recorded_data_to_json
 from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.vkinging_presentation import ve_failure_text
 
 
 class SequenceWidgetUiOpsMixin:
@@ -585,4 +586,4 @@ class SequenceWidgetUiOpsMixin:
         self.player_btn.setDisabled(not can_start)
         config_error = getattr(self, "_ve_recording_config_error", None)
         if config_error:
-            self.player_btn.setToolTip(f"VE 录制配置错误：{config_error}")
+            self.player_btn.setToolTip(ve_failure_text("configuration"))

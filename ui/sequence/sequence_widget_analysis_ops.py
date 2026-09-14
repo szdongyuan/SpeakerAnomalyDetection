@@ -21,6 +21,7 @@ from base.load_config import LoadUiConfig
 from base.analysis_artifact_paths import AnalysisStorageContext
 from base.recording_process_protocol import FrozenConfig
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
+from ui.vkinging_presentation import ve_failure_text
 from base.product_test_project_config import (
     classify_project_trigger_mode,
     is_manual_project_play_allowed,
@@ -1148,7 +1149,7 @@ class SequenceWidgetAnalysisOpsMixin(
         if not self._is_import_audio_mode() and callable(can_start) and not can_start():
             config_error = getattr(self, "_ve_recording_config_error", None)
             if config_error:
-                QMessageBox.warning(self, "VE 录制配置错误", config_error)
+                QMessageBox.warning(self, "VE 录制配置错误", ve_failure_text("configuration"))
             return None
 
         validate_analysis_channels = getattr(
@@ -3167,11 +3168,16 @@ class SequenceWidgetAnalysisOpsMixin(
         return superseded()
 
     def judge_play_and_record(self, label="not_labeled", is_replay=False, *, tcp_completion_address=None):
+        device = getattr(self, "mic", None) or {}
+        ve_recording = device.get("backend") == "vkinging"
+        machine_id = device.get("machine_id")
         can_start = getattr(self, "_can_start_recording_workflow", None)
         if callable(can_start) and not can_start():
             config_error = getattr(self, "_ve_recording_config_error", None)
             if config_error:
-                QMessageBox.warning(self, "VE 录制配置错误", config_error)
+                self.default_logger.error(
+                    f"VE recording admission failed machine_id={machine_id}: {config_error}")
+                QMessageBox.warning(self, "VE 录制配置错误", ve_failure_text("configuration"))
             return
         if not callable(can_start) and getattr(self, "_record_workflow_busy", False):
             return
@@ -3273,14 +3279,17 @@ class SequenceWidgetAnalysisOpsMixin(
             else:
                 recorded_dict, sample_rate = self.reset_work_pram(label)
         except Exception as e:
-            self.default_logger.error(f"reset_work_pram_error: {e}")
-            handled = self._cleanup_failed_recording_initialization(
-                f"初始化录音失败: {e}"
-            )
+            self.default_logger.error(f"reset_work_pram_error: {e}; machine_id={machine_id}")
+            reason = ve_failure_text("recording") if ve_recording else f"初始化录音失败: {e}"
+            handled = self._cleanup_failed_recording_initialization(reason)
             if not handled:
-                QMessageBox.warning(self, "提示", f"初始化录音失败: {e}")
+                QMessageBox.warning(self, "提示", reason)
             return
 
+        # A successful reset supplies the device actually admitted for this run.
+        device = recorded_dict["device"]
+        ve_recording = device.get("backend") == "vkinging"
+        machine_id = device.get("machine_id")
         try:
             self._capture_recording_wav_calibration_metadata()
         except Exception as error:
@@ -3289,15 +3298,14 @@ class SequenceWidgetAnalysisOpsMixin(
             # expected VE store/schema errors become actionable UI failures.
             self._recording_wav_calibration_metadata = None
             self.default_logger.error(
-                f"recording_calibration_snapshot_unexpected_error: {error}"
+                f"recording_calibration_snapshot_unexpected_error: {error}; machine_id={machine_id}"
             )
-            handled = self._cleanup_failed_recording_initialization(
-                f"初始化录音失败: 无法创建录音校准快照: {error}"
-            )
-            if (isinstance(error, (ValueError, OSError))
-                    and self.mic and self.mic.get("backend") == "vkinging"):
+            reason = (ve_failure_text("recording") if ve_recording
+                      else f"初始化录音失败: 无法创建录音校准快照: {error}")
+            handled = self._cleanup_failed_recording_initialization(reason)
+            if isinstance(error, (ValueError, OSError)) and ve_recording:
                 if not handled:
-                    QMessageBox.warning(self, "提示", f"无法创建 VE 录音校准快照: {error}")
+                    QMessageBox.warning(self, "提示", reason)
                 return
             raise
 
@@ -3306,10 +3314,11 @@ class SequenceWidgetAnalysisOpsMixin(
                 recorded_dict, sample_rate, tcp_completion_address=tcp_completion_address)
         except (RuntimeError, ValueError, TypeError, KeyError, OSError) as error:
             self._recording_wav_calibration_metadata = None
-            self.default_logger.error(f"start_recording_process_error: {error}")
-            handled = self._cleanup_failed_recording_initialization(f"启动录音失败: {error}")
+            self.default_logger.error(f"start_recording_process_error: {error}; machine_id={machine_id}")
+            reason = ve_failure_text("recording") if ve_recording else f"启动录音失败: {error}"
+            handled = self._cleanup_failed_recording_initialization(reason)
             if not handled:
-                QMessageBox.warning(self, "提示", f"启动录音失败: {error}")
+                QMessageBox.warning(self, "提示", reason)
             return
 
         # Return immediately - completion will be handled by _on_streaming_complete()

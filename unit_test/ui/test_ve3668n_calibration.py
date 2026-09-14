@@ -18,6 +18,7 @@ from base.recording_result_reader import RecordingAudio, ResultReader
 from base.recording_service import RecordingSession
 from base.ve3668n_stores import VECalibrationStore, VEInputProfileStore
 from ui import calibration_window as calibration
+from ui.vkinging_presentation import ve_failure_text
 from unit_test.base.test_ve3668n_calibration import descriptor_for, sine_volts
 from unit_test.base.ve3668n_fakes import device_info, input_config
 
@@ -42,6 +43,7 @@ class CalibrationBridgeFake(QObject):
 
 @pytest.fixture
 def setup(ui_qapp, tmp_path, monkeypatch):
+    real_popup = calibration.InputCalibration.calibration_popup
     monkeypatch.setattr(calibration.LogManager, "set_log_handler", lambda *_: mock.Mock())
     monkeypatch.setattr(calibration.InputCalibration, "calibration_popup", mock.Mock())
     monkeypatch.setattr(calibration.QMessageBox, "critical", mock.Mock())
@@ -65,7 +67,8 @@ def setup(ui_qapp, tmp_path, monkeypatch):
         return widget
 
     yield SimpleNamespace(make=make, profiles=profiles, calibrations=calibrations,
-                          bridge=bridge, tmp_path=tmp_path, forbidden=forbidden)
+                          bridge=bridge, tmp_path=tmp_path, forbidden=forbidden,
+                          real_popup=real_popup)
     for widget in widgets:
         widget.close_recording()
         widget.close()
@@ -125,6 +128,96 @@ def accept(widget, session, audio):
 def release(widget, session):
     session.released.set()
     widget._on_calibration_released(session)
+
+
+@pytest.mark.parametrize("boundary,operation", [
+    ("refresh", "unavailable"), ("start", "calibration_start"),
+    ("failure", "calibration"), ("release", "calibration_release"),
+    ("verify", "calibration"), ("save", "calibration"),
+    ("reset", "calibration_reset"),
+])
+@pytest.mark.parametrize("detail_has_identity", [False, True])
+def test_calibration_fault_gui_is_private_and_preserves_old_record(
+        setup, monkeypatch, boundary, operation, detail_has_identity):
+    widget = setup.make(channels=(7,))
+    seed_old(setup, widget)
+    before = setup.calibrations.path.read_bytes()
+    identity = widget.input_device["machine_id"]
+    detail = f"denied {identity} another-private-machine-id" if detail_has_identity else "denied"
+    popups = []
+    monkeypatch.setattr(widget, "calibration_popup", setup.real_popup.__get__(widget))
+    monkeypatch.setattr(calibration.QMessageBox, "exec_", lambda box:
+                        popups.append((box.windowTitle(), box.text(), box.informativeText(),
+                                       box.detailedText())) or calibration.QMessageBox.Ok)
+    changed, finished = [], []
+    widget.calibration_state_changed.connect(changed.append)
+    widget.calibration_finished.connect(finished.append)
+    original_load = setup.profiles.load
+    if boundary == "refresh":
+        monkeypatch.setattr(setup.profiles, "load", mock.Mock(side_effect=calibration.VEStoreIOError(detail)))
+        assert not widget.refresh_ve_calibration_state()
+        assert not widget.calibration_available
+        assert not widget.channel_combo_box.isEnabled()
+        assert widget.channel_status_label.text() == ve_failure_text(operation)
+        assert not widget.clicked_calibration()
+    elif boundary == "start":
+        monkeypatch.setattr(setup.bridge, "start", mock.Mock(side_effect=RuntimeError(detail)))
+        assert not widget.clicked_calibration()
+    elif boundary == "reset":
+        monkeypatch.setattr(setup.calibrations, "reset", mock.Mock(side_effect=calibration.VEStoreIOError(detail)))
+        widget.reset_btn_clicked()
+    else:
+        session, audio = offered(widget)
+        request_before = session.request
+        if boundary in ("failure", "release"):
+            # The originating request keeps the VE identity even after selection changes.
+            widget.input_device = {"backend": "sounddevice", "name": "ordinary mic"}
+            widget._ve_input = False
+            if boundary == "failure":
+                failure = SimpleNamespace(message=detail, detail=detail)
+                widget._on_calibration_failed(session, failure)
+                assert failure.message == detail and failure.detail == detail
+            else:
+                session.release_error = detail
+                widget._on_calibration_release_failed(session, detail)
+                assert session.release_error == detail
+            assert not session.released.is_set()
+        else:
+            if boundary == "verify":
+                monkeypatch.setattr(widget, "_verified_ve_audio", mock.Mock(side_effect=ValueError(detail)))
+            else:
+                monkeypatch.setattr(setup.calibrations, "save", mock.Mock(side_effect=calibration.VEStoreIOError(detail)))
+            accept(widget, session, audio)
+            release(widget, session)
+        assert session.request == request_before
+        assert finished == [False]
+    assert popups == [("校准失败", ve_failure_text(operation), "", "")]
+    for child in widget.findChildren(QWidget):
+        assert identity not in child.toolTip()
+        assert "another-private-machine-id" not in child.toolTip()
+        if isinstance(child, QLabel):
+            assert identity not in child.text()
+            assert "another-private-machine-id" not in child.text()
+    logs = str(widget.default_logger.error.call_args_list)
+    assert identity in logs and detail in logs
+    assert setup.calibrations.path.read_bytes() == before
+    assert changed == []
+    if boundary == "refresh":
+        monkeypatch.setattr(setup.profiles, "load", original_load)
+        assert widget.refresh_ve_calibration_state()
+        assert widget.channel_status_label.text() == "状态: 实测校准有效"
+
+
+@pytest.mark.parametrize("device", [None, {}, ["invalid identity"]])
+def test_reset_invalid_identity_still_reports_failure_without_writing(setup, device):
+    widget = setup.make(channels=(7,))
+    seed_old(setup, widget)
+    before = setup.calibrations.path.read_bytes()
+    widget.input_device = device
+    widget.reset_btn_clicked()
+    widget.calibration_popup.assert_called_once_with(
+        success_flag=False, message=ve_failure_text("calibration_reset"))
+    assert setup.calibrations.path.read_bytes() == before
 
 
 @pytest.mark.parametrize("rate", [44100, 48000, 51200])
@@ -526,7 +619,8 @@ def test_ve_without_explicit_stores_is_unavailable_not_legacy_fallback(setup):
     try:
         assert not widget.calibration_available
         assert not widget.clicked_calibration()
-        assert "共享" in widget.calibration_unavailable_message
+        assert widget.calibration_unavailable_message == ve_failure_text("unavailable")
+        assert "共享" in str(widget.default_logger.error.call_args_list)
         setup.forbidden.assert_not_called()
     finally:
         widget.close_recording()

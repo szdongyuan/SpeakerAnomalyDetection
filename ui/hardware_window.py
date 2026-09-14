@@ -1,5 +1,6 @@
 from cgi import print_arguments
 import sys
+import logging
 from dataclasses import dataclass
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -27,6 +28,7 @@ from base.sound_device_manager import SoundDeviceManager
 from base.hardware_selection import is_ve_input, save_ve_selection, restore_or_default, save_if_changed
 from base.ve3668n_stores import VEInputProfileStore, VECalibrationStore
 from ui.ve3668n_hardware_controls import VE3668NHardwareControls
+from ui.vkinging_presentation import device_display_name, ve_failure_text
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
@@ -537,7 +539,7 @@ class HardwareSelectionController:
         self._rendering_devices = True
         try:
             table = self.view.mic_device_table
-            table.set_options([(f"{d.get('name', 'VK')} · {d.get('machine_id')}"
+            table.set_options([(device_display_name(d)
                                 + (" · 不可用" if not d.get("available") else ""), d)
                                for d in self.view.ve_controls.devices])
             table.set_checked_by_predicate(lambda d: bool(selection and selection.get("available"))
@@ -599,8 +601,11 @@ class HardwareSelectionController:
                     path=self.selection_path, api_name=self.model.state.api_name,
                     legacy_soundcard_selection=legacy_selection)
             except (ValueError, OSError) as exc:
-                self.view.ve_status_label.setText(f"未保存：{exc}")
-                QMessageBox.warning(self.view, "VE 硬件未保存", str(exc))
+                logging.getLogger(__name__).warning(
+                    "VE hardware save failed for MachineId %s: %s", (mic or {}).get("machine_id"), exc)
+                message = ve_failure_text("hardware_save")
+                self.view.ve_status_label.setText(message)
+                QMessageBox.warning(self.view, "VE 硬件未保存", message)
                 return
             if speaker is not None:
                 SoundDeviceManager.change_default_output_device(int(speaker["index"]))
