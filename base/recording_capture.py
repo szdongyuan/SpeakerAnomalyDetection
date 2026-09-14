@@ -7,7 +7,6 @@ non-GUI owners/tests. No callbacks, queues or raw audio are sent through IPC her
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
-import logging
 import math
 import os
 import sys
@@ -17,6 +16,7 @@ import threading
 import numpy as np
 import soundfile as sf
 
+from base.log_manager import LogManager
 from base.multichannel_waveform_session import MultichannelWaveformSession
 from base.recording_process_protocol import (
     RecordingCancelled, RecordingFailure, RecordingPreview, RecordingRequest, RecordingResult,
@@ -117,7 +117,7 @@ class RecordingCapture:
         self._stage = "starting"
         self._warnings = []
         self._status_warning = None
-        self._logger = logging.getLogger(__name__)
+        self._logger = LogManager.set_log_handler("core")
         self._effective_trim = request.trim_samples if request.purpose == "main" else 0
         # For a known overlarge trim, finalization retains all audio too.
         if self._effective_trim >= request.target_samples:

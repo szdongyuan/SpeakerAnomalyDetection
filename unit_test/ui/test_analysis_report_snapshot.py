@@ -1,5 +1,7 @@
 import logging
+import re
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from PyQt5.QtCore import QSize
@@ -18,6 +20,7 @@ from ui.sequence.analysis_report_snapshot import (
     export_plot_widget_png,
 )
 from ui.sequence.analysis_channel_preflight import AnalysisChannelSkip, preflight_analysis_channels
+from unit_test.logging_test_support import isolated_project_logger
 
 
 def test_process_result_report_snapshot_reads_saved_channel_image(tmp_path):
@@ -621,6 +624,7 @@ def test_build_analysis_report_items_isolates_single_plot_failure(
 def test_export_plot_widget_png_logs_only_slow_snapshot(
     monkeypatch,
     caplog,
+    tmp_path,
 ):
     class _Exporter:
         def __init__(self, _plot_item):
@@ -635,7 +639,7 @@ def test_export_plot_widget_png_logs_only_slow_snapshot(
             image.fill(QColor("white"))
             return image
 
-    plot_widget = _StubPlotWidget("慢截图")
+    plot_widget = _StubPlotWidget("slow-snapshot-probe")
     monkeypatch.setattr(
         "ui.sequence.analysis_report_snapshot.pg.exporters.ImageExporter",
         _Exporter,
@@ -646,10 +650,54 @@ def test_export_plot_widget_png_logs_only_slow_snapshot(
     )
     caplog.set_level(
         logging.WARNING,
-        logger="ui.sequence.analysis_report_snapshot",
+        logger="core",
     )
 
-    export_plot_widget_png(plot_widget)
+    with isolated_project_logger(tmp_path, monkeypatch) as state:
+        png_data = export_plot_widget_png(plot_widget)
+        assert png_data.startswith(b"\x89PNG\r\n\x1a\n")
+        records = [record for record in caplog.records
+                   if "product_pdf_plot_snapshot_slow" in record.getMessage()]
+        assert len(records) == 1
+        assert records[0].name == "core"
+        assert records[0].levelno == logging.WARNING
+        for handler in state.logger.handlers:
+            handler.flush()
+        data = state.path.read_bytes()
+        assert b"core WARNING product_pdf_plot_snapshot_slow: title='slow-snapshot-probe' width=1000 elapsed_ms=" in data
+        assert re.search(rb"\[analysis_report_snapshot.py:[1-9][0-9]*\]", data)
 
     assert "product_pdf_plot_snapshot_slow" in caplog.text
     assert "width=1000" in caplog.text
+
+
+def test_export_plot_widget_png_fast_snapshot_does_not_acquire_logger(monkeypatch, caplog):
+    from base.log_manager import LogManager
+    from ui.sequence import analysis_report_snapshot as snapshot
+
+    class Exporter:
+        def __init__(self, plot_item):
+            self.params = {}
+
+        def parameters(self):
+            return self.params
+
+        def export(self, *, toBytes):
+            assert toBytes is True
+            image = QImage(320, 180, QImage.Format_RGB32)
+            image.fill(QColor("white"))
+            return image
+
+    clock = iter((10.0, 10.1))
+    acquire = Mock(side_effect=AssertionError("fast snapshot acquired logger"))
+    monkeypatch.setattr(snapshot.time, "perf_counter", lambda: next(clock))
+    monkeypatch.setattr(snapshot, "_REPORT_PLOT_SLOW_SECONDS", 0.5)
+    monkeypatch.setattr(snapshot.pg.exporters, "ImageExporter", Exporter)
+    monkeypatch.setattr(LogManager, "set_log_handler", acquire)
+
+    png_data = export_plot_widget_png(_StubPlotWidget("fast-snapshot-probe"))
+
+    assert png_data.startswith(b"\x89PNG\r\n\x1a\n")
+    acquire.assert_not_called()
+    assert not any("product_pdf_plot_snapshot_slow" in record.getMessage()
+                   for record in caplog.records)

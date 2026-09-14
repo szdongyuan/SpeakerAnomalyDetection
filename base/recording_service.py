@@ -12,7 +12,6 @@ released continuation, never a mutable current-recording path, for file actions.
 """
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
-import logging
 import math
 import multiprocessing
 import os
@@ -23,6 +22,7 @@ import tempfile
 import threading
 import time
 
+from base.log_manager import LogManager
 from base.recording_process_protocol import (
     CaptureSlotReleased, FrozenConfig, RecordingCancelled, RecordingEvent,
     RecordingFailure, RecordingProgress, RecordingRequest, RecordingResult,
@@ -234,7 +234,7 @@ class RecordingService:
         self.closed = threading.Event()
         self.diagnostics = []
         self.threads = []
-        self._logger = logging.getLogger(__name__)
+        self._logger = LogManager.set_log_handler("core")
         self._supervisor = threading.Thread(target=self._run, name="recording-supervisor", daemon=True)
         self._start_thread(self._supervisor)
 

@@ -3,11 +3,11 @@
 Only lifecycle values and one cumulative preview cross this Qt boundary. No
 audio device, file writer, pipe operation or process wait runs in this adapter.
 """
-import logging
 import threading
 
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
 
+from base.log_manager import LogManager
 from base.recording_service import RecordingCallbacks
 
 
@@ -19,6 +19,7 @@ class RecordingServiceBridge(QObject):
 
     def __init__(self, service, parent=None):
         super().__init__(parent)
+        self._logger = LogManager.set_log_handler("core")
         self.service = service
         self._callbacks = {}
         self._previews = {}
@@ -124,7 +125,7 @@ class RecordingServiceBridge(QObject):
                         # The prewarm consumer is a UI extension boundary just
                         # like recording event delivery.  A broken consumer
                         # must not unwind through the queued Qt slot.
-                        logging.getLogger(__name__).exception(
+                        self._logger.exception(
                             "VE prewarm UI callback failed: %s", error)
 
                 self._invoke.emit(deliver)
@@ -223,7 +224,7 @@ class RecordingServiceBridge(QObject):
         except Exception as error:
             # The UI extension boundary must never unwind through a Qt slot.
             # Reject provisional delivery; accepted recordings stay successful.
-            logging.getLogger(__name__).exception("Recording UI %s failed: %s", kind, error)
+            self._logger.exception("Recording UI %s failed: %s", kind, error)
             if kind == "result_ready":
                 session.reject_result(f"UI result validation failed: {error}")
         finally:

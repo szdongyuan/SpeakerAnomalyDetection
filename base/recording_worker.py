@@ -1,13 +1,14 @@
 """Spawn entry point. Capture, control sends and preview sends never share a wait."""
 import importlib
-import logging
 import multiprocessing
 import os
 import queue
 import threading
 import time
 from dataclasses import dataclass
+from contextlib import ExitStack
 
+from base.log_manager import LogManager
 from base.recording_capture import RecordingCapture
 from base.recording_process_protocol import (
     CaptureSlotReleased,
@@ -69,7 +70,7 @@ def _send_loop(connection, outgoing, broken, latest=None, wake=None, urgent=None
     except Exception:
         # Pipe serialization and connection.send are an external runtime
         # boundary. Any unexpected failure makes further ownership uncertain.
-        logging.getLogger(__name__).exception("Recording sender failed")
+        LogManager.set_log_handler("core").exception("Recording sender failed")
         broken.set()
 
 
@@ -96,6 +97,12 @@ class _WorkerPrewarm:
 def recording_worker(control, preview, generation, backend_factory, backend_options,
                      cancel_timeout=5.0, preview_interval=.05):
     """Own one VE controller plus a request-keyed two-slot child pipeline."""
+    with ExitStack() as setup_cleanup:
+        setup_cleanup.callback(control.close)
+        setup_cleanup.callback(preview.close)
+        logger = LogManager.set_log_handler("core")
+        setup_cleanup.pop_all()
+
     control_out = queue.Queue(maxsize=8)
     ordered_control_out = queue.Queue()
     fatal_out = queue.Queue(maxsize=1)
@@ -567,7 +574,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
             state.capture.cancel()
         cancel_prewarm("VE prewarm cancelled after control channel closed")
     except Exception as exc:
-        logging.getLogger(__name__).exception("Recording worker failed")
+        logger.exception("Recording worker failed")
         broken.set()
         for state in pipeline.shutdown_snapshot():
             state.capture.cancel()
@@ -606,7 +613,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         try:
             preview_out.put_nowait(None)
         except queue.Full:
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "Discarding blocked recording sender at exit")
         control_wake.set()
         for sender in senders:
