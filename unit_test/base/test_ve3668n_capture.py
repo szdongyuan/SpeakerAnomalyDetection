@@ -74,7 +74,7 @@ def test_single_capture_applies_requested_voltage_range(tmp_path, limit):
 
 def cleanup_log_records(caplog):
     return [record for record in caplog.records
-            if record.name == "base.ve3668n_capture"
+            if record.name == "core"
             and record.getMessage().startswith("[VE cleanup]")]
 
 
@@ -88,7 +88,7 @@ def test_cleanup_diagnostic_success_is_ordered_flushed_and_deterministically_tim
     printed = []
     monkeypatch.setattr("builtins.print",
                         lambda *args, **kwargs: printed.append((args, kwargs)))
-    caplog.set_level(logging.INFO, logger="base.ve3668n_capture")
+    caplog.set_level(logging.INFO, logger="core")
 
     assert stream.start()
     finish_stream(stream)
@@ -125,7 +125,7 @@ def test_cleanup_diagnostic_failure_is_single_line_and_preserves_cleanup_semanti
     printed = []
     monkeypatch.setattr("builtins.print",
                         lambda *args, **kwargs: printed.append((args, kwargs)))
-    caplog.set_level(logging.INFO, logger="base.ve3668n_capture")
+    caplog.set_level(logging.INFO, logger="core")
 
     assert stream.start()
     finish_stream(stream)
@@ -207,7 +207,7 @@ def test_cleanup_diagnostic_sdk_construction_failure_emits_nothing(
     printed = []
     monkeypatch.setattr("builtins.print",
                         lambda *args, **kwargs: printed.append((args, kwargs)))
-    caplog.set_level(logging.INFO, logger="base.ve3668n_capture")
+    caplog.set_level(logging.INFO, logger="core")
 
     assert not stream.start()
     finish_stream(stream)

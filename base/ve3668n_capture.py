@@ -1,6 +1,5 @@
 """Single-thread native VE3668N owner, injected for hardware-free tests."""
 import ctypes
-import logging
 import math
 import threading
 import time
@@ -8,6 +7,7 @@ import uuid
 
 import numpy as np
 
+from base.log_manager import LogManager
 from base.ve3668n_capture_timing import VeCaptureDeadline, VeCaptureProgress
 from base.ve3668n_discovery import resolve_device
 from base.vkinging_sdk import VkDaqClient, VkDaqError
@@ -52,7 +52,7 @@ class Ve3668nInputStream:
         self._clock = clock
         self._ready_timeout = ready_timeout
         self._join_timeout = join_timeout
-        self._logger = logging.getLogger(__name__)
+        self._logger = LogManager.set_log_handler("core")
         self.started = threading.Event()
         self.done = threading.Event()
         self._ready = threading.Event()

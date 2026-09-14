@@ -3,7 +3,6 @@ from collections import Counter
 from dataclasses import dataclass
 import importlib
 import json
-import logging
 import math
 import multiprocessing
 import os
@@ -13,6 +12,7 @@ import threading
 import time
 
 from base import vkinging_sdk
+from base.log_manager import LogManager
 from base.ve3668n_input import (
     create_input_config, normalize_machine_id, normalize_model,
     validate_device_snapshot, validate_physical_channels,
@@ -262,7 +262,7 @@ def _discovery_worker(connection, factory_name, options_json, limit):
     except (OSError, EOFError):
         # Parent cancellation/oversize rejection can close the pipe mid-send.
         # No more result is possible; logging diagnoses it and finally closes.
-        logging.getLogger(__name__).warning("Discovery result pipe closed", exc_info=True)
+        LogManager.set_log_handler("core").warning("Discovery result pipe closed", exc_info=True)
     finally:
         connection.close()
         finished.set()
@@ -351,6 +351,7 @@ class DiscoveryService:
         self._current = None
         self._result = None
         self._unreaped = None
+        self._logger = LogManager.set_log_handler("core")
         self._supervisor = threading.Thread(target=self._supervise,
                                             name="ve-discovery-supervisor", daemon=True)
         self._supervisor.start()
@@ -436,7 +437,7 @@ class DiscoveryService:
                         callback(event)
                     except Exception:
                         # User callback boundary; retirement is independent of it.
-                        logging.getLogger(__name__).exception("Discovery callback failed")
+                        self._logger.exception("Discovery callback failed")
         finally:
             self._finished.set()
 
@@ -556,11 +557,11 @@ class DiscoveryService:
             if resources.launcher.is_alive():
                 return
             if resources.launch_failure is not None:
-                logging.getLogger(__name__).warning(
+                self._logger.warning(
                     "Late %s", resources.launch_failure.diagnostics[0])
             cleanup = self._retire(resources)
             if cleanup:
-                logging.getLogger(__name__).warning("Late discovery retirement: %s", "; ".join(cleanup))
+                self._logger.warning("Late discovery retirement: %s", "; ".join(cleanup))
         child, receiver = resources.child, resources.receiver
         if child is not None:
             if child.is_alive():
@@ -569,7 +570,7 @@ class DiscoveryService:
                 except OSError:
                     # Uncertain OS retirement is already reported in the result;
                     # retain the handle and retry without permitting a new probe.
-                    logging.getLogger(__name__).error("Discovery helper kill retry failed", exc_info=True)
+                    self._logger.error("Discovery helper kill retry failed", exc_info=True)
                 child.join(self.retire_timeout)
             if not child.is_alive():
                 child.close()

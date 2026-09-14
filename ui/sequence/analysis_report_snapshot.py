@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import math
 from pathlib import Path
 import time
@@ -10,6 +9,7 @@ import pyqtgraph as pg
 import pyqtgraph.exporters
 from PyQt5.QtCore import QByteArray, QBuffer, QIODevice
 
+from base.log_manager import LogManager
 
 _NON_JUDGMENT_ANALYSIS_TYPES = {"SPEC"}
 _CURVE_JUDGMENT_ANALYSIS_TYPES = {
@@ -22,7 +22,6 @@ _CURVE_JUDGMENT_ANALYSIS_TYPES = {
 _REPORT_PLOT_LAYOUT_SIZE = (1000, 600)
 _REPORT_PLOT_EXPORT_WIDTH = 1000
 _REPORT_PLOT_SLOW_SECONDS = 0.5
-_LOGGER = logging.getLogger(__name__)
 
 
 def build_analysis_report_items_from_task_result(task_result, analysis_config):
@@ -548,7 +547,7 @@ def export_plot_widget_png(
     png_data = bytes(byte_array)
     elapsed_seconds = time.perf_counter() - started_at
     if elapsed_seconds >= _REPORT_PLOT_SLOW_SECONDS:
-        _LOGGER.warning(
+        LogManager.set_log_handler("core").warning(
             "product_pdf_plot_snapshot_slow: title=%r width=%d elapsed_ms=%.1f",
             title_text,
             int(width),
