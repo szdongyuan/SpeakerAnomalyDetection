@@ -1,3 +1,4 @@
+import logging
 import sys
 from collections.abc import Mapping
 from copy import deepcopy
@@ -26,6 +27,7 @@ from consts.ve3668n_consts import (
     VE_SAMPLE_RATE_MIN, VE_SAMPLE_RATE_MAX, VE_SAMPLE_RATES,
 )
 from ui.config_dialog_base import ConfigDialogBase
+from ui.vkinging_presentation import device_display_name, ve_failure_text
 
 
 class BaseConfigWindow(ConfigDialogBase):
@@ -137,10 +139,12 @@ class RecordConfigWindow(BaseConfigWindow):
                     rate_detail, fallback_profile=profile)["sample_rate"]
             except (ValueError, OSError) as exc:
                 self._sample_rate_load_error = str(exc)
+                logging.getLogger(__name__).warning(
+                    "VE acquisition profile failed machine_id=%s: %s", self.mic.get("machine_id"), exc)
                 rate = (self.input_data["sample_rate"] if "sample_rate" in self.input_data
                         else profile.get("sample_rate", "配置不可用")
                         if isinstance(profile, Mapping) else "配置不可用")
-                self.samplerate_combo.setToolTip(str(exc))
+                self.samplerate_combo.setToolTip(ve_failure_text("configuration"))
             self.samplerate_combo.setEditText(str(rate))
             self.samplerate_combo.editTextChanged.connect(self._on_sample_rate_edited)
             self.samplerate_combo.lineEdit().textEdited.connect(self._on_sample_rate_edited)
@@ -159,7 +163,8 @@ class RecordConfigWindow(BaseConfigWindow):
         if self.mic is None:
             QMessageBox.warning(self, "设置警告", "请先连接输入设备!")
         else:
-            self.input_device_display.setPlaceholderText(f"{self.mic.get('name')}")
+            self.input_device_display.setPlaceholderText(
+                device_display_name(self.mic) if self._is_vk else f"{self.mic.get('name')}")
 
         self.recording_advanced_toggle = QPushButton()
         self.recording_advanced_toggle.setObjectName("recording_advanced_toggle")
@@ -260,7 +265,9 @@ class RecordConfigWindow(BaseConfigWindow):
                 raise ValueError("当前声卡不支持此采样率，请重新选择。")
         except ValueError as exc:
             self.samplerate_combo.setFocus()
-            QMessageBox.warning(self, "设置警告", str(exc))
+            message = (ve_failure_text("configuration")
+                       if self._is_vk and self._sample_rate_load_error else str(exc))
+            QMessageBox.warning(self, "设置警告", message)
             return
         if self._is_vk:
             try:

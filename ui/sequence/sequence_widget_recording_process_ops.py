@@ -17,6 +17,7 @@ from base.ve3668n_wav_metadata import validate_ve_wav_metadata
 from consts.ve3668n_consts import VE_BACKEND
 from ui.recording_service_bridge import RecordingProcessorFacade, RecordingServiceBridge
 from ui.sequence.recording_process_context import RecordingProcessContext
+from ui.vkinging_presentation import ve_failure_text
 
 
 
@@ -132,11 +133,15 @@ class SequenceWidgetRecordingProcessOpsMixin:
                 )
             except (ValueError, OSError) as exc:
                 diagnostic = str(exc)
-                if diagnostic != getattr(self, "_ve_recording_config_error", None):
+                error_context = (mic.get("machine_id"), diagnostic)
+                if error_context != getattr(self, "_ve_recording_config_error_context", None):
                     import logging
-                    logging.getLogger(__name__).warning("VE recording configuration: %s", diagnostic)
+                    logging.getLogger(__name__).warning(
+                        "VE recording configuration machine_id=%s: %s", *error_context)
+                self._ve_recording_config_error_context = error_context
                 self._ve_recording_config_error = diagnostic
                 return False
+        self._ve_recording_config_error_context = None
         self._ve_recording_config_error = None
         return lifetime.admission_for(signature) == "allowed"
 
@@ -612,7 +617,8 @@ class SequenceWidgetRecordingProcessOpsMixin:
             return
         self.default_logger.error(
             f"Recording failed request={session.request.request_id} "
-            f"stage={failure.stage} path={session.request.path}: {failure.message}")
+            f"stage={failure.stage} path={session.request.path} "
+            f"machine_id={session.request.device.get('machine_id')}: {failure.message}")
         context.failed = True
         context.validated_audio = None
         active = self._is_active_recording_process(session)
@@ -633,7 +639,10 @@ class SequenceWidgetRecordingProcessOpsMixin:
         self._drop_recording_context(context)
         if active:
             self.streaming_processor = None
-            self._handle_invalid_recording(f"录音失败 ({failure.stage}): {failure.message}")
+            reason = (ve_failure_text("release" if failure.stage == "release" else "recording")
+                      if session.request.device.get("backend") == VE_BACKEND
+                      else f"录音失败 ({failure.stage}): {failure.message}")
+            self._handle_invalid_recording(reason)
 
     def _on_process_recording_cancelled(self, session, descriptor):
         context = self._recording_context_for_session(session)

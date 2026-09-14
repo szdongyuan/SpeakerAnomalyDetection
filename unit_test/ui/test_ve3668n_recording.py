@@ -909,3 +909,229 @@ def test_ve_records_with_corrupt_legacy_monitor_without_output(host_factory, str
     assert isinstance(capture.outcome, RecordingResult)
     assert (capture.snapshot(generation=1, sequence=1) is not None) is streaming
     assert len(audio.multi) == request.target_samples - request.trim_samples
+
+
+class ProductRecordingHost(RecordingHost):
+    from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin as _serial
+    _on_serial_product_runtime_error = _serial._on_serial_product_runtime_error
+    _abort_serial_product_round = _serial._abort_serial_product_round
+    _show_serial_product_error_once = _serial._show_serial_product_error_once
+    _show_serial_product_notice_once = _serial._show_serial_product_notice_once
+    SERIAL_PRODUCT_ERROR_MESSAGE = _serial.SERIAL_PRODUCT_ERROR_MESSAGE
+
+
+@pytest.mark.parametrize("stage", ["release", "other-private-machine-id"])
+@pytest.mark.parametrize("backend", ["vkinging", "sounddevice"])
+def test_recording_failure_uses_session_identity_and_preserves_failure(
+        host_factory, caplog, stage, backend):
+    from copy import deepcopy
+    from ui.vkinging_presentation import ve_failure_text
+    host = host_factory()
+    host.judge_play_and_record()
+    session = host._recording_process_session
+    if backend != "vkinging":
+        from unit_test.base.recording_process_fakes import device_info as soundcard
+        session.request = replace(session.request, device=soundcard(), channels=(0, 1))
+    context = host._recording_context_for_session(session)
+    failure = SimpleNamespace(stage=stage, message="unknown fault other-private-machine-id")
+    before = deepcopy(failure)
+    host.mic = {"backend": "sounddevice", "name": "new selection"}
+    host._on_process_recording_failed(session, failure)
+    popup = analysis.QMessageBox.warning.call_args.args[-1]
+    if backend == "vkinging":
+        assert ve_failure_text("release" if stage == "release" else "recording") in popup
+        assert "other-private-machine-id" not in popup
+        assert "test-machine-1" in caplog.text
+    else:
+        assert failure.message in popup and stage in popup
+    assert failure == before and context.failed
+    assert failure.message in caplog.text
+    assert not host._record_workflow_busy
+    host.saved.assert_not_called()
+    host._send_recording_tcp_finish.assert_not_called()
+
+
+@pytest.mark.parametrize("fault", ["early", "late", "database"])
+@pytest.mark.parametrize("backend", ["vkinging", "sounddevice"])
+def test_completion_error_reaches_real_product_popup_with_frozen_backend(
+        host_factory, monkeypatch, caplog, fault, backend):
+    from ui.vkinging_presentation import ve_failure_text
+    host = host_factory(host_type=ProductRecordingHost)
+    host.judge_play_and_record()
+    request = host._recording_process_session.request
+    if backend == "sounddevice":
+        from unit_test.base.recording_process_fakes import device_info as soundcard
+        request = replace(request, device=soundcard(), channels=(0, 1))
+    host._recording_process_request = request
+    host.mic = {"backend": "sounddevice", "name": "new selection"}
+    host._serial_product_condition_executing = True
+    diagnostic = "unknown completion fault other-private-machine-id"
+    def fail(*args, **kwargs):
+        # Cleanup may remove the request; the catch still owns its snapshot.
+        host._recording_process_request = None
+        raise ValueError(diagnostic)
+    if fault == "early":
+        host.streaming_processor = SimpleNamespace(get_recorded_data=fail)
+        kwargs = {}
+    else:
+        kwargs = dict(recorded_mono=np.ones(2, np.float32),
+                      recorded_multi=np.ones((2, 2), np.float32), sample_rate=51200)
+        if fault == "late":
+            host._cache_condition_record = fail
+        else:
+            host.saved.return_value = (1, diagnostic)
+    warnings = []
+    def warning(*args):
+        warnings.append(args[-1])
+        host._abort_serial_product_round("duplicate fault")
+    monkeypatch.setattr(analysis.QMessageBox, "warning", warning)
+    assert host._on_streaming_complete(prefinalized=True, **kwargs) is not True
+    assert len(warnings) == 1
+    if backend == "vkinging":
+        assert ve_failure_text("recording") in warnings[0]
+        assert "other-private-machine-id" not in warnings[0]
+        assert "test-machine-1" in caplog.text
+    else:
+        assert diagnostic in warnings[0]
+    assert diagnostic in caplog.text
+    assert not host._serial_product_condition_executing
+    assert not host._serial_product_error_dialog_open
+    assert not host._record_workflow_busy
+    host._send_recording_tcp_finish.assert_not_called()
+
+
+@pytest.mark.parametrize("boundary", ["reset", "snapshot", "start"])
+@pytest.mark.parametrize("product", [False, True])
+@pytest.mark.parametrize("backend", ["vkinging", "sounddevice"])
+def test_start_failure_hides_ve_detail_at_cleanup_and_direct_popup(
+        host_factory, caplog, boundary, product, backend):
+    from ui.vkinging_presentation import ve_failure_text
+    host = host_factory(host_type=ProductRecordingHost)
+    if backend == "sounddevice":
+        from unit_test.base.recording_process_fakes import device_info as soundcard
+        host.mic = soundcard()
+        host.speaker = soundcard()
+        host.mic_channels = [0, 1]
+        host.refresh_channel_windows()
+    diagnostic = "unknown startup fault other-private-machine-id"
+    def fail(*args, **kwargs):
+        host.mic = {"backend": "sounddevice", "name": "changed selection"}
+        raise ValueError(diagnostic)
+    setattr(host, {"reset": "reset_work_pram", "snapshot": "_capture_recording_wav_calibration_metadata",
+                   "start": "_start_process_recording"}[boundary], fail)
+    host._serial_product_condition_executing = product
+    if boundary == "snapshot" and backend == "sounddevice":
+        with pytest.raises(ValueError, match="unknown startup fault"):
+            host.judge_play_and_record()
+        if not product:
+            analysis.QMessageBox.warning.assert_not_called()
+            return
+    else:
+        host.judge_play_and_record()
+    popup = analysis.QMessageBox.warning.call_args.args[-1]
+    if backend == "vkinging":
+        assert ve_failure_text("recording") in popup
+        assert "other-private-machine-id" not in popup
+        assert "test-machine-1" in caplog.text
+    else:
+        assert diagnostic in popup
+    assert diagnostic in caplog.text
+    assert not host._record_workflow_busy and not host.player_status_flag
+    assert host.recording_bridge.requests == []
+
+
+def test_ve_config_admission_popup_keeps_raw_error_internal(host_factory, caplog):
+    from ui.vkinging_presentation import ve_failure_text
+    host = host_factory()
+    diagnostic = "unknown config other-private-machine-id"
+    def denied():
+        host._ve_recording_config_error = diagnostic
+        return False
+    host._can_start_recording_workflow = denied
+    host.judge_play_and_record()
+    assert analysis.QMessageBox.warning.call_args.args[-1] == ve_failure_text("configuration")
+    assert host._ve_recording_config_error == diagnostic
+    assert diagnostic in caplog.text and "test-machine-1" in caplog.text
+    assert host.recording_bridge.requests == []
+
+
+def test_ve_release_error_popup_is_once_only_and_failed_audio_stays_unpublished(host_factory, caplog):
+    from ui.vkinging_presentation import ve_failure_text
+    host = host_factory()
+    session, _, audio = started_audio(host)
+    host._on_process_recording_result(session, audio)
+    session.state = "completed"
+    host._on_process_recording_accepted(session, audio)
+    context = host._recording_context_for_session(session)
+    diagnostic = "test-machine-1 and other-private-machine-id failed to release"
+    session.release_error = diagnostic
+    host.mic = {"backend": "sounddevice", "name": "later selection"}
+    host._on_process_recording_release_failed(session, diagnostic)
+    host._on_process_recording_release_failed(session, diagnostic)
+    popup = analysis.QMessageBox.warning.call_args.args[-1]
+    analysis.QMessageBox.warning.assert_called_once()
+    assert ve_failure_text("release") in popup
+    assert "test-machine-1" not in popup and "other-private-machine-id" not in popup
+    assert diagnostic in caplog.text and session.release_error == diagnostic
+    assert context.failed and context.release_warned
+    assert not session.released.is_set()
+    session.released.set()
+    host._on_process_recording_released(session)
+    assert host.data_struct.store_wave_data_multi is None
+    host.saved.assert_not_called()
+    host.run.assert_not_called()
+    host._send_recording_tcp_finish.assert_not_called()
+
+
+@pytest.mark.parametrize("boundary", ["manual_condition", "player_tooltip"])
+@pytest.mark.parametrize("diagnostic", ["unknown configuration fault", "test-machine-1 and other-private-machine-id"])
+def test_configuration_admission_outlets_are_safe_and_keep_diagnostic_identity(
+        host_factory, monkeypatch, caplog, boundary, diagnostic):
+    from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+    from ui.vkinging_presentation import ve_failure_text
+    host = host_factory()
+    host.ve_prewarm_lifetime = VePrewarmLifetime()
+    original_load = host.ve_profile_store.load
+    monkeypatch.setattr(host.ve_profile_store, "load", mock.Mock(side_effect=OSError(diagnostic)))
+    if boundary == "manual_condition":
+        host._load_sequence_config_for_product_condition = lambda condition: (True, "")
+        host._product_condition_sequence = lambda: [{"name": "test condition"}]
+        assert host._prepare_next_manual_product_condition_recording() is None
+        text = analysis.QMessageBox.warning.call_args.args[-1]
+    else:
+        host.toolsbar = SimpleNamespace(player_btn=QPushButton())
+        try:
+            SequenceWidgetUiOpsMixin.update_player_btn_is_paused(host)
+            assert not host.player_btn.isEnabled()
+            text = host.player_btn.toolTip()
+            # Repainting with the same error must not duplicate diagnostics.
+            SequenceWidgetUiOpsMixin.update_player_btn_is_paused(host)
+            monkeypatch.setattr(host.ve_profile_store, "load", original_load)
+            SequenceWidgetUiOpsMixin.update_player_btn_is_paused(host)
+            assert host.player_btn.isEnabled()
+            assert host.player_btn.toolTip() == "开始录制"
+        finally:
+            host.player_btn.close()
+    assert text == ve_failure_text("configuration")
+    errors = [record.getMessage() for record in caplog.records if diagnostic in record.getMessage()]
+    assert len(errors) == 1 and "test-machine-1" in errors[0]
+    if boundary == "manual_condition":
+        assert host._ve_recording_config_error == diagnostic
+    else:
+        assert host._ve_recording_config_error is None
+    assert host.recording_bridge.requests == []
+
+
+def test_admission_diagnostics_distinguish_devices_with_the_same_error(host_factory, monkeypatch, caplog):
+    from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+    host = host_factory()
+    host.ve_prewarm_lifetime = VePrewarmLifetime()
+    diagnostic = "unknown configuration fault"
+    monkeypatch.setattr(host.ve_profile_store, "load", mock.Mock(side_effect=OSError(diagnostic)))
+    assert not host._ve_prewarm_admission_available()
+    assert not host._ve_prewarm_admission_available()
+    host.mic = device_info(machine_id="another-private-machine-id")
+    assert not host._ve_prewarm_admission_available()
+    errors = [record.getMessage() for record in caplog.records if diagnostic in record.getMessage()]
+    assert len(errors) == 2
+    assert "test-machine-1" in errors[0] and "another-private-machine-id" in errors[1]

@@ -1031,7 +1031,7 @@ def test_dead_worker_before_acceptance_never_publishes_success(ui_qapp, service,
     host._handle_invalid_recording.assert_called_once()
 
 
-def test_bounded_shutdown_reports_retained_paths_without_endless_wait(ui_qapp, monkeypatch):
+def test_bounded_shutdown_reports_retained_paths_without_endless_wait(ui_qapp, monkeypatch, caplog):
     from main_window import MainWindow
     from PyQt5.QtWidgets import QMainWindow, QMessageBox
     warnings = []
@@ -1047,7 +1047,9 @@ def test_bounded_shutdown_reports_retained_paths_without_endless_wait(ui_qapp, m
     window = Window()
     window._finish_recording_shutdown()
     window.close.assert_called_once()
-    assert "isolated.wav" in warnings[0]
+    assert "部分文件资源尚未释放" in warnings[0]
+    assert "isolated.wav" not in warnings[0]
+    assert "pending reader: isolated.wav" in caplog.text
     assert not window.recording_bridge.service.closed.is_set()
     window.deleteLater()
 

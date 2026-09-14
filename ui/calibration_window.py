@@ -44,6 +44,7 @@ from base.soundcard_calibration_manager import (
 )
 from consts import ui_style_const, error_code
 from consts.running_consts import DEFAULT_DIR
+from ui.vkinging_presentation import device_display_name, ve_failure_text
 
 
 class CalibrationWindow(QDialog):
@@ -809,8 +810,10 @@ class InputCalibration(QWidget):
                 raise ValueError("VE 输入设备或物理通道不可用")
             records = self.ve_calibration_store.observe(device)
         except (ValueError, VEStoreIOError) as exc:
-            self.default_logger.error(f"VE input calibration unavailable: {exc}")
-            self._set_calibration_unavailable(str(exc))
+            machine_id = self.input_device.get("machine_id") if isinstance(self.input_device, Mapping) else None
+            self.default_logger.error(
+                f"VE input calibration unavailable machine_id={machine_id}: {exc}")
+            self._set_calibration_unavailable(ve_failure_text("unavailable"))
             return False
         self._ve_display_device = device
         self._set_ve_records(records)
@@ -992,7 +995,8 @@ class InputCalibration(QWidget):
         if self.input_device is not None:
             getter = getattr(self.input_device, "get", None)
             if callable(getter):
-                device_name = str(getter("name") or device_name)
+                device_name = (device_display_name(self.input_device) if self._ve_input
+                               else str(getter("name") or device_name))
 
         self.input_device_label = QLabel(device_name)
         self.input_device_label.setWordWrap(True)
@@ -1148,6 +1152,8 @@ class InputCalibration(QWidget):
             self.v2pa_factor_lineedit.clear()
         self._begin_capture(self.current_channel)
         self._capture_standard_spl_db = 94.0 if self.standard_spl_flag else 114.0
+        is_ve = self._ve_input
+        machine_id = self.input_device.get("machine_id") if isinstance(self.input_device, Mapping) else None
         try:
             device = self._current_ve_device() if self._ve_input else self.input_device
             sample_rate = device["input_config"]["sample_rate"] if self._ve_input else 44100
@@ -1178,8 +1184,10 @@ class InputCalibration(QWidget):
         except (RuntimeError, ValueError, TypeError, VEStoreIOError) as exc:
             self.streaming_processor = None
             self._clear_active_capture()
-            self.default_logger.error(f"Failed to start input calibration recording: {exc}")
-            self.calibration_popup(success_flag=False, message=f"输入校准录音启动失败：{str(exc)[:80]}")
+            self.default_logger.error(
+                f"Failed to start input calibration recording machine_id={machine_id}: {exc}")
+            self.calibration_popup(success_flag=False,
+                message=ve_failure_text("calibration_start") if is_ve else f"输入校准录音启动失败：{str(exc)[:80]}")
             return False
         self.update_ui_timer.start()
         return True
@@ -1228,8 +1236,12 @@ class InputCalibration(QWidget):
 
     def _on_calibration_failed(self, session, failure):
         if self._is_current_session(session):
-            self.default_logger.error(f"Input calibration recording failed: {failure}")
-            self._finish_failed_calibration(f"输入校准录音失败：{failure.message}")
+            device = session.request.device
+            self.default_logger.error(
+                f"Input calibration recording failed machine_id={device.get('machine_id')}: {failure}")
+            self._finish_failed_calibration(
+                ve_failure_text("calibration") if device.get("backend") == "vkinging"
+                else f"输入校准录音失败：{failure.message}")
 
     def _on_calibration_cancelled(self, session, _cancelled):
         if self._is_current_session(session):
@@ -1251,10 +1263,11 @@ class InputCalibration(QWidget):
         if current:
             self._release_notice_session = None
         self.default_logger.error(
-            f"Input calibration temporary cleanup failed for {session.request.path}: {error}")
-        if self._ve_input:
+            f"Input calibration temporary cleanup failed machine_id={session.request.device.get('machine_id')} "
+            f"for {session.request.path}: {error}")
+        if session.request.device.get("backend") == "vkinging":
             if current and self._is_current_session(session):
-                self._finish_failed_calibration(f"输入校准资源未释放，未保存校准：{error}")
+                self._finish_failed_calibration(ve_failure_text("calibration_release"))
             if current and not self._recording_closed:
                 if self.streaming_processor is None:
                     self._clear_active_capture()
@@ -1413,8 +1426,9 @@ class InputCalibration(QWidget):
                 standard_spl=context.standard_spl, calibration_sample_rate=request.sample_rate,
                 calibration_duration_seconds=10.0, calibrated_at=context.calibrated_at)
         except (ValueError, ArithmeticError, VEStoreIOError) as exc:
-            self.default_logger.error(f"Failed to calculate or save VE calibration: {exc}")
-            self._finish_failed_calibration(f"输入校准失败，未保存校准：{exc}")
+            self.default_logger.error(
+                f"Failed to calculate or save VE calibration machine_id={session.request.device.get('machine_id')}: {exc}")
+            self._finish_failed_calibration(ve_failure_text("calibration"))
             return
         self._stop_calibration_timers()
         self.streaming_processor = None
@@ -1619,8 +1633,10 @@ class InputCalibration(QWidget):
         try:
             changed = self.ve_calibration_store.reset(self.input_device, channel)
         except (ValueError, VEStoreIOError) as exc:
-            self.default_logger.error(f"Failed to reset VE input calibration: {exc}")
-            self.calibration_popup(success_flag=False, message=f"输入校准重置失败：{exc}")
+            machine_id = self.input_device.get("machine_id") if isinstance(self.input_device, Mapping) else None
+            self.default_logger.error(
+                f"Failed to reset VE input calibration machine_id={machine_id}: {exc}")
+            self.calibration_popup(success_flag=False, message=ve_failure_text("calibration_reset"))
             return
         self._ve_calibration_records.pop(channel, None)
         self.saved_v2pa_factors.pop(channel, None)

@@ -16,12 +16,45 @@ from unit_test.ui.test_ve3668n_recording import (
     RecordingHost, host_factory, capture_audio, finish_ve_capture, save_calibration,
 )
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
+from ui.vkinging_presentation import ve_failure_text
 from unit_test.ui.test_ve3668n_prewarm_trigger import _WindowHarness, _completion, _discovery
 from unit_test.ui.test_ve3668n_calibration import setup, seed_old, offered, accept, release
 
 
 class ConditionRecordingHost(RecordingHost, SequenceWidgetSerialTriggerOpsMixin):
     pass
+
+
+@pytest.mark.parametrize("exception_type", [ValueError, OSError])
+@pytest.mark.parametrize("detail_has_identity", [False, True])
+def test_profile_error_is_private_and_blocks_dialog_until_repaired(
+        ui_qapp, monkeypatch, caplog, exception_type, detail_has_identity):
+    from ui import acquisition_config_window as config_ui
+
+    device = device_info(machine_id="private-config-machine-id")
+    before = deepcopy(device)
+    detail = ("profile denied private-config-machine-id other-config-machine-id"
+              if detail_has_identity else "profile denied")
+    provider = mock.Mock(side_effect=exception_type(detail))
+    warnings = mock.Mock()
+    monkeypatch.setattr(config_ui.QMessageBox, "warning", warnings)
+    dialog = config_ui.RecordConfigWindow({}, mic=device, ve_profile_provider=provider)
+    try:
+        assert dialog._sample_rate_load_error == detail
+        assert dialog.samplerate_combo.toolTip() == ve_failure_text("configuration")
+        assert device["machine_id"] in caplog.text and detail in caplog.text
+        dialog.on_click_ok_btn()
+        assert warnings.call_args.args[2] == ve_failure_text("configuration")
+        assert dialog.final_data is None
+        dialog.samplerate_combo.setEditText("96000")
+        assert dialog.samplerate_combo.toolTip() == ""
+        dialog.on_click_ok_btn()
+        assert dialog.final_data["sample_rate"] == 96000
+        assert dialog.result() == dialog.Accepted
+        assert warnings.call_count == 1
+        assert device == before
+    finally:
+        dialog.close()
 
 
 @pytest.fixture
@@ -201,7 +234,7 @@ def test_queue_calibration_uses_frozen_config_and_retains_coefficients(setup):
 
 
 @pytest.mark.parametrize("failure", ["invalid", "profile_io"])
-def test_admission_configuration_failures_are_diagnostic_and_repairable(host_factory, failure):
+def test_admission_configuration_failures_are_diagnostic_and_repairable(host_factory, failure, caplog):
     host = host_factory()
     host.ve_prewarm_lifetime = VePrewarmLifetime()
     window = _WindowHarness(lifetime=host.ve_prewarm_lifetime)
@@ -217,7 +250,8 @@ def test_admission_configuration_failures_are_diagnostic_and_repairable(host_fac
     assert not host._ve_prewarm_admission_available()
     assert diagnostic in host._ve_recording_config_error
     assert not MainWindow._calibration_admission_available(window)
-    assert diagnostic in window._status.messages[-1]
+    assert window._status.messages[-1] == ve_failure_text("configuration")
+    assert diagnostic in caplog.text and host.mic["machine_id"] in caplog.text
     assert window._try_start_ve_prewarm(host.mic, host.mic_channels, "startup") == "invalid"
     assert not window.recording_bridge.calls
     assert host.ve_prewarm_lifetime.snapshot().state == "available"
@@ -276,7 +310,7 @@ def test_queue_files_reload_independently_and_shared_references_see_same_edit(ho
     assert host.reset_work_pram("not_labeled")[1] == 51200
 
 
-def test_record_button_shows_config_error_then_clears_it_after_repair(host_factory):
+def test_record_button_shows_config_error_then_clears_it_after_repair(host_factory, caplog):
     from PyQt5.QtWidgets import QPushButton
     from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
 
@@ -288,16 +322,17 @@ def test_record_button_shows_config_error_then_clears_it_after_repair(host_facto
     try:
         SequenceWidgetUiOpsMixin.update_player_btn_is_paused(host)
         assert not host.player_btn.isEnabled()
-        assert "sample_rate" in host.player_btn.toolTip()
+        assert host.player_btn.toolTip() == ve_failure_text("configuration")
+        assert "sample_rate" in caplog.text and host.mic["machine_id"] in caplog.text
         detail["sample_rate"] = 48000
         SequenceWidgetUiOpsMixin.update_player_btn_is_paused(host)
         assert host.player_btn.isEnabled()
-        assert "sample_rate" not in host.player_btn.toolTip()
+        assert host.player_btn.toolTip() == "开始录制"
     finally:
         host.player_btn.close()
 
 
-def test_late_prewarm_completion_reports_invalid_current_queue_without_losing_owner(host_factory):
+def test_late_prewarm_completion_reports_invalid_current_queue_without_losing_owner(host_factory, caplog):
     host = host_factory()
     detail = host.sequence_config[0]["seq1"]["acq"]["detail"]
     detail["sample_rate"] = 48000
@@ -309,11 +344,12 @@ def test_late_prewarm_completion_reports_invalid_current_queue_without_losing_ow
     detail["sample_rate"] = None
     window.recording_bridge.callback(_completion(request))
     assert window.ve_prewarm_lifetime.snapshot().state == "succeeded"
-    assert "sample_rate" in window._status.messages[-1]
+    assert window._status.messages[-1] == ve_failure_text("configuration")
+    assert "sample_rate" in caplog.text and host.mic["machine_id"] in caplog.text
 
 
 @pytest.mark.parametrize("rate", [96000, None, 7999])
-def test_startup_discovery_uses_explicit_queue_without_reading_broken_profile(host_factory, rate):
+def test_startup_discovery_uses_explicit_queue_without_reading_broken_profile(host_factory, rate, caplog):
     host = host_factory()
     host.sequence_config[0]["seq1"]["acq"]["detail"].update(sample_rate=rate, ve_range_index=5)
     host.ve_profile_store.load = mock.Mock(side_effect=OSError("unneeded broken profile"))
@@ -329,13 +365,14 @@ def test_startup_discovery_uses_explicit_queue_without_reading_broken_profile(ho
         assert window.recording_bridge.calls[0].device["input_config"]["range_max"] == .1
     else:
         assert window.mic["available"]
-        assert "sample_rate" in window._status.messages[-1]
+        assert window._status.messages[-1] == ve_failure_text("configuration")
+        assert "sample_rate" in caplog.text and host.mic["machine_id"] in caplog.text
         assert not window.recording_bridge.calls
     host.ve_profile_store.load.assert_not_called()
 
 
 @pytest.mark.parametrize("failure", ["invalid_queue", "profile_io", "offline"])
-def test_discovery_configuration_failure_recovers_on_valid_queue_without_rediscovery(host_factory, failure):
+def test_discovery_configuration_failure_recovers_on_valid_queue_without_rediscovery(host_factory, failure, caplog):
     host = host_factory()
     detail = host.sequence_config[0]["seq1"]["acq"]["detail"]
     if failure == "invalid_queue":
@@ -353,7 +390,9 @@ def test_discovery_configuration_failure_recovers_on_valid_queue_without_redisco
     assert not host._ve_prewarm_admission_available()
     if failure != "offline":
         assert window.mic["available"]
-        assert "sample_rate" in window._status.messages[-1] or "profile denied" in window._status.messages[-1]
+        assert window._status.messages[-1] == ve_failure_text("configuration")
+        assert ("sample_rate" if failure == "invalid_queue" else "profile denied") in caplog.text
+        assert host.mic["machine_id"] in caplog.text
     detail.update(sample_rate=96000, ve_range_index=5)
     result = window._try_start_ve_prewarm(window.mic, window.mic_channels, "repaired queue")
     if failure == "offline":
@@ -377,7 +416,7 @@ def test_condition_entry_loads_target_before_configuration_admission(condition_h
 
 
 @pytest.mark.parametrize("entry", ["manual", "serial"])
-def test_invalid_target_is_rejected_after_load_before_round_mutation(condition_host, entry):
+def test_invalid_target_is_rejected_after_load_before_round_mutation(condition_host, entry, caplog):
     host = condition_host
     queue = json.loads(host.target_queue_path.read_text(encoding="utf-8"))
     queue[0]["seq1"]["acq"]["detail"]["sample_rate"] = None
@@ -389,7 +428,8 @@ def test_invalid_target_is_rejected_after_load_before_round_mutation(condition_h
     assert not host._get_active_product_condition_key()
     assert "sample_rate" in host._ve_recording_config_error
     from ui.sequence import sequence_widget_analysis_ops as analysis
-    assert "sample_rate" in analysis.QMessageBox.warning.call_args.args[-1]
+    assert analysis.QMessageBox.warning.call_args.args[-1] == ve_failure_text("configuration")
+    assert "sample_rate" in caplog.text and host.mic["machine_id"] in caplog.text
 
 
 @pytest.mark.parametrize("entry", ["manual", "serial", "direct"])

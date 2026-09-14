@@ -25,6 +25,7 @@ from unit_test.base.test_ve3668n_stores import save_measurement
 from unit_test.base.test_ve3668n_hardware_selection import fake_soundcards
 from unit_test.ui.test_ve3668n_recording import host_factory, capture_audio, finish_ve_capture
 from ui.acquisition_config_window import RecordConfigWindow
+from ui.vkinging_presentation import device_display_name, ve_failure_text
 from consts.recording_preview_consts import (
     PREVIEW_TIME_MODE_CUMULATIVE,
     RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
@@ -138,8 +139,8 @@ def test_driver_selects_vk_inventory_and_gates_channels(controls, ui_qapp):
     confirm(controller, ui_qapp, device_info(), device_info(machine_id="two", name="Second"))
     table = view.mic_device_table.model()
     assert table.rowCount() == 2
-    assert "test-machine-1" in table.item(0).text()
-    assert "Second" in table.item(1).text() and "two" in table.item(1).text()
+    assert table.item(0).text() == "Dev1"
+    assert table.item(1).text() == "Second"
     assert view.mic_device_table.checked_payload() is None
     assert view.mic_channel_table.model().rowCount() == 0
     table.item(0).setCheckState(Qt.Checked)
@@ -283,7 +284,7 @@ def test_saved_device_restores_only_after_discovery_without_profile_write(contro
 
 
 @pytest.mark.parametrize("saved_vk", [False, True])
-def test_empty_vk_scan_clears_rows_and_status_without_changing_saved_selection(controls, ui_qapp, saved_vk):
+def test_empty_vk_scan_clears_rows_and_status_without_changing_saved_selection(controls, ui_qapp, saved_vk, caplog):
     from base import hardware_selection
 
     mic = device_info() if saved_vk else controls.old_mic
@@ -305,6 +306,7 @@ def test_empty_vk_scan_clears_rows_and_status_without_changing_saved_selection(c
     assert not view.mic_channel_table.isEnabled()
     assert controller.model.state.mic_channels == []
     assert view.ve_status_label.text() == ""
+    assert not caplog.records
     assert controls.warnings == []
     assert controls.path.read_bytes() == original
     assert not controls.profiles.path.exists() and not controls.calibrations.path.exists()
@@ -323,7 +325,7 @@ def test_empty_vk_scan_clears_rows_and_status_without_changing_saved_selection(c
 
 
 @pytest.mark.parametrize("released", [False, True])
-def test_empty_vk_scan_preserves_real_sdk_or_release_diagnostics(controls, ui_qapp, released):
+def test_empty_vk_scan_preserves_real_sdk_or_release_diagnostics(controls, ui_qapp, released, caplog):
     controller = controls.create()
     view = controller.view
     diagnostic = "fake SDK enumeration failure" if released else "fake SDK close failure"
@@ -332,7 +334,8 @@ def test_empty_vk_scan_preserves_real_sdk_or_release_diagnostics(controls, ui_qa
     assert view.mic_device_table.model().rowCount() == 0
     assert view.mic_channel_table.model().rowCount() == 0
     assert not view.mic_channel_table.isEnabled()
-    assert diagnostic in view.ve_status_label.text()
+    assert view.ve_status_label.text() == ve_failure_text("discovery")
+    assert diagnostic in caplog.text
     assert not controls.path.exists()
 
 
@@ -447,13 +450,14 @@ def test_busy_after_dialog_open_disables_edits_and_rechecks_ok(controls, ui_qapp
     assert controller.view.mic_channel_table.isEnabled()
 
 
-def test_unreleased_discovery_is_unavailable_not_busy_forever(controls, ui_qapp):
+def test_unreleased_discovery_is_unavailable_not_busy_forever(controls, ui_qapp, caplog):
     controller = controls.create()
     panel = controller.view.ve_controls
     panel.discovery.service.deliver([device_info()], released=False, diagnostics=("launch pending",))
     ui_qapp.processEvents()
     assert not controller.model.state.mic_device["available"]
-    assert "launch pending" in controller.view.ve_status_label.text()
+    assert controller.view.ve_status_label.text() == ve_failure_text("discovery")
+    assert "launch pending" in caplog.text
     controller._on_ok_clicked()
     assert controller.view.result() != QDialog.Accepted
 
@@ -573,6 +577,7 @@ def main_window_harness(controls, monkeypatch):
         "QPoint": QPoint, "SoundDeviceManager": hardware_ui.SoundDeviceManager,
         "QMessageBox": hardware_ui.QMessageBox, "restore_or_default": hardware_selection.restore_or_default,
         "save_if_changed": hardware_selection.save_if_changed,
+        "device_display_name": device_display_name, "ve_failure_text": ve_failure_text,
         "open_hardware_selection_window": hardware_ui.open_hardware_selection_window}
     exec(compile(ast.fix_missing_locations(ast.Module(body=[klass], type_ignores=[])), str(source), "exec"), namespace)
     MainWindow = namespace["MainWindow"]
@@ -679,7 +684,8 @@ def test_main_startup_is_async_and_shares_instance_stores(main_window_harness, c
     ui_qapp.processEvents()
     assert window.mic["available"] and window.sequence_window.mic == window.mic
     assert window.mic["name"] == "reconnected"
-    assert "test-machine-1" in window.device_label.text() and "可用" in window.device_label.text()
+    assert "reconnected · 可用" in window.device_label.text()
+    assert "test-machine-1" not in window.device_label.text()
     assert "legacy calibration refresh" not in main_window_harness.events
 
 
@@ -1032,7 +1038,7 @@ def test_main_accepted_native_signature_change_publishes_then_releases(
 
 
 def test_main_release_failure_warns_without_rolling_back_persisted_setting(
-    main_window_harness, controls, ui_qapp, monkeypatch,
+    main_window_harness, controls, ui_qapp, monkeypatch, caplog,
 ):
     from base import hardware_selection
 
@@ -1057,7 +1063,8 @@ def test_main_release_failure_warns_without_rolling_back_persisted_setting(
     assert window.mic == replacement and window.mic["input_config"]["sample_rate"] == 44100
     assert controls.path.read_bytes() == persisted
     assert main_window_harness.bridge.hardware_busy
-    assert any("ClearTask failed" in warning and "回收" in warning
+    assert "ClearTask failed" in caplog.text
+    assert any("ClearTask failed" not in warning and "回收" in warning
                for warning in controls.warnings)
 
 

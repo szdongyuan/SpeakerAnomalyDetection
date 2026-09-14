@@ -51,6 +51,7 @@ from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
 from ui.sequence.recent_session_panel import RecentSessionPanel
 from ui.sequence.multichannel_waveform_session import MultichannelWaveformSession
+from ui.vkinging_presentation import ve_failure_text
 
 
 class FinalWaveformWorkspaceContractError(ValueError):
@@ -2240,6 +2241,11 @@ class SequenceWidgetStreamingOpsMixin:
         - Save to database
         - Enable buttons and optionally run analysis
         """
+        # Keep this run's identity through early errors and reentrant cleanup.
+        request = (getattr(self, "_recording_process_request", None)
+                   if prefinalized else None)
+        ve_recording = request is not None and request.device.get("backend") == "vkinging"
+        machine_id = request.device.get("machine_id") if request is not None else None
         try:
             processor = getattr(self, "streaming_processor", None)
             run_channels = getattr(self, "_recording_input_channels", None)
@@ -2352,8 +2358,6 @@ class SequenceWidgetStreamingOpsMixin:
                 copy=False,
             )
 
-            request = (getattr(self, "_recording_process_request", None)
-                       if prefinalized else None)
             self.data_struct.sample_rate = sample_rate
             self.data_struct.audio_lenth = len(recorded_multi)
             if request is not None and request.device.get("backend") == "vkinging":
@@ -2413,10 +2417,12 @@ class SequenceWidgetStreamingOpsMixin:
                     register_database(self.recorded_signal_info)
                 self.default_logger.info(f"Database save successful: {save_msg}")
             else:
-                self.default_logger.error(f"Database save failed: {save_msg}")
+                self.default_logger.error(
+                    f"Database save failed: {save_msg}; machine_id={machine_id}")
                 serial_runtime_error = getattr(self, "_on_serial_product_runtime_error", None)
                 if callable(serial_runtime_error) and serial_runtime_error(
-                    f"录音结果保存失败: {save_msg}"
+                    ve_failure_text("recording") if ve_recording
+                    else f"录音结果保存失败: {save_msg}"
                 ):
                     return
 
@@ -2563,7 +2569,8 @@ class SequenceWidgetStreamingOpsMixin:
             return save_code == error_code.OK
 
         except Exception as e:
-            self.default_logger.error(f"Error in streaming completion: {e}")
+            self.default_logger.error(
+                f"Error in streaming completion: {e}; machine_id={machine_id}")
             # Clean up on error
             try:
                 _claim_and_finalize_streaming_wav_writer(self)
@@ -2592,7 +2599,8 @@ class SequenceWidgetStreamingOpsMixin:
             self.update_player_btn_is_paused()
             serial_runtime_error = getattr(self, "_on_serial_product_runtime_error", None)
             if callable(serial_runtime_error):
-                serial_runtime_error(f"录音完成处理异常: {e}")
+                serial_runtime_error(ve_failure_text("recording") if ve_recording
+                                     else f"录音完成处理异常: {e}")
             try:
                 self._reset_barcode_commit_dedup()
             except Exception:
