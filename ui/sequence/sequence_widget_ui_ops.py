@@ -586,4 +586,4 @@ class SequenceWidgetUiOpsMixin:
         self.player_btn.setDisabled(not can_start)
         config_error = getattr(self, "_ve_recording_config_error", None)
         if config_error:
-            self.player_btn.setToolTip(ve_failure_text("configuration"))
+            self.player_btn.setToolTip(ve_failure_text("unavailable"))

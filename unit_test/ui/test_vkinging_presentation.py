@@ -54,7 +54,7 @@ def test_name_without_machine_id_keeps_sdk_name():
     ("operation", "summary"),
     [
         ("discovery", "VE 设备检查失败，请连接设备后刷新。"),
-        ("unavailable", "VE 设备不可用，请在硬件设置中检查设备和通道。"),
+        ("unavailable", "VE 设备当前不可用。"),
         ("hardware_save", "VE 硬件设置未保存，请检查设备和通道后重试。"),
         ("configuration", "VE 采集配置不可用，请检查采样率和量程。"),
         ("prewarm", "VE 设备初始化失败。"),
@@ -67,7 +67,8 @@ def test_name_without_machine_id_keeps_sdk_name():
     ],
 )
 def test_known_operation_has_fixed_summary_and_log_guidance(operation, summary):
-    assert ve_failure_text(operation) == summary + "详细原因请查看日志。"
+    expected = summary if operation == "unavailable" else summary + "详细原因请查看日志。"
+    assert ve_failure_text(operation) == expected
 
 
 @pytest.mark.parametrize(
