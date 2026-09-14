@@ -1149,7 +1149,7 @@ class SequenceWidgetAnalysisOpsMixin(
         if not self._is_import_audio_mode() and callable(can_start) and not can_start():
             config_error = getattr(self, "_ve_recording_config_error", None)
             if config_error:
-                QMessageBox.warning(self, "VE 录制配置错误", ve_failure_text("configuration"))
+                QMessageBox.warning(self, "VE 设备不可用", ve_failure_text("unavailable"))
             return None
 
         validate_analysis_channels = getattr(
@@ -3177,7 +3177,7 @@ class SequenceWidgetAnalysisOpsMixin(
             if config_error:
                 self.default_logger.error(
                     f"VE recording admission failed machine_id={machine_id}: {config_error}")
-                QMessageBox.warning(self, "VE 录制配置错误", ve_failure_text("configuration"))
+                QMessageBox.warning(self, "VE 设备不可用", ve_failure_text("unavailable"))
             return
         if not callable(can_start) and getattr(self, "_record_workflow_busy", False):
             return

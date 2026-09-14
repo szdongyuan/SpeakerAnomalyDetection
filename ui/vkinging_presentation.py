@@ -17,7 +17,7 @@ def ve_failure_text(operation, *, code=None):
     """Map a known UI operation to fixed text, exposing only actual integer codes."""
     summaries = {
         "discovery": "VE 设备检查失败，请连接设备后刷新。",
-        "unavailable": "VE 设备不可用，请在硬件设置中检查设备和通道。",
+        "unavailable": "VE 设备当前不可用。",
         "hardware_save": "VE 硬件设置未保存，请检查设备和通道后重试。",
         "configuration": "VE 采集配置不可用，请检查采样率和量程。",
         "prewarm": "VE 设备初始化失败。",
@@ -33,4 +33,6 @@ def ve_failure_text(operation, *, code=None):
         summary = summaries.get(operation, summary)
     if type(code) is int:
         summary += f"(code={code})"
+    if isinstance(operation, str) and operation == "unavailable":
+        return summary
     return summary + "详细原因请查看日志。"

@@ -1049,7 +1049,7 @@ def test_ve_config_admission_popup_keeps_raw_error_internal(host_factory, caplog
         return False
     host._can_start_recording_workflow = denied
     host.judge_play_and_record()
-    assert analysis.QMessageBox.warning.call_args.args[-1] == ve_failure_text("configuration")
+    assert analysis.QMessageBox.warning.call_args.args[-1] == ve_failure_text("unavailable")
     assert host._ve_recording_config_error == diagnostic
     assert diagnostic in caplog.text and "test-machine-1" in caplog.text
     assert host.recording_bridge.requests == []
@@ -1112,7 +1112,7 @@ def test_configuration_admission_outlets_are_safe_and_keep_diagnostic_identity(
             assert host.player_btn.toolTip() == "开始录制"
         finally:
             host.player_btn.close()
-    assert text == ve_failure_text("configuration")
+    assert text == ve_failure_text("unavailable")
     errors = [record.getMessage() for record in caplog.records if diagnostic in record.getMessage()]
     assert len(errors) == 1 and "test-machine-1" in errors[0]
     if boundary == "manual_condition":
