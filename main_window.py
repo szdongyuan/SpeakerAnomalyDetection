@@ -40,6 +40,7 @@ class MainWindow(QMainWindow):
         # Explicit launcher injection also becomes the fallback for later callers.
         app._ve_prewarm_lifetime = ve_prewarm_lifetime
         super().__init__()
+        self.default_logger = LogManager.set_log_handler("core")
         self.ve_prewarm_lifetime = ve_prewarm_lifetime
         if recording_bridge is None:
             from base.recording_service import RecordingService
@@ -183,8 +184,7 @@ class MainWindow(QMainWindow):
             # into Qt. None blocks VK calibration and cannot authorize capture.
             error_context = (mic.get("machine_id"), str(exc))
             if error_context != getattr(self, "_ve_signature_error_context", None):
-                import logging
-                logging.getLogger(__name__).warning(
+                self.default_logger.warning(
                     "VE acquisition configuration failed machine_id=%s: %s", *error_context)
             self._ve_signature_error_context = error_context
             self._show_ve_prewarm_status(ve_failure_text("configuration"))
@@ -229,8 +229,7 @@ class MainWindow(QMainWindow):
             request = VePrewarmRequest.create(
                 warmup_id, device, channels, device["input_config"]["sample_rate"], attempt=1)
         except (TypeError, ValueError, OSError) as exc:
-            import logging
-            logging.getLogger(__name__).error(
+            self.default_logger.error(
                 "VE prewarm configuration failed machine_id=%s: %s",
                 device.get("machine_id"), exc)
             self._show_ve_prewarm_status(ve_failure_text("configuration"))
@@ -246,8 +245,7 @@ class MainWindow(QMainWindow):
             self.ve_prewarm_lifetime.mark_skipped_busy(
                 token, signature, f"{source}: hardware busy")
             self._ve_prewarm_context = None
-            import logging
-            logging.getLogger(__name__).info(
+            self.default_logger.info(
                 "VE prewarm skipped because hardware is busy (%s)", source)
             self._show_ve_prewarm_status("VE 设备初始化已跳过：硬件正忙")
             self._refresh_ve_admission_controls()
@@ -266,8 +264,7 @@ class MainWindow(QMainWindow):
             self.ve_prewarm_lifetime.mark_skipped_busy(
                 token, signature, f"{source}: service busy")
             self._ve_prewarm_context = None
-            import logging
-            logging.getLogger(__name__).info(
+            self.default_logger.info(
                 "VE prewarm skipped because service admission is busy (%s)", source)
             self._show_ve_prewarm_status("VE 设备初始化已跳过：硬件正忙")
             self._refresh_ve_admission_controls()
@@ -289,8 +286,7 @@ class MainWindow(QMainWindow):
             token, signature, fault, ownership_safe=True)
         self._ve_prewarm_context = None
         self._refresh_ve_admission_controls()
-        import logging
-        logging.getLogger(__name__).error(
+        self.default_logger.error(
             "VE prewarm admission failed signature=%s: %s", signature, fault.detail)
         self._render_ve_prewarm_failure(fault, ownership_safe=True)
         return str(status)
@@ -320,8 +316,7 @@ class MainWindow(QMainWindow):
         self._refresh_ve_admission_controls()
 
         if not completion.success:
-            import logging
-            logging.getLogger(__name__).error(
+            self.default_logger.error(
                 "VE prewarm failed signature=%s: %s", signature, "; ".join((
                     f"{completion.stage}"
                     + (f" (code={completion.code})" if completion.code is not None else "")
@@ -356,8 +351,7 @@ class MainWindow(QMainWindow):
     def _on_ve_hardware_release_complete(self, status, diagnostics, *, machine_id=None):
         if status in ("released", "unchanged"):
             return
-        import logging
-        logging.getLogger(__name__).warning(
+        self.default_logger.warning(
             "VE hardware release status=%s machine_id=%s: %s", status, machine_id,
             "; ".join(str(item) for item in diagnostics if item))
         if status == "failed":
@@ -379,7 +373,6 @@ class MainWindow(QMainWindow):
         if (self.mic or {}).get("backend") != "vkinging":
             return
         from base.hardware_selection import resolve_ve_input
-        import logging
         diagnostic = "; ".join(event.result.diagnostics)
         # Physical availability survives an invalid queue or unreadable fallback
         # profile. Prewarm/admission resolve the queue and report its own error.
@@ -388,11 +381,11 @@ class MainWindow(QMainWindow):
             profile_store=self.ve_profile_store, calibration_store=self.ve_calibration_store,
             diagnostic=diagnostic, load_profile=False)
         if diagnostic:
-            logging.getLogger(__name__).warning(
+            self.default_logger.warning(
                 "VE discovery failed for MachineId %s: %s", self.mic.get("machine_id"), diagnostic)
         input_diagnostic = self.mic.get("diagnostic", "")
         if (event.result.devices or diagnostic) and input_diagnostic and input_diagnostic != diagnostic:
-            logging.getLogger(__name__).warning(
+            self.default_logger.warning(
                 "VE input unavailable for MachineId %s: %s", self.mic.get("machine_id"), input_diagnostic)
         self.sequence_window.mic = self.mic
         self.sequence_window.mic_channels = list(self.mic_channels)
@@ -831,8 +824,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "录音或校准进行中，请等待完成后再修改校准")
             return
         if (self.mic or {}).get("backend") == "vkinging" and not self.mic.get("available"):
-            import logging
-            logging.getLogger(__name__).warning(
+            self.default_logger.warning(
                 "VE calibration input unavailable for MachineId %s: %s",
                 self.mic.get("machine_id"), self.mic.get("diagnostic", ""))
             QMessageBox.warning(self, "VE 输入不可用", ve_failure_text("unavailable"))
@@ -992,8 +984,7 @@ class MainWindow(QMainWindow):
             # The bounded service callback confirms worker death, not every
             # parent reader/path release. Report honestly and permit app exit;
             # no pending audio is moved/deleted and no lease is fabricated.
-            import logging
-            logging.getLogger(__name__).warning(
+            self.default_logger.warning(
                 "Recording shutdown cleanup incomplete: %s",
                 "\n".join(self.recording_bridge.service.diagnostics))
             QMessageBox.warning(self, "录音资源清理未完成",

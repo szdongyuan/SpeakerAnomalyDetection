@@ -1,6 +1,7 @@
 """Real Qt delivery and real spawn tests for the application recording boundary."""
 from collections import UserDict
 import json
+import logging
 import os
 from pathlib import Path
 import subprocess
@@ -1040,6 +1041,7 @@ def test_bounded_shutdown_reports_retained_paths_without_endless_wait(ui_qapp, m
     class Window(MainWindow):
         def __init__(self):
             QMainWindow.__init__(self)
+            self.default_logger = logging.getLogger("core")
             self.recording_bridge = SimpleNamespace(service=SimpleNamespace(
                 closed=threading.Event(), worker_pid=None, diagnostics=["pending reader: isolated.wav"]))
             self.close = mock.Mock()

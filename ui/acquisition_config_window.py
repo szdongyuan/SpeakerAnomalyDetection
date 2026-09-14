@@ -1,4 +1,3 @@
-import logging
 import sys
 from collections.abc import Mapping
 from copy import deepcopy
@@ -9,6 +8,7 @@ from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDoubleSpinBox, 
 from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
 from PyQt5.QtWidgets import QWidget
 
+from base.log_manager import LogManager
 from base.sound_device_manager import SoundDeviceManager
 from base.ve3668n_input import validate_range_index
 from base.ve3668n_recording_config import resolve_ve_recording_config
@@ -76,6 +76,7 @@ class BaseConfigWindow(ConfigDialogBase):
 class RecordConfigWindow(BaseConfigWindow):
     def __init__(self, input_data, mic=None, speaker=None, speaker_channels=None, *, ve_profile_provider=None):
         super().__init__(mic=mic)
+        self.default_logger = LogManager.set_log_handler("core")
         self.setWindowTitle("录制音频")
         self.setMinimumWidth(560)
         self.resize(560, 420)
@@ -139,7 +140,7 @@ class RecordConfigWindow(BaseConfigWindow):
                     rate_detail, fallback_profile=profile)["sample_rate"]
             except (ValueError, OSError) as exc:
                 self._sample_rate_load_error = str(exc)
-                logging.getLogger(__name__).warning(
+                self.default_logger.warning(
                     "VE acquisition profile failed machine_id=%s: %s", self.mic.get("machine_id"), exc)
                 rate = (self.input_data["sample_rate"] if "sample_rate" in self.input_data
                         else profile.get("sample_rate", "配置不可用")

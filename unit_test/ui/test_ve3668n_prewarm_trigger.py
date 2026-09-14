@@ -1,6 +1,7 @@
 """Focused MainWindow coordination tests; no native VE or dialog I/O."""
 
 from copy import deepcopy
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -64,6 +65,7 @@ class _WindowHarness:
         """The focused harness has no real recording or hardware controls."""
 
     def __init__(self, *, bridge=None, lifetime=None):
+        self.default_logger = logging.getLogger("core")
         self.ve_prewarm_lifetime = lifetime or VePrewarmLifetime()
         self.recording_bridge = bridge or _Bridge()
         self.sequence_window = SimpleNamespace(

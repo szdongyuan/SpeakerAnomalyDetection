@@ -135,8 +135,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
                 diagnostic = str(exc)
                 error_context = (mic.get("machine_id"), diagnostic)
                 if error_context != getattr(self, "_ve_recording_config_error_context", None):
-                    import logging
-                    logging.getLogger(__name__).warning(
+                    self.default_logger.warning(
                         "VE recording configuration machine_id=%s: %s", *error_context)
                 self._ve_recording_config_error_context = error_context
                 self._ve_recording_config_error = diagnostic
