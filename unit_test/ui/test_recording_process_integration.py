@@ -190,7 +190,7 @@ def test_calibration_cleanup_failure_warns_without_releasing_or_revoking_success
             message=(
                 "校准成功\n"
                 f"本次校准结果：{widget.saved_v2pa_factors[1]:.6f} Pa/V\n"
-                "下次校准通道：0"
+                "下次校准通道：In1"
             ),
         )
         path = Path(session.request.path)

@@ -932,15 +932,19 @@ class InputCalibration(QWidget):
                 for channel in search_order
                 if channel not in self.saved_v2pa_factors
             ),
-            completed_channel,
+            None,
         )
 
     def _success_popup_message(self, factor, next_channel):
-        return (
+        message = (
             "校准成功\n"
-            f"本次校准结果：{float(factor):.6f} Pa/V\n"
-            f"下次校准通道：{next_channel}"
+            f"本次校准结果：{float(factor):.6f} Pa/V"
         )
+        if next_channel is not None:
+            index = self.channel_combo_box.findData(next_channel)
+            label = self.channel_combo_box.itemText(index)
+            message += f"\n下次校准通道：{label}"
+        return message
 
     def init_ui(self):
         """
@@ -1358,13 +1362,13 @@ class InputCalibration(QWidget):
         self.saved_v2pa_factors[captured_channel] = float(v2pa_factor)
         self.channel_combo_box.setEnabled(True)
         next_channel = self._next_uncalibrated_channel(captured_channel)
-        self._select_channel(next_channel)
+        self._select_channel(next_channel if next_channel is not None else captured_channel)
         self.calibration_state_changed.emit(True)
         if not self.stop_timer:
             self.calibration_popup(
                 success_flag=True,
                 message=self._success_popup_message(
-                    v2pa_factor, self.current_channel
+                    v2pa_factor, next_channel
                 ),
             )
             self.default_logger.info("Input calibration succeeded and was saved.")
@@ -1436,11 +1440,11 @@ class InputCalibration(QWidget):
         self.saved_v2pa_factors[channel] = float(factor)
         self._clear_active_capture(refresh_display=False)
         next_channel = self._next_uncalibrated_channel(channel)
-        self._select_channel(next_channel)
+        self._select_channel(next_channel if next_channel is not None else channel)
         self.calibration_state_changed.emit(True)
         self.calibration_popup(
             success_flag=True,
-            message=self._success_popup_message(factor, self.current_channel),
+            message=self._success_popup_message(factor, next_channel),
         )
         self.calibration_finished.emit(True)
 
