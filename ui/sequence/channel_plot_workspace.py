@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
@@ -58,26 +57,18 @@ class ChannelPlotPresentationMixin:
         )
 
     @staticmethod
-    def _restore_auto_range_state(view_box, axis, value) -> None:
-        view_box.enableAutoRange(axis=axis, enable=value)
-        state_index = 0 if axis == pg.ViewBox.XAxis else 1
-        # pyqtgraph normalizes True to 1.0 and schedules a paint-time update.
-        # Keep the opaque snapshot value exact and let only later item changes
-        # request the next auto-range calculation.
-        view_box.state["autoRange"][state_index] = value
-        view_box._autoRangeNeedsUpdate = False
-
-    @classmethod
-    def _restore_axis_view_state(cls, view_box, axis, axis_range, auto_range):
-        range_name = "xRange" if axis == pg.ViewBox.XAxis else "yRange"
+    def _restore_axis_view_state(view_box, axis_range, auto_range):
         view_box.setRange(
-            **{
-                range_name: axis_range,
-                "padding": 0,
-                "disableAutoRange": False,
-            }
+            xRange=axis_range,
+            padding=0,
+            disableAutoRange=False,
         )
-        cls._restore_auto_range_state(view_box, axis, auto_range)
+        view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=auto_range)
+        # Y has already been calculated with X auto-range disabled during
+        # rollback. Preserve the opaque X value (including True's type) and
+        # suppress only the recalculation requested by restoring X auto-range.
+        view_box.state["autoRange"][0] = auto_range
+        view_box._autoRangeNeedsUpdate = False
 
     def _release_deferred_view_guard(self, *_args) -> None:
         guard = getattr(self, "_deferred_view_guard", None)
@@ -141,8 +132,7 @@ class ChannelPlotPresentationMixin:
         self,
         view_box,
         *,
-        x_view_state=None,
-        y_view_state=None,
+        x_view_state,
     ) -> None:
         self._release_deferred_view_guard()
         restoring_guarded_view_state = False
@@ -160,18 +150,7 @@ class ChannelPlotPresentationMixin:
                 return
             restoring_guarded_view_state = True
             try:
-                if x_view_state is not None:
-                    self._restore_axis_view_state(
-                        view_box,
-                        pg.ViewBox.XAxis,
-                        *x_view_state,
-                    )
-                if y_view_state is not None:
-                    self._restore_axis_view_state(
-                        view_box,
-                        pg.ViewBox.YAxis,
-                        *y_view_state,
-                    )
+                self._restore_axis_view_state(view_box, *x_view_state)
             finally:
                 restoring_guarded_view_state = False
             release_timer.start(0)
@@ -225,68 +204,48 @@ class ChannelPlotPresentationMixin:
         self._release_deferred_view_guard()
         super().deleteLater()
 
-    @contextmanager
-    def _preserve_y_view_state(self):
-        self._release_deferred_view_guard()
-        view_box = self.plot_widget.getViewBox()
-        y_range = self.plot_widget.viewRange()[1]
-        y_range = (float(y_range[0]), float(y_range[1]))
-        y_auto_range = view_box.state["autoRange"][1]
-        try:
-            yield view_box
-        finally:
-            y_view_state = (y_range, y_auto_range)
-            self._restore_axis_view_state(
-                view_box,
-                pg.ViewBox.YAxis,
-                *y_view_state,
-            )
-            self._install_deferred_view_guard(
-                view_box,
-                y_view_state=y_view_state,
-            )
-
     def clear_plot(self) -> None:
-        with self._preserve_y_view_state() as view_box:
-            self.plot_widget.clear()
-            self.plot_item = None
-            self._set_presentation_mode(PLOT_PRESENTATION_COMPLETE)
-            view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
-            view_box.updateAutoRange()
+        self._release_deferred_view_guard()
+        self.plot_widget.clear()
+        self.plot_item = None
+        self._set_presentation_mode(PLOT_PRESENTATION_COMPLETE)
+        view_box = self.plot_widget.getViewBox()
+        view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
+        view_box.updateAutoRange()
 
     def set_relative_preview_data(self, x, y):
-        with self._preserve_y_view_state() as view_box:
-            updated = self._set_curve_data(x, y)
-            if updated is False:
-                return False
-            view_box.disableAutoRange(axis=pg.ViewBox.XAxis)
-            self.plot_widget.setXRange(-10.0, 0.0, padding=0)
-            self._set_presentation_mode(PREVIEW_TIME_MODE_RELATIVE_LATEST)
-            return updated
+        updated = self._set_curve_data(x, y)
+        if updated is False:
+            return False
+        view_box = self.plot_widget.getViewBox()
+        view_box.disableAutoRange(axis=pg.ViewBox.XAxis)
+        self.plot_widget.setXRange(-10.0, 0.0, padding=0)
+        self._set_presentation_mode(PREVIEW_TIME_MODE_RELATIVE_LATEST)
+        return updated
 
     def set_live_data(self, x, y):
         """Compatibility alias for the relative latest preview."""
         return self.set_relative_preview_data(x, y)
 
     def set_cumulative_preview_data(self, x, y):
-        with self._preserve_y_view_state() as view_box:
-            updated = self._set_curve_data(x, y)
-            if updated is False:
-                return False
-            view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
-            view_box.updateAutoRange()
-            self._set_presentation_mode(PREVIEW_TIME_MODE_CUMULATIVE)
-            return updated
+        updated = self._set_curve_data(x, y)
+        if updated is False:
+            return False
+        view_box = self.plot_widget.getViewBox()
+        view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
+        view_box.updateAutoRange()
+        self._set_presentation_mode(PREVIEW_TIME_MODE_CUMULATIVE)
+        return updated
 
     def set_data(self, x, y):
-        with self._preserve_y_view_state() as view_box:
-            updated = self._set_curve_data(x, y)
-            if updated is False:
-                return False
-            self._set_presentation_mode(PLOT_PRESENTATION_COMPLETE)
-            view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
-            view_box.updateAutoRange()
-            return updated
+        updated = self._set_curve_data(x, y)
+        if updated is False:
+            return False
+        self._set_presentation_mode(PLOT_PRESENTATION_COMPLETE)
+        view_box = self.plot_widget.getViewBox()
+        view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
+        view_box.updateAutoRange()
+        return updated
 
     def snapshot_plot_state(self):
         """Copy curve and X-view state for an opaque rollback snapshot."""
@@ -326,24 +285,12 @@ class ChannelPlotPresentationMixin:
 
         self._set_presentation_mode(state.presentation_mode)
         view_box = self.plot_widget.getViewBox()
-        y_range = self.plot_widget.viewRange()[1]
-        y_view_state = (
-            (float(y_range[0]), float(y_range[1])),
-            view_box.state["autoRange"][1],
-        )
         view_box.disableAutoRange(axis=pg.ViewBox.XAxis)
         self.plot_widget.setXRange(*state.x_range, padding=0)
+        view_box.updateAutoRange()
         x_view_state = (state.x_range, state.x_auto_range)
-        self._restore_axis_view_state(
-            view_box,
-            pg.ViewBox.XAxis,
-            *x_view_state,
-        )
-        self._install_deferred_view_guard(
-            view_box,
-            x_view_state=x_view_state,
-            y_view_state=y_view_state,
-        )
+        self._restore_axis_view_state(view_box, *x_view_state)
+        self._install_deferred_view_guard(view_box, x_view_state=x_view_state)
 
 
 @dataclass(frozen=True)

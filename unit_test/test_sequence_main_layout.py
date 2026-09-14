@@ -5,11 +5,12 @@ import tempfile
 import traceback
 import types
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QCoreApplication, QEvent, Qt
+from PyQt5.QtCore import QCoreApplication, QElapsedTimer, QEvent, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QComboBox, QLabel, QPushButton, QSplitter, QVBoxLayout, QWidget
 
@@ -289,6 +290,55 @@ class _ProductConditionSyncWidget(SequenceWidgetStreamingOpsMixin):
 
 
 class TestSequenceMainLayout(unittest.TestCase):
+    def _wait_for_plot_ranges_stable(self, row):
+        elapsed = QElapsedTimer()
+        elapsed.start()
+        previous = None
+        stable_since = 0
+        while elapsed.elapsed() < 1500:
+            QTest.qWait(10)
+            self.app.processEvents()
+            current = np.asarray(row.plot_widget.viewRange(), dtype=float)
+            now = elapsed.elapsed()
+            if previous is None or not np.allclose(current, previous, rtol=1e-9, atol=1e-9):
+                stable_since = now
+            if now >= 150 and now - stable_since >= 40:
+                return current
+            previous = current.copy()
+        self.fail("Plot ranges did not stabilize within 1500 ms")
+
+    def _make_visible_plot_row(self, workspace_type):
+        workspace = workspace_type()
+        self.addCleanup(workspace.close)
+        workspace.resize(800, 400)
+        workspace.set_channels([0])
+        workspace.show()
+        self.app.processEvents()
+        return workspace, workspace.all_subwindows()[0]
+
+    def test_public_plot_updates_auto_scale_y(self):
+        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
+            for setter_name in (
+                "set_data", "set_relative_preview_data",
+                "set_cumulative_preview_data", "set_live_data",
+            ):
+                with self.subTest(workspace=workspace_type.__name__, setter=setter_name):
+                    workspace, row = self._make_visible_plot_row(workspace_type)
+                    x = np.linspace(-1.0, 0.0, 1001)
+                    spans = []
+                    for amplitude in (5.0, 20.0, 0.2):
+                        y = amplitude * np.sin(2.0 * np.pi * x)
+                        getattr(row, setter_name)(x, y)
+                        low, high = self._wait_for_plot_ranges_stable(row)[1]
+                        self.assertLessEqual(low, float(y.min()))
+                        self.assertGreaterEqual(high, float(y.max()))
+                        self.assertTrue(row.plot_widget.getViewBox().state["autoRange"][1])
+                        self.assertIsNone(row._deferred_view_guard)
+                        spans.append(high - low)
+                    self.assertGreater(spans[1], spans[0])
+                    self.assertLess(spans[2], spans[0])
+                    workspace.close()
+
     def test_waveform_restores_display_only_channel_rows_and_grid(self):
         panel = AnalysisWaveformPanel(
             condition_configs=[{"key": "import", "condition_name": "导入工况"}],
@@ -625,96 +675,196 @@ class TestSequenceMainLayout(unittest.TestCase):
                             window.plot_widget.viewRange()[0], [-10.0, 0.0]
                         )
 
-    def test_real_plot_rows_preserve_enabled_y_auto_range_during_x_updates(self):
-        operations = (
-            "clear_plot",
-            "set_data",
-            "set_cumulative_preview_data",
-            "set_relative_preview_data",
-        )
+    def test_plot_y_manual_range_survives_updates_and_clear(self):
+        x = np.linspace(-1.0, 0.0, 1001)
         for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            for y_auto_range in (True, 0.35):
-                for operation in operations:
-                    with self.subTest(
-                        row_type=workspace_type.__name__,
-                        y_auto_range=y_auto_range,
-                        operation=operation,
-                    ):
-                        workspace = workspace_type()
-                        self.addCleanup(workspace.close)
-                        workspace.set_channels([0])
-                        workspace.show()
-                        self.app.processEvents()
-                        window = workspace.all_subwindows()[0]
-                        view_box = window.plot_widget.getViewBox()
-                        window._set_curve_data(
-                            np.asarray([0.0, 1.0]),
-                            np.asarray([-1.0, 1.0], dtype=np.float32),
-                        )
-                        view_box.enableAutoRange(
-                            axis=pg.ViewBox.YAxis,
-                            enable=y_auto_range,
-                        )
+            with self.subTest(workspace=workspace_type.__name__):
+                workspace, row = self._make_visible_plot_row(workspace_type)
+                view_box = row.plot_widget.getViewBox()
+                row.plot_widget.setYRange(-2.0, 2.0, padding=0)
+                for setter_name in (
+                    "set_data", "set_relative_preview_data",
+                    "set_cumulative_preview_data", "set_live_data", "clear_plot",
+                    "set_data",
+                ):
+                    if setter_name == "clear_plot":
+                        row.clear_plot()
+                    else:
+                        getattr(row, setter_name)(x, 20.0 * np.sin(2 * np.pi * x))
+                    np.testing.assert_allclose(
+                        self._wait_for_plot_ranges_stable(row)[1], [-2.0, 2.0]
+                    )
+                    self.assertIs(view_box.state["autoRange"][1], False)
+                    self.assertIsNone(row._deferred_view_guard)
+
+                view_box.menu.ctrl[1].autoPercentSpin.setValue(100)
+                view_box.menu.yAutoClicked()
+                auto_range = self._wait_for_plot_ranges_stable(row)[1]
+                self.assertLessEqual(auto_range[0], -20.0)
+                self.assertGreaterEqual(auto_range[1], 20.0)
+                row.set_live_data(x, 0.2 * np.sin(2 * np.pi * x))
+                next_range = self._wait_for_plot_ranges_stable(row)[1]
+                self.assertLess(np.ptp(next_range), np.ptp(auto_range))
+                self.assertLessEqual(next_range[0], -0.2)
+                self.assertGreaterEqual(next_range[1], 0.2)
+                self.assertTrue(view_box.state["autoRange"][1])
+                workspace.close()
+
+    def test_plot_y_partial_auto_range_matches_plain_view(self):
+        x = np.linspace(-1.0, 0.0, 1001)
+        distribution = np.linspace(-1.0, 1.0, x.size)
+        distribution[0], distribution[-1] = -100.0, 100.0
+        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
+            with self.subTest(workspace=workspace_type.__name__):
+                workspace, row = self._make_visible_plot_row(workspace_type)
+                plain = pg.PlotWidget()
+                self.addCleanup(plain.close)
+                plain.resize(row.plot_widget.size())
+                plain.show()
+                row.plot_widget.getViewBox().enableAutoRange(axis=pg.ViewBox.YAxis, enable=0.35)
+                plain.getViewBox().enableAutoRange(axis=pg.ViewBox.YAxis, enable=0.35)
+                curve = plain.plot()
+                spans = []
+                for setter_name, amplitude in (
+                    ("set_data", 5.0), ("set_relative_preview_data", 20.0),
+                    ("set_cumulative_preview_data", 0.2), ("set_live_data", 10.0),
+                ):
+                    y = amplitude * distribution
+                    curve.setData(x, y)
+                    getattr(row, setter_name)(x, y)
+                    actual = self._wait_for_plot_ranges_stable(row)[1]
+                    expected = plain.viewRange()[1]
+                    np.testing.assert_allclose(actual, expected, rtol=0.15, atol=0.01)
+                    self.assertEqual(row.plot_widget.getViewBox().state["autoRange"][1], 0.35)
+                    spans.append(np.ptp(actual))
+                self.assertGreater(spans[1], spans[0])
+                self.assertLess(spans[2], spans[0])
+                self.assertGreater(spans[3], spans[2])
+                saved = row.snapshot_plot_state()
+                row.set_data(x, distribution)
+                self._wait_for_plot_ranges_stable(row)
+                row.restore_plot_state(saved)
+                restored = self._wait_for_plot_ranges_stable(row)[1]
+                np.testing.assert_allclose(restored, plain.viewRange()[1], rtol=0.15, atol=0.01)
+                self.assertEqual(row.plot_widget.getViewBox().state["autoRange"][1], 0.35)
+                row.clear_plot()
+                self._wait_for_plot_ranges_stable(row)
+                self.assertEqual(row.plot_widget.getViewBox().state["autoRange"][1], 0.35)
+                row.set_data(x, distribution * 0.2)
+                curve.setData(x, distribution * 0.2)
+                after_clear = self._wait_for_plot_ranges_stable(row)[1]
+                np.testing.assert_allclose(after_clear, plain.viewRange()[1], rtol=0.15, atol=0.01)
+                self.assertEqual(row.plot_widget.getViewBox().state["autoRange"][1], 0.35)
+                plain.hide()
+                workspace.close()
+
+    def test_plot_restore_keeps_exact_x_and_autoscales_y(self):
+        x = np.linspace(-1.0, 0.0, 1001)
+        y = 5.0 * np.sin(2 * np.pi * x)
+        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
+            for setter_name, mode, x_auto in (
+                ("set_data", PLOT_PRESENTATION_COMPLETE, 0.35),
+                ("set_cumulative_preview_data", PREVIEW_TIME_MODE_CUMULATIVE, True),
+                ("set_relative_preview_data", PREVIEW_TIME_MODE_RELATIVE_LATEST, False),
+            ):
+                for immediate_update in (False, True):
+                    with self.subTest(workspace=workspace_type.__name__, mode=mode,
+                                      immediate_update=immediate_update):
+                        workspace, row = self._make_visible_plot_row(workspace_type)
+                        view_box = row.plot_widget.getViewBox()
+                        getattr(row, setter_name)(x, y)
+                        self._wait_for_plot_ranges_stable(row)
+                        # The snapshot is opaque and must preserve even bool True exactly.
+                        view_box.state["autoRange"][0] = x_auto
+                        saved = row.snapshot_plot_state()
+                        row.set_live_data(x, y * 4.0)
+                        self._wait_for_plot_ranges_stable(row)
+                        # Start rollback from a genuinely different Y range even on
+                        # the broken baseline, where the preview itself is frozen.
                         view_box.updateAutoRange()
-                        expected_y_range = tuple(window.plot_widget.viewRange()[1])
-                        expected_y_auto = view_box.state["autoRange"][1]
-
-                        if operation == "clear_plot":
-                            window.clear_plot()
+                        preview_range = self._wait_for_plot_ranges_stable(row)[1]
+                        self.assertLessEqual(preview_range[0], -20.0)
+                        self.assertGreaterEqual(preview_range[1], 20.0)
+                        row.restore_plot_state(saved)
+                        if immediate_update:
+                            row.set_live_data(x, y * 0.04)
+                            ranges = self._wait_for_plot_ranges_stable(row)
+                            np.testing.assert_allclose(ranges[0], [-10.0, 0.0])
+                            self.assertIs(view_box.state["autoRange"][0], False)
+                            self.assertEqual(row.presentation_mode, PREVIEW_TIME_MODE_RELATIVE_LATEST)
+                            expected_y = y * 0.04
                         else:
-                            getattr(window, operation)(
-                                np.asarray([0.0, 2.0]),
-                                np.asarray([-100.0, 100.0], dtype=np.float32),
-                            )
-                        self.app.processEvents()
+                            ranges = self._wait_for_plot_ranges_stable(row)
+                            np.testing.assert_array_equal(ranges[0], saved.x_range)
+                            actual_auto = view_box.state["autoRange"][0]
+                            self.assertEqual(actual_auto, saved.x_auto_range)
+                            self.assertIs(type(actual_auto), type(saved.x_auto_range))
+                            self.assertEqual(row.presentation_mode, mode)
+                            expected_y = y
+                        restored_x, restored_y = row.plot_item.getData()
+                        np.testing.assert_array_equal(restored_x, x)
+                        np.testing.assert_array_equal(restored_y, expected_y)
+                        self.assertLessEqual(ranges[1, 0], float(expected_y.min()))
+                        self.assertGreaterEqual(ranges[1, 1], float(expected_y.max()))
+                        self.assertLess(np.ptp(ranges[1]), 3.0 * np.ptp(expected_y))
+                        self.assertTrue(view_box.state["autoRange"][1])
+                        # A subsequent item change must request another Y calculation.
+                        row.set_cumulative_preview_data(x, y * 8.0)
+                        later_range = self._wait_for_plot_ranges_stable(row)[1]
+                        self.assertLessEqual(later_range[0], -40.0)
+                        self.assertGreaterEqual(later_range[1], 40.0)
+                        workspace.close()
 
-                        self.assertEqual(
-                            view_box.state["autoRange"][1], expected_y_auto
-                        )
-                        self.assertIs(
-                            type(view_box.state["autoRange"][1]),
-                            type(expected_y_auto),
-                        )
-                        np.testing.assert_allclose(
-                            window.plot_widget.viewRange()[1], expected_y_range
-                        )
+    def test_plot_restore_preserves_current_manual_y_range(self):
+        x = np.linspace(-1.0, 0.0, 1001)
+        y = 5.0 * np.sin(2 * np.pi * x)
+        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
+            with self.subTest(workspace=workspace_type.__name__):
+                workspace, row = self._make_visible_plot_row(workspace_type)
+                row.set_data(x, y)
+                row.plot_widget.setYRange(-2.0, 2.0, padding=0)
+                saved = row.snapshot_plot_state()
+                row.set_live_data(x, y * 4.0)
+                row.plot_widget.setYRange(-3.0, 7.0, padding=0)
+                row.restore_plot_state(saved)
+                np.testing.assert_allclose(self._wait_for_plot_ranges_stable(row)[1], [-3.0, 7.0])
+                self.assertIs(row.plot_widget.getViewBox().state["autoRange"][1], False)
+                workspace.close()
 
-                        manual_y_range = (-7.5, 8.5)
-                        view_box.setRange(
-                            yRange=manual_y_range,
-                            padding=0,
-                        )
-                        self.assertIsNone(
-                            getattr(window, "_deferred_view_guard", None)
-                        )
-                        self.app.processEvents()
-                        np.testing.assert_allclose(
-                            window.plot_widget.viewRange()[1], manual_y_range
-                        )
-
-                        view_box.enableAutoRange(
-                            axis=pg.ViewBox.YAxis,
-                            enable=expected_y_auto,
-                        )
-                        view_box.state["autoRange"][1] = expected_y_auto
-                        window._set_curve_data(
-                            np.asarray([0.0, 3.0]),
-                            np.asarray([-1000.0, 1000.0], dtype=np.float32),
-                        )
-                        self.app.processEvents()
-                        self.assertEqual(
-                            view_box.state["autoRange"][1], expected_y_auto
-                        )
-                        self.assertIs(
-                            type(view_box.state["autoRange"][1]),
-                            type(expected_y_auto),
-                        )
-                        self.assertFalse(
-                            np.allclose(
-                                window.plot_widget.viewRange()[1],
-                                expected_y_range,
-                            )
-                        )
+    def test_plot_restore_empty_and_legacy_states_allow_later_auto_y(self):
+        x = np.linspace(-1.0, 0.0, 1001)
+        y = 5.0 * np.sin(2 * np.pi * x)
+        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
+            for state_kind in ("none", "no_data", "empty_data", "legacy", "clear"):
+                with self.subTest(workspace=workspace_type.__name__, state=state_kind):
+                    workspace, row = self._make_visible_plot_row(workspace_type)
+                    empty_state = row.snapshot_plot_state()
+                    if state_kind == "empty_data":
+                        empty_state = replace(empty_state, data=(np.asarray([]), np.asarray([])))
+                    row.set_data(x, y * 4.0)
+                    self._wait_for_plot_ranges_stable(row)
+                    if state_kind == "clear":
+                        row.clear_plot()
+                    else:
+                        state = {"none": None, "no_data": empty_state,
+                                 "empty_data": empty_state, "legacy": (x, y)}[state_kind]
+                        row.restore_plot_state(state)
+                    ranges = self._wait_for_plot_ranges_stable(row)
+                    self.assertTrue(row.plot_widget.getViewBox().state["autoRange"][1])
+                    if state_kind == "legacy":
+                        np.testing.assert_array_equal(row.plot_item.getData()[1], y)
+                        self.assertLess(np.ptp(ranges[1]), 30.0)
+                        self.assertLessEqual(ranges[1, 0], -5.0)
+                        self.assertGreaterEqual(ranges[1, 1], 5.0)
+                    elif row.plot_item is not None:
+                        self.assertTrue(all(values is None or len(values) == 0
+                                            for values in row.plot_item.getData()))
+                    row.set_live_data(x, y * 0.04)
+                    next_range = self._wait_for_plot_ranges_stable(row)[1]
+                    self.assertLessEqual(next_range[0], -0.2)
+                    self.assertGreaterEqual(next_range[1], 0.2)
+                    self.assertLess(np.ptp(next_range), 1.0)
+                    workspace.close()
 
     def test_real_plot_rows_restore_exact_x_auto_range_value_and_type(self):
         for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
@@ -748,7 +898,7 @@ class TestSequenceMainLayout(unittest.TestCase):
                         np.asarray([-100.0, 100.0], dtype=np.float32),
                     )
                     window.restore_plot_state(saved)
-                    self.app.processEvents()
+                    self._wait_for_plot_ranges_stable(window)
 
                     restored_x_auto = view_box.state["autoRange"][0]
                     self.assertEqual(restored_x_auto, expected_x_auto)
@@ -769,7 +919,7 @@ class TestSequenceMainLayout(unittest.TestCase):
                     self.assertIsNone(
                         getattr(window, "_deferred_view_guard", None)
                     )
-                    self.app.processEvents()
+                    self._wait_for_plot_ranges_stable(window)
                     np.testing.assert_allclose(
                         window.plot_widget.viewRange()[0], manual_x_range
                     )
@@ -821,17 +971,22 @@ class TestSequenceMainLayout(unittest.TestCase):
                                 window.restore_plot_state(saved)
 
                             guard = window._deferred_view_guard
-                            self.assertIsNotNone(guard)
-                            original_set_range = guard[3]
-                            original_enable_auto_range = guard[4]
+                            if presentation_path == "restore":
+                                self.assertIsNotNone(guard)
+                                original_set_range = guard[3]
+                                original_enable_auto_range = guard[4]
+                            else:
+                                self.assertIsNone(guard)
+                                original_set_range = view_box.setRange
+                                original_enable_auto_range = view_box.enableAutoRange
                             view_box.enableAutoRange(
                                 axis=axis,
                                 enable=requested_auto_range,
                             )
 
                             self.assertIsNone(window._deferred_view_guard)
-                            self.assertIs(view_box.setRange, original_set_range)
-                            self.assertIs(
+                            self.assertEqual(view_box.setRange, original_set_range)
+                            self.assertEqual(
                                 view_box.enableAutoRange,
                                 original_enable_auto_range,
                             )
@@ -858,8 +1013,7 @@ class TestSequenceMainLayout(unittest.TestCase):
                             else:
                                 self.assertTrue(expected_auto_range)
 
-                            QTest.qWait(125)
-                            self.app.processEvents()
+                            self._wait_for_plot_ranges_stable(window)
 
                             actual_auto_range = view_box.state["autoRange"][
                                 state_index
@@ -898,12 +1052,15 @@ class TestSequenceMainLayout(unittest.TestCase):
                     np.asarray([-100.0, 100.0], dtype=np.float32),
                 )
 
+                saved = window.snapshot_plot_state()
+                window.set_live_data(np.asarray([-1.0, 0.0]), np.asarray([-1.0, 1.0]))
+                window.restore_plot_state(saved)
                 guard = window._deferred_view_guard
                 self.assertIsNotNone(guard)
                 original_set_range = guard[3]
                 original_enable_auto_range = guard[4]
                 original_set_range(
-                    yRange=(-500.0, 500.0),
+                    xRange=(-500.0, 500.0),
                     padding=0,
                     disableAutoRange=False,
                 )
@@ -916,8 +1073,8 @@ class TestSequenceMainLayout(unittest.TestCase):
                 self.assertEqual(view_box.state["autoRange"][1], 0.35)
                 self.assertIs(type(view_box.state["autoRange"][1]), float)
 
-                QTest.qWait(125)
-                self.app.processEvents()
+                ranges = self._wait_for_plot_ranges_stable(window)
+                np.testing.assert_array_equal(ranges[0], saved.x_range)
 
                 self.assertIsNone(window._deferred_view_guard)
                 self.assertIs(view_box.setRange, original_set_range)
@@ -972,6 +1129,10 @@ class TestSequenceMainLayout(unittest.TestCase):
                         else:
                             getattr(window, operation)(source_x, source_y)
 
+                        if operation != "restore_plot_state":
+                            self.assertIsNone(window._deferred_view_guard)
+                            saved = window.snapshot_plot_state()
+                            window.restore_plot_state(saved)
                         guard = getattr(window, "_deferred_view_guard", None)
                         self.assertIsNotNone(guard)
                         view_box = window.plot_widget.getViewBox()
