@@ -1,9 +1,9 @@
 """Instance-owned asynchronous VK discovery and device selection."""
 from copy import deepcopy
-import logging
 
 from PyQt5.QtCore import QObject, Qt, pyqtSignal, pyqtSlot
 
+from base.log_manager import LogManager
 from base.hardware_selection import is_ve_input, resolve_ve_input
 from base.ve3668n_discovery import DiscoveryService
 from ui.vkinging_presentation import ve_failure_text
@@ -63,6 +63,7 @@ class VE3668NHardwareControls(QObject):
     def __init__(self, parent=None, *, profile_store, calibration_store,
                  initial_device=None, initial_channels=(), discovery_factory=None, busy_check=None):
         super().__init__(parent)
+        self.default_logger = LogManager.set_log_handler("core")
         self.profile_store = profile_store
         self.calibration_store = calibration_store
         self.discovery = VEDiscoveryBridge(self, discovery_factory=discovery_factory)
@@ -154,11 +155,11 @@ class VE3668NHardwareControls(QObject):
         else:
             self._current = None
         if discovery_diagnostic:
-            logging.getLogger(__name__).warning(
+            self.default_logger.warning(
                 "VE discovery failed for MachineId %s: %s",
                 (self._current or {}).get("machine_id"), discovery_diagnostic)
         if diagnostic and diagnostic != discovery_diagnostic:
-            logging.getLogger(__name__).warning(
+            self.default_logger.warning(
                 "VE input unavailable for MachineId %s: %s",
                 (self._current or {}).get("machine_id"), diagnostic)
         if discovery_diagnostic:
@@ -180,7 +181,7 @@ class VE3668NHardwareControls(QObject):
             load_profile=False)
         diagnostic = (self._current or {}).get("diagnostic", "")
         if diagnostic:
-            logging.getLogger(__name__).warning(
+            self.default_logger.warning(
                 "VE input unavailable for MachineId %s: %s", machine_id, diagnostic)
         self._publish(ve_failure_text("unavailable") if diagnostic else "")
 

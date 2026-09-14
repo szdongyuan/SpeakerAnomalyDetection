@@ -15,6 +15,7 @@ from PyQt5.QtTest import QTest
 
 from ui import hardware_window as hardware_ui
 from base.ve3668n_discovery import DiscoveryEvent, DiscoveryResult
+from base.log_manager import LogManager
 from base.ve3668n_stores import VEInputProfileStore, VECalibrationStore
 from base.ve3668n_input import validate_device_snapshot
 from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
@@ -573,7 +574,7 @@ def main_window_harness(controls, monkeypatch):
     source = Path(__file__).resolve().parents[2] / "main_window.py"
     parsed = ast.parse(source.read_text(encoding="utf-8"))
     klass = next(node for node in parsed.body if isinstance(node, ast.ClassDef) and node.name == "MainWindow")
-    namespace = {"QMainWindow": QMainWindow, "QAction": QAction, "QApplication": QApplication,
+    namespace = {"LogManager": LogManager, "QMainWindow": QMainWindow, "QAction": QAction, "QApplication": QApplication,
         "QPoint": QPoint, "SoundDeviceManager": hardware_ui.SoundDeviceManager,
         "QMessageBox": hardware_ui.QMessageBox, "restore_or_default": hardware_selection.restore_or_default,
         "save_if_changed": hardware_selection.save_if_changed,
