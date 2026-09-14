@@ -57,8 +57,9 @@ def setup(ui_qapp, tmp_path, monkeypatch):
     bridge = CalibrationBridgeFake(tmp_path)
     widgets = []
 
-    def make(rate=51200, channels=(7, 1), **kwargs):
-        device = device_info(input_config=input_config(rate))
+    def make(rate=51200, channels=(7, 1), physical_channels=(7, 1), **kwargs):
+        device = device_info(
+            input_config=input_config(rate), physical_channels=list(physical_channels))
         profiles.set_sample_rate(device, rate, calibrations)
         widget = calibration.InputCalibration(
             device, channels, recording_bridge=bridge,
@@ -128,6 +129,86 @@ def accept(widget, session, audio):
 def release(widget, session):
     session.released.set()
     widget._on_calibration_released(session)
+
+
+@pytest.mark.parametrize(
+    'channels,completed,already_valid,selected,next_label',
+    [
+        ((0, 1), 0, (), 1, 'In2'),
+        ((2, 3), 2, (), 3, 'In4'),
+        ((7, 1, 3), 7, (1,), 3, 'In4'),
+        ((7, 3, 1), 7, (), 3, 'In4'),
+        ((0, 2), 2, (), 0, 'In1'),
+        ((7, 1), 7, (1,), 7, None),
+        ((0,), 0, (), 0, None),
+        ((0, 2), 0, (0, 2), 0, None),
+    ],
+)
+def test_ve_success_navigation_matches_popup(
+    setup, monkeypatch, channels, completed, already_valid, selected, next_label
+):
+    widget = setup.make(channels=channels, physical_channels=channels)
+    old_records = {ch: seed_old(setup, widget, channel=ch) for ch in already_valid}
+    widget._select_channel(completed)
+    popup = mock.Mock()
+    monkeypatch.setattr(widget, 'calibration_popup', popup)
+    changed, finished = [], []
+    widget.calibration_state_changed.connect(changed.append)
+    widget.calibration_finished.connect(finished.append)
+    session, audio = offered(widget)
+    with mock.patch.object(setup.bridge, 'start') as start_next, \
+         mock.patch.object(widget, 'clicked_calibration') as click_next:
+        accept(widget, session, audio)
+        assert widget.current_channel == completed
+        popup.assert_not_called()
+        release(widget, session)
+    start_next.assert_not_called()
+    click_next.assert_not_called()
+    assert len(setup.bridge.sessions) == 1
+    assert session.request.channels == (completed,)
+    record = setup.calibrations.get_record(widget.input_device, completed)
+    assert record['status'] == 'valid'
+    for ch, old in old_records.items():
+        if ch != completed:
+            assert setup.calibrations.get_record(widget.input_device, ch) == old
+    if selected != completed:
+        assert setup.calibrations.get_record(widget.input_device, selected) is None
+    assert widget.current_channel == selected
+    assert widget.channel_combo_box.currentData() == selected
+    assert widget.channel_combo_box.currentText() == f'In{selected + 1}'
+    assert widget.streaming_processor is None
+    assert widget.active_capture_channel is None
+    assert widget.channel_combo_box.isEnabled()
+    assert changed == [True] and finished == [True]
+    message = f"校准成功\n本次校准结果：{record['v2pa_factor']:.6f} Pa/V"
+    if next_label is not None:
+        message += f'\n下次校准通道：{next_label}'
+    else:
+        assert float(widget.v2pa_factor_lineedit.text()) == pytest.approx(
+            record['v2pa_factor'], abs=1e-6
+        )
+    popup.assert_called_once_with(success_flag=True, message=message)
+
+
+def test_ve_success_selects_invalidated_next_channel(setup, monkeypatch):
+    widget = setup.make(channels=(7, 1))
+    seed_old(setup, widget, channel=1)
+    changed_device = deepcopy(widget.input_device)
+    changed_device['input_config']['unit'] = 'g'
+    with pytest.raises(ValueError):
+        setup.calibrations.observe(changed_device)
+    widget.refresh_ve_calibration_state()
+    assert setup.calibrations.get_record(widget.input_device, 1)['status'] == 'invalidated'
+    widget._select_channel(7)
+    popup = mock.Mock()
+    monkeypatch.setattr(widget, 'calibration_popup', popup)
+    session, audio = offered(widget)
+    accept(widget, session, audio)
+    release(widget, session)
+    assert widget.current_channel == 1
+    assert widget.channel_combo_box.currentText() == 'In2'
+    assert popup.call_args.kwargs['message'].endswith('\n下次校准通道：In2')
+    assert setup.calibrations.get_record(widget.input_device, 1)['status'] == 'invalidated'
 
 
 @pytest.mark.parametrize("boundary,operation", [

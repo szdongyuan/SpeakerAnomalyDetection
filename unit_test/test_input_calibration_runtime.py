@@ -218,8 +218,9 @@ def test_main_window_initialization_contains_scalar_refresh_errors(error_type):
             self.spacing = spacing
 
     class FakeSequenceWindow:
-        def __init__(self, *, recording_bridge):
+        def __init__(self, *, recording_bridge, ve_prewarm_lifetime):
             self.recording_bridge = recording_bridge
+            self.ve_prewarm_lifetime = ve_prewarm_lifetime
             self.v2pa_factor = 9.0
             self.default_logger = default_logger
             self.update_v2pa_factor = MethodType(update_factor, self)
@@ -229,6 +230,7 @@ def test_main_window_initialization_contains_scalar_refresh_errors(error_type):
     menu_row = object()
     window = SimpleNamespace(
         recording_bridge=object(),
+        ve_prewarm_lifetime=object(),
         mic=DEVICE,
         mic_channels=[1],
         speaker={"name": "Speaker"},
@@ -285,6 +287,7 @@ def test_main_window_passes_current_input_to_calibration_and_refreshes_on_succes
         update_v2pa_factor=lambda: events.append(("refresh", None))
     )
     window = SimpleNamespace(
+        _calibration_admission_available=lambda: True,
         recording_bridge=object(),
         mic=DEVICE,
         mic_channels=[1],
@@ -349,6 +352,7 @@ def test_successful_calibration_contains_scalar_refresh_errors(error_type):
 
     speaker = {"name": "Speaker"}
     window = SimpleNamespace(
+        _calibration_admission_available=lambda: True,
         recording_bridge=object(),
         mic=DEVICE,
         mic_channels=[1],
@@ -394,6 +398,7 @@ def test_main_window_does_not_refresh_after_failed_or_cancelled_calibration():
 
     sequence = SimpleNamespace(update_v2pa_factor=mock.Mock())
     window = SimpleNamespace(
+        _calibration_admission_available=lambda: True,
         mic=DEVICE,
         mic_channels=[1],
         speaker={"name": "Speaker"},
@@ -428,6 +433,8 @@ def test_hardware_change_refreshes_factor_after_new_input_is_installed():
         refresh_channel_windows=mock.Mock(),
     )
     window = SimpleNamespace(
+        _hardware_selection_admission_available=lambda: True,
+        _ve_signature=lambda _device, _channels: None,
         mic=DEVICE,
         mic_channels=[0],
         speaker={"index": 2, "name": "Speaker", "hostapi": 3},
@@ -501,6 +508,8 @@ def test_hardware_change_contains_scalar_refresh_errors(error_type):
     sequence.update_v2pa_factor = MethodType(update_factor, sequence)
     speaker = {"index": 2, "name": "Speaker", "hostapi": 3}
     window = SimpleNamespace(
+        _hardware_selection_admission_available=lambda: True,
+        _ve_signature=lambda _device, _channels: None,
         mic=DEVICE,
         mic_channels=[0],
         speaker=speaker,
