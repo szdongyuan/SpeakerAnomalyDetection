@@ -187,6 +187,154 @@ qdialog_style = _style("""
             }
 """)
 
+analysis_report_dialog_style = _style("""
+            QDialog#analysisReportExportDialog QWidget {
+                font-family: $UI_FONT_FAMILY;
+                font-size: 16px;
+                font-weight: normal;
+            }
+            QDialog#analysisReportExportDialog,
+            QDialog#analysisReportWavDialog,
+            QDialog#analysisReportWavFilterDialog {
+                background-color: $COLOR_PAGE_BG;
+            }
+            QGroupBox {
+                margin-top: 10px;
+                padding: 18px 8px 16px 8px;
+                border: none;
+                border-top: 1px solid $COLOR_BORDER;
+                border-radius: 0;
+                background-color: transparent;
+                color: $COLOR_TEXT;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 8px;
+                padding: 0 4px;
+                background-color: $COLOR_PAGE_BG;
+                color: $COLOR_TEXT;
+            }
+            QDialog#analysisReportExportDialog QGroupBox#reportScopeGroup,
+            QDialog#analysisReportExportDialog QGroupBox#reportContentGroup {
+                font-size: 18px;
+                font-weight: bold;
+                margin-top: 0;
+                padding: 42px 18px 18px 18px;
+                border: 1px solid $COLOR_BORDER;
+                border-radius: 8px;
+                background-color: $COLOR_CARD_BG;
+            }
+            QGroupBox#reportScopeGroup::title,
+            QGroupBox#reportContentGroup::title {
+                subcontrol-origin: margin;
+                left: 13px;
+                top: 14px;
+                padding: 0;
+                background-color: transparent;
+                color: $COLOR_PRIMARY;
+            }
+            QLabel#reportAnalysisItemEmptyLabel {
+                color: $COLOR_DISABLED_TEXT;
+            }
+            QDialog#analysisReportExportDialog QLineEdit,
+            QDialog#analysisReportExportDialog QComboBox,
+            QDialog#analysisReportExportDialog QToolButton,
+            QDialog#analysisReportExportDialog QPushButton {
+                min-height: 26px;
+            }
+            QLabel,
+            QCheckBox {
+                color: $COLOR_TEXT;
+                background-color: transparent;
+            }
+            QLabel#reportWavSelectionSummary {
+                font-family: $UI_FONT_FAMILY;
+                font-size: 12px;
+            }
+            QLineEdit,
+            QComboBox,
+            QToolButton {
+                padding: 4px 8px;
+                border: 1px solid $COLOR_BORDER_STRONG;
+                border-radius: 4px;
+                background-color: $COLOR_CARD_BG;
+                color: $COLOR_TEXT;
+            }
+            QLineEdit:disabled,
+            QComboBox:disabled,
+            QToolButton:disabled {
+                border-color: $COLOR_BORDER;
+                background-color: $COLOR_CARD_BG;
+                color: $COLOR_DISABLED_TEXT;
+            }
+            QPushButton {
+                padding: 4px 10px;
+                border: 1px solid $COLOR_BORDER_STRONG;
+                border-radius: 4px;
+                background-color: $COLOR_TOOLBAR_BUTTON_BG;
+                color: $COLOR_TEXT;
+            }
+            QPushButton:hover {
+                border-color: $COLOR_PRIMARY;
+                background-color: $COLOR_CONTROL_HOVER;
+            }
+            QPushButton:pressed {
+                border-color: $COLOR_PRIMARY_HOVER;
+                background-color: $COLOR_CONTROL_PRESSED;
+            }
+            QPushButton:disabled {
+                border-color: $COLOR_BORDER;
+                background-color: $COLOR_DISABLED_BG;
+                color: $COLOR_DISABLED_TEXT;
+            }
+            QPushButton#reportExportButton,
+            QPushButton#reportWavConfirmButton,
+            QPushButton#reportWavFilterApplyButton,
+            QPushButton#reportWavFilterButton[filtersActive="true"] {
+                border-color: $COLOR_PRIMARY;
+                background-color: $COLOR_PRIMARY;
+                color: white;
+            }
+            QPushButton#reportExportButton:hover,
+            QPushButton#reportWavConfirmButton:hover,
+            QPushButton#reportWavFilterApplyButton:hover,
+            QPushButton#reportWavFilterButton[filtersActive="true"]:hover {
+                border-color: $COLOR_PRIMARY_HOVER;
+                background-color: $COLOR_PRIMARY_HOVER;
+            }
+            QPushButton#reportExportButton:disabled,
+            QPushButton#reportWavConfirmButton:disabled {
+                border-color: $COLOR_BORDER_STRONG;
+                background-color: $COLOR_DISABLED_BG;
+                color: $COLOR_DISABLED_TEXT;
+            }
+            QMenu,
+            QListWidget,
+            QTableView {
+                border: 1px solid $COLOR_BORDER;
+                background-color: $COLOR_CARD_BG;
+                color: $COLOR_TEXT;
+            }
+            QTableView {
+                alternate-background-color: $COLOR_CARD_BG;
+                gridline-color: $COLOR_BORDER;
+            }
+            QListWidget::item:selected,
+            QTableView::item:selected {
+                background-color: $COLOR_CONTROL_PRESSED;
+                color: $COLOR_TEXT;
+            }
+            QHeaderView::section {
+                padding: 5px 6px;
+                border: none;
+                border-right: 1px solid $COLOR_BORDER;
+                border-bottom: 1px solid $COLOR_BORDER;
+                background-color: $COLOR_TOOLBAR_BG;
+                color: $COLOR_TEXT;
+            }
+""")
+
 qlabel_style = _style("""
             QLabel {
                 font-family: $UI_FONT_FAMILY;

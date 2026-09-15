@@ -90,6 +90,7 @@ class MainWindow(QMainWindow):
         self.function_action_test_sequence = QAction("测试队列", self)
         self.function_action_ai_training = QAction("训练AI模型", self)
         self.function_audio_manager = QAction("音频数据管理", self)
+        self.function_action_report_export = QAction("报告导出", self)
         self.function_action_exit = QAction("退出", self)
         self.hardware_action_selection = QAction("硬件选择", self)
         self.hardware_action_calibration = QAction("校准", self)
@@ -97,7 +98,10 @@ class MainWindow(QMainWindow):
         self.user_action_add_account = QAction("添加用户", self)
         self.user_action_change_pwd = QAction("修改密码", self)
         # set the operator and engineer and admin power
-        self.widget_list_operator = [self.user_action_change_pwd]
+        self.widget_list_operator = [
+            self.user_action_change_pwd,
+            self.function_action_report_export,
+        ]
         self.widget_list_engineer = self.widget_list_operator + [
             self.function_action_product_test_program,
             self.function_action_test_sequence,
@@ -581,6 +585,11 @@ class MainWindow(QMainWindow):
         function_menu.addAction(self.function_audio_manager)
         self.function_audio_manager.triggered.disconnect()
         self.function_audio_manager.triggered.connect(self.on_audio_manager_init)
+        function_menu.addAction(self.function_action_report_export)
+        self.function_action_report_export.triggered.disconnect()
+        self.function_action_report_export.triggered.connect(
+            self.on_analysis_report_export
+        )
         function_menu.addSeparator()
 
         function_menu.addAction(self.function_action_exit)
@@ -708,6 +717,12 @@ class MainWindow(QMainWindow):
 
         dlg = AiWindow(LogManager.set_log_handler("train"))
         dlg.exec()
+
+    def on_analysis_report_export(self):
+        from ui.analysis_report_export_dialog import AnalysisReportExportDialog
+
+        dialog = AnalysisReportExportDialog(self)
+        dialog.exec()
 
     def on_access_lvl_changed(self):
         # Set the executable function according to the user level
