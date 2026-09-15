@@ -390,7 +390,7 @@ def test_worker_fatal_and_sender_exit_cleanup_reach_project_file(
 
     done = threading.Event()
     done.set()
-    capture = SimpleNamespace(done=done, cancel=Mock())
+    capture = SimpleNamespace(done=done, cancel=Mock(), join=lambda timeout=0: True)
     pipeline = SimpleNamespace(shutdown_snapshot=lambda: [SimpleNamespace(capture=capture)])
     monkeypatch.setattr(worker_module, "WorkerCapturePipeline", lambda: pipeline)
     controller = SimpleNamespace(close=Mock(return_value=SimpleNamespace(success=True)))

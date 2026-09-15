@@ -299,6 +299,9 @@ def test_two_request_lifecycle_burst_delivers_one_fatal_when_control_queue_satur
         def cancel(self):
             self.done.set()
 
+        def join(self, timeout=0):
+            return self.done.is_set()
+
     class BlockedControl:
         def poll(self, _timeout):
             return commands_enabled.is_set() and not commands.empty()
@@ -918,6 +921,9 @@ def test_parent_watch_never_inspects_pipeline_during_active_to_finalizer_transit
         def cancel(self):
             self.done.set()
 
+        def join(self, timeout=0):
+            return self.done.is_set()
+
     class Connection:
         def poll(self, _timeout):
             return not commands.empty()
@@ -991,6 +997,9 @@ def test_worker_lost_slot_snapshot_is_fatal_instead_of_opening_capacity(
 
         def cancel(self):
             self.done.set()
+
+        def join(self, timeout=0):
+            return self.done.is_set()
 
     class Connection:
         def poll(self, _timeout):

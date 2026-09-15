@@ -180,6 +180,18 @@ class RecordingCapture:
             raise TimeoutError(f"capture {self.request.request_id} is still {self._stage}")
         return self.outcome
 
+    def join(self, timeout=0):
+        """Confirm thread exit; ``done`` alone is published just before return."""
+        if self._thread is None:
+            return True
+        self._thread.join(timeout)
+        return not self._thread.is_alive()
+
+    @property
+    def stream_closed(self):
+        """Read after joining: no stream remains with uncertain native ownership."""
+        return self._stream is None
+
     def snapshot(self, *, generation, sequence):
         """Copy only the selected bounded envelope; skip a busy consumer."""
         if (not self._preview_enabled or self._waveforms is None
