@@ -1675,6 +1675,9 @@ def test_worker_final_progress_survives_done_snapshot_race_and_immediate_ack(tmp
         def cancel(self):
             self.done.set()
 
+        def join(self, timeout=0):
+            return self.done.is_set()
+
     class Control:
         def poll(self, timeout):
             return not commands.empty()

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from contextlib import ExitStack
 
 from base.log_manager import LogManager
-from base.recording_capture import RecordingCapture
+from base.recording_capture import RecordingCapture, sounddevice_backend
 from base.recording_process_protocol import (
     CaptureSlotReleased,
     RecordingEvent,
@@ -117,6 +117,8 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
     controller = None
     controller_closed = False
     controller_close_failed = False
+    audio_backend = None
+    audio_cleanup_failed = False
 
     def parent_watch():
         while not finished.wait(.05):
@@ -155,6 +157,15 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         progress_out.task_done()
 
     def emit_terminal(state):
+        nonlocal audio_cleanup_failed
+        # Do not discard a capture (and its thread ownership) merely because
+        # done was published. Polling keeps control/cancellation responsive.
+        if not state.capture.join():
+            return
+        if (audio_backend is not None
+                and state.capture.request.device.get("backend") != VE_BACKEND
+                and not state.capture.stream_closed):
+            audio_cleanup_failed = True
         outcome = state.capture.outcome
         kind = "completed" if isinstance(outcome, RecordingResult) else (
             "failed" if isinstance(outcome, RecordingFailure) else "cancelled")
@@ -297,7 +308,8 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                 now = time.monotonic()
             if stopping is not None:
                 if controller_closed and all(
-                        state.capture.done.is_set() for state in pipeline.shutdown_snapshot()):
+                        state.capture.done.is_set() and state.capture.join()
+                        for state in pipeline.shutdown_snapshot()):
                     if prewarm is not None:
                         cancel_prewarm("VE prewarm cancelled while worker stopped")
                         if prewarm is not None:
@@ -334,13 +346,36 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                             "start", "recording cannot start during active VE prewarm")
                         continue
                     last_terminal_prewarm = None
+                    capture_dependencies = dict(dependencies)
+                    initialization_failure = None
+                    if (command.payload.device.get("backend") != VE_BACKEND
+                            and capture_dependencies.get("backend") is None):
+                        if audio_backend is None:
+                            try:
+                                # First import initializes PortAudio. The worker
+                                # control thread owns it across all captures.
+                                audio_backend = sounddevice_backend()
+                            except Exception as exc:
+                                # Native import/initialization is an external boundary.
+                                # No capture thread or WAV has been started yet.
+                                logger.exception("Audio initialization failed for %s",
+                                                 command.request_id)
+                                initialization_failure = RecordingFailure(
+                                    command.request_id, "device", command.payload.path,
+                                    str(exc), handles_released=True)
+                        capture_dependencies["backend"] = audio_backend
                     capture = RecordingCapture(
-                        command.payload, ve_stream_factory=controller.stream, **dependencies)
+                        command.payload, ve_stream_factory=controller.stream,
+                        **capture_dependencies)
                     try:
                         state = pipeline.start(command.request_id, capture)
                     except (ValueError, RuntimeError) as exc:
                         protocol_fatal(
                             "start", f"invalid start for {command.request_id}: {exc}")
+                        continue
+                    if initialization_failure is not None:
+                        emit("failed", state.request_id, initialization_failure)
+                        pipeline.mark_terminal(state.request_id)
                         continue
                     clear_progress()
                     state.next_preview_at = now
@@ -587,7 +622,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         else:
             emit_worker_fatal("worker", exc)
     finally:
-        cleanup_deadline = time.monotonic() + cancel_timeout
+        cleanup_deadline = stopping if stopping is not None else time.monotonic() + cancel_timeout
         cleanup_states = pipeline.shutdown_snapshot()
         for state in cleanup_states:
             if not state.capture.done.is_set():
@@ -600,13 +635,14 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
             controller_close_failed = not release_outcome.success
         if prewarm is not None:
             emit_prewarm_terminal(prewarm)
+        capture_cleanup_failed = False
         for state in cleanup_states:
-            remaining = cleanup_deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            state.capture.done.wait(remaining)
-        capture_cleanup_failed = any(
-            not state.capture.done.is_set() for state in cleanup_states)
+            if not state.capture.join(max(0, cleanup_deadline - time.monotonic())):
+                capture_cleanup_failed = True
+            elif (audio_backend is not None
+                  and state.capture.request.device.get("backend") != VE_BACKEND
+                  and not state.capture.stream_closed):
+                audio_cleanup_failed = True
         # The control sentinel shares the ordered lane so it cannot overtake a
         # prewarm terminal/fatal pair while the pipe is backpressured.
         ordered_control_out.put_nowait(None)
@@ -619,7 +655,17 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         for sender in senders:
             sender.join(.2)
         finished.set()
-        if controller_close_failed or capture_cleanup_failed:
+        if controller_close_failed or capture_cleanup_failed or audio_cleanup_failed:
             os._exit(1)
+        if audio_backend is not None:
+            try:
+                # sounddevice's helper decrements its initialization count, so
+                # its registered atexit handler will not terminate it again.
+                audio_backend._terminate()
+            except Exception:
+                # Native teardown can raise arbitrary backend exceptions. Do
+                # not retry via atexit after uncertain library cleanup.
+                logger.exception("Failed to terminate worker audio library")
+                os._exit(1)
         control.close()
         preview.close()
