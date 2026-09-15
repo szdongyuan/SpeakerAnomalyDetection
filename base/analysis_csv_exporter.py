@@ -15,6 +15,7 @@ from base.analysis_artifact_paths import (
     build_csv_path,
     format_channel_name,
 )
+from base.spl_csv_schema import overall_spl_csv_columns
 
 
 @dataclass(frozen=True)
@@ -122,9 +123,7 @@ def _spl_tables(config, outputs, channel_labels):
     if include_overall:
         header = (
             "通道",
-            "总体声压级dB",
-            "总体下限dB",
-            "总体上限dB",
+            *overall_spl_csv_columns(config.get("weighting", "Z")),
             "result",
         )
         overall_judged = bool(config.get("limit_checked", False)) and str(

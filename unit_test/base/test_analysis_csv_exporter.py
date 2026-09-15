@@ -79,7 +79,7 @@ def test_spl_exports_overall_and_one_shared_axis_realtime_csv(tmp_path):
     ]
     overall = _read(records[0].file_path)
     realtime = _read(records[1].file_path)
-    assert overall[0] == ["通道", "总体声压级dB", "总体下限dB", "总体上限dB", "result"]
+    assert overall[0] == ["通道", "总体声压级dB(Z)", "总体下限dB(Z)", "总体上限dB(Z)", "result"]
     assert [row[0] for row in overall[1:]] == ["CH1(前)", "CH2(后)"]
     assert overall[1][-1] == "OK"
     assert realtime[0] == [
