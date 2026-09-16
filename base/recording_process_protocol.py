@@ -204,6 +204,20 @@ class RecordingRequest:
 
 
 @dataclass(frozen=True)
+class RecordingFinalizationTiming:
+    """Child-local elapsed seconds; never subtract child and parent clocks."""
+    target_to_file_closed: float
+    metadata_seconds: float
+    target_to_descriptor: float
+
+    def __post_init__(self):
+        for name in ("target_to_file_closed", "metadata_seconds", "target_to_descriptor"):
+            _monotonic_time(name, getattr(self, name))
+        if max(self.target_to_file_closed, self.metadata_seconds) > self.target_to_descriptor:
+            raise ValueError("finalization stage exceeds child total duration")
+
+
+@dataclass(frozen=True)
 class RecordingResult:
     request_id: str
     purpose: str
@@ -216,6 +230,10 @@ class RecordingResult:
     warnings: tuple[str, ...] = ()
     handles_released: bool = True
     cleanup_paths: tuple[str, ...] = ()
+    # Defaults support legacy direct readers; production requires both fields.
+    digest_algorithm: str | None = None
+    sample_digest: str | None = None
+    finalization_timing: RecordingFinalizationTiming | None = None
 
 
 @dataclass(frozen=True)

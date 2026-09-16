@@ -17,7 +17,7 @@ from base.streaming_waveform_accumulator import (
     StreamingWaveformAccumulator,
     StreamingWaveformSnapshot,
 )
-from base.wav_calibration_metadata import read_wav_calibration_metadata
+from base.wav_calibration_metadata import read_wav_calibration_metadata, append_wav_calibration_metadata_result
 from consts.recording_preview_consts import (
     MAIN_RECORDING_LIVE_MAX_POINTS,
     MAIN_RECORDING_LIVE_WINDOW_SECONDS,
@@ -212,7 +212,8 @@ def test_actual_metadata_file_failures_preserve_capture_ownership(
         {"wav_channel_index": 0, "physical_input_channel": 0, "calibrated": False},
         {"wav_channel_index": 1, "physical_input_channel": 2, "calibrated": False},
     ]}
-    capture, backend = captures(request(tmp_path, trim_samples=0, calibration_metadata=metadata))
+    capture, backend = captures(request(tmp_path, trim_samples=0, calibration_metadata=metadata),
+                                metadata_appender=append_wav_calibration_metadata_result)
     feed_all(backend)
     try:
         outcome = capture.wait(3)
@@ -255,7 +256,8 @@ def test_metadata_cleanup_failure_keeps_warning_and_owned_paths(
 
     monkeypatch.setattr(module.os, "unlink", fail_owned_unlink)
     metadata = {"recorded_channels": [{"wav_channel_index": 0, "calibrated": False}]}
-    capture, backend = captures(request(tmp_path, trim_samples=0, channels=(0,), calibration_metadata=metadata))
+    capture, backend = captures(request(tmp_path, trim_samples=0, channels=(0,), calibration_metadata=metadata),
+                                metadata_appender=append_wav_calibration_metadata_result)
     feed_all(backend)
     try:
         outcome = capture.wait(3)
@@ -279,7 +281,10 @@ def test_quality_gate_runs_after_trim(tmp_path, captures):
     data[:2] = 1
     backend.stream.feed(data)
     result = capture.wait(3)
-    assert isinstance(result, RecordingFailure) and result.stage == "validation"
+    from unit_test.base.test_recording_finalization import read_result
+    assert isinstance(result, RecordingResult)
+    validated = read_result(result, capture.request)
+    assert validated.audio is None and "weak_signal" in validated.error
     np.testing.assert_array_equal(sf.read(result.path, dtype="float32")[0], np.zeros((7, 2)))
 
 
@@ -304,8 +309,8 @@ def test_cancel_drains_accepted_audio_without_success(tmp_path, captures):
     writer.release.set()
     result = capture.wait(3)
     assert isinstance(result, RecordingCancelled)
-    assert result.raw_frames == result.final_frames == 5
-    np.testing.assert_array_equal(sf.read(result.path, dtype="float32")[0], known_audio(5)[:, [0, 2]])
+    assert result.raw_frames == 5 and result.final_frames == 3
+    np.testing.assert_array_equal(sf.read(result.path, dtype="float32")[0], known_audio(5)[2:, [0, 2]])
 
 
 def test_wrong_device_identity_fails_before_open(tmp_path, captures):
@@ -473,15 +478,12 @@ def test_relative_preview_protocol_rejects_mode_and_channel_mismatch():
         )
 
 
-def test_cancel_during_trim_reports_actual_final_frames(tmp_path, captures):
+def test_cancel_during_streaming_write_reports_actual_final_frames(tmp_path, captures):
     writer = ControlledWriter(pause=True)
     capture, backend = captures(request(tmp_path), writer_factory=writer)
-    rewrite = capture._rewrite_trimmed
-    def trim_then_cancel(audio):
-        rewrite(audio)
-        capture.cancel()
-    capture._rewrite_trimmed = trim_then_cancel
     feed_all(backend)
+    assert writer.entered.wait(3)
+    capture.cancel()
     writer.release.set()
     outcome = capture.wait(3)
     assert isinstance(outcome, RecordingCancelled)
@@ -503,17 +505,14 @@ def test_real_metadata_and_overlarge_trim_keep_samples(tmp_path, captures):
     np.testing.assert_array_equal(sf.read(outcome.path, dtype="float32")[0], known_audio()[:9, [0, 2]])
 
 
-def test_trim_replace_failure_is_terminal_and_cleans_only_own_temp(tmp_path, captures, monkeypatch):
-    import base.recording_capture as module
+def test_streaming_write_failure_preserves_unrelated_file(tmp_path, captures):
     unrelated = tmp_path / "unrelated.wav"
     unrelated.write_bytes(b"keep me")
-    def fail_replace(source, target):
-        raise OSError("injected trim replacement failure")
-    monkeypatch.setattr(module.os, "replace", fail_replace)
-    capture, backend = captures(request(tmp_path))
+    capture, backend = captures(request(tmp_path), writer_factory=ControlledWriter(fail_at="write"))
     feed_all(backend)
     outcome = capture.wait(3)
-    assert isinstance(outcome, RecordingFailure) and outcome.stage == "trim"
+    assert isinstance(outcome, RecordingFailure) and outcome.stage == "write"
+    assert outcome.written_frames == 0
     assert not list(tmp_path.glob(".recording-trim-*"))
     assert unrelated.read_bytes() == b"keep me"
 
@@ -521,13 +520,10 @@ def test_trim_replace_failure_is_terminal_and_cleans_only_own_temp(tmp_path, cap
 @pytest.mark.parametrize("target,close_fails,processing_fails", [
     ("initial_reader", True, False),
     ("metadata_reader", True, False),
-    ("trim_writer", True, False),
     ("initial_reader", False, True),
     ("metadata_reader", False, True),
-    ("trim_writer", False, True),
     ("initial_reader", True, True),
     ("metadata_reader", True, True),
-    ("trim_writer", True, True),
 ])
 def test_finalization_file_ownership_tracks_close_separately(
     tmp_path, captures, monkeypatch, target, close_fails, processing_fails,
@@ -546,19 +542,9 @@ def test_finalization_file_ownership_tracks_close_separately(
             return getattr(self.wrapped, name)
 
         def __len__(self):
-            if processing_fails and target == "metadata_reader":
+            if processing_fails:
                 raise OSError("injected metadata verification failure")
             return len(self.wrapped)
-
-        def read(self, *args, **kwargs):
-            if processing_fails:
-                raise OSError("injected finalization read failure")
-            return self.wrapped.read(*args, **kwargs)
-
-        def write(self, *args, **kwargs):
-            if processing_fails:
-                raise OSError("injected trim write failure")
-            return self.wrapped.write(*args, **kwargs)
 
         def close(self):
             self.close_attempts += 1
@@ -580,7 +566,7 @@ def test_finalization_file_ownership_tracks_close_separately(
             read_count += 1
             current = "initial_reader" if read_count == 1 else "metadata_reader"
         else:
-            current = "trim_writer" if os.path.basename(str(path)).startswith(".recording-trim-") else "capture_writer"
+            current = "capture_writer"
         if current == target:
             controlled = ControlledSoundFile(wrapped)
             opened.append(controlled)
@@ -601,48 +587,9 @@ def test_finalization_file_ownership_tracks_close_separately(
         assert outcome.path == str(tmp_path / "recording.wav")
         assert outcome.path not in outcome.cleanup_paths
         assert pickle.loads(pickle.dumps(outcome)).cleanup_paths == retained
-        if target == "trim_writer":
-            # No replacement or removal while close is uncertain. A processing
-            # failure with successful close still removes its owned temporary.
-            assert bool(list(tmp_path.glob(".recording-trim-*"))) is close_fails
-            with real_sound_file(outcome.path) as source:
-                assert len(source) == 9
     finally:
         for controlled in opened:
             controlled.wrapped.close()
-
-
-def test_trim_descriptor_close_uncertainty_prevents_cleanup(tmp_path, captures, monkeypatch):
-    import base.recording_capture as module
-    real_mkstemp = module.tempfile.mkstemp
-    real_close = module.os.close
-    allocated = []
-
-    def allocate_temp(*args, **kwargs):
-        descriptor, path = real_mkstemp(*args, **kwargs)
-        allocated.append((descriptor, path))
-        return descriptor, path
-
-    def fail_descriptor_close(descriptor):
-        if allocated and descriptor == allocated[0][0]:
-            raise OSError("injected trim descriptor close failure")
-        return real_close(descriptor)
-
-    monkeypatch.setattr(module.tempfile, "mkstemp", allocate_temp)
-    monkeypatch.setattr(module.os, "close", fail_descriptor_close)
-    capture, backend = captures(request(tmp_path))
-    feed_all(backend)
-    try:
-        outcome = capture.wait(3)
-        assert isinstance(outcome, RecordingFailure)
-        assert not outcome.handles_released
-        assert "descriptor close failure" in outcome.message
-        assert len(allocated) == 1 and os.path.exists(allocated[0][1])
-        assert outcome.cleanup_paths == (allocated[0][1],)
-        assert outcome.path == str(tmp_path / "recording.wav")
-    finally:
-        for descriptor, _ in allocated:
-            real_close(descriptor)
 
 
 def test_failure_cleanup_paths_default_to_no_owned_temporary_files():
@@ -682,7 +629,7 @@ def test_preview_append_failure_after_valid_block_does_not_invalidate_audio(
     assert capture.snapshot(generation=1, sequence=1) is None
     assert capture._waveforms is None
     assert calls == 2
-    np.testing.assert_array_equal(np.concatenate(written), data[:9, (0, 2)])
+    np.testing.assert_array_equal(np.concatenate(written), data[2:9, (0, 2)])
     saved, _ = sf.read(outcome.path, dtype="float32", always_2d=True)
     np.testing.assert_array_equal(saved, data[:9, (0, 2)][2:])
 
@@ -716,7 +663,7 @@ def test_preview_serialization_failure_after_valid_waveform_does_not_invalidate_
     outcome = capture.wait(3)
     assert isinstance(outcome, RecordingResult)
     assert sum("preview disabled" in warning for warning in outcome.warnings) == 1
-    np.testing.assert_array_equal(np.concatenate(written), data[:9, (0, 2)])
+    np.testing.assert_array_equal(np.concatenate(written), data[2:9, (0, 2)])
     saved, _ = sf.read(outcome.path, dtype="float32", always_2d=True)
     np.testing.assert_array_equal(saved, data[:9, (0, 2)][2:])
 
@@ -761,7 +708,7 @@ def test_preview_setup_and_snapshot_faults_do_not_change_capture_result(
     backend.stream.feed(data[:5])
     if failure_at == "snapshot":
         deadline = time.monotonic() + 3
-        while capture.written_frames < 5 and time.monotonic() < deadline:
+        while capture.written_frames < 3 and time.monotonic() < deadline:
             time.sleep(.005)
         assert capture.snapshot(generation=1, sequence=1) is None
     backend.stream.feed(data[5:])
@@ -777,10 +724,10 @@ def test_preview_setup_and_snapshot_faults_do_not_change_capture_result(
     }]
     assert capture._waveforms is None
     assert capture.snapshot(generation=1, sequence=2) is None
-    assert (capture.raw_frames, capture.written_frames) == (9, 9)
+    assert (capture.raw_frames, capture.written_frames) == (9, 7)
     assert (outcome.raw_frames, outcome.final_frames) == (9, 7)
     assert sum("preview disabled" in warning for warning in outcome.warnings) == 1
-    np.testing.assert_array_equal(np.concatenate(written), data[:9, (0, 2)])
+    np.testing.assert_array_equal(np.concatenate(written), data[2:9, (0, 2)])
     saved, rate = sf.read(outcome.path, dtype="float32", always_2d=True)
     assert rate == 100
     np.testing.assert_array_equal(saved, data[:9, (0, 2)][2:])

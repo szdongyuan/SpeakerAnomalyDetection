@@ -48,6 +48,7 @@ class RecordingCallbacks:
     cancelled: object = None
     released: object = None
     release_failed: object = None
+    finalizing: object = None
 
 
 class RecordingSession:
@@ -73,6 +74,8 @@ class RecordingSession:
         self._capture_requested_at = None
         self._capture_deadline = None
         self._slot_release_deadline = None
+        self._finalizing_notified = False
+        self._completion_observed_at = None
         self._target_reached_at = None
         self._slot_released_at = None
         self._slot_lifecycle_counts = None
@@ -650,12 +653,21 @@ class RecordingService:
         self.diagnostics.append(message)
         self._logger.error(message)
 
+    def _notify_finalizing(self, session):
+        # A fast child can finish between worker polls, without a finalizing
+        # event. The validated terminal is the once-only fallback boundary.
+        if not session._finalizing_notified and not session.cancel_requested and not session._terminal:
+            session._finalizing_notified = True
+            self._logger.info("Recording timing request=%s process=parent stage=finalizing_observed parent_monotonic=%.6f",
+                session.request.request_id, time.monotonic())
+            self._notify(session, "finalizing")
+
     def _notify(self, session, kind, payload=None):
         callback = getattr(session.callbacks, kind)
         if callback is None:
             return
         try:
-            if kind in ("started", "released"):
+            if kind in ("started", "finalizing", "released"):
                 callback(session)
             else:
                 callback(session, payload)
@@ -1293,6 +1305,7 @@ class RecordingService:
         elif event.kind == "finalizing" and not session._terminal:
             if session.state == "recording":
                 session.state = "finalizing"
+            self._notify_finalizing(session)
         elif event.kind == "started" and not session._terminal:
             if session.state == "starting":
                 if is_ve:
@@ -1360,11 +1373,14 @@ class RecordingService:
                 self._cancelled(session)
             elif event.kind == "completed" and not session._terminal:
                 session._trusted_terminal = is_ve
+                session._completion_observed_at = time.monotonic()
+                self._notify_finalizing(session)
                 session.state = "delivering"
                 session._deadline = None
                 try:
                     session.reader = self._reader_factory(descriptor,
-                        lambda outcome: self._inbox.put(("read", session, outcome)))
+                        lambda outcome: self._inbox.put(("read", session, outcome)),
+                        request=session.request)
                     session._reader_released = False
                     self._start_thread(session.reader.thread, start=session.reader.start)
                 except Exception as exc:

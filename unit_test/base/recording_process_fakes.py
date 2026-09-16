@@ -471,10 +471,15 @@ def process_dependencies(**options):
                     update(fed_chunks=index + 1, producer_waiting_for_writer=pace_writer)
                     if pace_writer:
                         # Synthetic duration is unrelated to wall-clock speed.
-                        # Acknowledge each write before producing another block,
-                        # so host scheduling cannot masquerade as device overflow.
+                        # Fully trimmed blocks have no write acknowledgement;
+                        # wait for their raw consumption on the real capture.
+                        capture = getattr(self.config["callback"], "__self__", None)
+                        skipped_to = (capture.raw_frames if capture is not None
+                                      and capture.raw_frames <= capture._effective_trim else None)
                         deadline = time.monotonic() + 10
                         while not writer_consumed.is_set():
+                            if skipped_to is not None and capture.consumed_frames >= skipped_to:
+                                break
                             # The writer can wake this wait; stop is still
                             # checked each bounded wait, before the deadline.
                             writer_consumed.wait(.005)
@@ -646,13 +651,13 @@ def persistent_ve_worker_dependencies(**options):
             super().write_chunk(chunk)
 
     def append_metadata(path, metadata, **kwargs):
-        from base.wav_calibration_metadata import append_wav_calibration_metadata_result
+        from base.wav_calibration_metadata import append_owned_recording_calibration_metadata_result
 
         identity = request_id(path)
         if identity in pause_finalizers:
             (trace_dir / f"finalizer-{identity}-entered").touch()
             wait_for(f"release-finalizer-{identity}")
-        return append_wav_calibration_metadata_result(path, metadata, **kwargs)
+        return append_owned_recording_calibration_metadata_result(path, metadata, **kwargs)
 
     return {
         "ve_sdk_factory": PersistentSDK,

@@ -753,6 +753,12 @@ def test_main_metadata_is_required_and_cannot_damage_raw_audio(tmp_path, mode):
         return append_wav_calibration_metadata_result(path, metadata, **kwargs)
     capture, _, _, _ = start_capture(tmp_path, metadata_appender=appender)
     outcome = capture.wait(3)
+    if mode == "gain":
+        from unit_test.base.test_recording_finalization import read_result
+        assert isinstance(outcome, RecordingResult)
+        validated = read_result(outcome, capture.request)
+        assert validated.audio is None and "digest" in validated.error
+        return
     assert isinstance(outcome, RecordingFailure), outcome
     assert outcome.stage == "metadata"
     assert outcome.handles_released is (mode not in ("unreleased", "retained"))
@@ -760,12 +766,13 @@ def test_main_metadata_is_required_and_cannot_damage_raw_audio(tmp_path, mode):
 
 @pytest.mark.parametrize("limit", [10.0, 5.0, 2.5, 1.0, 0.5, 0.1, 0.02])
 def test_quality_gate_uses_only_temporary_full_scale_and_leaves_raw_voltage(tmp_path, monkeypatch, limit):
-    from base import recording_capture
+    from base import recording_result_reader
+    from unit_test.base.test_recording_finalization import read_result
     inspected = []
     def validate(audio, thresholds):
         inspected.append(audio.copy())
         return True, "", ""
-    monkeypatch.setattr(recording_capture, "validate_recorded_audio", validate)
+    monkeypatch.setattr(recording_result_reader, "validate_recorded_audio", validate)
     request = capture_request(tmp_path / "capture.wav")
     device = request.device.to_dict()
     device["input_config"].update(range_min=-limit, range_max=limit)
@@ -778,6 +785,7 @@ def test_quality_gate_uses_only_temporary_full_scale_and_leaves_raw_voltage(tmp_
     outcome = capture.wait(3)
     assert isinstance(outcome, RecordingResult)
     expected = np.tile(np.array([8.25, 2.5], dtype=np.float32), (7, 1))
+    assert read_result(outcome, capture.request).error is None
     assert len(inspected) == 1
     np.testing.assert_array_equal(inspected[0], expected / limit)
     np.testing.assert_array_equal(sf.read(outcome.path, dtype="float32")[0], expected)
@@ -818,8 +826,10 @@ def test_readback_nonfinite_fails_even_without_product_quality_gate(tmp_path, pu
         options.update(purpose=purpose, channels=(7,), target_samples=512000, calibration_metadata=None)
     capture, _, _, _ = start_capture(tmp_path, request_options=options, writer_factory=writer, queue_seconds=11)
     outcome = capture.wait(4)
-    assert isinstance(outcome, RecordingFailure), outcome
-    assert "non-finite" in outcome.message
+    from unit_test.base.test_recording_finalization import read_result
+    assert isinstance(outcome, RecordingResult), outcome
+    validated = read_result(outcome, capture.request)
+    assert validated.audio is None and "non-finite" in validated.error
 
 
 def test_queue_overflow_wakes_capture_and_never_publishes_success(tmp_path):
@@ -840,7 +850,8 @@ def test_queue_overflow_wakes_capture_and_never_publishes_success(tmp_path):
         writer.release.set()
     outcome = capture.wait(3)
     assert isinstance(outcome, RecordingFailure) and "queue" in outcome.message
-    assert outcome.raw_frames == outcome.written_frames == 4096
+    assert outcome.raw_frames == 4096
+    assert outcome.written_frames == 4096 - capture.request.trim_samples
     assert outcome.handles_released
 
 
@@ -858,7 +869,7 @@ def test_ve_actual_metadata_file_faults_are_failures_with_owned_handles(tmp_path
     faults = MetadataFileFaults(stage, close_fails=close_fails)
     faults.install(monkeypatch)
     try:
-        capture, _, _, _ = start_capture(tmp_path)
+        capture, _, _, _ = start_capture(tmp_path, metadata_appender=append_wav_calibration_metadata_result)
         outcome = capture.wait(3)
         assert isinstance(outcome, RecordingFailure), outcome
         assert outcome.handles_released is not close_fails
@@ -957,7 +968,7 @@ def test_compact_short_read_ignores_old_finite_tail(tmp_path):
     np.testing.assert_array_equal(np.concatenate(blocks)[:, (7, 1)], np.tile([8.25, 2.5], (9, 1)))
 
 
-@pytest.mark.parametrize("target", ["initial_reader", "trim_writer", "metadata_reader"])
+@pytest.mark.parametrize("target", ["initial_reader", "writer", "metadata_reader"])
 @pytest.mark.parametrize("processing_fails", [False, True])
 def test_ve_finalization_retains_failed_close_without_masking_primary_error(
     tmp_path, monkeypatch, target, processing_fails,
@@ -972,11 +983,9 @@ def test_ve_finalization_retains_failed_close_without_masking_primary_error(
         def __getattr__(self, name):
             return getattr(self.wrapped, name)
         def __len__(self):
-            return len(self.wrapped)
-        def read(self, *args, **kwargs):
             if processing_fails:
                 raise OSError("first processing failure")
-            return self.wrapped.read(*args, **kwargs)
+            return len(self.wrapped)
         def write(self, *args, **kwargs):
             if processing_fails:
                 raise OSError("first processing failure")
@@ -992,7 +1001,7 @@ def test_ve_finalization_retains_failed_close_without_masking_primary_error(
             read_count += 1
             current = "initial_reader" if read_count == 1 else "metadata_reader"
         else:
-            current = "trim_writer" if os.path.basename(str(path)).startswith(".recording-trim-") else "writer"
+            current = "writer"
         if current == target:
             wrapped = Boundary(wrapped)
             opened.append(wrapped)
@@ -1005,7 +1014,7 @@ def test_ve_finalization_retains_failed_close_without_masking_primary_error(
         assert "first processing failure" in outcome.message if processing_fails else "close failure" in outcome.message
         assert len(opened) == 1 and opened[0].close_attempts == 1
         assert capture._unreleased_finalization_handles
-        assert bool(outcome.cleanup_paths) is (target == "trim_writer")
+        assert outcome.cleanup_paths == ()
     finally:
         for boundary in opened:
             boundary.wrapped.close()
@@ -1099,7 +1108,7 @@ def test_metadata_primary_fault_reaches_capture_with_separate_cleanup_diagnostic
                                      read_after_backend=processing == "readback")
     faults.install(monkeypatch)
     try:
-        capture, _, _, _ = start_capture(tmp_path)
+        capture, _, _, _ = start_capture(tmp_path, metadata_appender=append_wav_calibration_metadata_result)
         outcome = capture.wait(3)
         assert isinstance(outcome, RecordingFailure) and outcome.stage == "metadata"
         assert outcome.handles_released is (not close_stages)
@@ -1139,7 +1148,8 @@ def test_legacy_metadata_write_fault_keeps_warning_only_when_handles_release(
         request_id="legacy-metadata", purpose="main", sample_rate=100, target_samples=9,
         channels=(0, 2), device=device_info(), path=str(path), streaming=False,
         trim_samples=0, monitor={}, calibration_metadata=metadata,
-        validation_thresholds={"enabled": False}), backend=backend)
+        validation_thresholds={"enabled": False}), backend=backend,
+        metadata_appender=append_wav_calibration_metadata_result)
     try:
         capture.start()
         assert capture.started.wait(3)
@@ -1176,7 +1186,7 @@ def test_metadata_ordinary_exception_cannot_bypass_capture_ownership_handoff(
                                      processing_error_type=error_type)
     faults.install(monkeypatch)
     try:
-        capture, _, _, _ = start_capture(tmp_path)
+        capture, _, _, _ = start_capture(tmp_path, metadata_appender=append_wav_calibration_metadata_result)
         outcome = capture.wait(3)
         assert isinstance(outcome, RecordingFailure) and outcome.stage == "metadata"
         first = "PRIMARY-WRITE-ERROR" if stage == "temporary" else f"PRIMARY-{stage.upper()}-READ-ERROR"

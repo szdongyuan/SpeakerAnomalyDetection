@@ -83,6 +83,8 @@ class WavCalibrationMetadataAppendResult:
     close_errors: tuple[str, ...] = ()
     retained_handles: tuple[tuple[str, Any], ...] = field(default=(), repr=False, compare=False)
     primary_error: Optional[str] = None
+    rollback_succeeded: Optional[bool] = None
+    rollback_errors: tuple[str, ...] = ()
 
 
 class _AppendFileOwnership:
@@ -225,6 +227,142 @@ def append_wav_calibration_metadata_result(path, metadata, logger=None) -> WavCa
         retained_handles=tuple(ownership.retained_handles),
         primary_error=ownership.primary_error,
     )
+
+
+def append_owned_recording_calibration_metadata_result(
+    path, metadata, logger=None,
+) -> WavCalibrationMetadataAppendResult:
+    """Append without audio copying to a caller-owned, unpublished new recording.
+
+    The caller must own the path exclusively and have closed its WAV/FLOAT writer.
+    Only its 16-byte IEEE float32 fmt header is eligible for this fast path.
+    Existing/imported WAV editing must use append_wav_calibration_metadata_result.
+    No file is deleted here. Uncertain rollback or close requires the owner to
+    retire this recording, even when calibration metadata is otherwise optional.
+    rollback_succeeded is None when no rollback was needed; True confirms the
+    original header/length/structure were restored and fsynced, not handle release.
+    """
+    ownership = _AppendFileOwnership()
+    rollback_succeeded = None
+    rollback_errors = []
+    appended = False
+    try:
+        normalized = normalize_wav_calibration_metadata(metadata)
+        if normalized is None:
+            raise ValueError("Invalid WAV calibration metadata: metadata payload was rejected")
+        comment = CALIBRATION_COMMENT_PREFIX + json.dumps(
+            normalized, ensure_ascii=True, separators=(",", ":"),
+        )
+        payload = comment.encode("utf-8") + b"\x00"
+        if len(payload) > MAX_CALIBRATION_COMMENT_SIZE:
+            raise ValueError("generated ICMT comment exceeds metadata read limit")
+        list_chunk = _build_chunk(LIST_ID, INFO_ID + _build_chunk(ICMT_ID, payload))
+        target_path = os.path.abspath(os.fspath(path))
+        with ownership.hold(open(target_path, "r+b")) as wav_file:
+            wav_file.seek(0, os.SEEK_END)
+            original_size = wav_file.tell()
+            wav_file.seek(0)
+            original_header = wav_file.read(RIFF_HEADER_SIZE)
+            _validate_owned_recording_metadata(wav_file, original_size, None, logger)
+            new_size = original_size + len(list_chunk)
+            if new_size - 8 > MAX_RIFF_SIZE:
+                raise ValueError("RIFF size exceeds 32-bit limit")
+            try:
+                wav_file.seek(original_size)
+                _write_all(wav_file, list_chunk)
+                wav_file.seek(4)
+                _write_all(wav_file, struct.pack("<I", new_size - 8))
+                wav_file.flush()
+                os.fsync(wav_file.fileno())
+                _validate_owned_recording_metadata(wav_file, new_size, normalized, logger)
+            except Exception as exc:
+                # File transaction boundary: arbitrary file wrappers/validation
+                # may fail after a partial write. Restore only the bytes changed
+                # here, and retain both the first failure and recovery evidence.
+                ownership.record_error(exc)
+                rollback_succeeded = False
+                try:
+                    wav_file.truncate(original_size)
+                    wav_file.seek(0)
+                    _write_all(wav_file, original_header)
+                    wav_file.flush()
+                    os.fsync(wav_file.fileno())
+                    wav_file.seek(0)
+                    if wav_file.read(RIFF_HEADER_SIZE) != original_header:
+                        raise OSError("restored WAV header did not match original")
+                    _validate_owned_recording_metadata(wav_file, original_size, None, logger)
+                    rollback_succeeded = True
+                except Exception as rollback_error:
+                    # Recovery is itself a file boundary. Never claim a durable
+                    # restoration if any write, fsync or validation was uncertain.
+                    detail = f"WAV metadata rollback failed for {target_path}: {rollback_error}"
+                    rollback_errors.append(detail)
+                raise
+        # hold() must successfully release the handle before success is reported.
+        appended = True
+    except Exception as exc:
+        # Public file-operation boundary, consistent with the generic append API:
+        # normalize wrapper failures without dropping uncertain handle ownership.
+        ownership.record_error(exc)
+        _log_metadata_issue(logger, "Failed to append owned recording metadata", ownership.primary_error)
+    for detail in (*rollback_errors, *ownership.close_errors):
+        _log_metadata_issue(logger, "WAV metadata cleanup failed", detail)
+    return WavCalibrationMetadataAppendResult(
+        appended=appended,
+        handles_released=ownership.handles_released,
+        close_errors=tuple(ownership.close_errors),
+        retained_handles=tuple(ownership.retained_handles),
+        primary_error=ownership.primary_error,
+        rollback_succeeded=rollback_succeeded,
+        rollback_errors=tuple(rollback_errors),
+    )
+
+
+def _validate_owned_recording_metadata(wav_file, expected_size, expected_metadata, logger):
+    """Check exact RIFF/INFO boundaries and metadata without reading audio data."""
+    if not _is_riff_wave_file(wav_file):
+        raise ValueError("owned recording is not a RIFF/WAVE file")
+    wav_file.seek(0, os.SEEK_END)
+    file_size = wav_file.tell()
+    riff_end = _read_authoritative_riff_end(wav_file, file_size, logger)
+    if riff_end is None or riff_end != file_size or file_size != expected_size:
+        raise ValueError("owned recording RIFF size does not match file size")
+    scan_state = _MetadataScanState()
+    valid, actual_metadata, comment_seen = _scan_declared_riff_chunks(
+        wav_file, riff_end, logger, read_metadata=True, scan_state=scan_state,
+    )
+    if not valid or scan_state.invalid_format or scan_state.wav_format is None:
+        raise ValueError("invalid owned recording RIFF/INFO structure")
+    # The generic scanner permits RIFF containers without audio. A newly owned
+    # recording must also have one complete, frame-aligned data chunk and a
+    # coherent WAV/FLOAT fmt header as emitted by the capture writer. Only chunk
+    # headers/fmt bytes are read; other formats use the generic append API.
+    wav_file.seek(RIFF_HEADER_SIZE)
+    data_sizes = []
+    block_align = None
+    while wav_file.tell() < riff_end:
+        chunk_id, chunk_size = struct.unpack("<4sI", wav_file.read(CHUNK_HEADER_SIZE))
+        chunk_end = wav_file.tell() + chunk_size + chunk_size % 2
+        if chunk_id == b"fmt ":
+            if chunk_size != 16:
+                raise ValueError("owned recording requires the capture WAV/FLOAT fmt header")
+            format_tag, channels, rate, byte_rate, block_align, bits = struct.unpack(
+                "<HHIIHH", wav_file.read(16),
+            )
+            if (format_tag != 3 or bits != 32 or not channels or not rate
+                    or block_align != channels * 4
+                    or byte_rate != rate * block_align):
+                raise ValueError("invalid owned recording audio format")
+        elif chunk_id == b"data":
+            data_sizes.append(chunk_size)
+        wav_file.seek(chunk_end)
+    if len(data_sizes) != 1 or data_sizes[0] % block_align:
+        raise ValueError("owned recording requires one frame-aligned data chunk")
+    if expected_metadata is None:
+        if comment_seen:
+            raise ValueError("owned recording already contains calibration metadata")
+    elif actual_metadata != expected_metadata or scan_state.invalid_ve:
+        raise ValueError("appended owned recording calibration metadata did not validate")
 
 
 def _append_wav_calibration_metadata(path, metadata, logger, ownership) -> bool:

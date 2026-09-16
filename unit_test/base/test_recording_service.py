@@ -276,7 +276,15 @@ def test_spawn_pid_complete_arrays_and_healthy_reuse(tmp_path, services, streami
         np.testing.assert_array_equal(result.multi, expected)
         np.testing.assert_array_equal(result.mono, expected.mean(axis=1))
         assert result.multi.dtype == result.mono.dtype == np.float32
-        assert result.multi.flags.owndata and result.mono.flags.owndata
+        assert result.is_prepared_for(session.request)
+        for array in (result.multi, result.mono):
+            assert not array.flags.writeable
+            owner = array
+            while isinstance(owner, np.ndarray) and owner.base is not None:
+                owner = owner.base
+            assert isinstance(owner, memoryview) and owner.readonly
+            assert isinstance(owner.obj, np.ndarray) and owner.obj.flags.owndata
+            assert not isinstance(owner.obj, np.memmap)
         trace = eventually(lambda: read_trace(tmp_path))
         assert trace["capture_pid"] == trace["writer_pid"] == session.worker_pid != os.getpid()
         if index:
@@ -557,7 +565,7 @@ def test_spawn_accepts_600_seconds_with_bounded_rolling_previews_and_exact_wav(
             if time.monotonic() >= trace_deadline:
                 raise AssertionError("finalization trace did not reach its release gate")
             threading.Event().wait(.1)
-        assert trace["written_frames"] == target
+        assert trace["written_frames"] == final_frames
         assert trace["capture_pid"] == trace["writer_pid"] == session.worker_pid != os.getpid()
         assert events.preview.empty()
         assert events.results.empty(), "finalization gate must still own the open WAV"
@@ -624,7 +632,7 @@ class PausedReader:
         self.release = threading.Event()
         self.closed = threading.Event()
 
-    def __call__(self, descriptor, completed):
+    def __call__(self, descriptor, completed, *, request):
         owner = self
         class Source:
             def __init__(self, *args, **kwargs):
@@ -644,7 +652,7 @@ class PausedReader:
             def close(self):
                 self.source.close()
                 owner.closed.set()
-        return ResultReader(descriptor, completed, opener=Source, block_frames=2)
+        return ResultReader(descriptor, completed, request=request, opener=Source, block_frames=2)
 
 
 @pytest.mark.parametrize("action", ["cancel", "reject_result", "shutdown"])
@@ -794,10 +802,10 @@ def test_result_offer_requires_acceptance_and_reject_is_failure(tmp_path, servic
 
 
 def test_result_read_failure_never_offers_arrays(tmp_path, services):
-    def unreadable(descriptor, completed):
+    def unreadable(descriptor, completed, *, request):
         def fail_open(*args, **kwargs):
             raise OSError("injected reader permission failure")
-        return ResultReader(descriptor, completed, opener=fail_open)
+        return ResultReader(descriptor, completed, request=request, opener=fail_open)
     service = services(reader_factory=unreadable)
     events = Events()
     session = service.start(request(tmp_path), events.callbacks)
@@ -982,12 +990,12 @@ def test_public_methods_never_perform_pipe_process_or_file_io(tmp_path, services
             assert threading.get_ident() != caller
             return _original(self, *args, **kwargs)
         monkeypatch.setattr(cls, name, checked)
-    def reader(descriptor, completed):
+    def reader(descriptor, completed, *, request):
         def opener(*args, **kwargs):
             observed.append(("read", threading.get_ident()))
             assert threading.get_ident() != caller
             return sf.SoundFile(*args, **kwargs)
-        return ResultReader(descriptor, completed, opener=opener)
+        return ResultReader(descriptor, completed, request=request, opener=opener)
     service = services(reader_factory=reader)
     events = Events()
     session = service.start(request(tmp_path), events.callbacks)
@@ -1024,12 +1032,12 @@ def test_cancelled_product_file_preserved_after_partial_audio_flush(tmp_path, se
     session = service.start(request(tmp_path), events.callbacks)
     events.started.get(timeout=10)
     (tmp_path / "feed-0").touch()
-    eventually(lambda: read_trace(tmp_path).get("written_frames", 0) >= 3)
+    eventually(lambda: read_trace(tmp_path).get("written_frames", 0) >= 1)
     session.cancel()
     events.cancelled.get(timeout=5)
     assert session.released.wait(5)
     audio, rate = sf.read(session.request.path, dtype="float32", always_2d=True)
-    np.testing.assert_array_equal(audio, (known_audio(110) % .5)[:3, [0, 2]])
+    np.testing.assert_array_equal(audio, (known_audio(110) % .5)[2:3, [0, 2]])
     assert rate == 100 and events.results.empty()
 
 
@@ -1181,8 +1189,8 @@ def test_preview_callback_failure_disables_preview_once_but_keeps_audio(tmp_path
 
 def test_reader_start_that_begins_then_raises_retains_lease_until_reader_exits(tmp_path, services):
     paused = PausedReader()
-    def reader_factory(descriptor, completed):
-        reader = paused(descriptor, completed)
+    def reader_factory(descriptor, completed, *, request):
+        reader = paused(descriptor, completed, request=request)
         original_start = reader.start
         def start_then_fail():
             original_start()
@@ -1369,7 +1377,7 @@ def test_thread_start_ownership_failure_releases_lease_and_reclaims_worker(
 ):
     message = f"injected {failure_at}: can't start new thread"
     if failure_at == "reader_construct":
-        def reader_factory(descriptor, completed):
+        def reader_factory(descriptor, completed, *, request):
             raise RuntimeError(message)
     else:
         reader_factory = ResultReader

@@ -490,6 +490,7 @@ def test_final_projection_failure_is_presentation_only_and_releases_run_state(
             "sample_rate": 48000,
         },
         "session_id": "session-1",
+        "group_id": "group-1",
     }
     assert host.streaming_processor is None
     assert host._recording_input_channels is None

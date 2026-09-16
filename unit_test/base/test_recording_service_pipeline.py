@@ -295,7 +295,7 @@ def test_reader_constructor_failure_isolates_only_finalizer_and_preserves_active
 ):
     probe = ve_probe(monkeypatch, tmp_path)
     release_probe_slot(probe)
-    probe.service._reader_factory = lambda descriptor, completed: (_ for _ in ()).throw(
+    probe.service._reader_factory = lambda descriptor, completed, **kwargs: (_ for _ in ()).throw(
         RuntimeError("injected reader construction failure"))
     from base.recording_service import RecordingCallbacks
     second_failures = queue.Queue()
