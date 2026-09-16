@@ -7,11 +7,12 @@ non-GUI owners/tests. No callbacks, queues or raw audio are sent through IPC her
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
+import hashlib
 import math
 import os
 import sys
-import tempfile
 import threading
+import time
 
 import numpy as np
 import soundfile as sf
@@ -20,13 +21,13 @@ from base.log_manager import LogManager
 from base.multichannel_waveform_session import MultichannelWaveformSession
 from base.recording_process_protocol import (
     RecordingCancelled, RecordingFailure, RecordingPreview, RecordingRequest, RecordingResult,
+    RecordingFinalizationTiming,
 )
-from base.recording_settings import validate_recorded_audio
 from base.streaming_file_writer import StreamingWavWriter
 from base.wav_calibration_metadata import (
     WavCalibrationMetadataAppendResult,
     WavCalibrationMetadataReadStatus,
-    append_wav_calibration_metadata_result,
+    append_owned_recording_calibration_metadata_result,
     inspect_wav_calibration_metadata,
 )
 from consts.recording_preview_consts import (
@@ -35,6 +36,7 @@ from consts.recording_preview_consts import (
     PREVIEW_TIME_MODE_RELATIVE_LATEST,
 )
 from consts.ve3668n_consts import VE_BACKEND
+from consts.recording_result_consts import RECORDING_SAMPLE_DIGEST_ALGORITHM
 
 
 def capture_queue_capacity(sample_rate, channels, *, blocksize=2048, seconds=2.0):
@@ -76,7 +78,7 @@ class RecordingCapture:
     def __init__(self, request: RecordingRequest, *, backend=None,
                  ve_stream_factory=None,
                  writer_factory=StreamingWavWriter,
-                 metadata_appender=append_wav_calibration_metadata_result,
+                 metadata_appender=append_owned_recording_calibration_metadata_result,
                  blocksize=2048, queue_seconds=2.0):
         self.request = request
         self._backend = backend
@@ -100,6 +102,10 @@ class RecordingCapture:
         self._blocks = deque()
         self._queued_frames = 0
         self.raw_frames = 0
+        self.consumed_frames = 0
+        self._sample_digest = hashlib.sha256()
+        self._target_sample_arrival = None
+        self._file_closed_at = None
         self.written_frames = 0
         self._final_frames = 0
         self.outcome = None
@@ -264,6 +270,7 @@ class RecordingCapture:
             self._queued_frames += accepted
             self.raw_frames += accepted
             if self.raw_frames == self.request.target_samples:
+                self._target_sample_arrival = time.monotonic()
                 self._stop_requested.set()
         self._wake.set()
         return owned
@@ -324,9 +331,14 @@ class RecordingCapture:
 
     def _consume(self, block):
         self._stage = "write"
-        self._writer.write_chunk(block)
-        self.written_frames += len(block)
-        self._final_frames = self.written_frames
+        skip = min(len(block), max(0, self._effective_trim - self.consumed_frames))
+        self.consumed_frames += len(block)
+        retained = block[skip:]
+        if len(retained):
+            self._writer.write_chunk(retained)
+            self.written_frames += len(retained)
+            self._final_frames = self.written_frames
+            self._sample_digest.update(retained.astype("<f4", copy=False).tobytes(order="C"))
         if self._preview_enabled and self._waveforms is not None:
             with self._waveform_lock:
                 try:
@@ -434,7 +446,18 @@ class RecordingCapture:
                     break
                 self._consume(block)
             self._close_writer()
+            file_closed_at = time.monotonic()
             self._publish_capture_slot()
+            if self._target_sample_arrival is not None and self._file_closed_at is None:
+                self._file_closed_at = file_closed_at
+            if (self._file_closed_at is not None and self._failure is None
+                    and not self._cancelled.is_set()):
+                # Cancellation has a bounded worker shutdown deadline. Avoid
+                # optional file-log I/O after its cleanup has already begun.
+                self._logger.info("Recording timing request=%s process=child stage=target_samples child_monotonic=%.6f",
+                    self.request.request_id, self._target_sample_arrival)
+                self._logger.info("Recording timing request=%s process=child stage=drain_file_close seconds=%.6f",
+                    self.request.request_id, self._file_closed_at - self._target_sample_arrival)
             if self._failure is None:
                 self._finish_audio()
         except Exception as exc:
@@ -465,8 +488,10 @@ class RecordingCapture:
     def _finish_audio(self):
         req = self.request
         self._stage = "counts"
-        if self.raw_frames != self.written_frames:
-            raise ValueError("accepted and written frame counts differ")
+        if self.raw_frames != self.consumed_frames:
+            raise ValueError("accepted and consumed raw frame counts differ")
+        if self.written_frames != max(0, self.consumed_frames - self._effective_trim):
+            raise ValueError("written frame count differs from streaming trim")
         if self._cancelled.is_set():
             return
         if self.raw_frames != req.target_samples:
@@ -474,30 +499,15 @@ class RecordingCapture:
         self._stage = "read_wav"
         with self._finalization_file(req.path) as source:
             if (source.subtype != "FLOAT" or source.samplerate != req.sample_rate
-                    or source.channels != len(req.channels) or len(source) != self.raw_frames):
+                    or source.channels != len(req.channels) or len(source) != self.written_frames):
                 raise ValueError("saved WAV shape, rate or float32 format differs from request")
-            audio = source.read(dtype="float32", always_2d=True)
-            if self._is_ve:
-                if audio.shape != (self.raw_frames, len(req.channels)):
-                    raise ValueError("saved WAV frame/channel shape differs from request")
-                if not np.isfinite(audio).all():
-                    raise ValueError("saved WAV contains non-finite voltage samples")
-        if self._effective_trim:
-            audio = audio[self._effective_trim:]
-            self._stage = "trim"
-            self._rewrite_trimmed(audio)
-            self._final_frames = len(audio)
-        elif req.purpose == "main" and req.trim_samples >= self.raw_frames:
+        if req.purpose == "main" and req.trim_samples >= self.raw_frames:
             self._warnings.append("startup trim skipped: trim is not smaller than recorded audio")
         metadata_appended = False
         if self._cancelled.is_set():
             return
+        metadata_started = time.monotonic()
         if req.purpose == "main":
-            self._stage = "validation"
-            quality_audio = audio / req.device["input_config"]["range_max"] if self._is_ve else audio
-            ok, reason, detail = validate_recorded_audio(quality_audio, req.validation_thresholds.to_dict())
-            if not ok:
-                raise ValueError(f"{reason} {detail}")
             self._stage = "metadata"
             metadata = req.calibration_metadata.to_dict() if req.calibration_metadata is not None else None
             metadata_result = self._metadata_appender(req.path, metadata, logger=self._logger)
@@ -505,11 +515,17 @@ class RecordingCapture:
                 self._owned_temporary_paths.update(metadata_result.cleanup_paths)
                 self._unreleased_finalization_handles.extend(metadata_result.retained_handles)
                 self._warnings.extend(metadata_result.close_errors)
+                self._warnings.extend(metadata_result.rollback_errors)
                 if (not metadata_result.handles_released
-                        or (self._is_ve and metadata_result.retained_handles)):
+                        or metadata_result.retained_handles):
                     self._handles_released = False
                     self._fail("metadata", metadata_result.primary_error or "; ".join(metadata_result.close_errors)
                                or "WAV metadata file handles were not released")
+                    return
+                if metadata_result.rollback_succeeded is False:
+                    self._fail("metadata", "; ".join(filter(None, (
+                        metadata_result.primary_error, *metadata_result.rollback_errors)))
+                        or "WAV metadata rollback could not be confirmed")
                     return
                 if self._is_ve and metadata_result.primary_error is not None:
                     self._fail("metadata", metadata_result.primary_error)
@@ -524,11 +540,9 @@ class RecordingCapture:
                 self._warnings.append("WAV calibration metadata was not appended")
             # Optional metadata failure is a warning only while audio remains readable.
             with self._finalization_file(req.path) as source:
-                if len(source) != len(audio) or source.channels != len(req.channels) or source.subtype != "FLOAT":
+                if (len(source) != self.written_frames or source.channels != len(req.channels)
+                        or source.subtype != "FLOAT" or source.samplerate != req.sample_rate):
                     raise ValueError("WAV audio became invalid during metadata finalization")
-                if self._is_ve and (source.samplerate != req.sample_rate or not np.array_equal(
-                        source.read(dtype="float32", always_2d=True), audio)):
-                    raise ValueError("VE WAV rate or raw voltage data changed during metadata finalization")
             if self._is_ve:
                 diagnostic = inspect_wav_calibration_metadata(req.path, logger=self._logger)
                 self._unreleased_finalization_handles.extend(diagnostic.retained_handles)
@@ -545,12 +559,30 @@ class RecordingCapture:
                         or diagnostic.declared_backend != VE_BACKEND
                         or diagnostic.metadata != req.calibration_metadata.to_dict()):
                     raise ValueError("VE WAV metadata readback differs from the frozen request snapshot")
+        # Metadata append/readback may outlast a cancellation request. Preserve
+        # its ownership and error checks above, then avoid optional success I/O
+        # while the worker is completing bounded cancellation cleanup.
+        if self._cancelled.is_set():
+            return
+        metadata_seconds = time.monotonic() - metadata_started
+        self._logger.info("Recording timing request=%s process=child stage=metadata seconds=%.6f applicable=%s",
+            req.request_id, metadata_seconds, req.purpose == "main")
+        timing = None
+        if self._target_sample_arrival is not None and self._file_closed_at is not None:
+            timing = RecordingFinalizationTiming(
+                self._file_closed_at - self._target_sample_arrival, metadata_seconds,
+                time.monotonic() - self._target_sample_arrival)
+            self._logger.info("Recording timing request=%s process=child stage=descriptor_ready target_elapsed_seconds=%.6f",
+                req.request_id, timing.target_to_descriptor)
         if self._status_warning:
             self._warnings.append(self._status_warning)
         self.outcome = RecordingResult(req.request_id, req.purpose, req.path, req.sample_rate,
-                                       req.channels, self.raw_frames, len(audio), metadata_appended,
+                                       req.channels, self.raw_frames, self.written_frames, metadata_appended,
                                        tuple(self._warnings),
-                                       cleanup_paths=tuple(sorted(self._owned_temporary_paths)))
+                                       cleanup_paths=tuple(sorted(self._owned_temporary_paths)),
+                                       digest_algorithm=RECORDING_SAMPLE_DIGEST_ALGORITHM,
+                                       sample_digest=self._sample_digest.hexdigest(),
+                                       finalization_timing=timing)
 
     def _close_finalization_handle(self, handle, path, close):
         try:
@@ -579,21 +611,3 @@ class RecordingCapture:
                 if not self._is_ve or original is None:
                     raise
                 original.add_note(str(cleanup))
-
-    def _rewrite_trimmed(self, audio):
-        req = self.request
-        descriptor, temporary = tempfile.mkstemp(prefix=".recording-trim-", suffix=".wav", dir=os.path.dirname(req.path))
-        self._owned_temporary_paths.add(temporary)
-        try:
-            self._close_finalization_handle(descriptor, temporary, lambda: os.close(descriptor))
-            with self._finalization_file(temporary, mode="w", samplerate=req.sample_rate,
-                                         channels=len(req.channels), format="WAV", subtype="FLOAT") as output:
-                output.write(audio)
-            os.replace(temporary, req.path)
-        finally:
-            # Never replace/delete a file whose handle release is uncertain.
-            # A processing failure with successful close still cleans its temp.
-            if self._handles_released:
-                if os.path.exists(temporary):
-                    os.unlink(temporary)
-                self._owned_temporary_paths.discard(temporary)

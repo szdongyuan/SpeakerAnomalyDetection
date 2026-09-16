@@ -4,6 +4,9 @@ import os
 import threading
 from datetime import datetime
 
+from base.recording_result_reader import RecordingAudio
+from base.recording_waveform_preparation import prepare_waveform_display_data
+
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QDialog, QLabel, QSplitter
@@ -986,61 +989,11 @@ class SequenceWidgetStreamingOpsMixin:
         return windows
 
     @classmethod
-    def _prepare_waveform_display_data(
-        cls,
-        waveform,
-        sample_rate,
-        *,
-        max_points=None,
-    ):
-        """Build a peak-preserving display copy without changing the full waveform."""
-        if max_points is None:
-            point_limit = cls._WAVEFORM_DISPLAY_MAX_POINTS
-        elif isinstance(max_points, (bool, np.bool_)) or not isinstance(
-            max_points,
-            (int, np.integer),
-        ) or max_points < 4:
-            raise ValueError("max_points must be an integer >= 4")
-        else:
-            point_limit = int(max_points)
+    def _prepare_waveform_display_data(cls, waveform, sample_rate, *, max_points=None):
+        return prepare_waveform_display_data(
+            waveform, sample_rate,
+            max_points=cls._WAVEFORM_DISPLAY_MAX_POINTS if max_points is None else max_points)
 
-        sample_count = waveform.shape[0]
-        if sample_count <= point_limit:
-            sample_indices = np.arange(sample_count, dtype=np.int64)
-        else:
-            peak_bucket_count = (point_limit - 2) // 2
-            bucket_size = (sample_count + peak_bucket_count - 1) // peak_bucket_count
-            full_block_count = sample_count // bucket_size
-            full_sample_count = full_block_count * bucket_size
-            blocks = waveform[:full_sample_count].reshape(full_block_count, bucket_size)
-            block_starts = np.arange(full_block_count, dtype=np.int64) * bucket_size
-            min_indices = block_starts + np.argmin(blocks, axis=1)
-            max_indices = block_starts + np.argmax(blocks, axis=1)
-            ordered_indices = np.empty(full_block_count * 2, dtype=np.int64)
-            ordered_indices[0::2] = np.minimum(min_indices, max_indices)
-            ordered_indices[1::2] = np.maximum(min_indices, max_indices)
-            peak_indices = [ordered_indices]
-
-            if full_sample_count < sample_count:
-                tail = waveform[full_sample_count:]
-                tail_min = full_sample_count + int(np.argmin(tail))
-                tail_max = full_sample_count + int(np.argmax(tail))
-                peak_indices.append(
-                    np.array([min(tail_min, tail_max), max(tail_min, tail_max)], dtype=np.int64)
-                )
-
-            sample_indices = np.unique(
-                np.concatenate(
-                    [
-                        np.array([0], dtype=np.int64),
-                        *peak_indices,
-                        np.array([sample_count - 1], dtype=np.int64),
-                    ]
-                )
-            )
-
-        time_axis = sample_indices.astype(np.float64) / float(sample_rate or 1.0)
-        return time_axis, waveform[sample_indices]
 
     def _configure_direction_waveform_workspace(self):
         if self.channel_workspace is None or not hasattr(
@@ -1694,16 +1647,18 @@ class SequenceWidgetStreamingOpsMixin:
         windows,
         *,
         max_points=None,
+        prepared_columns=None,
     ) -> None:
         """Render one already-validated column per preflighted window."""
-        prepared_columns = [
-            self._prepare_waveform_display_data(
-                recorded_multi[:, column_index],
-                sample_rate,
-                max_points=max_points,
-            )
-            for column_index in range(recorded_multi.shape[1])
-        ]
+        if prepared_columns is None:
+            prepared_columns = [
+                self._prepare_waveform_display_data(
+                    recorded_multi[:, column_index],
+                    sample_rate,
+                    max_points=max_points,
+                )
+                for column_index in range(recorded_multi.shape[1])
+            ]
         window_states = [
             self._snapshot_waveform_window_state(window)
             for window in windows
@@ -2229,6 +2184,7 @@ class SequenceWidgetStreamingOpsMixin:
         completion_source="streaming",
         prefinalized=False,
         final_waveform_windows=None,
+        prepared_audio=None,
     ):
         """
         Handle streaming completion: alignment, file save, and analysis.
@@ -2349,14 +2305,19 @@ class SequenceWidgetStreamingOpsMixin:
                     self._handle_invalid_recording(quality_reason)
                     return
 
+            trusted_preparation = (
+                prefinalized and completion_source == "process"
+                and isinstance(prepared_audio, RecordingAudio)
+                and prepared_audio.is_prepared_for(request)
+                and prepared_audio.multi is recorded_multi
+                and prepared_audio.mono is recorded_mono
+                and prepared_audio.descriptor.sample_rate == sample_rate)
             # Publish the validated, trimmed recording atomically to the
             # authoritative analysis state. Invalid captures must leave the
             # previous recording available to downstream analysis.
             self.data_struct.store_wave_data_multi = recorded_multi
-            self.data_struct.store_wave_data = recorded_multi.mean(axis=1).astype(
-                np.float32,
-                copy=False,
-            )
+            self.data_struct.store_wave_data = (recorded_mono if trusted_preparation else
+                recorded_multi.mean(axis=1).astype(np.float32, copy=False))
 
             self.data_struct.sample_rate = sample_rate
             self.data_struct.audio_lenth = len(recorded_multi)
@@ -2392,6 +2353,7 @@ class SequenceWidgetStreamingOpsMixin:
                     sample_rate,
                     final_waveform_windows,
                     max_points=MAIN_RECORDING_FINAL_MAX_POINTS,
+                    **({"prepared_columns": prepared_audio.waveforms} if trusted_preparation else {}),
                 )
                 if request is not None and request.device.get("backend") == "vkinging":
                     self._set_recording_voltage_tooltips(final_waveform_windows, request.calibration_metadata)

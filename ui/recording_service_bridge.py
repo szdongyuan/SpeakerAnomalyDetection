@@ -217,7 +217,7 @@ class RecordingServiceBridge(QObject):
         callback = getattr(callbacks, kind)
         try:
             if callback is not None:
-                if kind in ("started", "released"):
+                if kind in ("started", "finalizing", "released"):
                     callback(session)
                 else:
                     callback(session, value)

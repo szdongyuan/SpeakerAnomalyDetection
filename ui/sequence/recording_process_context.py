@@ -11,6 +11,8 @@ class RecordingProcessContext:
     session: object = None
     session_binding_pending: bool = False
     processor: object = None
+    processing_notified: bool = False
+    processing_condition: str = ""
     final: bool = False
     failed: bool = False
     cancelled: bool = False

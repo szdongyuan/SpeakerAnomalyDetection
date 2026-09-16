@@ -182,7 +182,7 @@ class _NewRecordingOwnershipHost(
         if self._fail_reset:
             raise RuntimeError("early reset failure")
         self._begin_new_recording_presentation()
-        recorded_dict = {}
+        recorded_dict = {"device": self.mic}
         self._snapshot_recording_input_channels(recorded_dict)
         return recorded_dict, 48000
 

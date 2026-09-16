@@ -32,6 +32,7 @@ class MotorAiResultPanel(QWidget):
         "Spec": "Spec",
     }
     PUBLIC_STAGE_TEXTS = {
+        "数据保存中",
         "等待开始",
         "分析中",
         "等待下一档位",
@@ -436,6 +437,8 @@ class MotorAiResultPanel(QWidget):
             display_text = raw_stage
         elif raw_stage.endswith(" 等待导入"):
             display_text = "等待开始"
+        elif raw_stage.endswith(" 数据保存中"):
+            display_text = "数据保存中"
         elif raw_stage.endswith(" 分析中"):
             display_text = "分析中"
         elif raw_stage.endswith(" 分析失败"):
@@ -445,7 +448,7 @@ class MotorAiResultPanel(QWidget):
         self.stage_text = display_text
         if display_text in ("等待开始", "等待下一档位"):
             display_tone = "pending"
-        elif display_text == "分析中":
+        elif display_text in ("分析中", "数据保存中"):
             display_tone = "running"
         elif display_text == "测试异常":
             display_tone = "ng"
@@ -753,6 +756,10 @@ class MotorAiResultPanel(QWidget):
             )
             labels["result"].setText(str(row.get("result") or "待检测"))
             labels["result"].setStyleSheet(self._row_result_style(row.get("tone")))
+            # Processing text is longer than the ordinary OK/NG state.
+            labels["result"].setFixedWidth(
+                max(60, labels["result"].fontMetrics().horizontalAdvance("数据保存中") + 12)
+                if row.get("result") == "数据保存中" else 60)
 
     def _update_port_summary(self):
         visible_rows = [

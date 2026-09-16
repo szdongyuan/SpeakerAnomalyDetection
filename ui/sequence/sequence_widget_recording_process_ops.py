@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QMessageBox
 from base.play_and_record import resolve_startup_trim_samples
 from base.recording_preview_config import resolve_recording_preview_time_mode
 from base.recording_process_protocol import RecordingFailure, RecordingRequest
+from base.recording_result_reader import RecordingAudio
 from base.recording_service import RecordingCallbacks, RecordingService
 from base.recording_settings import merge_audio_validation_thresholds
 from base.ve3668n_input import validate_sample_rate
@@ -284,6 +285,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
         self._active_recording_process_id = request.request_id
         callbacks = RecordingCallbacks(
             started=self._on_process_recording_started,
+            finalizing=self._on_process_recording_finalizing,
             preview=self._on_process_recording_preview,
             result_ready=self._on_process_recording_result,
             accepted=self._on_process_recording_accepted,
@@ -371,6 +373,34 @@ class SequenceWidgetRecordingProcessOpsMixin:
                     clear_stage()
             self.default_logger.info(f"Recording started request={session.request.request_id} pid={session.worker_pid}")
 
+    def _on_process_recording_finalizing(self, session):
+        context = self._recording_context_for_session(session)
+        if (context is None or context.cancelled or context.failed or context.final
+                or context.processing_notified or not self._is_active_recording_process(session)):
+            return
+        context.processing_notified = True
+        context.processing_condition = self._get_active_product_condition_key()
+        self._set_active_product_condition_stage("数据保存中", update_task_stage=False)
+        left_panel = getattr(self, "left_panel", None)
+        if left_panel is not None:
+            left_panel.set_current_stage("数据保存中", tone="running")
+
+    def _finish_process_recording_status(self, context, condition_text, stage_text, tone):
+        if not context.processing_notified or not self._is_active_recording_process(context.session):
+            return
+        left_panel = getattr(self, "left_panel", None)
+        panel = getattr(left_panel, "ai_result_panel", left_panel)
+        if getattr(panel, "stage_text", None) == "数据保存中":
+            left_panel.set_current_stage(stage_text, tone=tone)
+        row = getattr(panel, "rows", {}).get(context.processing_condition, {})
+        if row.get("result") == "数据保存中":
+            left_panel.set_condition_result(context.processing_condition, condition_text, tone=tone)
+        workspace = getattr(self, "channel_workspace", None)
+        workspace_context = getattr(workspace, "_condition_contexts", {}).get(
+            context.processing_condition, {})
+        if workspace_context.get("status") == "数据保存中":
+            workspace.set_condition_context(context.processing_condition, status=condition_text)
+
     def _on_process_recording_preview(self, session, preview):
         context = self._recording_context_for_session(session)
         final = (context.final if context is not None
@@ -422,13 +452,14 @@ class SequenceWidgetRecordingProcessOpsMixin:
             self._recording_process_final = True
         try:
             request, descriptor = session.request, audio.descriptor
+            prepared = isinstance(audio, RecordingAudio) and audio.is_prepared_for(request)
             if getattr(request, "device", {}).get("backend") == VE_BACKEND:
                 self._validate_ve_recording_result(session, audio, context=context)
             multi = self._normalize_final_recording_array(audio.multi, request.channels)
             if (descriptor.channels != request.channels or descriptor.path != request.path
                     or descriptor.sample_rate != request.sample_rate
                     or len(multi) != descriptor.final_frames
-                    or not np.array_equal(audio.mono, multi.mean(axis=1), equal_nan=True)):
+                    or (not prepared and not np.array_equal(audio.mono, multi.mean(axis=1), equal_nan=True))):
                 raise ValueError("final recording arrays do not match the request/result contract")
             if context.final_windows is None:
                 context.final_windows = self._validate_final_waveform_workspace(
@@ -468,8 +499,9 @@ class SequenceWidgetRecordingProcessOpsMixin:
                 or descriptor.final_frames != request.target_samples - trim
                 or descriptor.metadata_appended is not True
                 or descriptor.handles_released is not True
-                or not np.all(np.isfinite(audio.multi))
-                or not np.all(np.isfinite(audio.mono))):
+                or (not (isinstance(audio, RecordingAudio) and audio.is_prepared_for(request))
+                    and (not np.all(np.isfinite(audio.multi))
+                         or not np.all(np.isfinite(audio.mono))))):
             raise ValueError("VE final recording metadata/count/release contract mismatch")
 
     def _on_process_recording_accepted(self, session, audio):
@@ -566,6 +598,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
             return
         # Claim before GUI observers can reenter. Admission remains held through
         # the original queue's snapshot of the current recording and config.
+        publication_started = time.monotonic()
         context.publication_started = True
         context.accepted_audio = None
         self._recording_publication_in_progress = True
@@ -578,11 +611,14 @@ class SequenceWidgetRecordingProcessOpsMixin:
         try:
             for warning in audio.descriptor.warnings:
                 self.default_logger.warning(f"Recording {session.request.request_id}: {warning}")
+            self._finish_process_recording_status(context, "待判定", "等待下一档位", "pending")
             succeeded = self._on_streaming_complete(
                 recorded_mono=audio.mono, recorded_multi=audio.multi,
                 sample_rate=audio.descriptor.sample_rate,
                 completion_source="process", prefinalized=True,
-                final_waveform_windows=context.final_windows)
+                final_waveform_windows=context.final_windows,
+                **({"prepared_audio": audio} if isinstance(audio, RecordingAudio)
+                   and audio.is_prepared_for(context.request) else {}))
             if succeeded is True:
                 self._notify_process_recording_finished(session, context=context)
         finally:
@@ -591,6 +627,21 @@ class SequenceWidgetRecordingProcessOpsMixin:
             context.publication_delivered = True
             self._drop_recording_context(context)
             self._recording_publication_in_progress = False
+            published_at = time.monotonic()
+            self.default_logger.info(
+                "Recording timing request=%s process=parent stage=gui_publication seconds=%.6f",
+                context.request.request_id, published_at - publication_started)
+            observed_at = getattr(session, "_completion_observed_at", None)
+            timing = getattr(audio.descriptor, "finalization_timing", None)
+            if observed_at is not None and timing is not None:
+                continuation = published_at - observed_at
+                self.default_logger.info(
+                    "Recording timing request=%s process=parent stage=completion "
+                    "child_target_to_descriptor_seconds=%.6f parent_observed_continuation_seconds=%.6f "
+                    "accounted_seconds=%.6f child_descriptor_to_parent_observation_gap=unmeasured "
+                    "boundary=target_samples_to_gui_publication",
+                    context.request.request_id, timing.target_to_descriptor, continuation,
+                    timing.target_to_descriptor + continuation)
         refresh = getattr(self, "update_player_btn_is_paused", None)
         if callable(refresh):
             refresh()
@@ -618,6 +669,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
             f"Recording failed request={session.request.request_id} "
             f"stage={failure.stage} path={session.request.path} "
             f"machine_id={session.request.device.get('machine_id')}: {failure.message}")
+        self._finish_process_recording_status(context, "测试异常", "测试异常", "ng")
         context.failed = True
         context.validated_audio = None
         active = self._is_active_recording_process(session)
@@ -647,6 +699,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
         context = self._recording_context_for_session(session)
         if context is None or context.cleanup_owned:
             return
+        self._finish_process_recording_status(context, "待检测", "等待开始", "pending")
         context.final = True
         context.cancelled = True
         context.validated_audio = None
@@ -674,6 +727,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
         context = self._recording_context_for_session(session)
         if context is None:
             return
+        self._finish_process_recording_status(context, "待检测", "等待开始", "pending")
         context.preview_enabled = False
         context.final = True
         context.accepted_audio = None
