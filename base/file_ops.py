@@ -246,7 +246,10 @@ class FileOps(object):
         return output_zip
 
     @staticmethod
-    def create_zip_with_files(file_path_list, output_zip_path=None, base_dir=DEFAULT_DIR, categorize=True, progress_callback=None):
+    def create_zip_with_files(
+        file_path_list, output_zip_path=None, base_dir=DEFAULT_DIR,
+        categorize=True, progress_callback=None, *, archive_names=None,
+    ):
         """
         Create a zip archive that contains the given files. zip archive will contains OK/NG/not_labeled subfolders originally
 
@@ -270,6 +273,9 @@ class FileOps(object):
             A callback that receives two integers (progress, total) so that UI
             elements such as progress bars can be updated while the archive is
             being created.
+        archive_names : dict[str, str], optional
+            Explicit ZIP paths keyed by the input source paths. When provided,
+            these paths replace the legacy basename/category layout.
 
         Returns
         -------
@@ -311,6 +317,9 @@ class FileOps(object):
 
                 if rel_path.endswith(".db"):
                     arcname = os.path.basename(rel_path)
+
+                if archive_names is not None:
+                    arcname = archive_names[path]
 
                 if os.path.exists(full_path):
                     zip_file.write(full_path, arcname)

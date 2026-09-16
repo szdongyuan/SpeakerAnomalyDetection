@@ -18,21 +18,44 @@ from PyQt5.QtWidgets import (
 )
 from scipy.io import wavfile as scipy_wavfile
 
-from base.file_ops import FileOps
+from base.audio_record_delete import (
+    count_audio_deletion_files, delete_audio_recordings, plan_audio_record_deletion,
+)
+from base.audio_record_filter import filter_audio_records, parse_audio_filter_metadata
+from base.audio_record_package import collect_audio_package_files, select_audio_package_files
 from base.log_manager import LogManager
 from base.playback_controller import PlaybackController
 from consts import error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
+from ui.archive_audio_delete_dialog import ArchiveAudioDeleteDialog
+from ui.archive_audio_filter_dialog import ArchiveAudioFilterDialog
+from ui.archive_audio_package_dialog import ArchiveAudioPackageDialog
+from ui.archive_audio_analysis_dialog import ArchiveAudioAnalysisDialog
+from ui.audio_package_thread import AudioPackageThread
 from ui.custom_ui_widget.audio_data_manage_dialog import (
     AudioDataManageDialog,
     extract_audio_file_name,
 )
 
 
+class _AudioPackageProgressDialog(QProgressDialog):
+    """Keep progress visible until its owner observes the worker finish."""
+
+    def reject(self):
+        pass
+
+    def closeEvent(self, event):
+        event.ignore()
+
+
 class ArchiveAudioDataDialog(AudioDataManageDialog):
 
     def __init__(self, logger: LogManager):
+        self._audio_filter_cache = {}
+        self._package_thread = None
         self._play_btn_col = 6
+        self._analysis_btn_col = 7
+        self._analysis_dialog = None
         self._play_text = "\u64ad\u653e"
         self._stop_text = "\u505c\u6b62"
         self._is_desc_order = False
@@ -61,7 +84,8 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.package_btn = QPushButton(" 打  包 ")
         self.delete_btn = QPushButton(" 删  除 ")
 
-        self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "播放"])
+        self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "播放", "分析结果"])
+        self.horizontalHeader().setSectionsClickable(False)
 
         # 而是在模型里放“播放/停止”文本项，并用 view.clicked 响应点击。
         self.data_view.clicked.connect(self._on_data_view_clicked)
@@ -72,12 +96,64 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._update_order_button_text()
         self.init_ui()
 
+    def _refresh_audio_filter_metadata(self):
+        previous = self._audio_filter_cache
+        current = {}
+        for row in self.all_audio_data:
+            cached = previous.get(row[0])
+            metadata = (
+                cached[1] if cached is not None and cached[0] == row[1]
+                else parse_audio_filter_metadata(row[1])
+            )
+            current[row[0]] = (row[1], metadata)
+        self._audio_filter_cache = current
+        return {identifier: entry[1] for identifier, entry in current.items()}
+
+    def load_all_audio_data(self):
+        super().load_all_audio_data()
+        self._refresh_audio_filter_metadata()
+
+    def create_filter_dialog(self, filter_config):
+        return ArchiveAudioFilterDialog(
+            self.all_audio_data, self._refresh_audio_filter_metadata(),
+            filter_config, parent=self,
+        )
+
+    def filter_audio_data_at_filter_config(self, filter_config):
+        self.filter_audio_data = filter_audio_records(
+            self.all_audio_data, self._refresh_audio_filter_metadata(), filter_config,
+        )
+
+    def delete_audio_data_with_id(self, id_list):
+        super().delete_audio_data_with_id(id_list)
+        self._refresh_audio_filter_metadata()
+
     def _on_data_view_clicked(self, index):
         if not index.isValid():
+            return
+        if index.column() == self._analysis_btn_col:
+            self._show_saved_analysis(index)
             return
         if index.column() != self._play_btn_col:
             return
         self._on_play_button_clicked(index.row())
+
+    def _show_saved_analysis(self, index):
+        if self._package_thread is not None:
+            return
+        if self._analysis_dialog is not None:
+            self._analysis_dialog.raise_()
+            self._analysis_dialog.activateWindow()
+            return
+        _, wav_path = index.data(Qt.UserRole)
+        dialog = ArchiveAudioAnalysisDialog(wav_path, self)
+        self._analysis_dialog = dialog
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        dialog.finished.connect(self._analysis_view_finished)
+        dialog.open()
+
+    def _analysis_view_finished(self, _result):
+        self._analysis_dialog = None
 
     def init_ui(self):
         self.setWindowTitle("音频数据管理")
@@ -345,12 +421,21 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         for row in range(row_count):
             is_current = bool(playing and row == self._current_playing_row)
             self._set_play_cell_text(row, is_current)
+        rows = self.filter_audio_data if self.is_filter_flag else self.all_audio_data
+        for row, record in enumerate(rows):
+            item = QStandardItem("查看")
+            item.setTextAlignment(Qt.AlignCenter)
+            item.setData((record[0], record[1]), Qt.UserRole)
+            self._apply_play_action_item_style(item)
+            model.setItem(row, self._analysis_btn_col, item)
+        model.setHeaderData(self._analysis_btn_col, Qt.Horizontal, "分析结果")
+        self.data_view.resizeColumnToContents(self._analysis_btn_col)
 
     def eventFilter(self, watched, event):
         if watched is self.data_view.viewport():
             if event.type() == QEvent.MouseMove:
                 index = self.data_view.indexAt(event.pos())
-                if index.isValid() and index.column() == self._play_btn_col:
+                if index.isValid() and index.column() in (self._play_btn_col, self._analysis_btn_col):
                     self.data_view.viewport().setCursor(Qt.PointingHandCursor)
                 else:
                     self.data_view.viewport().unsetCursor()
@@ -453,7 +538,11 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         QMessageBox.warning(self, "提示", "正在播放，请先停止播放后再退出")
 
     def on_clicked_package_btn(self):
+        if self._package_thread is not None:
+            return
         self._stop_playback_if_needed()
+        selected_paths = [row[1] for row in self.select_wave_data.values()]
+        package_files = ()
         if not self.select_wave_data:
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("提示")
@@ -462,6 +551,26 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             cancel_btn = msg_box.addButton(" 取  消 ", QMessageBox.RejectRole)
             msg_box.exec_()
             if msg_box.clickedButton() != confirm_btn:
+                return
+        else:
+            try:
+                grouped = collect_audio_package_files(selected_paths)
+                selected_wavs = {
+                    os.path.normcase(os.path.abspath(os.path.join(DEFAULT_DIR, path)))
+                    for path in selected_paths
+                }
+                available_wavs = {os.path.normcase(entry.source) for entry in grouped["wav"]}
+                dialog = ArchiveAudioPackageDialog(
+                    {kind: len(files) for kind, files in grouped.items()},
+                    len(selected_paths), parent=self,
+                    missing_wav_count=len(selected_wavs - available_wavs),
+                )
+                if dialog.exec() != dialog.Accepted:
+                    return
+                package_files = select_audio_package_files(grouped, dialog.selected_kinds())
+            except (OSError, ValueError) as error:
+                self.logger.error(f"failed to collect audio package files: {error}")
+                QMessageBox.warning(self, "打包失败", f"无法收集打包文件：{error}")
                 return
 
         file_name = "audio_data_export_%s" % datetime.now().strftime("%Y%m%d")
@@ -478,76 +587,92 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         if not file_path.endswith(".zip"):
             file_path += ".zip"
 
-        file_path_list = [i[1] for i in self.select_wave_data.values()]
+        file_path_list = [entry.source for entry in package_files]
+        archive_names = {entry.source: entry.archive_name for entry in package_files}
         file_path_list.append("database/audio_data.db")
-        self.packaging_progress = QProgressDialog("正在打包...", None, 0, len(file_path_list), self)
+        archive_names["database/audio_data.db"] = "audio_data.db"
+        self._start_audio_package(file_path_list, file_path, archive_names)
+
+    def _start_audio_package(self, file_paths, output_path, archive_names):
+        thread = AudioPackageThread(file_paths, output_path, archive_names, self)
+        self._package_thread = thread
+        self.package_btn.setEnabled(False)
+        self.packaging_progress = _AudioPackageProgressDialog(
+            "正在打包...", None, 0, len(file_paths), self,
+        )
         self.packaging_progress.setWindowTitle("打包进度")
         self.packaging_progress.setWindowModality(Qt.WindowModal)
         self.packaging_progress.setWindowFlags(self.packaging_progress.windowFlags() & ~Qt.WindowCloseButtonHint)
+        self.packaging_progress.setAutoClose(False)
+        self.packaging_progress.setAutoReset(False)
         self.packaging_progress.show()
-        QApplication.processEvents()
+        thread.progress.connect(self.update_packaging_progress, Qt.QueuedConnection)
+        thread.finished.connect(self._on_package_finished, Qt.QueuedConnection)
+        thread.start()
 
-        try:
-            FileOps.create_zip_with_files(
-                file_path_list,
-                file_path,
-                progress_callback=self.update_packaging_progress,
-            )
-        except Exception as error:
-            self.logger.error("failed to package audio data: %s" % error)
-            QMessageBox.warning(self, "打包失败", "音频数据打包失败：%s" % error)
+    def _on_package_finished(self):
+        thread = self._package_thread
+        # finished is already emitted; join final thread cleanup before allowing
+        # the dialog (and its child QThread) to be destroyed.
+        thread.wait()
+        error = thread.error_message
+        self._package_thread = None
+        thread.deleteLater()
+        self.packaging_progress.hide()
+        self.packaging_progress.deleteLater()
+        self.packaging_progress = None
+        self.package_btn.setEnabled(True)
+        if error is not None:
+            self.logger.error(f"failed to package audio data: {error}")
+            QMessageBox.warning(self, "打包失败", f"音频数据打包失败：{error}")
             return
-        finally:
-            self.packaging_progress.close()
-            self.packaging_progress = None
-
         self.set_all_checkboxes_checked([0], False)
 
     def on_clicked_delete_btn(self):
-        current_file = self.playback_controller.get_current_playing_file()
-        if current_file and self.select_wave_data:
-            selected_paths = []
-            for value in self.select_wave_data.values():
-                selected_path = value[1]
-                if os.path.isabs(selected_path):
-                    selected_paths.append(os.path.abspath(selected_path))
-                else:
-                    selected_paths.append(os.path.abspath(os.path.join(DEFAULT_DIR, selected_path)))
-            if os.path.abspath(current_file) in selected_paths:
-                self._stop_playback_if_needed()
-
-        is_delete_item_list = list()
-        will_delete_in_db_list = list()
-        for key, value in self.select_wave_data.items():
-            raw_path = value[1]
-            if os.path.isabs(raw_path):
-                file_path = os.path.abspath(raw_path)
-            else:
-                file_path = os.path.abspath(os.path.join(DEFAULT_DIR, raw_path))
-            self._audio_duration_cache.pop(os.path.abspath(file_path), None)
-            if os.path.isfile(file_path):
-                try:
-                    os.remove(file_path)
-                    is_delete_item_list.append(int(key))
-                    will_delete_in_db_list.append(value[0])
-                except Exception as e:
-                    QMessageBox.warning(self, "警告", "%s" % str(e)[:40])
-            else:
-                will_delete_in_db_list.append(value[0])
-        code, result = self.recording_manager.delete_audio_at_id_list(will_delete_in_db_list)
-        if code == error_code.OK:
-            self.logger.info("success delete audio with will_delete_in_db_list")
-        else:
-            self.logger.error(result)
+        if self._package_thread is not None:
             return
-        self.data_view.del_model_row_with_list(is_delete_item_list)
-        self.select_wave_data = dict()
-        self.delete_audio_data_with_id(will_delete_in_db_list)
+        selected_rows = tuple(self.select_wave_data.values())
+        if not selected_rows:
+            QMessageBox.information(self, "提示", "请先勾选需要删除的录音。")
+            return
+        try:
+            plans = plan_audio_record_deletion(selected_rows)
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(self, "无法删除", f"无法确认待删除文件：{error}")
+            return
+        dialog = ArchiveAudioDeleteDialog(count_audio_deletion_files(plans), len(plans), self)
+        if dialog.exec() != dialog.Accepted:
+            return
+
+        self._stop_playback_if_needed()
+        deleted_ids, errors = delete_audio_recordings(plans, self.recording_manager)
+        for plan in plans:
+            self._audio_duration_cache.pop(plan.wav_path, None)
+        self.delete_audio_data_with_id(deleted_ids)
+        self.product_model_set = {row[2] for row in self.all_audio_data}
+        self.record_date_set = {row[4] for row in self.all_audio_data}
+        if not self.all_audio_data:
+            self.filter_config.clear()
+            self.is_filter_flag = False
+        self.load_audio_data_to_view()
+        self.all_selected_checkbox.setChecked(False)
+        self.all_select_flag = False
         self.set_select_wave_num_text(0)
-        self.update_filter_sets_after_deletion()
-        self._rebuild_play_buttons()
+        if errors:
+            message = QMessageBox(self)
+            message.setWindowTitle("部分录音未删除完成")
+            message.setIcon(QMessageBox.Warning)
+            message.setText(
+                f"已完整删除 {len(deleted_ids)} 条录音，{len(errors)} 条未完成。\n"
+                "未完成的记录已保留，部分文件可能已删除，可排除问题后重试。"
+            )
+            message.setDetailedText("\n".join(errors))
+            message.exec_()
 
     def closeEvent(self, event):
+        if self._package_thread is not None:
+            event.ignore()
+            return
         if self.playback_controller.is_audio_playing():
             self._warn_cannot_close_while_playing()
             event.ignore()
@@ -557,12 +682,18 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         super().closeEvent(event)
 
     def reject(self):
+        if self._package_thread is not None:
+            return
         if self.playback_controller.is_audio_playing():
             self._warn_cannot_close_while_playing()
             return
         if self._playback_poll_timer is not None:
             self._playback_poll_timer.stop()
         super().reject()
+
+    def done(self, result):
+        if self._package_thread is None:
+            super().done(result)
 
 
 if __name__ == "__main__":

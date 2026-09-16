@@ -151,8 +151,7 @@ class AudioDataManageDialog(DataManageDialog):
             self.set_all_checkboxes_checked([0], True)
             self.all_select_flag = True
 
-    def on_click_filter_btn(self):
-        filter_config = copy.deepcopy(self.filter_config)
+    def create_filter_dialog(self, filter_config):
         dlg = FilterAudioDialog(
             self.product_model_set,
             self.record_date_set,
@@ -160,13 +159,16 @@ class AudioDataManageDialog(DataManageDialog):
             rotation_speed_set=self.rotation_speed_set,
         )
         dlg.hide_select_not_label_check_box(self.is_hide_select_not_label)
+        return dlg
+
+    def on_click_filter_btn(self):
+        filter_config = copy.deepcopy(self.filter_config)
+        dlg = self.create_filter_dialog(filter_config)
         flag, filter_config = dlg.exec()
         if flag == 1:
             self.filter_config = filter_config
             self.filter_audio_data_at_filter_config(self.filter_config)
             self.is_filter_flag = True
-            if len(self.all_audio_data) == len(self.filter_audio_data) and not self.is_filter_flag:
-                return
             self.load_audio_data_to_view()
             self.all_selected_checkbox.setChecked(False)
             self.all_select_flag = False
@@ -177,7 +179,7 @@ class AudioDataManageDialog(DataManageDialog):
             self.filter_signal.emit()
 
     def show_all_wave(self):
-        if self.is_filter_flag is False or len(self.all_audio_data) == len(self.filter_audio_data):
+        if not self.is_filter_flag and not self.filter_config:
             return
         self.is_filter_flag = False
         self.filter_audio_data.clear()
@@ -251,10 +253,14 @@ class AudioDataManageDialog(DataManageDialog):
         for key, value in filter_config.items():
             if key == "select_rotation_speed" and value is not None:
                 result = [i for i in result if extract_rotation_speed(i[1]) == value]
-            elif key in ["select_sample_rate", "select_labels"] and value:
-                result = [i for i in result if any(v in i for v in value)]
-            elif key not in ["select_rotation_speed", "select_sample_rate", "select_labels"]:
-                result = [i for i in result if value in i]
+            elif key == "select_sample_rate" and value:
+                result = [i for i in result if i[3] in value]
+            elif key == "select_labels" and value:
+                result = [i for i in result if i[5] in value]
+            elif key == "select_product_model":
+                result = [i for i in result if i[2] == value]
+            elif key == "select_record_date":
+                result = [i for i in result if i[4] == value]
         self.filter_audio_data = result
 
     def set_select_wave_num_text(self, select_num):
