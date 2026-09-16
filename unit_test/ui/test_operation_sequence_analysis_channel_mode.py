@@ -59,7 +59,7 @@ def test_analysis_catalog_only_shows_first_release_analysis_types(qapp):
             for row in range(analysis_group.rowCount())
         ]
         assert visible_entries == [
-            "声压级 (SPL)", "频谱分析 (Spec)", "AI 分析",
+            "声压级 (SPL)", "频谱分析 (Spec)",
             "频段能量 (FBA)", "快速傅里叶变换 (FFT)",
         ]
     finally:

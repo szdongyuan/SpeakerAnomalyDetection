@@ -464,15 +464,15 @@ def _calculate_ai(
     source,
     sequence_snapshot,
 ):
-    model_name = str(config.get("analyse_model_name") or "").strip()
-    if not model_name:
-        raise ValueError("未配置 AI 分析模型")
     from base.model_runtime_validation import validate_model_duration
     from base.predict_model import predict_from_audio
     from base.training_model_management import TrainingModelManagement
     from consts import error_code
     from consts.running_consts import DEFAULT_DIR
 
+    model_name = str(config.get("analyse_model_name") or "").strip()
+    if not model_name:
+        raise ValueError("未配置 AI 分析模型")
     manager = TrainingModelManagement()
     code, query_result = manager.get_model_path_from_db(model_name)
     if code != error_code.OK or not query_result:
