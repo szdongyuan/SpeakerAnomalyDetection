@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 from collections import OrderedDict
 import gc
 import math
@@ -30,6 +31,16 @@ from base.analysis_process_protocol import (
     AnalysisWorkerFailure,
 )
 from base.analysis_result_summary import summarize_analysis_task
+from base.analysis_segments import TIME_UNIT_SECONDS
+
+
+def _segment_plot_label(segment):
+    if segment.mode == "output_load":
+        return f"{segment.value:g} {segment.unit}".strip()
+    samples_per_unit = segment.sample_rate * TIME_UNIT_SECONDS[segment.unit]
+    start = segment.start_sample / samples_per_unit
+    end = segment.end_sample / samples_per_unit
+    return f"{start:g}～{end:g} {segment.unit}"
 
 
 def analysis_worker_main(request, event_queue, log_queue=None):
@@ -55,7 +66,11 @@ def analysis_worker_main(request, event_queue, log_queue=None):
             sample_rate=sample_rate,
             duration_seconds=round(time.monotonic() - wav_started_at, 3),
         )
-        result = _execute_task(request, audio, sample_rate, event_queue, log_queue)
+        if request.segment_plan:
+            from base.segmented_analysis_worker import execute_segmented_task
+            result = execute_segmented_task(request, audio, sample_rate, event_queue, log_queue)
+        else:
+            result = _execute_task(request, audio, sample_rate, event_queue, log_queue)
         event_queue.put(("result", result))
         _emit_log(
             log_queue,
@@ -287,6 +302,8 @@ def _execute_task(request, audio, sample_rate, event_queue, log_queue):
                     item_config,
                     channel_outputs,
                     channel_labels,
+                    skip_overall=bool(request.segment_plan),
+                    input_voltage=request.condition_snapshot.get("input_voltage"),
                 )
                 csv_artifacts = tuple(
                     AnalysisArtifactResult(
@@ -355,7 +372,7 @@ def _execute_task(request, audio, sample_rate, event_queue, log_queue):
             duration_seconds=round(time.monotonic() - item_started_at, 3),
         )
 
-    return summarize_analysis_task(request, all_results)
+    return replace(summarize_analysis_task(request, all_results), condition_snapshot=request.condition_snapshot)
 
 
 def _execute_instance(
@@ -366,6 +383,8 @@ def _execute_instance(
     sequence_snapshot,
 ):
     config = instance_request.parameters.to_dict()
+    if request.segment_plan and instance_request.analysis_type == "SPL":
+        config["analysis_time_range_enabled"] = False
     calculation = calculate_analysis_instance(
         instance_request.analysis_type,
         signal,
@@ -376,6 +395,21 @@ def _execute_instance(
         sequence_snapshot=sequence_snapshot,
     )
     try:
+        if request.segment_plan:
+            plot = calculation.get("plot")
+            if plot is not None:
+                plot["title"] = "整段概览 " + str(plot.get("title") or "")
+        if request.segment_plan and instance_request.analysis_type in {"SPL", "Spec"}:
+            calculation["plot"]["recording_time_range"] = [0, len(signal) / sample_rate]
+            calculation["plot"]["segment_boundaries"] = [s.start_sample / s.sample_rate for s in request.segment_plan[1:]]
+            calculation["plot"]["segment_annotations"] = [
+                {
+                    "start": segment.start_sample / segment.sample_rate,
+                    "end": segment.end_sample / segment.sample_rate,
+                    "label": _segment_plot_label(segment),
+                }
+                for segment in request.segment_plan
+            ]
         image_payload = render_analysis_png(calculation.get("plot"))
         contributes = _contributes_to_final(
             instance_request.analysis_type,
@@ -391,6 +425,11 @@ def _execute_instance(
             request.source,
             image_payload,
         )
+        if request.segment_plan and instance_request.analysis_type == "SPL" and request.source == "手动查看":
+            normalized["display_payload"].update(
+                segment_boundaries=calculation["plot"]["segment_boundaries"],
+                recording_time_range=calculation["plot"]["recording_time_range"],
+            )
         normalized.update(
             {
                 "raw_channel": instance_request.raw_channel,

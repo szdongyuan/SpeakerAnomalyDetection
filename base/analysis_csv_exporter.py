@@ -34,6 +34,9 @@ def export_item_csvs(
     config,
     channel_outputs,
     channel_labels=None,
+    *,
+    skip_overall=False,
+    input_voltage=None,
 ):
     """Export enabled result data; no extra save checkboxes are consulted."""
     ordered = sorted(channel_outputs, key=lambda item: int(item["raw_channel"]))
@@ -47,6 +50,11 @@ def export_item_csvs(
     )
     records = []
     for config_item_name, header, rows in tables:
+        if skip_overall and config_item_name == "总体声压级":
+            continue
+        if config_item_name == "总体声压级" and input_voltage is not None:
+            header = (*header, "输入电压")
+            rows = [(*row, input_voltage) for row in rows]
         path = build_csv_path(
             storage_context,
             wav_stem,

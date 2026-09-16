@@ -17,6 +17,7 @@ TEST_CONDITIONS_KEY = "test_conditions"
 CONDITION_NAME_KEY = "condition_name"
 TRIGGER_STATE_KEY = "trigger_state"
 TEST_QUEUE_KEY = "test_queue"
+OUTPUT_LOAD_KEY = "output_load"
 
 # Runtime modes
 PRODUCT_TRIGGER_MODE_MANUAL = "manual"

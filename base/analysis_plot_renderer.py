@@ -41,12 +41,30 @@ def render_analysis_png(plot_payload):
             _render_values(axis, payload)
         else:
             raise ValueError(f"不支持的图片类型：{kind}")
+        for boundary in payload.get("segment_boundaries", ()):
+            color = "#FFFFFF" if kind == "spectrogram" else "#666666"
+            axis.axvline(boundary, color=color, linestyle="--", linewidth=1.1)
+        if "recording_time_range" in payload:
+            axis.set_xlim(*payload["recording_time_range"])
+        _draw_segment_annotations(axis, payload.get("segment_annotations", ()))
         figure.tight_layout()
         output = BytesIO()
         figure.savefig(output, format="png", facecolor="white")
         return output.getvalue()
     finally:
         plt.close(figure)
+
+
+def _draw_segment_annotations(axis, annotations):
+    left, right = axis.get_xlim()
+    visible = [item for item in annotations if item["start"] < right and item["end"] > left]
+    for item in visible:
+        midpoint = (max(left, item["start"]) + min(right, item["end"])) / 2
+        axis.text(
+            midpoint, 1.02, item["label"], transform=axis.get_xaxis_transform(),
+            ha="center", va="bottom", fontsize=9, color="#444444",
+            rotation=90 if len(visible) > 16 else 0, clip_on=False,
+        )
 
 
 def _render_curve(axis, payload):

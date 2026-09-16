@@ -64,6 +64,11 @@ def _format_analysis_main_log(record):
         ("config_key", "item"),
         ("analysis_type", "type"),
         ("runtime_key", "runtime"),
+        ("segment_label", "segment"),
+        ("raw_channel", "raw_channel"),
+        ("window_start_seconds", "window_start_seconds"),
+        ("window_end_seconds", "window_end_seconds"),
+        ("artifact_kind", "artifact"),
         ("config_item_name", "config_item"),
         ("error_type", "error_type"),
         ("error_message", "error"),
@@ -75,7 +80,7 @@ def _format_analysis_main_log(record):
         for key, label in optional_fields
         if record.get(key) not in (None, "")
     ]
-    if event == "analysis_task_failed" and record.get("wav_path"):
+    if record.get("level") == "ERROR" and record.get("wav_path"):
         fields.append(f"wav={record['wav_path']}")
     return " | ".join(common + fields)
 
@@ -326,12 +331,16 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         fallback_factors = dict(
             getattr(self, "_live_mic_channel_v2pa_factors", {}) or {}
         )
+        saved_config = info.get("analysis_task_config") or (record or {}).get("config_snapshot") or {}
+        if "channel_labels" in saved_config:
+            storage_snapshot["channel_labels"] = dict(saved_config["channel_labels"])
         request = build_analysis_task_request(
             condition_key=condition_key,
             wav_path=wav_path,
             source=source,
-            sequence_config=getattr(self, "sequence_config", []) or [],
-            analysis_config=getattr(self, "analysis_config", {}) or {},
+            sequence_config=saved_config.get("sequence_config", getattr(self, "sequence_config", []) or []),
+            analysis_config=saved_config.get("analysis_config", getattr(self, "analysis_config", {}) or {}),
+            condition_config=saved_config.get("condition_config", {}),
             storage_snapshot=storage_snapshot,
             saved_active_input_channels=info.get("active_input_channels"),
             fallback_v2pa_factors=fallback_factors,
@@ -414,7 +423,7 @@ class SequenceWidgetAnalysisProcessOpsMixin:
                 if active_request.source == "自动分析":
                     self._set_condition_analysis_stage(
                         active_request.condition_key,
-                        payload.stage,
+                        "分析中" if payload.stage == "分段分析" else payload.stage,
                         "running",
                     )
                 elif active_request.source == "手动查看":
@@ -704,12 +713,24 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             report_state = "not_required"
         recorded_info = dict(record.get("recorded_signal_info", {}) or {})
         recorded_info["labels"] = label
+        segment_results = []
+        judgement_items = result.instance_results
+        if result.segments:
+            from ui.sequence.analysis_report_snapshot import build_segment_report_results
+            segment_results = build_segment_report_results(result, analysis_config)
+            grouped = {}
+            for segment in result.segments:
+                for item in segment.instance_results:
+                    grouped.setdefault(item.runtime_key, []).append(item)
+            from dataclasses import replace
+            judgement_items = tuple(replace(items[0], judgement="OK" if all(i.judgement == "OK" for i in items) else "NG")
+                for items in grouped.values() if all(i.execution_status == "分析完成" and i.contributes_to_final for i in items))
         analysis_result_dict = {
             item.runtime_key: (
                 item.judgement == "OK",
                 0.0,
             )
-            for item in result.instance_results
+            for item in judgement_items
             if item.execution_status == "分析完成"
             and item.contributes_to_final
             and item.judgement in {"OK", "NG"}
@@ -722,6 +743,11 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             analysis_result_dict=analysis_result_dict,
             analysis_report_state=report_state,
             analysis_report_items=report_items,
+            segment_results=segment_results,
+            input_voltage=result.condition_snapshot.get("input_voltage", ""),
+            segmented_analysis=result.condition_snapshot.to_dict().get("segmented_analysis", {}),
+            analysis_execution_status=result.execution_status,
+            analysis_error=result.error_message,
         )
 
     def _sync_process_result_to_condition_panel(self, result, display_text, tone):
@@ -772,7 +798,8 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             "Spec": "Spec",
         }
         channels = {}
-        for item in task_result.instance_results:
+        items = [i for segment in task_result.segments for i in segment.instance_results] if task_result.segments else task_result.instance_results
+        for item in items:
             channel = channels.setdefault(
                 int(item.raw_channel),
                 {"columns": {}, "judgements": []},
@@ -789,7 +816,9 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         output = []
         for raw_channel, state in sorted(channels.items()):
             verdicts = state["judgements"]
-            if "NG" in verdicts:
+            if any("分析失败" in values for values in state["columns"].values()):
+                overall = "结果不完整"
+            elif "NG" in verdicts:
                 overall = "NG"
             elif verdicts and all(value == "OK" for value in verdicts):
                 overall = "OK"
@@ -883,13 +912,15 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             )
             or {}
         )
+        if result.segments:
+            channel_labels = result.channel_labels.to_dict()
         for config_key, instance_results in grouped.items():
             window = AnalysisMultichannelResultWindow(
                 config_key,
                 instance_results,
                 config=config_snapshot.get(config_key, {}),
                 channel_labels=channel_labels,
-                source_label=source_label,
+                source_label=(f"整段概览 · {source_label}" if result.segments else source_label),
             )
             window.setAttribute(Qt.WA_DeleteOnClose, True)
             window.destroyed.connect(
@@ -900,7 +931,14 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             window.show()
             window.raise_()
             self.analysis_window.append(window)
-        return len(grouped)
+        if result.segments:
+            from ui.segmented_analysis_results_dialog import SegmentedAnalysisResultsDialog
+            window = SegmentedAnalysisResultsDialog(result, config_snapshot, self)
+            window.setAttribute(Qt.WA_DeleteOnClose, True)
+            window.destroyed.connect(lambda _object=None, target=window: self._discard_manual_analysis_window(target))
+            self.analysis_window.append(window)
+            window.show()
+        return len(self.analysis_window)
 
     def _discard_manual_analysis_window(self, window):
         self.analysis_window = [

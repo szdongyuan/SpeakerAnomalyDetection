@@ -2,6 +2,7 @@ import copy
 import ntpath
 import os
 from base.sequence_queue_references import QueueReferenceDraft
+from base.config_number_format import format_config_number
 
 from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
@@ -38,6 +39,7 @@ from consts.product_test_project_consts import (
     CONDITION_NAME_KEY,
     EXPORT_RAW_AUDIO_CSV_KEY,
     GROUP_NAME_KEY,
+    OUTPUT_LOAD_KEY,
     PROJECT_NAME_KEY,
     REGISTRY_ACTIVE_FILE_KEY,
     REGISTRY_CONFIGS_KEY,
@@ -50,6 +52,8 @@ from consts.product_test_project_consts import (
 )
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
+from ui.output_load_config_dialog import OutputLoadConfigDialog
+from base.analysis_segments import normalize_segmented_analysis, segment_condition_fields, segment_count
 
 
 NO_QUEUE_TEXT = "暂无可用测试队列"
@@ -382,6 +386,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self.contextual_queue_editor_callback = contextual_queue_editor_callback
         self._queue_reference_draft = None
         self.current_file = None
+        self._imported_draft = False
         self.project_data = self.manager.default_project()
         self.queue_catalog = {}
         self._visible_group_index = -1
@@ -397,7 +402,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self.add_condition_btn = QPushButton("+ 添加工况")
         self.delete_condition_btn = QPushButton("删除工况")
         self.copy_conditions_btn = QPushButton("复制到其他端口")
-        self.condition_table = QTableWidget(0, 6)
+        self.condition_table = QTableWidget(0, 8)
         self.result_root_input = QLineEdit()
         self.select_result_root_btn = QPushButton("选择")
         self.raw_audio_save_group = QButtonGroup(self)
@@ -651,7 +656,9 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
                 "状态码",
                 "测试队列配置",
                 "录音时长",
+                "分段分析",
                 "判定与分析",
+                "输入电压",
             ]
         )
         self.condition_table.verticalHeader().setVisible(False)
@@ -672,14 +679,18 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         )
         header = self.condition_table.horizontalHeader()
         header.setDefaultAlignment(Qt.AlignCenter)
-        for column in range(6):
+        for column in range(8):
             header.setSectionResizeMode(column, QHeaderView.Fixed)
-        header.setSectionResizeMode(5, QHeaderView.Stretch)
+        header.setSectionResizeMode(6, QHeaderView.Stretch)
         self.condition_table.setColumnWidth(0, 50)
-        self.condition_table.setColumnWidth(1, 140)
-        self.condition_table.setColumnWidth(2, 220)
-        self.condition_table.setColumnWidth(3, 320)
+        self.condition_table.setColumnWidth(1, 120)
+        self.condition_table.setColumnWidth(2, 120)
+        self.condition_table.setColumnWidth(3, 240)
         self.condition_table.setColumnWidth(4, 90)
+        self.condition_table.setColumnWidth(5, 205)
+        self.condition_table.setColumnWidth(7, 120)
+        header.moveSection(header.visualIndex(7), 2)
+        header.moveSection(header.visualIndex(5), 7)
 
     def _connect_signals(self):
         self.project_name_input.textEdited.connect(self._on_project_field_changed)
@@ -740,6 +751,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
     def _show_project(self, project_data, file_name):
         self._loading = True
         self.current_file = file_name
+        self._imported_draft = False
         self.project_data = copy.deepcopy(project_data)
         self.project_name_input.setText(
             str(self.project_data.get(PROJECT_NAME_KEY, "") or "")
@@ -847,6 +859,8 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
                         trigger_input.text() if trigger_input is not None else ""
                     ),
                     TEST_QUEUE_KEY: self._combobox_value(queue_combobox),
+                    "input_voltage": self.condition_table.cellWidget(row, 7).text().strip(),
+                    **self._output_load_fields(row),
                 }
             )
         groups[index] = {
@@ -946,9 +960,84 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         duration_item = self._read_only_item()
         self.condition_table.setItem(row, 4, duration_item)
 
+        load_cell = QWidget()
+        load_cell.load_settings = normalize_segmented_analysis(condition)
+        load_cell.status_label = QLabel()
+        load_cell.status_label.setStyleSheet(self.CONDITION_CONTROL_FONT_STYLE)
+        load_button = QPushButton("设置")
+        load_cell.settings_button = load_button
+        load_button.setAutoDefault(False)
+        load_button.setStyleSheet(self.CONDITION_CONTROL_FONT_STYLE)
+        load_button.setFixedHeight(self.CONDITION_CONTROL_HEIGHT)
+        load_button.setFixedWidth(operation_button.minimumWidth())
+        load_button.clicked.connect(
+            lambda _checked=False, cell=load_cell: self._edit_output_load(cell)
+        )
+        load_layout = QHBoxLayout(load_cell)
+        load_layout.setContentsMargins(4, 2, 4, 2)
+        load_layout.setSpacing(6)
+        load_layout.addWidget(load_cell.status_label, 1)
+        load_layout.addWidget(load_button)
+        self.condition_table.setCellWidget(row, 5, load_cell)
+        voltage_input = QLineEdit(str(condition.get("input_voltage", "") or ""))
+        voltage_input.setPlaceholderText("选填")
+        voltage_input.setToolTip("例如 230Vac/50Hz；留空时报告显示 /")
+        voltage_input.setStyleSheet(self.CONDITION_CONTROL_FONT_STYLE)
+        voltage_input.textEdited.connect(self._on_row_widget_changed)
+        self.condition_table.setCellWidget(row, 7, voltage_input)
+        self._update_output_load_status(load_cell)
+
         summary_item = self._read_only_item()
-        self.condition_table.setItem(row, 5, summary_item)
+        self.condition_table.setItem(row, 6, summary_item)
         self._update_row_summary(row)
+
+    def _output_load_fields(self, row):
+        settings = self.condition_table.cellWidget(row, 5).load_settings
+        return {"segmented_analysis": copy.deepcopy(settings)}
+
+    def _update_output_load_status(self, cell):
+        settings = cell.load_settings or {}
+        mode = settings.get("mode", "none")
+        text = "未启用"
+        if mode == "output_load":
+            text = f"按负载 · {len(settings['load_values'])} 段"
+        elif mode == "time":
+            row = next(row for row in range(self.condition_table.rowCount()) if self.condition_table.cellWidget(row, 5) is cell)
+            combo, _ = self._queue_controls_for_row(row)
+            info = self.queue_catalog.get(self._combobox_value(combo), {})
+            try:
+                count = segment_count(settings, info.get("duration"))
+                text = f"按时间 · {count} 段"
+                cell.setToolTip("")
+            except ValueError as error:
+                text = "配置需调整"
+                cell.setToolTip(str(error))
+        cell.status_label.setText(text)
+        color = "#1F2937" if mode != "none" else "#6B7280"
+        cell.status_label.setStyleSheet(
+            ProductTestProjectConfigDialog.CONDITION_CONTROL_FONT_STYLE
+            + f"color: {color};"
+        )
+
+    def _edit_output_load(self, cell):
+        row = next(
+            row
+            for row in range(self.condition_table.rowCount())
+            if self.condition_table.cellWidget(row, 5) is cell
+        )
+        queue_combo, _ = self._queue_controls_for_row(row)
+        queue_info = self.queue_catalog.get(self._combobox_value(queue_combo), {})
+        dialog = OutputLoadConfigDialog(
+            self.condition_table.item(row, 1).text(),
+            cell.load_settings,
+            queue_info.get("duration") if queue_info.get("available") else None,
+            self,
+            port_name=self.project_data[TEST_GROUPS_KEY][self._visible_group_index].get(GROUP_NAME_KEY, ""),
+        )
+        if dialog.exec() == dialog.Accepted:
+            cell.load_settings = dialog.settings()
+            self._update_output_load_status(cell)
+            self._set_dirty(True)
 
     @staticmethod
     def _read_only_item():
@@ -998,7 +1087,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         queue_name = self._combobox_value(queue_combobox)
         queue_info = self.queue_catalog.get(queue_name)
         duration_item = self.condition_table.item(row, 4)
-        summary_item = self.condition_table.item(row, 5)
+        summary_item = self.condition_table.item(row, 6)
 
         duration_text = "--"
         summary_text = "--"
@@ -1012,16 +1101,14 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         elif queue_info:
             duration = queue_info.get("duration")
             if duration is not None:
-                duration_text = f"{duration:g}秒"
+                duration_text = f"{format_config_number(duration)}秒"
             analysis_items = queue_info.get("analysis_items", [])
-            judgment_text = (
-                "自动判定" if queue_info.get("can_auto_judge", False) else "仅分析"
-            )
-            summary_text = judgment_text
-            if analysis_items:
-                summary_text += "；" + "、".join(analysis_items)
-            tooltip = summary_text
+            summary_text = "、".join(analysis_items) or "--"
+            tooltip = "\n".join(analysis_items)
 
+        load_cell = self.condition_table.cellWidget(row, 5)
+        if load_cell is not None:
+            self._update_output_load_status(load_cell)
         duration_item.setText(duration_text)
         summary_item.setText(summary_text)
         summary_item.setToolTip(tooltip)
@@ -1199,6 +1286,9 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
                 ),
                 TRIGGER_STATE_KEY: "",
                 TEST_QUEUE_KEY: str(condition.get(TEST_QUEUE_KEY, "") or ""),
+                **(
+                    segment_condition_fields(condition)
+                ),
             }
             for condition in groups[source_index].get(TEST_CONDITIONS_KEY, [])
         ]
@@ -1280,12 +1370,14 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         )
         if not source_path:
             return
-        success, message = self.manager.import_project(source_path)
+        success, project_data = self.manager.import_project(source_path)
         if not success:
-            QMessageBox.warning(self, "导入失败", message)
+            QMessageBox.warning(self, "导入失败", project_data)
             return
-        self._load_project(message)
-        self._emit_projects_changed()
+        self.queue_catalog = self.manager.load_queue_catalog()
+        self._show_project(project_data, None)
+        self._imported_draft = True
+        self._set_dirty(True)
 
     def _save_project_as(self):
         project_data = self.collect_project()
@@ -1329,20 +1421,41 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
 
     def _save_project(self, close_dialog=True):
         project_data = self.collect_project()
+        save_file = self.current_file
+        overwrite_file = None
+        if self._imported_draft:
+            overwrite_file = self.manager.existing_project_file(
+                project_data[PROJECT_NAME_KEY]
+            )
+            save_file = overwrite_file
         validation = self.manager.validate_project(
-            project_data, self.current_file, self.queue_catalog
+            project_data, save_file, self.queue_catalog
         )
         if not validation["can_save"]:
             QMessageBox.warning(
                 self, "无法保存", "\n".join(validation["save_errors"])
             )
             return False
-        success, message = self.manager.save_project(self.current_file, project_data)
+        if overwrite_file:
+            result = QMessageBox.question(
+                self,
+                "覆盖已有配置",
+                f"项目“{os.path.splitext(overwrite_file)[0]}”已存在。是否用导入后的配置覆盖？\n"
+                "选择“否”可继续编辑，或使用“另存为配置”保存为另一份配置。",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if result != QMessageBox.Yes:
+                return False
+        success, message = self.manager.save_project(save_file, project_data)
         if not success:
             QMessageBox.warning(self, "保存失败", message)
             return False
         self.current_file = message
+        self._imported_draft = False
+        project_data[PROJECT_NAME_KEY] = os.path.splitext(message)[0]
         self.project_data = project_data
+        self.project_name_input.setText(project_data[PROJECT_NAME_KEY])
         self._set_dirty(False)
         self._emit_projects_changed()
         if validation["use_warnings"]:

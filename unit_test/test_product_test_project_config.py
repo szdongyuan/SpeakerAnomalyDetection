@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -305,6 +306,56 @@ def test_rename_project_updates_file_and_registry_but_keeps_old_results(tmp_path
     assert manager.load_registry()["active_file"] == renamed_file
 
 
+@pytest.mark.parametrize("new_name", ["demo", "DEMO"])
+def test_case_only_update_preserves_original_project_name(tmp_path, new_name):
+    manager = make_manager(tmp_path)
+    project = make_project(tmp_path, project_name="Demo")
+    assert manager.save_project(None, project) == (True, "Demo.json")
+    project[PROJECT_NAME_KEY] = new_name
+    project[EXPORT_RAW_AUDIO_CSV_KEY] = True
+
+    assert manager.existing_project_file(new_name) == "Demo.json"
+    assert manager.save_project("Demo.json", project) == (True, "Demo.json")
+    assert manager.load_registry() == {
+        "active_file": "Demo.json",
+        "configs": [{"file": "Demo.json", "project_name": "Demo"}],
+    }
+    saved = manager.load_project("Demo.json")[1]
+    assert saved[PROJECT_NAME_KEY] == "Demo"
+    assert saved[EXPORT_RAW_AUDIO_CSV_KEY] is True
+    assert sorted(p.name for p in Path(manager.program_dir).glob("*.json")) == [
+        "Demo.json", "program_registry.json"
+    ]
+
+
+@pytest.mark.parametrize("operation", ["new", "save-as", "rename"])
+def test_case_insensitive_name_collision_rejects_unapproved_save(tmp_path, operation):
+    manager = make_manager(tmp_path)
+    project = make_project(tmp_path, project_name="Demo")
+    assert manager.save_project(None, project)[0]
+    other = make_project(tmp_path, project_name="Other")
+    assert manager.save_project(None, other)[0]
+    before = {p: p.read_bytes() for p in Path(manager.program_dir).glob("*.json")}
+
+    if operation == "save-as":
+        success, message = manager.save_as(other, "DEMO")
+    else:
+        other[PROJECT_NAME_KEY] = "demo"
+        success, message = manager.save_project("Other.json" if operation == "rename" else None, other)
+
+    assert not success
+    assert "项目名称已存在" in message
+    assert {p: p.read_bytes() for p in Path(manager.program_dir).glob("*.json")} == before
+
+
+def test_case_insensitive_lookup_preserves_unregistered_file_name(tmp_path):
+    manager = make_manager(tmp_path)
+    project = make_project(tmp_path, project_name="Demo")
+    assert manager.save_project(None, project)[0]
+    Path(manager.registry_path).unlink()
+    assert manager.existing_project_file("DEMO") == "Demo.json"
+
+
 def test_registry_failure_restores_previous_project_file(tmp_path, monkeypatch):
     manager = make_manager(tmp_path)
     project = make_project(tmp_path)
@@ -503,7 +554,7 @@ def test_project_import_queue_ignores_invalid_recording_preview_field(tmp_path):
     assert info["available"] is True
 
 
-def test_import_rejects_legacy_or_duplicate_project(tmp_path):
+def test_import_rejects_legacy_but_loads_duplicate_without_writing(tmp_path):
     manager = make_manager(tmp_path)
     legacy_path = tmp_path / "legacy.json"
     legacy_path.write_text(
@@ -524,6 +575,26 @@ def test_import_rejects_legacy_or_duplicate_project(tmp_path):
         encoding="utf-8",
     )
 
-    success, message = manager.import_project(str(duplicate_path))
-    assert success is False
-    assert message == "项目名称已存在：PB-A01充电宝"
+    before = {
+        path: path.read_bytes()
+        for path in Path(manager.program_dir).iterdir()
+        if path.is_file()
+    }
+    success, imported = manager.import_project(str(duplicate_path))
+    assert success is True
+    assert imported == project
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_import_new_project_does_not_create_files_or_results(tmp_path):
+    manager = make_manager(tmp_path)
+    project = make_project(tmp_path)
+    source = tmp_path / "external.json"
+    source.write_text(json.dumps(project), encoding="utf-8")
+    before = set(tmp_path.rglob("*"))
+
+    success, imported = manager.import_project(str(source))
+
+    assert success is True
+    assert imported == project
+    assert set(tmp_path.rglob("*")) == before

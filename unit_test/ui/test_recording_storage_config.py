@@ -42,6 +42,18 @@ def test_record_config_preserves_stored_root_exactly(window_factory, recording_r
     assert window_factory.warnings == []
 
 
+@pytest.mark.parametrize("seconds", [1.25, 0.0125, 7200])
+def test_recording_duration_survives_confirm_and_reopen(window_factory, seconds):
+    saved = {"total_time": seconds, "sample_rate": 48000}
+    for _ in range(2):
+        window = window_factory(saved)
+        assert window.time_input.value() == seconds
+        window.on_click_ok_btn()
+        assert window.final_data["total_time"] == seconds
+        saved = window.final_data
+    assert window_factory.warnings == []
+
+
 def test_record_config_does_not_insert_missing_root(window_factory):
     window = window_factory({"sample_rate": 48000})
 

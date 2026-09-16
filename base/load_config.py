@@ -1,3 +1,5 @@
+from base.analysis_segments import segment_condition_fields
+
 import json
 import os
 import yaml
@@ -230,6 +232,7 @@ class LoadUiConfig(object):
                         ),
                         "group_name": group_name,
                         "condition_name": condition_name,
+                        **segment_condition_fields(item),
                         "display_name": f"{group_name} / {condition_name}",
                         "trigger_state": " ".join(
                             str(item.get("trigger_state") or "")

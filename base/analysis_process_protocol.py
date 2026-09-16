@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from base.analysis_segments import AnalysisSegment
 import os
 
 from base.recording_process_protocol import FrozenConfig
@@ -86,7 +87,7 @@ class AnalysisInstanceRequest:
         analysis_type = _required_text("analysis_type", self.analysis_type)
         _integer("raw_channel", self.raw_channel)
         _integer("source_wav_column", self.source_wav_column)
-        if analysis_type not in SUPPORTED_ANALYSIS_TYPES:
+        if analysis_type not in SUPPORTED_ANALYSIS_TYPES and analysis_type != "Unsupported":
             raise ValueError(f"unsupported analysis_type: {analysis_type}")
         if runtime_key != build_runtime_key(config_key, self.raw_channel):
             raise ValueError("runtime_key does not match config_key and raw_channel")
@@ -122,6 +123,8 @@ class AnalysisTaskRequest:
     analysis_config_snapshot: Mapping
     storage_snapshot: Mapping
     instances: tuple[AnalysisInstanceRequest, ...]
+    condition_snapshot: Mapping = field(default_factory=dict)
+    segment_plan: tuple[AnalysisSegment, ...] = ()
 
     def __post_init__(self):
         object.__setattr__(self, "task_id", _required_text("task_id", self.task_id))
@@ -165,11 +168,16 @@ class AnalysisTaskRequest:
 
         object.__setattr__(self, "wav_path", os.path.abspath(wav_path))
         object.__setattr__(self, "channel_mapping", mappings)
+        plan = tuple(self.segment_plan)
+        if any(not isinstance(s, AnalysisSegment) or s.segment_index != i for i, s in enumerate(plan)):
+            raise ValueError("分段计划身份无效")
+        object.__setattr__(self, "segment_plan", plan)
         object.__setattr__(self, "instances", instances)
         for name in (
             "sequence_config_snapshot",
             "analysis_config_snapshot",
             "storage_snapshot",
+            "condition_snapshot",
         ):
             object.__setattr__(
                 self,
@@ -233,7 +241,7 @@ class AnalysisInstanceResult:
         _required_text("task_id", self.task_id)
         config_key = _required_text("config_key", self.config_key)
         runtime_key = _required_text("runtime_key", self.runtime_key)
-        if self.analysis_type not in SUPPORTED_ANALYSIS_TYPES:
+        if self.analysis_type not in SUPPORTED_ANALYSIS_TYPES and self.analysis_type != "Unsupported":
             raise ValueError(f"unsupported analysis_type: {self.analysis_type}")
         _integer("raw_channel", self.raw_channel)
         _integer("source_wav_column", self.source_wav_column)
@@ -272,9 +280,12 @@ class AnalysisTaskResult:
     judgement_status: str
     final_judgement: str | None
     instance_results: tuple[AnalysisInstanceResult, ...]
+    segments: tuple["AnalysisSegmentResult", ...] = ()
+    condition_snapshot: Mapping = field(default_factory=dict)
     error_stage: str = ""
     error_type: str = ""
     error_message: str = ""
+    channel_labels: Mapping = field(default_factory=dict)
 
     def __post_init__(self):
         _required_text("task_id", self.task_id)
@@ -291,6 +302,16 @@ class AnalysisTaskResult:
             raise ValueError("final_judgement must be OK, NG or empty")
         if self.judgement_status != "已判定" and self.final_judgement is not None:
             raise ValueError("only judged tasks can carry final_judgement")
+        object.__setattr__(self, "condition_snapshot", _freeze_mapping("condition_snapshot", self.condition_snapshot))
+        object.__setattr__(self, "channel_labels", _freeze_mapping("channel_labels", self.channel_labels))
+        object.__setattr__(self, "segments", tuple(self.segments))
+        for segment in self.segments:
+            if not isinstance(segment, AnalysisSegmentResult):
+                raise ValueError("segments must contain segment results")
+            if any(item.task_id != self.task_id for item in segment.instance_results):
+                raise ValueError("segment result task_id does not match task")
+        if len({s.segment.segment_index for s in self.segments}) != len(self.segments):
+            raise ValueError("duplicate segment indices")
         results = tuple(self.instance_results)
         for result in results:
             if not isinstance(result, AnalysisInstanceResult):
@@ -298,6 +319,15 @@ class AnalysisTaskResult:
             if result.task_id != self.task_id:
                 raise ValueError("instance result task_id does not match task")
         object.__setattr__(self, "instance_results", results)
+
+
+@dataclass(frozen=True)
+class AnalysisSegmentResult:
+    segment: AnalysisSegment
+    instance_results: tuple[AnalysisInstanceResult, ...]
+    execution_status: str
+    judgement_status: str
+    final_judgement: str | None
 
 
 @dataclass(frozen=True)
