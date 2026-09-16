@@ -1,6 +1,7 @@
 """Plan and delete only the confirmed files of selected audio records."""
 
 from dataclasses import dataclass
+import errno
 import os
 from pathlib import Path
 
@@ -49,6 +50,25 @@ def count_audio_deletion_files(plans):
     }
 
 
+def _remove_empty_result_directories(plan):
+    if plan.sample_directory is None:
+        return
+    sample_directory = Path(plan.sample_directory)
+    for category in ("images", "csv"):
+        directory = sample_directory / category / Path(plan.wav_path).stem
+        if not directory.resolve().is_relative_to(sample_directory.resolve()):
+            raise ValueError(f"结果目录超出录音样本目录：{directory}")
+        try:
+            # Only remove this recording's empty directory, never its contents
+            # or shared parent directories. This also works on deletion retries.
+            directory.rmdir()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            if error.errno != errno.ENOTEMPTY:
+                raise
+
+
 def delete_audio_recordings(plans, recording_manager):
     """Keep a record for retry when any file or its database deletion fails."""
     deleted_ids = []
@@ -60,6 +80,7 @@ def delete_audio_recordings(plans, recording_manager):
                     if kind != "wav":
                         _validate_companion_path(filename, plan.sample_directory)
                     Path(filename).unlink(missing_ok=True)
+            _remove_empty_result_directories(plan)
         except (OSError, ValueError) as error:
             errors.append(f"{Path(plan.wav_path).name}：{error}")
             continue
