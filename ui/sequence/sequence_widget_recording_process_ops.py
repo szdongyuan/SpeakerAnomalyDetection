@@ -1,5 +1,7 @@
 """Main-recording adapter: request snapshots, envelopes and accepted results."""
 import os
+import copy
+from base.analysis_segments import normalize_segmented_analysis, recording_duration, segment_count
 import time
 from uuid import uuid4
 
@@ -220,6 +222,15 @@ class SequenceWidgetRecordingProcessOpsMixin:
                 or getattr(self, "_recording_publication_in_progress", False)):
             raise RuntimeError("previous recording publication has not entered the analysis queue")
         detail = self._resolve_recording_acq_detail()
+        analysis_task_config = {
+            "condition_config": copy.deepcopy(getattr(self, "_active_product_condition_config", None) or {}),
+            "sequence_config": copy.deepcopy(getattr(self, "sequence_config", []) or []),
+            "analysis_config": copy.deepcopy(getattr(self, "analysis_config", {}) or {}),
+            "channel_labels": copy.deepcopy(getattr(getattr(self, "channel_workspace", None), "channel_layout", {}) or {}),
+        }
+        segment_settings = normalize_segmented_analysis(analysis_task_config["condition_config"])
+        if segment_settings["mode"] != "none":
+            segment_count(segment_settings, recording_duration(analysis_task_config["sequence_config"]))
         preview_time_mode = resolve_recording_preview_time_mode(detail)
         if recorded_dict["device"].get("backend") == VE_BACKEND:
             request_rate = validate_sample_rate(sample_rate)
@@ -262,8 +273,10 @@ class SequenceWidgetRecordingProcessOpsMixin:
                 session_binding_pending=True,
                 recent_session_id=str(
                     getattr(self, "_current_recent_session_id", "") or ""),
-                recorded_signal_info=dict(
-                    getattr(self, "recorded_signal_info", {}) or {}),
+                recorded_signal_info={
+                    **dict(getattr(self, "recorded_signal_info", {}) or {}),
+                    "analysis_task_config": analysis_task_config,
+                },
                 workflow_token=getattr(self, "_recording_workflow_token", None),
             )
             validate_workspace = getattr(

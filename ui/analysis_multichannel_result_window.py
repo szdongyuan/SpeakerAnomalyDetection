@@ -324,6 +324,13 @@ class AnalysisMultichannelResultWindow(QWidget):
             axis.setPen(pg.mkPen(ui_style_const.COLOR_BORDER_STRONG))
             axis.setTextPen(pg.mkPen(ui_style_const.COLOR_TEXT_MUTED))
         widget.showGrid(x=True, y=True, alpha=0.22)
+        for boundary in payload.get("segment_boundaries", ()):
+            widget.addItem(pg.InfiniteLine(
+                pos=float(boundary), angle=90, movable=False,
+                pen=pg.mkPen("#6B7280", width=1, style=Qt.DashLine),
+            ))
+        if payload.get("recording_time_range"):
+            widget.setXRange(*payload["recording_time_range"], padding=0)
 
     def _image_page(self, payload):
         label = _ResponsivePixmapLabel()

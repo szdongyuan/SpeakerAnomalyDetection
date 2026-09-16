@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict, replace
 import math
 from pathlib import Path
 import time
@@ -22,6 +23,22 @@ _CURVE_JUDGMENT_ANALYSIS_TYPES = {
 _REPORT_PLOT_LAYOUT_SIZE = (1000, 600)
 _REPORT_PLOT_EXPORT_WIDTH = 1000
 _REPORT_PLOT_SLOW_SECONDS = 0.5
+
+
+def build_segment_report_results(task_result, analysis_config):
+    results = []
+    for segment in task_result.segments:
+        plan = segment.segment
+        result = replace(task_result, instance_results=segment.instance_results, segments=())
+        results.append({
+            **asdict(plan), "segment_value": plan.value, "segment_label": plan.label,
+            "window_start_seconds": plan.window_start_sample / plan.sample_rate,
+            "window_end_seconds": plan.window_end_sample / plan.sample_rate,
+            "result": segment.final_judgement or ("未产生判定" if segment.execution_status == "分析完成" else "分析失败"),
+            "analysis_state": "completed" if segment.execution_status == "分析完成" else "failed",
+            "analysis_items": build_analysis_report_items_from_task_result(result, analysis_config),
+        })
+    return results
 
 
 def build_analysis_report_items_from_task_result(task_result, analysis_config):
@@ -88,6 +105,7 @@ def build_analysis_report_items_from_task_result(task_result, analysis_config):
                 "item_key": item.config_key,
                 "runtime_key": item.runtime_key,
                 "channel_key": f"In{item.raw_channel + 1}",
+                "channel_label": getattr(task_result, "channel_labels", {}).get(f"CH{item.raw_channel + 1}", ""),
                 "type": item.analysis_type,
                 "state": state,
                 "status": status,
@@ -144,8 +162,8 @@ def _process_result_limits(analysis_type, metrics, config):
     if not config.get("limit_checked", False):
         return "-", "-"
     return (
-        _configured_limit_value(config, "lower", {}),
-        _configured_limit_value(config, "upper", {}),
+        metrics.get("lower_limit_summary") or _configured_limit_value(config, "lower", {}),
+        metrics.get("upper_limit_summary") or _configured_limit_value(config, "upper", {}),
     )
 
 

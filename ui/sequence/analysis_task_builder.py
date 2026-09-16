@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import soundfile as sf
 
+from base.analysis_segments import build_segment_plan, normalize_segmented_analysis, recording_duration
 from base.analysis_process_protocol import (
     AnalysisChannelMapping,
     AnalysisInstanceRequest,
@@ -40,6 +41,7 @@ def build_analysis_task_request(
     saved_active_input_channels=None,
     fallback_v2pa_factors=None,
     task_id=None,
+    condition_config=None,
 ):
     absolute_path = os.path.abspath(str(wav_path or "").strip())
     if not absolute_path or not os.path.isfile(absolute_path):
@@ -86,6 +88,12 @@ def build_analysis_task_request(
         and float(value) > 0.0
     }
 
+    condition_snapshot = copy.deepcopy(condition_config or {})
+    try:
+        segments = normalize_segmented_analysis(condition_snapshot)
+    except ValueError as error:
+        raise AnalysisTaskBuildError(str(error)) from error
+    is_segmented = segments["mode"] != "none"
     display_sequence = analysis_config.get("display_sequence", [])
     if not isinstance(display_sequence, (list, tuple)):
         raise AnalysisTaskBuildError("分析项顺序配置无效")
@@ -98,7 +106,10 @@ def build_analysis_task_request(
             continue
         analysis_type = str(parameters.get("type") or "").strip()
         if analysis_type not in SUPPORTED_ANALYSIS_TYPES:
-            continue
+            if not is_segmented:
+                continue
+            parameters = {**parameters, "unsupported_type": analysis_type}
+            analysis_type = "Unsupported"
         for raw_channel in normalize_analysis_channels(parameters):
             source_column = column_by_raw_channel.get(raw_channel)
             if source_column is None:
@@ -140,6 +151,13 @@ def build_analysis_task_request(
             "当前配置没有可执行的 SPL、Spec、FBA、AI 或 FFT 分析项"
         )
 
+    try:
+        if segments["mode"] != "none":
+            condition_snapshot["segmented_analysis"] = segments
+            condition_snapshot.pop("output_load", None)
+        plan = build_segment_plan(segments, recording_duration(sequence_config), sample_rate) if segments["mode"] != "none" else ()
+    except ValueError as error:
+        raise AnalysisTaskBuildError(str(error)) from error
     sequence_snapshot = {
         "sequence_config": copy.deepcopy(sequence_config or []),
         "sample_rate": sample_rate,
@@ -155,4 +173,6 @@ def build_analysis_task_request(
         analysis_config_snapshot=copy.deepcopy(analysis_config),
         storage_snapshot=copy.deepcopy(storage_snapshot or {}),
         instances=tuple(instances),
+        condition_snapshot=condition_snapshot,
+        segment_plan=plan,
     )

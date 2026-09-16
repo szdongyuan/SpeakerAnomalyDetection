@@ -1624,6 +1624,7 @@ def test_coalesced_600_second_delivery_reaches_live_and_final_endpoints(
         },
         "session_id": "",
         "group_id": "",
+        "config_snapshot": {},
     }
     expected_time, expected_display = original_prepare(
         raw_mono[trim:],

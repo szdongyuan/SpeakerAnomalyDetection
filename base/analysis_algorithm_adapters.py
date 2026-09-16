@@ -86,11 +86,14 @@ def _calculate_spl(signal, sample_rate, config, v2pa_factor, **_context):
             weighting=weighting,
             zero_phase=False,
         )
-    analysis_signal, analysis_start_sample = apply_spl_analysis_time_range(
-        weighted_signal,
-        sample_rate,
-        config,
-    )
+    window = _context.get("sequence_snapshot", {}).get("segment_window_samples")
+    if window is not None:
+        analysis_start_sample, stop = window
+        analysis_signal = weighted_signal[analysis_start_sample:stop]
+    else:
+        analysis_signal, analysis_start_sample = apply_spl_analysis_time_range(
+            weighted_signal, sample_rate, config,
+        )
     overall_spl = calculate_overall_spl(
         analysis_signal,
         reference_pressure,
@@ -461,15 +464,15 @@ def _calculate_ai(
     source,
     sequence_snapshot,
 ):
+    model_name = str(config.get("analyse_model_name") or "").strip()
+    if not model_name:
+        raise ValueError("未配置 AI 分析模型")
     from base.model_runtime_validation import validate_model_duration
     from base.predict_model import predict_from_audio
     from base.training_model_management import TrainingModelManagement
     from consts import error_code
     from consts.running_consts import DEFAULT_DIR
 
-    model_name = str(config.get("analyse_model_name") or "").strip()
-    if not model_name:
-        raise ValueError("未配置 AI 分析模型")
     manager = TrainingModelManagement()
     code, query_result = manager.get_model_path_from_db(model_name)
     if code != error_code.OK or not query_result:
@@ -560,8 +563,11 @@ def calculate_analysis_instance(
     try:
         handler = _HANDLERS[analysis_type]
     except KeyError as exc:
-        raise ValueError(f"不支持的分析类型：{analysis_type}") from exc
+        raise ValueError(f"不支持的分析类型：{(config or {}).get('unsupported_type', analysis_type)}") from exc
     values = np.asarray(signal, dtype=np.float32).reshape(-1)
+    window = (sequence_snapshot or {}).get("segment_window_samples")
+    if window is not None and analysis_type != "SPL":
+        values = values[window[0]:window[1]]
     if values.size == 0:
         raise ValueError("分析通道没有音频数据")
     if int(sample_rate) <= 0:

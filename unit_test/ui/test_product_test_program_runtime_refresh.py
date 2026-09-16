@@ -48,9 +48,10 @@ def test_main_window_connects_program_changes_before_opening_dialog():
             self.callback = callback
 
     class FakeDialog:
-        def __init__(self, manager, queue_editor, parent):
+        def __init__(self, manager, queue_editor, parent, *, contextual_queue_editor_callback=None):
             assert manager is None
             assert queue_editor is parent._open_analysis_model_select
+            assert contextual_queue_editor_callback is queue_editor
             self.queue_editor = queue_editor
             self.programs_changed = FakeSignal()
 
@@ -103,7 +104,7 @@ def test_main_window_refreshes_button_after_exceptional_dialog_exit():
             return None
 
     class FakeDialog:
-        def __init__(self, _manager, _queue_editor, _parent):
+        def __init__(self, _manager, _queue_editor, _parent, *, contextual_queue_editor_callback=None):
             self.programs_changed = FakeSignal()
 
         def exec(self):

@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QWidget
 
 from base.log_manager import LogManager
 from base.sound_device_manager import SoundDeviceManager
+from base.config_number_format import config_number_decimals
 from base.ve3668n_input import validate_range_index
 from base.ve3668n_recording_config import resolve_ve_recording_config
 from base.recording_preview_config import (
@@ -109,9 +110,10 @@ class RecordConfigWindow(BaseConfigWindow):
 
         label_time = QLabel("音频时长:")
         self.time_input = QDoubleSpinBox()
-        self.time_input.setRange(0.1, 600)
-        self.time_input.setDecimals(1)
-        self.time_input.setValue(float(self.input_data.get("total_time", 4.0)))
+        total_time = float(self.input_data.get("total_time", 4.0))
+        self.time_input.setDecimals(config_number_decimals(total_time, 1))
+        self.time_input.setRange(min(0.1, total_time), max(600, total_time))
+        self.time_input.setValue(total_time)
         self.time_input.setSingleStep(0.1)
         self.time_input.setSuffix(" 秒")
 

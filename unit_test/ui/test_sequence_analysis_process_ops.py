@@ -1,4 +1,7 @@
+from base.recording_process_protocol import FrozenConfig
 from types import SimpleNamespace
+
+import pytest
 
 import ui.sequence.sequence_widget_analysis_process_ops as analysis_process_ops
 from ui.sequence.sequence_widget_analysis_process_ops import (
@@ -134,6 +137,7 @@ def test_automatic_admission_error_is_not_marked_result_incomplete():
 
 def test_channel_results_keep_non_judging_spec_as_analysis_complete():
     task_result = SimpleNamespace(
+        segments=(),
         instance_results=(
             SimpleNamespace(
                 raw_channel=0,
@@ -161,9 +165,10 @@ def test_channel_results_keep_non_judging_spec_as_analysis_complete():
     assert rows[0]["result"] == "OK"
 
 
-def test_progress_keeps_short_analysis_status_in_header_and_row():
+@pytest.mark.parametrize("stage", ["分析中", "分段分析"])
+def test_progress_keeps_short_analysis_status_in_header_and_row(stage):
     progress = SimpleNamespace(
-        stage="分析中",
+        stage=stage,
         message="声压级 (SPL) 1 CH1",
     )
 
@@ -177,6 +182,7 @@ def test_progress_keeps_short_analysis_status_in_header_and_row():
     class Host(SequenceWidgetAnalysisProcessOpsMixin):
         def __init__(self):
             self.left_panel = _LeftPanel()
+            self.channel_workspace = _Workspace()
             self._analysis_process_service = _Service()
             self._analysis_active_request = SimpleNamespace(
                 source="自动分析",
@@ -200,6 +206,9 @@ def test_progress_keeps_short_analysis_status_in_header_and_row():
     ]
     assert host.left_panel.stage_updates == [
         ("分析中", "running")
+    ]
+    assert host.channel_workspace.context_updates == [
+        ("group_1:condition_2", {"status": "分析中"})
     ]
 
 
@@ -299,6 +308,8 @@ def test_terminal_result_does_not_leave_background_analysis_stage():
 
     host = Host()
     result = SimpleNamespace(
+        segments=(),
+        condition_snapshot=FrozenConfig.snapshot({}),
         condition_key="group_1:condition_1",
         instance_results=(),
         final_judgement="OK",
@@ -323,6 +334,8 @@ def test_completed_analysis_replaces_collecting_waveform_status():
 
     host = Host()
     result = SimpleNamespace(
+        segments=(),
+        condition_snapshot=FrozenConfig.snapshot({}),
         condition_key="group_1:condition_1",
         instance_results=(),
         execution_status="分析完成",
@@ -426,6 +439,8 @@ def test_manual_terminal_waits_for_click_without_updating_official_state(monkeyp
 
     host = Host()
     result = SimpleNamespace(
+        segments=(),
+        condition_snapshot=FrozenConfig.snapshot({}),
         task_id="manual-1",
         source="手动查看",
         condition_key="0.3",
@@ -631,7 +646,7 @@ def test_manual_result_windows_receive_current_channel_position_labels(monkeypat
     host = Host()
     instance = SimpleNamespace(config_key="声压级")
     host._show_manual_analysis_result_windows(
-        SimpleNamespace(instance_results=(instance,))
+        SimpleNamespace(instance_results=(instance,), segments=())
     )
 
     assert created[0][2]["channel_labels"] == {
@@ -670,6 +685,8 @@ def test_artifact_failure_is_visible_without_changing_official_label():
 
     host = Host()
     result = SimpleNamespace(
+        segments=(),
+        condition_snapshot=FrozenConfig.snapshot({}),
         task_id="auto-1",
         condition_key="0.3",
         wav_path="C:/record.wav",
@@ -708,6 +725,8 @@ def test_task_level_failure_marks_report_snapshot_failed():
 
     host = Host()
     result = SimpleNamespace(
+        segments=(),
+        condition_snapshot=FrozenConfig.snapshot({}),
         task_id="auto-2",
         execution_status="分析失败",
         error_message="子进程异常退出",
@@ -794,6 +813,28 @@ def test_worker_log_keeps_compact_item_summary_in_main_and_raw_detail_in_debug()
     assert '"wav_path": "D:/very/long/path/source.wav"' in (
         host._analysis_debug_logger.messages[0][1]
     )
+
+
+def test_segment_failure_log_has_segment_channel_window_and_full_debug_reason():
+    class Host(SequenceWidgetAnalysisProcessOpsMixin):
+        def __init__(self):
+            self.default_logger = _Logger()
+            self._analysis_debug_logger = _Logger()
+
+    host = Host()
+    host._write_analysis_worker_log({
+        'level': 'ERROR', 'event': 'analysis_segment_instance_failed',
+        'task_id': 'task-1', 'source': '自动分析', 'condition_key': '档位',
+        'wav_path': 'D:/record.wav', 'config_key': 'SPL1', 'runtime_key': 'SPL1--通道1',
+        'segment_label': '输出负载0A', 'raw_channel': 0,
+        'window_start_seconds': 25, 'window_end_seconds': 35,
+        'error_message': '录音不足', 'traceback_text': 'ValueError: 录音不足',
+    })
+    message = host.default_logger.messages[0][1]
+    assert 'segment=输出负载0A' in message and 'raw_channel=0' in message
+    assert 'window_start_seconds=25' in message and 'window_end_seconds=35' in message
+    assert 'wav=D:/record.wav' in message and 'error=录音不足' in message
+    assert 'traceback_text' in host._analysis_debug_logger.messages[0][1]
 
 
 def test_worker_log_routes_successful_instance_detail_to_debug_only():

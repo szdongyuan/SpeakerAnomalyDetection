@@ -1,8 +1,11 @@
 """Project-level product test configuration management."""
 
+import copy
+import math
 import ntpath
 import os
 
+from base.analysis_segments import segment_condition_fields, normalize_segmented_analysis, segment_count
 from base.hardware_trigger.serial_full_frame_matcher import normalize_hex_frame
 from base.load_config import LoadUiConfig
 from base.recording_preview_config import resolve_recording_preview_time_mode
@@ -14,6 +17,7 @@ from consts.product_test_project_consts import (
     INVALID_PROJECT_NAME_CHARS,
     LIMIT_RULE_ANALYSIS_TYPES,
     MIXED_ACQUISITION_MODE_ERROR,
+    OUTPUT_LOAD_KEY,
     PRODUCT_TRIGGER_MODE_MANUAL,
     PRODUCT_TRIGGER_MODE_MIXED,
     PRODUCT_TRIGGER_MODE_SERIAL,
@@ -85,6 +89,7 @@ def flatten_test_conditions(project_data):
             {
                 "key": f"group_{group_index}:condition_{condition_index}",
                 GROUP_NAME_KEY: group_name,
+                **segment_condition_fields(condition),
                 CONDITION_NAME_KEY: condition_name,
                 TRIGGER_STATE_KEY: normalize_trigger_state(
                     condition.get(TRIGGER_STATE_KEY, "")
@@ -164,6 +169,11 @@ class ProductTestProjectValidator(object):
                 errors.append(f"{location}引用的测试队列不存在：{test_queue}")
             elif not queue_info.get("available", False):
                 errors.append(f"{location}引用的测试队列不可用：{test_queue}")
+            if isinstance(queue_info, dict) and queue_info.get("available"):
+                try:
+                    segment_count(normalize_segmented_analysis(condition), queue_info.get("duration"))
+                except ValueError as error:
+                    errors.append(f"{location}：{error}")
         return errors
 
     @staticmethod
@@ -261,6 +271,36 @@ class ProductTestProjectValidator(object):
                             else:
                                 trigger_states.add(trigger_state)
 
+                try:
+                    segment_condition_fields(condition)
+                except ValueError as error:
+                    errors.append(f"{location}：{error}")
+
+                if OUTPUT_LOAD_KEY in condition:
+                    load = condition[OUTPUT_LOAD_KEY]
+                    if not isinstance(load, dict):
+                        errors.append(f"{location}的输出负载配置必须是对象")
+                    else:
+                        values = load.get("values")
+                        seconds = load.get("analysis_seconds")
+                        if type(load.get("enabled")) is not bool:
+                            errors.append(f"{location}的输出负载启用状态必须是布尔值")
+                        if not isinstance(values, list) or any(
+                            type(value) not in (int, float)
+                            or not math.isfinite(value)
+                            or value < 0
+                            for value in values
+                        ):
+                            errors.append(f"{location}的输出负载必须是非负数列表")
+                        elif load.get("enabled") and not values:
+                            errors.append(f"{location}的输出负载不能为空")
+                        if (
+                            type(seconds) not in (int, float)
+                            or not math.isfinite(seconds)
+                            or seconds <= 0
+                        ):
+                            errors.append(f"{location}的每段分析时长必须大于零")
+
                 test_queue = condition.get(TEST_QUEUE_KEY, "")
                 if not isinstance(test_queue, str):
                     errors.append(f"{location}的测试队列名称格式错误")
@@ -281,7 +321,10 @@ class ProductTestProjectValidator(object):
             registered_name = normalize_project_name(
                 item.get(PROJECT_NAME_KEY, "")
             )
-            if file_name != current_file and registered_name == project_name:
+            if (
+                file_name.casefold() != str(current_file or "").casefold()
+                and registered_name.casefold() == project_name.casefold()
+            ):
                 errors.append(f"项目名称已存在：{project_name}")
                 break
         return errors
@@ -412,6 +455,8 @@ class ProductTestProjectConfigManager(object):
     def save_project(self, current_file, project_data):
         if current_file and not self._is_safe_file_name(current_file):
             return False, "产品测试配置文件名不合法"
+        if current_file:
+            current_file = self.existing_project_file(current_file) or current_file
 
         registry = self.load_registry()
         errors = self._collect_save_errors(project_data, registry, current_file)
@@ -421,11 +466,18 @@ class ProductTestProjectConfigManager(object):
         normalized_project = self._normalize_project(project_data)
         project_name = normalized_project[PROJECT_NAME_KEY]
         target_file = project_file_name(project_name)
+        # A case-only change updates the same project, keeping its saved spelling.
+        if current_file and target_file.casefold() == current_file.casefold():
+            target_file = current_file
+            project_name = os.path.splitext(current_file)[0]
+            normalized_project[PROJECT_NAME_KEY] = project_name
         current_path = (
             os.path.join(self.program_dir, current_file) if current_file else None
         )
         target_path = os.path.join(self.program_dir, target_file)
-        if target_file != current_file and os.path.exists(target_path):
+        if target_file != current_file and (
+            self.existing_project_file(project_name) or os.path.exists(target_path)
+        ):
             return False, f"项目名称已存在：{project_name}"
 
         try:
@@ -483,20 +535,31 @@ class ProductTestProjectConfigManager(object):
         return self.save_project(None, copied_project)
 
     def import_project(self, source_path):
+        """Read an import draft; persistence is handled only by save_project."""
         load_code, project_data = LoadUiConfig.load_data_from_json(source_path)
         if load_code != error_code.OK or not isinstance(project_data, dict):
             return False, "导入文件不是有效的产品测试配置 JSON"
-        project_name = normalize_project_name(
-            project_data.get(PROJECT_NAME_KEY, "")
+        errors = ProductTestProjectValidator.validate_for_save(
+            project_data, {}, None
         )
+        if errors:
+            return False, "\n".join(errors)
+        return True, project_data
+
+    def existing_project_file(self, project_name):
+        """Find the managed save target, including a missing registered file."""
         target_file = project_file_name(project_name)
-        registry = self.load_registry()
-        if os.path.exists(os.path.join(self.program_dir, target_file)) or any(
-            str(item.get(PROJECT_NAME_KEY, "") or "").strip() == project_name
-            for item in registry.get(REGISTRY_CONFIGS_KEY, [])
-        ):
-            return False, f"项目名称已存在：{project_name}"
-        return self.save_project(None, project_data)
+        if not self._is_safe_file_name(target_file):
+            return None
+        for item in self.load_registry().get(REGISTRY_CONFIGS_KEY, []):
+            if item[REGISTRY_FILE_KEY].casefold() == target_file.casefold():
+                return item[REGISTRY_FILE_KEY]
+        if os.path.isdir(self.program_dir):
+            with os.scandir(self.program_dir) as entries:
+                for entry in entries:
+                    if entry.name.casefold() == target_file.casefold() and entry.is_file():
+                        return entry.name
+        return None
 
     def delete_project(self, file_name):
         if not self._is_safe_file_name(file_name):
@@ -664,6 +727,9 @@ class ProductTestProjectConfigManager(object):
                         TEST_QUEUE_KEY: str(
                             condition.get(TEST_QUEUE_KEY, "") or ""
                         ).strip(),
+                        **(
+                            segment_condition_fields(condition)
+                        ),
                     }
                 )
             test_groups.append(

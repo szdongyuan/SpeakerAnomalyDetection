@@ -202,6 +202,8 @@ class SequenceWidgetStreamingOpsMixin:
             "recorded_path": recorded_path,
             "recorded_signal_info": recorded_signal_info,
             "session_id": session_id,
+            "config_snapshot": recorded_signal_info.get("analysis_task_config") or
+                ((getattr(self, "recent_test_session_by_id", {}) or {}).get(session_id, {}) or {}).get("config_snapshot", {}),
         }
         channel_workspace = getattr(self, "channel_workspace", None)
         if channel_workspace is not None:
@@ -695,6 +697,8 @@ class SequenceWidgetStreamingOpsMixin:
                     str(item.get("test_queue") or "").strip(),
                     str(item.get("group_name") or "").strip(),
                     str(item.get("condition_name") or item.get("name") or "").strip(),
+                    str(item.get("input_voltage") or "").strip(),
+                    json.dumps(item.get("segmented_analysis") or item.get("output_load") or {}, sort_keys=True, ensure_ascii=False),
                 )
             )
         return tuple(signature)
