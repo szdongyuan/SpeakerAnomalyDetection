@@ -57,7 +57,6 @@ SUPPORTED_ACQ_MODES = {"RECORD_ONLY", "IMPORT_AUDIO"}
 SUPPORTED_ANALYSIS_ITEMS = [
     "声压级 (SPL) ",
     "频谱分析 (Spec) ",
-    "AI 分析 ",
     "频段能量 (FBA) ",
     "快速傅里叶变换 (FFT) ",
 ]
