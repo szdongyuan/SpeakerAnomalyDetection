@@ -1777,10 +1777,10 @@ class RecordingService:
         if (self._shutdown_deadline is not None and now >= self._shutdown_deadline
                 and worker is not None and not worker.retiring):
             self._retire(worker)
-        if (self._closing and self._worker is None and self._shutdown_deadline is not None
+        if (self._closing and self._worker is None and self._leases
+                and self._shutdown_deadline is not None
                 and now >= self._shutdown_deadline and not self._shutdown_reported):
-            if self._leases:
-                self._diagnose("Recording stopped; pending reader paths remain leased during shutdown")
+            self._diagnose("Recording stopped; pending reader paths remain leased during shutdown")
             self._report_shutdown()
 
     def _report_shutdown(self):
@@ -1892,8 +1892,9 @@ class RecordingService:
                 self._handle_supervisor_exception(exc)
             if self._closing and self._worker is None and not self._leases:
                 self._timing_logger.close()
-                self._report_shutdown()
+                # Publish complete resource closure before callbacks observe it.
                 self.closed.set()
+                self._report_shutdown()
                 return
 
     def _handle_supervisor_exception(self, exc):

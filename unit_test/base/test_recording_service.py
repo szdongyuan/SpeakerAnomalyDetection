@@ -841,6 +841,59 @@ def test_duplicate_and_stale_events_cannot_redeliver_or_overwrite(tmp_path, serv
 
 
 
+@pytest.mark.parametrize("deadline_expired", [False, True], ids=["normal", "expired"])
+def test_idle_shutdown_callback_observes_closed_state(services, monkeypatch, deadline_expired):
+    begin = threading.Event()
+    deadline_ready = threading.Event()
+    resume = threading.Event()
+    callback = threading.Event()
+    observations = []
+    now = [100.0]
+    run = RecordingService._run
+
+    def gated_run(service):
+        # Queue shutdown before the first iteration, so its real dispatch
+        # computes the deadline before the closing guard can finish the loop.
+        if not begin.wait(5):
+            return
+        run(service)
+
+    monkeypatch.setattr(RecordingService, "_run", gated_run)
+    service = services(monotonic=lambda: now[0], shutdown_timeout=1)
+    dispatch = service._dispatch
+
+    def gated_dispatch(item):
+        dispatch(item)
+        if item[0] == "shutdown":
+            deadline_ready.set()
+            if not resume.wait(5):
+                raise TimeoutError("test did not resume shutdown before tick")
+
+    monkeypatch.setattr(service, "_dispatch", gated_dispatch)
+
+    def observe():
+        observations.append((service.closed.is_set(), service.worker_pid,
+                             dict(service._leases), tuple(service.diagnostics)))
+        callback.set()
+
+    try:
+        service.shutdown(observe)
+        begin.set()
+        assert deadline_ready.wait(5)
+        assert service._shutdown_deadline == 101.0
+        if deadline_expired:
+            now[0] = service._shutdown_deadline + 1
+        resume.set()
+        assert callback.wait(5)
+        assert observations == [(True, None, {}, ())]
+    finally:
+        begin.set()
+        resume.set()
+        service.shutdown()
+        service._supervisor.join(5)
+        assert not service._supervisor.is_alive()
+
+
 def test_shutdown_deadline_handles_native_close_hang(tmp_path, services):
     service = services(dict(manual=True, hang_close=True), cancel_timeout=.2,
                        shutdown_timeout=.3, terminate_timeout=.2)
@@ -879,10 +932,22 @@ def test_shutdown_with_stuck_reader_reports_boundedly_but_retains_lease(tmp_path
     events = Events()
     session = service.start(request(tmp_path, purpose="calibration", channels=(0,)), events.callbacks)
     callback = threading.Event()
+    observations = []
+
+    def observe():
+        observations.append((service.closed.is_set(), service.worker_pid,
+                             service.is_path_leased(session.request.path),
+                             tuple(service.diagnostics)))
+        callback.set()
+
     try:
         assert paused.entered.wait(10)
-        service.shutdown(callback.set)
+        service.shutdown(observe)
         assert callback.wait(3), "shutdown must report pending file release without waiting for stuck I/O"
+        assert len(observations) == 1
+        closed, worker_pid, leased, diagnostics = observations[0]
+        assert not closed and worker_pid is None and leased
+        assert any("leased" in message for message in diagnostics)
         assert service.worker_pid is None
         assert service.is_path_leased(session.request.path) and Path(session.request.path).exists()
         assert any("leased" in message for message in service.diagnostics)
@@ -890,6 +955,10 @@ def test_shutdown_with_stuck_reader_reports_boundedly_but_retains_lease(tmp_path
     finally:
         paused.release.set()
     assert session.released.wait(5)
+    assert service.closed.wait(5)
+    service._supervisor.join(5)
+    assert not service._supervisor.is_alive()
+    assert len(observations) == 1
     assert not Path(session.request.path).parent.exists()
 
 

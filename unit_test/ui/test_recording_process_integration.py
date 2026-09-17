@@ -1032,6 +1032,63 @@ def test_dead_worker_before_acceptance_never_publishes_success(ui_qapp, service,
     host._handle_invalid_recording.assert_called_once()
 
 
+def test_idle_shutdown_main_close_observes_closed_before_supervisor_resumes(
+        ui_qapp, service, monkeypatch, caplog):
+    from main_window import MainWindow
+    from PyQt5.QtWidgets import QMainWindow, QMessageBox
+    from ui.recording_service_bridge import RecordingServiceBridge
+
+    queued = threading.Event()
+    delivered = threading.Event()
+    resume = threading.Event()
+    observations = []
+    resumed_after_delivery = []
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
+    invoke = service._invoke_shutdown
+
+    def wait_for_qt(callback):
+        invoke(callback)
+        queued.set()
+        resumed_after_delivery.append(resume.wait(5))
+
+    monkeypatch.setattr(service, "_invoke_shutdown", wait_for_qt)
+
+    class Window(MainWindow):
+        def __init__(self):
+            QMainWindow.__init__(self)
+            self.default_logger = logging.getLogger("core")
+            self.recording_bridge = RecordingServiceBridge(service)
+            self.close = mock.Mock()
+
+        def _finish_recording_shutdown(self):
+            try:
+                observations.append((service.closed.is_set(),
+                                     QThread.currentThread() is ui_qapp.thread()))
+                super()._finish_recording_shutdown()
+                delivered.set()
+            finally:
+                resume.set()
+
+    window = Window()
+    try:
+        window.recording_bridge.shutdown(window._finish_recording_shutdown)
+        assert queued.wait(5)
+        pump(ui_qapp, delivered.is_set, timeout=5)
+        assert observations == [(True, True)]
+        assert not warnings
+        assert "Recording shutdown cleanup incomplete" not in caplog.text
+        window.close.assert_called_once()
+    finally:
+        resume.set()
+        service.shutdown()
+        service._supervisor.join(5)
+        window.deleteLater()
+        assert not service._supervisor.is_alive()
+    assert resumed_after_delivery == [True]
+    assert service.closed.is_set()
+
+
 def test_bounded_shutdown_reports_retained_paths_without_endless_wait(ui_qapp, monkeypatch, caplog):
     from main_window import MainWindow
     from PyQt5.QtWidgets import QMainWindow, QMessageBox
