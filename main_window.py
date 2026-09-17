@@ -111,6 +111,13 @@ class MainWindow(QMainWindow):
         ]
         self.widget_list_admin = self.widget_list_engineer + [self.user_action_add_account]
 
+        from ui.video_controller import VideoController
+        self.video_controller = VideoController(
+            self, can_configure=lambda: self.access_lvl in {"Engineer", "Admin"},
+            start_automatically=False,
+        )
+        QApplication.instance().aboutToQuit.connect(self.video_controller.shutdown)
+
         self.init_ui()
         # Discovery starts only after sequence_window exists. Constructor-time
         # restores deliberately retain unavailable VE choices without probing.
@@ -511,6 +518,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "ve_profile_store"):
             self.sequence_window.ve_profile_store = self.ve_profile_store
             self.sequence_window.ve_calibration_store = self.ve_calibration_store
+        self.video_controller.attach_panel(self.sequence_window.left_panel.video_monitor_panel)
         menu_bar = self.init_menu()
         title_bar = self.set_title()
         menu_row = self._create_menu_row(menu_bar)
@@ -742,6 +750,7 @@ class MainWindow(QMainWindow):
         access_lvl, user_name = dlg.on_exec()
         if access_lvl is not None:
             self.access_lvl, self.user_name = access_lvl, user_name
+            self.video_controller.start_preview()
             self._expand_sequence_workspace()
             self.sequence_window.show()
             if hasattr(self.sequence_window, "init_serial_trigger_runtime"):
@@ -930,6 +939,15 @@ class MainWindow(QMainWindow):
             return
         if hasattr(self, "ve_discovery"):
             self._close_ve_discovery()
+        video = getattr(self, "video_controller", None)
+        if video is not None and not video.is_shutdown_complete:
+            event.ignore()
+            if not getattr(self, "_video_close_requested", False):
+                self._video_close_requested = True
+                self.setEnabled(False)
+                video.closed.connect(self.close)
+                video.shutdown()
+            return
         bridge = getattr(self, "recording_bridge", None)
         if (bridge is not None and not bridge.service.closed.is_set()
                 and not getattr(self, "_recording_shutdown_reported", False)):
