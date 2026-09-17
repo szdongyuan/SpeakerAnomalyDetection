@@ -35,6 +35,17 @@ class MotorVideoMonitorPanel(QWidget):
         super().__init__(parent)
         self._init_ui()
 
+    def bind_bridge(self, bridge):
+        """Keep standalone/legacy construction unchanged; attach the live card once."""
+        from ui.video_monitor_widget import VideoMonitorWidget
+
+        if hasattr(self, "live_panel"):
+            return self.live_panel
+        self.card.hide()
+        self.live_panel = VideoMonitorWidget(bridge, self)
+        self.layout().addWidget(self.live_panel, stretch=1)
+        return self.live_panel
+
     def _init_ui(self):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
