@@ -35,11 +35,10 @@ def _coerce_sample_rate(sample_rate) -> float:
 def resolve_startup_trim_samples(acq_detail, sample_rate) -> int:
     """Return the number of leading samples to drop from one recording.
 
-    Resolves ``startup_trim_ms`` through the global recording-settings
-    file (see :mod:`base.recording_settings`) plus an optional
-    per-product override in ``acq_detail``. The shared resolver enforces
-    the precedence rules; this helper just turns the resulting
-    millisecond value into a sample count at the given rate.
+    Resolves ``startup_trim_ms`` from the queue's ``acq_detail``, falling
+    back directly to the code default of 100 ms without reading global
+    settings (see :mod:`base.recording_settings`). This helper turns the
+    resolved millisecond value into a sample count at the given rate.
 
     Returns ``0`` (no trim) when the resolved trim is zero or when the
     sample rate is missing / invalid -- in that case the recording is

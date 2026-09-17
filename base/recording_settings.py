@@ -4,11 +4,14 @@ Owns ``configs/recording_settings.json`` (defaults shared across all
 product configs) and :func:`validate_recorded_audio` (the gate that
 rejects silent / stuck / unplugged recordings before they reach AI).
 
-Three-layer precedence, lowest first:
+Startup trim uses the queue's ``seqN.acq.detail.startup_trim_ms`` value,
+falling back directly to the code default of 100 ms. An explicit ``0``
+disables startup trim; global recording settings are not consulted.
+
+``audio_validation`` uses three-layer precedence, lowest first:
 1. ``_HARDCODE_DEFAULTS`` -- safety net when the JSON is missing/corrupt.
 2. ``configs/recording_settings.json`` -- global, edited once.
 3. ``seqN.acq.detail`` -- per-product override of any single field.
-   ``startup_trim_ms: 0`` is honoured as an explicit opt-out.
 
 ``audio_validation`` fields:
 * ``min_rms_dbfs`` -- "no signal" detector (device off, mic unplugged).
@@ -129,22 +132,15 @@ def _coerce_positive_ms(raw: Any) -> Optional[float]:
 
 
 def resolve_startup_trim_ms(acq_detail: Any) -> float:
-    """Resolve ``startup_trim_ms`` (per-product > global > hardcode).
+    """Resolve queue startup trim, falling back directly to 100 ms.
 
-    ``0`` is honoured at every layer as an explicit "do not trim".
-    A malformed per-product value falls through to the global default
-    rather than collapsing to 0, so a typo cannot silently disable
-    the trim everyone else relies on.
+    An explicit zero disables startup trim. This resolver does not
+    consult global recording settings.
     """
     if isinstance(acq_detail, dict) and "startup_trim_ms" in acq_detail:
         local = _coerce_positive_ms(acq_detail.get("startup_trim_ms"))
         if local is not None:
             return local
-    global_value = _coerce_positive_ms(
-        get_global_settings().get("startup_trim_ms")
-    )
-    if global_value is not None:
-        return global_value
     return float(_HARDCODE_DEFAULTS["startup_trim_ms"])
 
 

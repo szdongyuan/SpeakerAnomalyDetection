@@ -6,11 +6,12 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QIntValidator
 from PyQt5.QtWidgets import QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout
 from PyQt5.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QSpinBox, QWidget
 
 from base.log_manager import LogManager
 from base.sound_device_manager import SoundDeviceManager
 from base.config_number_format import config_number_decimals
+from base.recording_settings import resolve_startup_trim_ms
 from base.ve3668n_input import validate_range_index
 from base.ve3668n_recording_config import resolve_ve_recording_config
 from base.recording_preview_config import (
@@ -183,6 +184,19 @@ class RecordConfigWindow(BaseConfigWindow):
         self.recording_advanced_panel.hide()
         self.recording_advanced_toggle.toggled.connect(self._set_advanced_visible)
 
+        label_startup_trim = QLabel("延迟启动:")
+        self.startup_trim_input = QSpinBox()
+        self.startup_trim_input.setObjectName("recording_startup_trim_ms")
+        startup_trim_ms = int(resolve_startup_trim_ms(self.input_data))
+        self.startup_trim_input.setRange(0, max(600000, startup_trim_ms))
+        self.startup_trim_input.setSingleStep(10)
+        self.startup_trim_input.setSuffix(" ms")
+        self.startup_trim_input.setValue(startup_trim_ms)
+        self.startup_trim_input.setToolTip(
+            "录音开始后的这段时间不计入有效音频，最终音频时长保持不变；"
+            "设为 0 时保留开头音频。"
+        )
+
         label_streaming_recording = QLabel("实时波形:")
         self.streaming_recording_checkbox = QCheckBox("启用")
         self.streaming_recording_checkbox.setChecked(
@@ -226,11 +240,13 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(self.samplerate_combo, 1, 1)
         grid_layout.addWidget(label_input_device, 2, 0)
         grid_layout.addWidget(self.input_device_display, 2, 1)
-        advanced_layout.addWidget(label_streaming_recording, 0, 0)
-        advanced_layout.addWidget(self.streaming_recording_checkbox, 0, 1)
-        advanced_layout.addWidget(self.preview_time_mode_label, 1, 0)
-        advanced_layout.addWidget(self.preview_time_mode_combo, 1, 1)
-        advanced_layout.addWidget(self.preview_time_mode_error_label, 2, 0, 1, 2)
+        advanced_layout.addWidget(label_startup_trim, 0, 0)
+        advanced_layout.addWidget(self.startup_trim_input, 0, 1)
+        advanced_layout.addWidget(label_streaming_recording, 1, 0)
+        advanced_layout.addWidget(self.streaming_recording_checkbox, 1, 1)
+        advanced_layout.addWidget(self.preview_time_mode_label, 2, 0)
+        advanced_layout.addWidget(self.preview_time_mode_combo, 2, 1)
+        advanced_layout.addWidget(self.preview_time_mode_error_label, 3, 0, 1, 2)
         self.ve_range_combo = QComboBox()
         self.ve_range_combo.setObjectName("ve_range_combo")
         for index, label in enumerate(VE_RANGE_LABELS):
@@ -244,8 +260,8 @@ class RecordConfigWindow(BaseConfigWindow):
                 self.ve_range_combo.setToolTip(str(exc))
             else:
                 self.ve_range_combo.setCurrentIndex(self.ve_range_combo.findData(range_index))
-        advanced_layout.addWidget(range_label, 3, 0)
-        advanced_layout.addWidget(self.ve_range_combo, 3, 1)
+        advanced_layout.addWidget(range_label, 4, 0)
+        advanced_layout.addWidget(self.ve_range_combo, 4, 1)
         range_label.setVisible(self._is_vk)
         self.ve_range_combo.setVisible(self._is_vk)
         grid_layout.addWidget(self.recording_advanced_toggle, 3, 0, 1, 2, Qt.AlignLeft)
@@ -303,6 +319,7 @@ class RecordConfigWindow(BaseConfigWindow):
         self.final_data.update({
             "total_time": self.time_input.value(),
             "sample_rate": sample_rate,
+            "startup_trim_ms": self.startup_trim_input.value(),
             "use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked()),
             RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: preview_time_mode,
         })
