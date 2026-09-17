@@ -454,28 +454,6 @@ class LoadUiConfig(object):
         return stimulus_dict, recorded_dict
 
     @staticmethod
-    def write_tcp_config(ip, port, logger):
-        file_path = DEFAULT_DIR + "ui/ui_config/tcp_config.txt"
-
-        try:
-            with open(file_path, "w") as f:
-                f.write(f"ip = {ip}\n")
-                f.write(f"port = {port}\n")
-            logger.info(f"write_tcp_config_success: {file_path}")
-        except Exception as e:
-            logger.error(f"write_tcp_config_error: {e}")
-
-    @staticmethod
-    def get_tcp_config():
-        file_path = DEFAULT_DIR + "ui/ui_config/tcp_config.txt"
-        with open(file_path, "r") as f:
-            config_data = f.readlines()
-            ip = config_data[0].split("=")[1].strip()
-            port_text = config_data[1].split("=")[1].strip()
-            port = int(port_text)
-            return ip, port
-
-    @staticmethod
     def get_default_scanner_config():
         """Canonical default for ``scanner_hid_config.json``.
 

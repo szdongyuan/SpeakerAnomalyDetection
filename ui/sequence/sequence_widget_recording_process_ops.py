@@ -216,7 +216,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
             self._owns_recording_bridge = True
         return bridge
 
-    def _start_process_recording(self, recorded_dict, sample_rate, *, tcp_completion_address=None):
+    def _start_process_recording(self, recorded_dict, sample_rate):
         if (any(not context.cancelled and not context.cleanup_owned
                 for context in self._recording_contexts().values())
                 or getattr(self, "_recording_publication_in_progress", False)):
@@ -268,7 +268,6 @@ class SequenceWidgetRecordingProcessOpsMixin:
             context = RecordingProcessContext(
                 request=request,
                 direction=direction,
-                tcp_completion=(request.request_id, tcp_completion_address),
                 preview_enabled=request.effective_streaming,
                 session_binding_pending=True,
                 recent_session_id=str(
@@ -329,7 +328,6 @@ class SequenceWidgetRecordingProcessOpsMixin:
             current_process_id = getattr(self, "_recording_process_id", None)
             if current_process_id in (None, request.request_id):
                 self._recording_process_id = None
-                self._recording_process_tcp_completion = None
             self._discard_recent_session_if_owned(attempt_recent_owner)
             raise
         # Compatibility aliases describe the active capture only. Install them
@@ -347,7 +345,6 @@ class SequenceWidgetRecordingProcessOpsMixin:
         self._recording_process_windows = context.final_windows
         self._recording_process_direction = direction
         self._recording_process_id = request.request_id
-        self._recording_process_tcp_completion = context.tcp_completion
         self._recording_process_session = session
         context.processor = processor
         self.streaming_processor = context.processor
@@ -625,15 +622,13 @@ class SequenceWidgetRecordingProcessOpsMixin:
             for warning in audio.descriptor.warnings:
                 self.default_logger.warning(f"Recording {session.request.request_id}: {warning}")
             self._finish_process_recording_status(context, "待判定", "等待下一档位", "pending")
-            succeeded = self._on_streaming_complete(
+            self._on_streaming_complete(
                 recorded_mono=audio.mono, recorded_multi=audio.multi,
                 sample_rate=audio.descriptor.sample_rate,
                 completion_source="process", prefinalized=True,
                 final_waveform_windows=context.final_windows,
                 **({"prepared_audio": audio} if isinstance(audio, RecordingAudio)
                    and audio.is_prepared_for(context.request) else {}))
-            if succeeded is True:
-                self._notify_process_recording_finished(session, context=context)
         finally:
             if self._is_active_recording_process(session):
                 self._finalize_recording_channel_selection()
@@ -661,18 +656,6 @@ class SequenceWidgetRecordingProcessOpsMixin:
         drain = getattr(self, "_drain_queued_directional_trigger", None)
         if callable(drain):
             drain()
-
-    def _notify_process_recording_finished(self, session, *, context=None):
-        context = context or self._recording_context_for_session(session)
-        if context is None or context.cancelled or context.cleanup_owned:
-            return
-        completion = context.tcp_completion
-        if completion is None or completion[0] != session.request.request_id:
-            return
-        # Claim before network I/O, including a send that raises after delivery.
-        context.tcp_completion = None
-        if completion[1] is not None:
-            self._send_recording_tcp_finish(completion[1])
 
     def _on_process_recording_failed(self, session, failure):
         context = self._recording_context_for_session(session)

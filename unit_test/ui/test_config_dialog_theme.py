@@ -28,7 +28,6 @@ from ui.product_test_project_config_dialog import (
 from ui.serial_discrete_input_config_dialog import (
     SerialDiscreteInputConfigDialog,
 )
-from ui.tcp_config_dialog import TcpConfigDialog
 from ui.custom_ui_widget.audio_data_manage_dialog import FilterAudioDialog
 from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.common_widgets import (
@@ -77,7 +76,6 @@ def test_feature_stylesheet_is_appended_after_shared_rules():
         BaseConfigWindow,
         ProductTestProgramConfigDialog,
         SerialDiscreteInputConfigDialog,
-        TcpConfigDialog,
         AIConfigWindow,
         ArchiveAudioDataDialog,
         FilterAudioDialog,

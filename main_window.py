@@ -943,9 +943,6 @@ class MainWindow(QMainWindow):
                 self.setEnabled(False)
                 bridge.shutdown(self._finish_recording_shutdown)
             return
-        if hasattr(SequenceWindow, "tcp_server") and SequenceWindow.tcp_server:
-            SequenceWindow.tcp_server.stop()
-            SequenceWindow.tcp_server = None
 
         # Close any other sub windows/dialogs that may still be open.
         self._close_all_subwindows()

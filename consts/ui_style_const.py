@@ -916,11 +916,11 @@ toolbar_combobox_style = _style("""
                 border-radius: 4px;
                 font-family: $UI_FONT_FAMILY;
                 font-size: 18px;
-                padding: 3px 30px 3px 8px;
+                padding: 3px;
             }
             QComboBox::drop-down {
                 border-left: 1px solid $COLOR_BORDER;
-                width: 24px;
+                width: 14px;
                 subcontrol-origin: padding;
                 subcontrol-position: top right;
                 background: transparent;
@@ -947,7 +947,7 @@ toolbar_spinbox_style = _style("""
                 border-radius: 4px;
                 font-family: $UI_FONT_FAMILY;
                 font-size: 18px;
-                padding: 3px 8px;
+                padding: 3px;
                 selection-background-color: $COLOR_PRIMARY;
             }
             QSpinBox:disabled {

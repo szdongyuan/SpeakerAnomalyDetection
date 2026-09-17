@@ -45,7 +45,6 @@ from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.pre_processing.spl_runtime_config import calculate_overall_spl, resolve_spl_unit
 
 from base.streaming_file_writer import StreamingWavWriter
-from base.temp_tcp_client import TempTcpClient
 from base.wav_calibration_metadata import (
     WavCalibrationMetadataReadStatus,
     inspect_wav_calibration_metadata,
@@ -2780,18 +2779,7 @@ class SequenceWidgetAnalysisOpsMixin(
         if callable(can_start) and not can_start():
             return
 
-        tcp_completion_address = None
         manual_start = self.clicked_player_flag is True
-        if not manual_start:
-            if self.tcp_flag and self.__class__.tcp_server.client_address is None:
-                QMessageBox.warning(self, "提示", "TCP链接异常")
-                cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
-                if callable(cancel_metadata):
-                    cancel_metadata()
-                return
-            if self.tcp_flag:
-                tcp_completion_address = tuple(self.__class__.tcp_server.client_address)
-
         close_analysis_windows = getattr(self, "_close_analysis_windows", None)
         if callable(close_analysis_windows):
             close_analysis_windows()
@@ -2804,20 +2792,10 @@ class SequenceWidgetAnalysisOpsMixin(
         self._current_run_recording_token = self._reserve_recorded_count_for_run()
 
         # Consume this invocation's manual intent before a callback can start
-        # another run. TCP completion belongs to the admitted request, not to
-        # the mutable current client/toolbar state after submission returns.
+        # another run.
         if manual_start:
             self.clicked_player_flag = False
-        self.judge_play_and_record(
-            label, is_replay=False, tcp_completion_address=tcp_completion_address)
-
-    def _send_recording_tcp_finish(self, address):
-        try:
-            TempTcpClient(address[0], address[1], "finish")
-        except OSError as error:
-            # Notification failure cannot invalidate already saved audio or
-            # retry a possibly delivered completion message.
-            self.default_logger.error(f"Recording TCP completion failed: {address}: {error}")
+        self.judge_play_and_record(label, is_replay=False)
 
     def checked_work_status_message(self):
         validate_metadata = getattr(self, "_validate_test_round_metadata", None)
@@ -3167,7 +3145,7 @@ class SequenceWidgetAnalysisOpsMixin(
             drain()
         return superseded()
 
-    def judge_play_and_record(self, label="not_labeled", is_replay=False, *, tcp_completion_address=None):
+    def judge_play_and_record(self, label="not_labeled", is_replay=False):
         device = getattr(self, "mic", None) or {}
         ve_recording = device.get("backend") == "vkinging"
         machine_id = device.get("machine_id")
@@ -3310,8 +3288,7 @@ class SequenceWidgetAnalysisOpsMixin(
             raise
 
         try:
-            self._start_process_recording(
-                recorded_dict, sample_rate, tcp_completion_address=tcp_completion_address)
+            self._start_process_recording(recorded_dict, sample_rate)
         except (RuntimeError, ValueError, TypeError, KeyError, OSError) as error:
             self._recording_wav_calibration_metadata = None
             self.default_logger.error(f"start_recording_process_error: {error}; machine_id={machine_id}")

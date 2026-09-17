@@ -1220,7 +1220,7 @@ def test_process_terminal_retains_last_successful_live_preview(
         path=str(tmp_path / "display.wav"), calibration_metadata=None,
         preview_time_mode=preview_mode), generation=3)
     context = RecordingProcessContext(
-        session.request, "", ("display", None), True, session=session)
+        session.request, "", True, session=session)
     host._recording_process_contexts = {"display": context}
     host._active_recording_process_id = "display"
     waveform = StreamingWaveformSnapshot(
@@ -1277,7 +1277,7 @@ def test_process_failure_without_preview_keeps_existing_clear_behavior(
         request_id="display", channels=(0, 2), device=device_info(),
         path=str(tmp_path / "display.wav")), generation=3)
     context = RecordingProcessContext(
-        session.request, "", ("display", None), False, session=session)
+        session.request, "", False, session=session)
     host._recording_process_contexts = {"display": context}
     host._active_recording_process_id = "display"
 
@@ -1601,56 +1601,52 @@ def controls_host(service, tmp_path, *, serial=False):
     return host
 
 
-def tcp_host(service, tmp_path, monkeypatch, *, manual=False):
-    from ui.sequence import sequence_widget_analysis_ops as analysis, sequence_widget_streaming_ops as stream
+def workflow_host(service, tmp_path, monkeypatch, *, manual=False):
+    from ui.sequence import sequence_widget_streaming_ops as stream
     host = main_host(service, tmp_path, streaming=False)
     host.clicked_player_flag = manual
-    host.tcp_flag = True
-    host.__class__.tcp_server = SimpleNamespace(client_address=["127.0.0.1", 12000])
     host._close_analysis_windows = mock.Mock()
     host._reserve_recorded_count_for_run = mock.Mock(return_value="run-1")
     save = mock.Mock(return_value=(0, "saved"))
-    sent = mock.Mock()
     monkeypatch.setattr(stream, "RecordingManager", lambda: SimpleNamespace(save_signal_info_to_db=save))
-    monkeypatch.setattr(analysis, "TempTcpClient", sent)
-    return host, save, sent
+    return host, save
 
 
 @pytest.mark.parametrize("manual", [False, True])
-def test_tcp_finish_waits_for_business_completion_and_snapshots_recipient(
+def test_recording_consumes_manual_intent_and_saves_once_after_release(
         ui_qapp, service, tmp_path, monkeypatch, manual):
     service._backend_options["manual"] = True
-    host, save, sent = tcp_host(service, tmp_path, monkeypatch, manual=manual)
+    host, save = workflow_host(service, tmp_path, monkeypatch, manual=manual)
     completion = []
     host._drain_queued_directional_trigger = lambda: completion.append("business complete")
-
-    def on_send(*args):
-        assert save.call_count == 1
+    publish = host._on_streaming_complete
+    def publish_after_release(**kwargs):
+        assert host._recording_process_session.released.is_set()
+        result = publish(**kwargs)
+        save.assert_called_once()
         assert completion == ["business complete"]
         assert not host._record_workflow_busy
-
-    sent.side_effect = on_send
+        completion.append("published")
+        return result
+    host._on_streaming_complete = publish_after_release
     host.start_this_play()
     session = host._recording_process_session
     assert host._record_workflow_busy
     assert host.clicked_player_flag is False
-    sent.assert_not_called()
-    host.__class__.tcp_server.client_address[:] = ["192.0.2.2", 13000]
-    host.tcp_flag = False  # current settings cannot change an admitted request's intent
+    save.assert_not_called()
     for index in range(3):
         (tmp_path / f"feed-{index}").touch()
     pump(ui_qapp, lambda: session.released.is_set() and not host._record_workflow_busy)
-    if manual:
-        sent.assert_not_called()
-    else:
-        sent.assert_called_once_with("127.0.0.1", 12000, "finish")
-    host._on_process_recording_released(session)  # duplicate cannot notify twice
-    assert sent.call_count == (0 if manual else 1)
+    assert completion == ["business complete", "published", "business complete"]
+    save.assert_called_once()
+    host._on_process_recording_released(session)
+    save.assert_called_once()
+    assert completion == ["business complete", "published", "business complete"]
 
 
 @pytest.mark.parametrize("outcome", ["failed", "write_failed", "cancelled", "admission_rejected", "db_failed"])
-def test_tcp_finish_is_not_sent_for_unsuccessful_workflows(ui_qapp, service, tmp_path, monkeypatch, outcome):
-    host, save, sent = tcp_host(service, tmp_path, monkeypatch)
+def test_unsuccessful_workflows_preserve_save_and_failure_boundaries(ui_qapp, service, tmp_path, monkeypatch, outcome):
+    host, save = workflow_host(service, tmp_path, monkeypatch)
     if outcome == "failed":
         service._backend_options["fail_close"] = True
     elif outcome == "write_failed":
@@ -1682,7 +1678,6 @@ def test_tcp_finish_is_not_sent_for_unsuccessful_workflows(ui_qapp, service, tmp
             host._handle_invalid_recording.assert_called_once()
             assert "disk write failure" in host._handle_invalid_recording.call_args.args[0]
             host.run.assert_not_called()
-    sent.assert_not_called()
 
 
 
@@ -1750,18 +1745,14 @@ def test_tcp_finish_is_not_sent_for_unsuccessful_workflows(ui_qapp, service, tmp
 
 
 
-def test_tcp_notification_error_does_not_retry_or_invalidate_saved_recording(
-        ui_qapp, service, tmp_path, monkeypatch, caplog):
-    host, save, sent = tcp_host(service, tmp_path, monkeypatch)
-    sent.side_effect = OSError("connection failed after possible delivery")
+def test_duplicate_release_preserves_saved_recording(
+        ui_qapp, service, tmp_path, monkeypatch):
+    host, save = workflow_host(service, tmp_path, monkeypatch)
     host.start_this_play()
     session = host._recording_process_session
     pump(ui_qapp, lambda: session.released.is_set() and not host._record_workflow_busy)
     host._on_process_recording_released(session)
-    host._notify_process_recording_finished(session)
-    sent.assert_called_once_with("127.0.0.1", 12000, "finish")
     save.assert_called_once()
-    assert "Recording TCP completion failed" in caplog.text
     assert session.state == "completed"
     host._handle_invalid_recording.assert_not_called()
 

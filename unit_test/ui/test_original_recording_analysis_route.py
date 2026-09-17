@@ -25,7 +25,7 @@ def test_accepted_released_capture_enters_original_queue_once(ui_qapp, tmp_path,
     audio = SimpleNamespace(multi=multi, mono=multi.mean(axis=1), descriptor=SimpleNamespace(sample_rate=100, warnings=()))
     session = SimpleNamespace(request=request, state="completed", released=threading.Event(), release_error=None)
     session.released.set()
-    context = RecordingProcessContext(request=request, session=session, direction="condition", tcp_completion=None, preview_enabled=False, accepted_audio=audio, validated_audio=audio, final_windows=host.channel_workspace.all_subwindows())
+    context = RecordingProcessContext(request=request, session=session, direction="condition", preview_enabled=False, accepted_audio=audio, validated_audio=audio, final_windows=host.channel_workspace.all_subwindows())
     # These fields exist only in the rejected architecture; the replacement ignores them.
     context.enabled_analysis_identifiers = types
     host._recording_process_contexts = {request.request_id: context}
@@ -82,7 +82,7 @@ def queue_host(ui_qapp, tmp_path, monkeypatch, types=("SPL",), auto=True):
     audio = SimpleNamespace(multi=multi, mono=multi.mean(axis=1), descriptor=SimpleNamespace(sample_rate=48000, warnings=()))
     session = SimpleNamespace(request=request, state="completed", released=threading.Event(), release_error=None)
     session.released.set()
-    context = RecordingProcessContext(request=request, session=session, direction="condition", tcp_completion=None, preview_enabled=False, accepted_audio=audio, validated_audio=audio, recorded_signal_info=dict(host.recorded_signal_info), final_windows=host.channel_workspace.all_subwindows())
+    context = RecordingProcessContext(request=request, session=session, direction="condition", preview_enabled=False, accepted_audio=audio, validated_audio=audio, recorded_signal_info=dict(host.recorded_signal_info), final_windows=host.channel_workspace.all_subwindows())
     host._recording_process_contexts = {request.request_id: context}
     host._active_recording_process_id = request.request_id
     host._recording_process_id = request.request_id

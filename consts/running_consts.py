@@ -56,8 +56,6 @@ LOG_MAPPING = {
     "soundcard_core": DEFAULT_LOG,
 }
 
-tcp_service_recv_bytes = 1024
-
 MODULES_LOAD = [
     ("加载格式", "consts.ui_style_const"),
     ("加载常量", "consts.model_consts"),

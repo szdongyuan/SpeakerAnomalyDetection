@@ -20,7 +20,6 @@ from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
 from ui.sequence.sequence_widget_test_metadata_ops import SequenceWidgetTestMetadataOpsMixin
 from ui.sequence.sequence_widget_round_reset_ops import SequenceWidgetRoundResetOpsMixin
 from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
-from ui.sequence.sequence_widget_tcp_ops import SequenceWidgetTcpOpsMixin
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
 from ui.sequence.sequence_widget_analysis_process_ops import (
     SequenceWidgetAnalysisProcessOpsMixin,
@@ -36,7 +35,6 @@ class SequenceWindow(
     SequenceWidgetTestMetadataOpsMixin,
     SequenceWidgetRoundResetOpsMixin,
     SequenceWidgetBarcodeOpsMixin,
-    SequenceWidgetTcpOpsMixin,
     SequenceWidgetSerialTriggerOpsMixin,
     SequenceWidgetAnalysisProcessOpsMixin,
     SequenceWidgetAnalysisOpsMixin,
@@ -45,8 +43,6 @@ class SequenceWindow(
     SequenceWidgetStreamingOpsMixin,
     QWidget,
 ):
-    tcp_server = None
-    _active_instance_ref = None
     raw_audio_csv_export_succeeded = pyqtSignal(str)
     raw_audio_csv_export_failed = pyqtSignal(str, str)
 
@@ -121,11 +117,7 @@ class SequenceWindow(
         # Used to prevent starting a new recording before the full workflow completes.
         self._record_workflow_busy = False
         self.recorded_signal_info = {}
-        self.ip_format = True
-        self.port_format = True
         self.clicked_player_flag = False
-        self.tcp_flag = False
-        self.tcp_ip, self.tcp_port = LoadUiConfig.get_tcp_config()
         self.mode = None
         self.last_play_count = None  # Cache last run token for replay overwrite
         self._current_cycle_recorded_count = None
