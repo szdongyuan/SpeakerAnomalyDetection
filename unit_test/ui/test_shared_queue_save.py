@@ -8,8 +8,10 @@ from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QPu
 
 from base.load_config import LoadUiConfig
 from base.sequence_queue_references import QueueReferenceDraft, SequenceQueueReferenceScanner
+from ui.acquisition_config_window import RecordConfigWindow
 from ui.operation_sequence import AnalysisModelSelect
 from unit_test.base.test_sequence_queue_references import project, write_json
+from unit_test.base.ve3668n_fakes import device_info
 
 
 @pytest.fixture(scope="module")
@@ -45,6 +47,60 @@ def editor(app, tmp_path, monkeypatch):
 def change(window):
     window.select_list.config[0].detail["sample_rate"] = 48000
     window.select_list._notify_config_changed()
+
+
+@pytest.fixture
+def recording_dialog(editor, monkeypatch):
+    window, target, *_ = editor
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    payload[0]["seq1"]["acq"].update(name="录制音频", mode="RECORD_ONLY")
+    write_json(target, payload)
+    window.select_list.load_model_config(str(target))
+    window.select_list.mic = {"name": "Soundcard"}
+    window.select_list.speaker = {"name": "Output"}
+
+    def edit(expected, value):
+        def execute(dialog):
+            assert isinstance(dialog, RecordConfigWindow)
+            assert dialog.startup_trim_input.value() == expected
+            dialog.startup_trim_input.setValue(value)
+            dialog.on_click_ok_btn()
+            assert dialog.final_data is not None
+            return dialog.final_data
+
+        monkeypatch.setattr(RecordConfigWindow, "exec", execute)
+        window.select_list.show_dialog(window.select_list.config[0].name)
+
+    return edit
+
+
+@pytest.mark.parametrize("vk", [False, True])
+def test_startup_delay_dialog_shared_save_and_reload(editor, recording_dialog, vk):
+    window, target, registry, products, _ = editor
+    if vk:
+        window.select_list.mic = device_info()
+    before = target.read_bytes(), registry.read_bytes()
+    product_before = (products / "one.json").read_bytes()
+    recording_dialog(100, 123)
+    assert window.select_list.config[0].detail["startup_trim_ms"] == 123
+    assert window.dirty
+    assert (target.read_bytes(), registry.read_bytes()) == before
+    window.ok_btn_clicked()
+    assert (target.read_bytes(), registry.read_bytes()) == before
+
+    confirmations = []
+    window.confirm_shared_save = lambda path, result: confirmations.append(path) or True
+    window.ok_btn_clicked()
+    for expected, value in ((123, 0), (0, 0)):
+        saved = json.loads(target.read_text(encoding="utf-8"))[0]["seq1"]["acq"]["detail"]
+        assert saved["startup_trim_ms"] == expected
+        assert type(saved["startup_trim_ms"]) is int
+        window.select_list.load_model_config(str(target))
+        recording_dialog(expected, value)
+        window.ok_btn_clicked()
+    assert confirmations == [str(target), str(target)]
+    assert registry.read_bytes() == before[1]
+    assert (products / "one.json").read_bytes() == product_before
 
 
 def test_shared_notifier_defers_and_ok_cancel_preserves_draft(editor):
@@ -117,7 +173,7 @@ def test_recording_load_preserves_owned_detail_for_repair_and_save(editor, rate)
 
 
 @pytest.mark.parametrize("overwrite", [False, True])
-def test_save_as_checks_actual_target_only(editor, monkeypatch, overwrite):
+def test_save_as_checks_actual_target_only(editor, recording_dialog, monkeypatch, overwrite):
     window, target, registry, products, _ = editor
     new_target = target.with_name("R.json")
     if overwrite:
@@ -125,6 +181,7 @@ def test_save_as_checks_actual_target_only(editor, monkeypatch, overwrite):
         write_json(registry, {"Q": str(target), "R": str(new_target)})
         write_json(products / "one.json", project("Q", "Q", "R", "R"))
     before = target.read_bytes()
+    recording_dialog(100, 123)
     change(window)
     confirmations = []
     window.confirm_shared_save = lambda path, result: confirmations.append((path, result)) or True
@@ -132,6 +189,9 @@ def test_save_as_checks_actual_target_only(editor, monkeypatch, overwrite):
     window.save_btn_clicked()
     assert target.read_bytes() == before
     assert json.loads(new_target.read_text(encoding="utf-8"))[0]["seq1"]["acq"]["detail"]["sample_rate"] == 48000
+    saved = json.loads(new_target.read_text(encoding="utf-8"))[0]["seq1"]["acq"]["detail"]
+    assert saved["startup_trim_ms"] == 123
+    assert type(saved["startup_trim_ms"]) is int
     if overwrite:
         assert confirmations[0][0] == str(new_target)
         assert [r.condition_name for r in confirmations[0][1].references] == ["C", "D"]

@@ -70,20 +70,24 @@ def feed_all(backend, *, mutate=False):
 
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("channels", [(0,), (0, 2), (2, 0)])
-def test_capture_owns_input_and_trims_once(tmp_path, captures, streaming, channels):
+@pytest.mark.parametrize("trim_samples", [0, 2, 6])
+def test_capture_owns_input_and_trims_once(tmp_path, captures, streaming, channels, trim_samples):
     writer = ControlledWriter(pause=True)
-    capture, backend = captures(request(tmp_path, streaming=streaming, channels=channels), writer_factory=writer)
-    expected = feed_all(backend, mutate=True)[:9, channels][2:]
+    capture, backend = captures(request(
+        tmp_path, streaming=streaming, channels=channels, trim_samples=trim_samples),
+        writer_factory=writer)
+    expected = feed_all(backend, mutate=True)[:9, channels][trim_samples:]
     writer.release.set()
     result = capture.wait(3)
     assert isinstance(result, RecordingResult)
     audio, rate = sf.read(result.path, dtype="float32", always_2d=True)
     np.testing.assert_array_equal(audio, expected)
     np.testing.assert_array_equal(audio.mean(axis=1), expected.mean(axis=1))
-    assert (result.raw_frames, result.final_frames, rate) == (9, 7, 100)
+    assert (result.raw_frames, result.final_frames, rate) == (9, 9 - trim_samples, 100)
     assert result.channels == channels
     assert result.handles_released and backend.stream.closed and writer.closed
     assert sf.info(result.path).subtype == "FLOAT"
+    assert sf.info(result.path).frames == 9 - trim_samples
     assert backend.stream.capture_pid == writer.writer_pid == os.getpid()
 
 

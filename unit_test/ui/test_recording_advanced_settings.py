@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from PyQt5.QtGui import QIntValidator
-from PyQt5.QtWidgets import QComboBox, QPushButton, QWidget
+from PyQt5.QtWidgets import QComboBox, QPushButton, QSpinBox, QWidget
 
 from consts import model_consts
 from consts.recording_preview_consts import (
@@ -46,7 +46,8 @@ def test_advanced_controls_belong_to_collapsed_panel_in_spec_order(windows, ui_q
     assert toggle is not None and panel is not None
     assert toggle.isCheckable() and not toggle.isChecked()
     assert panel.isHidden()
-    controls = [window.streaming_recording_checkbox, window.preview_time_mode_combo]
+    controls = [window.startup_trim_input, window.streaming_recording_checkbox,
+                window.preview_time_mode_combo]
     assert all(panel.isAncestorOf(control) for control in controls)
     assert all(not panel.isAncestorOf(control) for control in (
         window.time_input, window.samplerate_combo, window.input_device_display))
@@ -69,6 +70,58 @@ def test_advanced_controls_belong_to_collapsed_panel_in_spec_order(windows, ui_q
     window.on_click_ok_btn()
     assert window.final_data["use_streaming_recording"] is True
     assert window.final_data[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] == PREVIEW_TIME_MODE_CUMULATIVE
+
+
+@pytest.mark.parametrize("vk", [False, True])
+@pytest.mark.parametrize("initial", [None, 0, 1, 123, 600001])
+def test_startup_delay_round_trip_as_integer(windows, monkeypatch, vk, initial):
+    from base import recording_settings
+
+    def reject_global_read():
+        raise AssertionError("delay UI must not load global settings")
+
+    monkeypatch.setattr(recording_settings, "get_global_settings", reject_global_read)
+    detail = {} if initial is None else {"startup_trim_ms": initial}
+    window = windows(detail, vk=vk)
+    field = window.findChild(QSpinBox, "recording_startup_trim_ms")
+    assert field is not None
+    assert window.recording_advanced_panel.isAncestorOf(field)
+    assert window.recording_advanced_panel.isHidden()
+    assert field.value() == (100 if initial is None else initial)
+    assert field.suffix() == " ms"
+    assert field.minimum() == 0
+    assert field.maximum() == max(600000, initial or 0)
+    assert field.singleStep() == 10
+    assert field.text() == f"{field.value()} ms"
+    window.on_click_ok_btn()
+    assert type(window.final_data["startup_trim_ms"]) is int
+    assert window.final_data["startup_trim_ms"] == field.value()
+
+
+@pytest.mark.parametrize("vk", [False, True])
+@pytest.mark.parametrize("delay", [0, 123])
+def test_startup_delay_edit_preserves_other_fields_and_live_toggle(windows, vk, delay):
+    raw = {"startup_trim_ms": 100,
+           model_consts.RECORDING_ROOT_CONFIG_KEY: "  relative/absent/audio  ",
+           "unknown": {"keep": [1, 2]}}
+    original = copy.deepcopy(raw)
+    window = windows(raw, vk=vk)
+    window.recording_advanced_toggle.click()
+    window.startup_trim_input.lineEdit().setText(str(delay))
+    window.startup_trim_input.interpretText()
+    for live in (True, False):
+        window.streaming_recording_checkbox.setChecked(live)
+        assert window.startup_trim_input.isEnabled()
+        assert window.startup_trim_input.value() == delay
+    window.recording_advanced_toggle.click()
+    assert window.startup_trim_input.value() == delay
+    window.on_click_ok_btn()
+    assert window.final_data["startup_trim_ms"] == delay
+    assert type(window.final_data["startup_trim_ms"]) is int
+    assert window.final_data[model_consts.RECORDING_ROOT_CONFIG_KEY] == raw[model_consts.RECORDING_ROOT_CONFIG_KEY]
+    assert window.final_data["unknown"] == raw["unknown"]
+    assert window.final_data["unknown"] is not raw["unknown"]
+    assert raw == original
 
 
 @pytest.mark.parametrize("rate", [8000, 32000, 44100, 48000, 51200, 96000, 102400])
@@ -183,6 +236,7 @@ def test_cancel_preserves_input_and_returns_no_result(windows):
     window = windows(raw)
     window.samplerate_combo.setEditText("96000")
     window.ve_range_combo.setCurrentIndex(5)
+    window.startup_trim_input.setValue(123)
     window.on_click_cancel_btn()
     assert window.final_data is None
     assert raw == original
@@ -203,7 +257,7 @@ def test_soundcard_unsupported_loaded_rate_remains_visible_until_repaired(window
 @pytest.mark.parametrize("initial_live", [False, True])
 def test_expansion_resizes_dialog_to_fit_advanced_control_minimums(windows, ui_qapp, initial_live):
     window = windows({"use_streaming_recording": initial_live})
-    controls = [window.streaming_recording_checkbox, window.preview_time_mode_combo,
+    controls = [window.startup_trim_input, window.streaming_recording_checkbox, window.preview_time_mode_combo,
                 window.ve_range_combo]
     for control in controls:
         control.setMinimumHeight(50)
@@ -223,7 +277,8 @@ def test_option_list_updates_draft_and_notifies_only_on_accept(ui_qapp, monkeypa
     options.set_sound_item("录制音频")
     before = copy.deepcopy(options.config[0].detail)
     before_len = options.signal_len
-    result = {"sample_rate": 96000, "total_time": 2.5, "ve_range_index": 5}
+    result = {"sample_rate": 96000, "total_time": 2.5, "ve_range_index": 5,
+              "startup_trim_ms": 123}
     notifications = []
     options.set_change_notifier(lambda: notifications.append(copy.deepcopy(options.config[0].detail)))
     monkeypatch.setattr("ui.operation_sequence.RecordConfigWindow",

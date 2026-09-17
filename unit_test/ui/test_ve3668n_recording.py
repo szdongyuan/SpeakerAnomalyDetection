@@ -131,13 +131,22 @@ def capture_audio(request):
 
 @pytest.mark.parametrize("rate", [44100, 48000, 51200])
 @pytest.mark.parametrize("live", [False, True])
-def test_effective_rate_is_resolved_before_target_trim_and_timeline(host_factory, rate, live):
+@pytest.mark.parametrize("delay_ms", [None, 0, 10, 100])
+def test_effective_rate_is_resolved_before_target_trim_and_timeline(host_factory, rate, live, delay_ms):
     host = host_factory(rate, live)
+    detail = host.sequence_config[0]["seq1"]["acq"]["detail"]
+    if delay_ms is None:
+        detail.pop("startup_trim_ms")
+        effective_delay_ms = 100
+    else:
+        detail["startup_trim_ms"] = delay_ms
+        effective_delay_ms = delay_ms
+    trim_samples = round(effective_delay_ms * rate / 1000)
     recorded, actual_rate = host.reset_work_pram("not_labeled")
     assert actual_rate == rate
     assert host.data_struct.sample_rate == recorded["sample_rate"] == recorded["sr"] == rate
-    assert recorded["num_frames"] == int(.04 * rate) + round(.01 * rate)
-    assert recorded["startup_trim_samples"] == round(.01 * rate)
+    assert recorded["num_frames"] == int(.04 * rate) + trim_samples
+    assert recorded["startup_trim_samples"] == trim_samples
     # Isolate the rate contract before the next TDD cycle wires the UI builder.
     host._recording_wav_calibration_metadata = build_recording_wav_calibration_metadata(
         host._recording_input_channels, recorded["device"], ve_calibration_store=host.ve_calibration_store)
@@ -145,7 +154,7 @@ def test_effective_rate_is_resolved_before_target_trim_and_timeline(host_factory
     request = host._recording_process_session.request
     assert request.sample_rate == rate
     assert request.target_samples == recorded["num_frames"]
-    assert request.trim_samples == round(.01 * rate)
+    assert request.trim_samples == trim_samples
     assert request.effective_streaming is live
     capture, audio = capture_audio(request)
     assert audio.descriptor.raw_frames == request.target_samples
