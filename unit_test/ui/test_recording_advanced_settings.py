@@ -46,12 +46,14 @@ def test_advanced_controls_belong_to_collapsed_panel_in_spec_order(windows, ui_q
     assert toggle is not None and panel is not None
     assert toggle.isCheckable() and not toggle.isChecked()
     assert panel.isHidden()
-    controls = [window.startup_trim_input, window.streaming_recording_checkbox,
-                window.preview_time_mode_combo]
+    controls = [window.streaming_recording_checkbox, window.preview_time_mode_combo]
+    range_combo = window.findChild(QComboBox, "ve_range_combo")
+    if vk:
+        controls.append(range_combo)
+    controls.append(window.startup_trim_input)
     assert all(panel.isAncestorOf(control) for control in controls)
     assert all(not panel.isAncestorOf(control) for control in (
         window.time_input, window.samplerate_combo, window.input_device_display))
-    range_combo = window.findChild(QComboBox, "ve_range_combo")
     assert range_combo is not None and panel.isAncestorOf(range_combo)
     assert [range_combo.itemText(i) for i in range(7)] == list(VE_RANGE_LABELS)
     assert [range_combo.itemData(i) for i in range(7)] == list(range(7))
@@ -60,8 +62,6 @@ def test_advanced_controls_belong_to_collapsed_panel_in_spec_order(windows, ui_q
     ui_qapp.processEvents()
     assert all(control.isVisible() for control in controls)
     assert range_combo.isVisible() is vk
-    if vk:
-        controls.append(range_combo)
     positions = [control.mapTo(panel, control.rect().topLeft()).y() for control in controls]
     assert positions == sorted(positions) and len(set(positions)) == len(positions)
     window.preview_time_mode_combo.setCurrentIndex(1)
