@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 class RecordingProcessContext:
     request: object
     direction: str
-    tcp_completion: object
     preview_enabled: bool
     session: object = None
     session_binding_pending: bool = False

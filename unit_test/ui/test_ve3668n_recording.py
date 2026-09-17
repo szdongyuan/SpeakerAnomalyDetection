@@ -104,7 +104,6 @@ def host_factory(ui_qapp, tmp_path, monkeypatch):
         host.data_btn = QPushButton()
         host.replayer_btn = QPushButton()
         host.update_player_btn_is_paused = mock.Mock()
-        host._send_recording_tcp_finish = mock.Mock()
         host.saved = save
         host.refresh_channel_windows()
         hosts.append(host)
@@ -401,7 +400,7 @@ def test_invalid_ve_initialization_is_actionable_and_restores_controls(host_fact
 
 
 def started_audio(host):
-    host.judge_play_and_record(tcp_completion_address=("127.0.0.1", 1234))
+    host.judge_play_and_record()
     session = host._recording_process_session
     capture, audio = capture_audio(session.request)
     return session, capture, audio
@@ -648,7 +647,6 @@ def test_ve_invalid_descriptor_is_rejected_before_accept_or_analysis(host_factor
     assert host.data_struct.store_wave_data_multi is None
     host.run.assert_not_called()
     host.saved.assert_not_called()
-    host._send_recording_tcp_finish.assert_not_called()
 
 
 @pytest.mark.parametrize("failure", ["not_released", "release_error", "release_timeout", "late_failure", "cancel", "changed_request"])
@@ -681,7 +679,6 @@ def test_ve_unreleased_or_failed_accepted_result_never_publishes(host_factory, f
     assert host.data_struct.store_wave_data_multi is None
     host.saved.assert_not_called()
     host.run.assert_not_called()
-    host._send_recording_tcp_finish.assert_not_called()
     if failure in ("release_error", "release_timeout"):
         # A later release cannot convert the already reported failure to success.
         session.released.set()
@@ -721,7 +718,6 @@ def test_publish_keeps_frozen_rate_metadata_and_raw_voltage(host_factory, monkey
     assert not host._record_workflow_busy and not host.player_status_flag
     host.run.assert_not_called()
     host.saved.assert_called_once()
-    host._send_recording_tcp_finish.assert_called_once_with(("127.0.0.1", 1234))
     forbidden.assert_not_called()
     for column, window in enumerate(host.channel_workspace.all_subwindows()):
         x, y = window.plot_item.getData()
@@ -844,7 +840,7 @@ def test_real_service_bridge_ve_lifecycle(host_factory, ui_qapp, tmp_path, outco
     host._on_process_recording_preview = preview
     session = None
     try:
-        host.judge_play_and_record(tcp_completion_address=("127.0.0.1", 1234))
+        host.judge_play_and_record()
         session = host._recording_process_session
         assert host.player_status_flag and not host.data_btn.isEnabled()
         if outcome == "release_error":
@@ -879,7 +875,6 @@ def test_real_service_bridge_ve_lifecycle(host_factory, ui_qapp, tmp_path, outco
             assert host.data_struct.store_wave_data_multi is None
             host.run.assert_not_called()
             host.saved.assert_not_called()
-            host._send_recording_tcp_finish.assert_not_called()
             if outcome != "close":
                 assert host.data_btn.isEnabled() and host.replayer_btn.isEnabled()
     finally:
@@ -948,7 +943,6 @@ def test_recording_failure_uses_session_identity_and_preserves_failure(
     assert failure.message in caplog.text
     assert not host._record_workflow_busy
     host.saved.assert_not_called()
-    host._send_recording_tcp_finish.assert_not_called()
 
 
 @pytest.mark.parametrize("fault", ["early", "late", "database"])
@@ -997,7 +991,6 @@ def test_completion_error_reaches_real_product_popup_with_frozen_backend(
     assert not host._serial_product_condition_executing
     assert not host._serial_product_error_dialog_open
     assert not host._record_workflow_busy
-    host._send_recording_tcp_finish.assert_not_called()
 
 
 @pytest.mark.parametrize("boundary", ["reset", "snapshot", "start"])
@@ -1080,7 +1073,6 @@ def test_ve_release_error_popup_is_once_only_and_failed_audio_stays_unpublished(
     assert host.data_struct.store_wave_data_multi is None
     host.saved.assert_not_called()
     host.run.assert_not_called()
-    host._send_recording_tcp_finish.assert_not_called()
 
 
 @pytest.mark.parametrize("boundary", ["manual_condition", "player_tooltip"])

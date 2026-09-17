@@ -33,8 +33,6 @@ class TestSequenceToolbarStyle(unittest.TestCase):
             (toolbar.player_btn, "开始录制"),
             (toolbar.replayer_btn, "重新录制"),
             (toolbar.data_btn, "分析"),
-            (toolbar.tcp_btn, "tcp配置"),
-            (toolbar.serial_trigger_btn, "串口离散输入触发配置"),
         ]
 
         for button, expected in expectations:
@@ -43,6 +41,13 @@ class TestSequenceToolbarStyle(unittest.TestCase):
                 self.assertEqual(button.accessibleName(), expected)
                 self.assertEqual(button.accessibleDescription(), expected)
                 self.assertIn(ui_style_const.COLOR_TOOLBAR_BUTTON_BG, button.styleSheet())
+
+        with self.subTest(expected="串口离散输入触发配置"):
+            button = toolbar.serial_trigger_btn
+            for hint in (button.toolTip(), button.accessibleName(), button.accessibleDescription()):
+                self.assertIn("串口离散输入触发配置", hint)
+                self.assertIn("未连接", hint)
+            self.assertIn(ui_style_const.COLOR_TOOLBAR_BUTTON_BG, button.styleSheet())
 
     def test_replay_button_is_retained_but_hidden(self):
         toolbar = SequenceToolsBar()
@@ -53,11 +58,12 @@ class TestSequenceToolbarStyle(unittest.TestCase):
 
     def test_product_fields_follow_action_buttons_before_flexible_space(self):
         toolbar = SequenceToolsBar()
-        main_layout = toolbar.layout().itemAt(1).layout()
-        serial_button_index = main_layout.indexOf(toolbar.serial_trigger_btn)
-
-        self.assertGreaterEqual(serial_button_index, 0)
-        self.assertIsNotNone(main_layout.itemAt(serial_button_index + 2).layout())
+        toolbar.resize(1920, toolbar.sizeHint().height())
+        toolbar.show()
+        self.app.processEvents()
+        self.assertLess(toolbar.serial_trigger_btn.geometry().right(),
+                        toolbar.lineedit_type.geometry().left())
+        toolbar.close()
 
     def test_analysis_button_uses_static_progress_and_terminal_badges(self):
         toolbar = SequenceToolsBar()
@@ -248,30 +254,30 @@ class TestSequenceToolbarStyle(unittest.TestCase):
         sample_number_label = next(
             label
             for label in toolbar.findChildren(QLabel)
-            if label.text() == "样本编号："
+            if label.buddy() is toolbar.sample_number_lineedit
         )
         model_label = next(
             label
             for label in toolbar.findChildren(QLabel)
-            if label.text() == "型 号："
+            if label.buddy() is toolbar.lineedit_type
         )
         self.assertEqual(
             sample_number_label.sizePolicy().horizontalPolicy(),
-            QSizePolicy.Fixed,
+            QSizePolicy.Preferred,
         )
         self.assertLessEqual(
             toolbar.sample_number_lineedit.geometry().left()
             - sample_number_label.geometry().right(),
-            1,
+            5,
         )
         self.assertEqual(
             model_label.sizePolicy().horizontalPolicy(),
-            QSizePolicy.Fixed,
+            QSizePolicy.Preferred,
         )
         self.assertLessEqual(
             toolbar.lineedit_type.geometry().left()
             - model_label.geometry().right(),
-            1,
+            5,
         )
         self.assertEqual(toolbar.lineedit_type.width(), 160)
         self.assertLess(
@@ -291,14 +297,14 @@ class TestSequenceToolbarStyle(unittest.TestCase):
             toolbar.current_round_spinbox.geometry().right(),
             toolbar.lineedit_s_or_n.geometry().left(),
         )
-        self.assertGreaterEqual(toolbar.lineedit_s_or_n.width(), 240)
+        self.assertEqual(toolbar.lineedit_s_or_n.width(), 320)
         self.assertEqual(
             toolbar.lineedit_s_or_n.sizePolicy().horizontalPolicy(),
             QSizePolicy.Expanding,
         )
         right_gap = toolbar.width() - toolbar.lineedit_s_or_n.geometry().right() - 1
         self.assertGreaterEqual(right_gap, 0)
-        self.assertLessEqual(right_gap, 30)
+        self.assertGreater(right_gap, 30)
 
         toolbar.close()
 

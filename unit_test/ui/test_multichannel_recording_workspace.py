@@ -200,7 +200,7 @@ class _NewRecordingOwnershipHost(
     def _begin_recent_session_for_current_run(self):
         return None
 
-    def _start_process_recording(self, _recorded_dict, _sample_rate, *, tcp_completion_address=None):
+    def _start_process_recording(self, _recorded_dict, _sample_rate):
         self.process_count += 1
 
 

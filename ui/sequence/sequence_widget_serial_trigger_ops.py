@@ -10,6 +10,7 @@ from consts.product_test_project_consts import (
     PRODUCT_TRIGGER_MODE_MIXED,
 )
 from ui.serial_discrete_input_config_dialog import SerialDiscreteInputConfigDialog
+from ui.sequence.toolbar_serial_button import ToolbarSerialButton
 
 
 class SequenceWidgetSerialTriggerOpsMixin:
@@ -744,9 +745,12 @@ class SequenceWidgetSerialTriggerOpsMixin:
 
         detail = message or status_text
         self.serial_trigger_btn.setText(status_text)
-        self.serial_trigger_btn.setToolTip(f"串口离散输入触发配置\n{detail}")
+        if isinstance(self.serial_trigger_btn, ToolbarSerialButton):
+            self.serial_trigger_btn.set_connection_state(connected, has_response)
+        hint = "\n".join(dict.fromkeys(("串口离散输入触发配置", status_text, detail)))
+        self.serial_trigger_btn.setToolTip(hint)
         self.serial_trigger_btn.setAccessibleName(f"串口离散输入触发配置，{status_text}")
-        self.serial_trigger_btn.setAccessibleDescription(detail)
+        self.serial_trigger_btn.setAccessibleDescription(hint)
         self.serial_trigger_btn.setStyleSheet(
             ui_style_const.serial_trigger_button_base_style + status_style
         )

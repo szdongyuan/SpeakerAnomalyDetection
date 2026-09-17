@@ -84,7 +84,7 @@ class RecordingSnapshotHost(SequenceWidgetAnalysisOpsMixin):
     def reset_work_pram(self, _label, count=None):
         self._active_input_channels = [0, 2]
         self.events.append(("reset", self._active_input_channels))
-        return {"input_channels": [0, 2]}, 48000
+        return {"input_channels": [0, 2], "device": self.mic}, 48000
 
     def _should_use_streaming_recording(self):
         return self._streaming
@@ -92,7 +92,7 @@ class RecordingSnapshotHost(SequenceWidgetAnalysisOpsMixin):
     def _begin_recent_session_for_current_run(self):
         return None
 
-    def _start_process_recording(self, _recorded_dict, _sample_rate, *, tcp_completion_address=None):
+    def _start_process_recording(self, _recorded_dict, _sample_rate):
         self.events.append(
             ("process", self._recording_wav_calibration_metadata)
         )

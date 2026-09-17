@@ -1486,15 +1486,24 @@ def test_explicit_table_reselect_clears_routes_and_reopen_restores_saved_only(co
     assert "mic" not in controls.audio.queries
 
 
-def test_default_mainwindow_constructs_with_baseline_sequence(controls, ui_qapp, monkeypatch):
+@pytest.mark.parametrize("legacy_config", [None, "invalid legacy configuration"])
+def test_default_mainwindow_constructs_with_baseline_sequence(controls, ui_qapp, monkeypatch, tmp_path, legacy_config):
     import main_window
     from PyQt5 import sip
     from ui.recording_service_bridge import RecordingServiceBridge
     from base.recording_service import RecordingService
     monkeypatch.setattr(main_window, "restore_or_default", lambda **kw: (None, None, [], []))
     monkeypatch.setattr(main_window.QMessageBox, "warning", lambda *args: None)
-    from base.load_config import LoadUiConfig
-    monkeypatch.setattr(LoadUiConfig, "get_tcp_config", lambda: ("127.0.0.1", 12345))
+    from base import load_config
+    from shutil import copytree
+    config_root = tmp_path / "isolated_config"
+    config_dir = config_root / "ui" / "ui_config"
+    copytree(Path(load_config.DEFAULT_DIR) / "ui" / "ui_config", config_dir)
+    legacy_path = config_dir / "tcp_config.txt"
+    legacy_path.unlink(missing_ok=True)
+    if legacy_config is not None:
+        legacy_path.write_text(legacy_config, encoding="utf-8")
+    monkeypatch.setattr(load_config, "DEFAULT_DIR", config_root.as_posix() + "/")
     monkeypatch.setattr(main_window.MainWindow, "get_current_version", lambda self: "test")
     for name in ("critical", "information", "question"):
         monkeypatch.setattr(main_window.QMessageBox, name, lambda *a, **kw: main_window.QMessageBox.No)
@@ -1507,6 +1516,10 @@ def test_default_mainwindow_constructs_with_baseline_sequence(controls, ui_qapp,
             ve_profile_store=controls.profiles, ve_calibration_store=controls.calibrations,
             discovery_factory=ControlledDiscovery, hardware_selection_path=controls.path)
         assert window.sequence_window.recording_bridge is bridge
+        toolbar = window.sequence_window.toolsbar
+        assert toolbar.serial_trigger_btn.toolTip()
+        assert toolbar.barcode_scanner_box is not None
+        assert toolbar.lineedit_s_or_n.isEnabled() == toolbar.barcode_scanner_box.isChecked()
         assert window._calibration_admission_available()
         window._update_hardware_busy_state()
     finally:

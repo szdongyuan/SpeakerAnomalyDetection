@@ -1,5 +1,4 @@
 import re
-import weakref
 
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QIcon
@@ -280,8 +279,6 @@ class SequenceWidgetUiOpsMixin:
             self._on_streaming_recording_finished,
             Qt.QueuedConnection,
         )
-        # Register this instance as current target for TCP callbacks
-        self.__class__._active_instance_ref = weakref.ref(self)
         self.setStyleSheet(
             ui_style_const.qcombobox_style
             + ui_style_const.qpushbutton_style
@@ -310,7 +307,6 @@ class SequenceWidgetUiOpsMixin:
             self.lineedit_s_or_n.textChanged.connect(self.left_panel.set_current_barcode)
 
         self.barcode_scanner_box.clicked.connect(self.clicked_scanner)
-        self.tcp_btn.clicked.connect(self.on_tcp_btn_clicked)
         self.serial_trigger_btn.clicked.connect(self.on_serial_trigger_btn_clicked)
         self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.count_board.ng_btn.clicked.connect(self.clicked_ok_or_ng)
@@ -435,10 +431,6 @@ class SequenceWidgetUiOpsMixin:
     @property
     def barcode_scanner_box(self):
         return self.toolsbar.barcode_scanner_box
-
-    @property
-    def tcp_btn(self):
-        return self.toolsbar.tcp_btn
 
     @property
     def serial_trigger_btn(self):

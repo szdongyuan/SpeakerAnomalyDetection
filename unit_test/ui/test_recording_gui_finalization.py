@@ -279,7 +279,7 @@ def test_cancelled_and_replaced_session_cannot_restore_processing(ui_qapp, tmp_p
     host._get_active_product_condition_key = lambda: "forward"
     req = request(tmp_path)
     old = RecordingSession(service, req, RecordingCallbacks())
-    context = RecordingProcessContext(req, "forward", None, False, session=old)
+    context = RecordingProcessContext(req, "forward", False, session=old)
     host._recording_process_contexts = {req.request_id: context}
     host._recording_process_session = old
     host._active_recording_process_id = req.request_id
@@ -304,7 +304,7 @@ def test_cancelled_and_replaced_session_cannot_restore_processing(ui_qapp, tmp_p
     assert panel.stage_label.text() == expected
     fresh_req = replace(req, request_id="fresh")
     fresh = RecordingSession(service, fresh_req, RecordingCallbacks())
-    fresh_context = RecordingProcessContext(fresh_req, "forward", None, False, session=fresh)
+    fresh_context = RecordingProcessContext(fresh_req, "forward", False, session=fresh)
     host._recording_process_contexts[fresh_req.request_id] = fresh_context
     host._active_recording_process_id = fresh_req.request_id
     panel.set_current_stage("分析中")
@@ -343,7 +343,7 @@ def test_ve_trusted_result_admission_never_scans_audio(ui_qapp, tmp_path, monkey
     host._recording_input_channels = req.channels
     host._active_input_channels = list(req.channels)
     session = SimpleNamespace(request=req, accept_result=mock.Mock(), reject_result=mock.Mock())
-    context = RecordingProcessContext(req, "forward", None, False, session=session)
+    context = RecordingProcessContext(req, "forward", False, session=session)
     host._recording_process_contexts = {req.request_id:context}
     host._active_recording_process_id = req.request_id
     def forbidden(*args, **kwargs):
