@@ -32,6 +32,7 @@ from base.spl_csv_schema import resolve_overall_spl_csv_columns
 _QT_APP = None
 _REPORT_FONT_FAMILY = None
 _REPORT_CONTENT_MODES = frozenset({"values_and_charts", "values_only"})
+_CHART_ONLY_TYPES = frozenset({"Spec", "FFT", "FBA"})
 _PDF_FOOTER_FONT_SIZE = 7
 _CHART_MAX_WIDTH = 600
 _CHART_MAX_HEIGHT = 340
@@ -208,9 +209,26 @@ def _build_analysis_report_pages(
         warnings,
     )
     with layout:
-        _append_data_tables(layout, prepared_by_item, report_content, summary)
+        chart_items = [item for item in prepared_by_item if item.analysis_type in _CHART_ONLY_TYPES]
+        scalar_records = {
+            item: records for item, records in prepared_by_item.items()
+            if item.analysis_type not in _CHART_ONLY_TYPES
+        }
+        if chart_items:
+            layout.append_block(summary)
+            summary = ""
+            if report_content == "values_only":
+                names = "、".join(f"{item.key}（{item.analysis_type}）" for item in chart_items)
+                layout.append_block(
+                    "<p class='note'>本次未包含分析图：" + _html(names)
+                    + "。这些分析项以图片展示，本报告未展开其曲线数值。</p>"
+                )
+        _append_data_tables(layout, scalar_records, report_content, summary)
         if report_content == "values_and_charts":
-            _append_chart_appendix(layout, prepared_by_item, cancel_requested=cancel_requested)
+            _append_chart_appendix(
+                layout, prepared_by_item, cancel_requested=cancel_requested,
+                start_new_page=bool(scalar_records),
+            )
         if not data_warnings:
             layout.append_block(_build_completeness_html(data_warnings))
         for title, section_warnings in (
@@ -222,7 +240,8 @@ def _build_analysis_report_pages(
                 f"<tr><td class='center'>{index}</td><td>{_html(warning)}</td></tr>"
                 for index, warning in enumerate(section_warnings, start=1)
             ]
-            layout.append_table(title, "<th>序号</th><th>说明</th>", rows)
+            lead = "<p class='incomplete'>结果不完整：以下记录存在数据缺失。</p>" if title == "数据完整性说明" else ""
+            layout.append_table(title, "<th>序号</th><th>说明</th>", rows, lead=lead)
         layout.finish()
     return layout, warnings
 
@@ -481,6 +500,8 @@ def _prepare_charts(item, expected_channels, requires_chart, *, cancel_requested
 
 
 def _append_data_tables(layout, prepared_by_item, report_content, summary):
+    if not prepared_by_item:
+        return
     lead = summary + "<h2>主要数据表</h2>"
     for identity, records in prepared_by_item.items():
         groups = {}
@@ -623,7 +644,7 @@ def _build_criteria_cell(record, channels):
     )
 
 
-def _append_chart_appendix(layout, prepared_by_item, *, cancel_requested=None):
+def _append_chart_appendix(layout, prepared_by_item, *, cancel_requested=None, start_new_page=True):
     lead = "<h2>分析图表附录</h2>"
     figures = []
     seen_images = set()
@@ -657,11 +678,11 @@ def _append_chart_appendix(layout, prepared_by_item, *, cancel_requested=None):
                 )
     if not figures:
         layout.append_block(
-            lead + "<p>所选分析项没有可读取的历史图片。</p>", start_new_page=True,
+            lead + "<p>所选分析项没有可读取的历史图片。</p>", start_new_page=start_new_page,
         )
         return
     for index, figure in enumerate(figures):
-        layout.append_block((lead if index == 0 else "") + figure, start_new_page=index == 0)
+        layout.append_block((lead if index == 0 else "") + figure, start_new_page=start_new_page and index == 0)
 
 
 def _scaled_chart_size(image_bytes):
