@@ -44,6 +44,7 @@ class AnalysisStatusButton(QPushButton):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._analysis_state = self.STATE_IDLE
+        self._status_badge_width = 18
         self._status_badge = ElidingLabel(self)
         self._status_badge.setObjectName("analysisStatusBadge")
         self._status_badge.setAlignment(Qt.AlignCenter)
@@ -110,8 +111,7 @@ class AnalysisStatusButton(QPushButton):
             }}
             """
         )
-        width = max(minimum_width, self._status_badge.sizeHint().width())
-        self._status_badge.setFixedSize(min(width, self.width() - 6), 18)
+        self._status_badge_width = max(minimum_width, self._status_badge.sizeHint().width())
         self._position_status_badge()
         self._status_badge.show()
         self._status_badge.raise_()
@@ -121,6 +121,9 @@ class AnalysisStatusButton(QPushButton):
         self.setAccessibleDescription(text)
 
     def _position_status_badge(self):
+        self._status_badge.setFixedSize(
+            min(self._status_badge_width, self.width() - 6), 18,
+        )
         self._status_badge.move(
             max(2, self.width() - self._status_badge.width() - 3),
             2,
@@ -186,11 +189,10 @@ class SequenceToolsBar(QWidget):
 
     def create_mainly_layout(self):
         layout = ToolbarRowLayout()
-        for button, width in ((self.player_btn, 48), (self.data_btn, 48),
-                              (self.serial_trigger_btn, 124)):
-            role = "serial" if button is self.serial_trigger_btn else "fixed"
-            layout.add_control(button, role, 48, width)
-            layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
+        for button in (self.player_btn, self.data_btn):
+            layout.add_control(button, "action", 48, 120)
+        layout.add_control(self.serial_trigger_btn, "serial", 48, 124)
+        layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
         self._configure_fields()
         for text, short_text, widget, preferred in (
             ("型号：", "型号：", self.lineedit_type, 160),
