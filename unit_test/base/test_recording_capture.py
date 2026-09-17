@@ -1,4 +1,6 @@
 import os
+import logging
+import threading
 import pickle
 import subprocess
 import sys
@@ -29,6 +31,100 @@ from unit_test.base.recording_process_fakes import (
     ControlledMetadataAppender, ControlledWriter, FakeBackend, FakeStatus, MetadataFileFaults,
     device_info, known_audio,
 )
+
+
+@pytest.mark.parametrize("log_failure", [False, True])
+def test_closed_writer_publishes_slot_before_blocked_success_log(tmp_path, log_failure):
+    from base.streaming_file_writer import StreamingWavWriter
+    from unit_test.base.test_ve3668n_capture import start_persistent_capture
+
+    entered, unblock = threading.Event(), threading.Event()
+    writers, records, finalized = [], [], []
+
+    class Handler(logging.Handler):
+        def emit(self, record):
+            if record.msg.startswith("StreamingWavWriter finalized."):
+                records.append(record)
+                entered.set()
+                assert unblock.wait(5)
+                if log_failure:
+                    raise OSError("optional-writer-log-failed")
+
+    logger = logging.Logger("writer-finalization-gate", logging.INFO)
+    logger.addHandler(Handler())
+
+    class Writer(StreamingWavWriter):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.logger = logger
+            writers.append(self)
+
+        def finalize(self):
+            finalized.append(self)
+            return super().finalize()
+
+    capture, controller, _, _ = start_persistent_capture(tmp_path, writer_factory=Writer)
+    try:
+        assert entered.wait(3)
+        assert writers[0].sf_file.closed
+        saved, rate = sf.read(capture.request.path, dtype="float32", always_2d=True)
+        np.testing.assert_array_equal(saved, np.tile([8.25, 2.5], (7, 1)))
+        assert not unblock.wait(.65)
+        assert capture.capture_slot_released.is_set(), "closed WAV proof is waiting for logging"
+        slot = capture.capture_slot
+        assert slot.writer_released and slot.adapter_released
+        assert slot.raw_frames == capture.request.target_samples
+        assert not capture.done.is_set()
+    finally:
+        unblock.set()
+        outcome = capture.wait(3)
+        assert capture.join(3)
+        assert controller.release(.5).success
+    assert isinstance(outcome, RecordingResult) and outcome.handles_released
+    assert finalized == writers and len(records) == 1
+    assert sum("optional-writer-log-failed" in item for item in outcome.warnings) == int(log_failure)
+    assert rate == capture.request.sample_rate
+    np.testing.assert_array_equal(sf.read(outcome.path, dtype="float32")[0], saved)
+
+
+@pytest.mark.parametrize("fault", ["before_super", "physical_close", "after_super"])
+def test_capture_deferral_preserves_subclass_finalize_failure_ownership(tmp_path, monkeypatch, fault):
+    from base.streaming_file_writer import StreamingWavWriter
+    from unit_test.base.test_ve3668n_capture import start_persistent_capture
+
+    writers, calls, closers = [], [], []
+
+    class Writer(StreamingWavWriter):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            writers.append(self)
+            closers.append(self.sf_file.close)
+            if fault == "physical_close":
+                def fail_close():
+                    raise OSError("physical-close-probe")
+                monkeypatch.setattr(self.sf_file, "close", fail_close)
+
+        def finalize(self):
+            calls.append(self)
+            if fault == "before_super":
+                raise OSError("before-super-probe")
+            super().finalize()
+            if fault == "after_super":
+                raise OSError("after-super-probe")
+
+    capture, controller, _, _ = start_persistent_capture(tmp_path, writer_factory=Writer)
+    try:
+        outcome = capture.wait(3)
+        assert isinstance(outcome, RecordingFailure) and outcome.stage == "close_wav"
+        assert not outcome.handles_released
+        assert not capture.capture_slot_released.is_set()
+        assert not capture._writer_released and capture._writer is writers[0]
+        assert calls == writers
+    finally:
+        assert capture.join(3)
+        assert controller.release(.5).success
+        for close in closers:
+            close()
 
 
 def request(tmp_path, **overrides):

@@ -23,6 +23,7 @@ import threading
 import time
 
 from base.log_manager import LogManager
+from base.recording_timing_logger import RecordingTimingLogger
 from base.recording_process_protocol import (
     CaptureSlotReleased, FrozenConfig, RecordingCancelled, RecordingEvent,
     RecordingFailure, RecordingProgress, RecordingRequest, RecordingResult,
@@ -238,6 +239,7 @@ class RecordingService:
         self.diagnostics = []
         self.threads = []
         self._logger = LogManager.set_log_handler("core")
+        self._timing_logger = RecordingTimingLogger(start_thread=self._start_thread)
         self._supervisor = threading.Thread(target=self._run, name="recording-supervisor", daemon=True)
         self._start_thread(self._supervisor)
 
@@ -658,10 +660,14 @@ class RecordingService:
         # event. The validated terminal is the once-only fallback boundary.
         if not session._finalizing_notified and not session.cancel_requested and not session._terminal:
             session._finalizing_notified = True
-            self._logger.info("Recording timing request=%s process=parent stage=finalizing_observed parent_monotonic=%.6f",
-                session.request.request_id, time.monotonic())
+            observed_at = time.monotonic()
             self._notify(session, "finalizing")
-
+            self._timing_logger.info(
+                self._logger,
+                "Recording timing request=%s process=parent "
+                "stage=finalizing_observed parent_monotonic=%.6f",
+                session.request.request_id, observed_at,
+            )
     def _notify(self, session, kind, payload=None):
         callback = getattr(session.callbacks, kind)
         if callback is None:
@@ -1885,6 +1891,7 @@ class RecordingService:
                 # retire the worker; keep observing leases rather than abandon them.
                 self._handle_supervisor_exception(exc)
             if self._closing and self._worker is None and not self._leases:
+                self._timing_logger.close()
                 self._report_shutdown()
                 self.closed.set()
                 return

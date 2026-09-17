@@ -113,6 +113,7 @@ class RecordingCapture:
         self._thread = None
         self._stream = None
         self._writer = None
+        self._writer_finalization_log = None
         self._stream_close_attempted = False
         self._writer_close_attempted = False
         self._adapter_released = False
@@ -390,6 +391,8 @@ class RecordingCapture:
         if writer is None or self._writer_close_attempted:
             return
         self._writer_close_attempted = True
+        if isinstance(writer, StreamingWavWriter):
+            writer.defer_finalization_log()
         try:
             writer.finalize()
         except Exception as exc:
@@ -402,6 +405,20 @@ class RecordingCapture:
             return
         self._writer_released = True
         self._writer = None
+        if isinstance(writer, StreamingWavWriter):
+            self._writer_finalization_log = writer
+
+    def _emit_writer_finalization_log(self):
+        writer = self._writer_finalization_log
+        self._writer_finalization_log = None
+        if writer is not None:
+            try:
+                writer.emit_finalization_log()
+            except Exception as exc:
+                # External optional logger boundary, after proven physical close.
+                # Retain one bounded warning; never turn diagnostic failure into
+                # unknown file ownership or recursively write another log.
+                self._warnings.append(f"WAV finalization log failed: {type(exc).__name__}: {exc}"[:512])
 
     def _publish_capture_slot(self):
         if (not self._is_ve or self.capture_slot_released.is_set()
@@ -450,6 +467,7 @@ class RecordingCapture:
             self._publish_capture_slot()
             if self._target_sample_arrival is not None and self._file_closed_at is None:
                 self._file_closed_at = file_closed_at
+            self._emit_writer_finalization_log()
             if (self._file_closed_at is not None and self._failure is None
                     and not self._cancelled.is_set()):
                 # Cancellation has a bounded worker shutdown deadline. Avoid
@@ -473,6 +491,7 @@ class RecordingCapture:
                 self._discard_failed_blocks()
             self._close_writer()
             self._publish_capture_slot()
+            self._emit_writer_finalization_log()
             if self._failure is not None:
                 stage, message = self._failure
                 self.outcome = RecordingFailure(self.request.request_id, stage, self.request.path,

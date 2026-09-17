@@ -2,6 +2,9 @@
 from dataclasses import replace
 from types import SimpleNamespace
 import queue
+import logging
+import threading
+import time
 
 import pytest
 
@@ -13,6 +16,91 @@ from base.recording_process_protocol import (
 from base.recording_service import RecordingService, _Worker
 from unit_test.base.test_recording_service import request
 from unit_test.base.ve3668n_fakes import DiscoveryClock, capture_request
+
+
+def test_blocked_finalizing_log_does_not_delay_slot_or_shutdown(tmp_path):
+    import numpy as np
+    import soundfile as sf
+    from base.recording_service import RecordingCallbacks
+
+    entered, unblock, completed = (threading.Event() for _ in range(3))
+    child_completed = threading.Event()
+    outcomes, observations = [], []
+    received = {}
+
+    class GatedHandler(logging.Handler):
+        def emit(self, record):
+            if "stage=finalizing_observed" in record.msg:
+                entered.set()
+                assert unblock.wait(15), "test did not release logging gate"
+
+    logger = logging.Logger("gated-recording", logging.INFO)
+    logger.addHandler(GatedHandler())
+    service = RecordingService(
+        backend_factory="unit_test.base.ve3668n_fakes:capture_dependencies",
+        backend_options={"trace_path": str(tmp_path / "sdk.jsonl"), "read_delay": .04})
+    service._logger = logger
+    original_event = service._event
+    original_put = service._inbox.put
+
+    def observe_receipt(item, *args, **kwargs):
+        if item[0] == "event":
+            event = item[2]
+            received[event.kind] = (time.monotonic(), event.payload)
+            if event.kind == "completed":
+                child_completed.set()
+        return original_put(item, *args, **kwargs)
+
+    service._inbox.put = observe_receipt
+
+    def observe_event(worker, event):
+        original_event(worker, event)
+        if event.kind == "capture_slot_released":
+            observations.append((time.monotonic(), service.can_start_recording))
+
+    service._event = observe_event
+
+    def accepted(session, audio):
+        outcomes.append("accepted")
+        completed.set()
+
+    def failed(session, failure):
+        outcomes.append(failure.stage)
+        completed.set()
+
+    req = capture_request(tmp_path / "gated.wav", target_samples=8192)
+    try:
+        session = service.start(req, RecordingCallbacks(
+            result_ready=lambda session, audio: session.accept_result(),
+            accepted=accepted, failed=failed))
+        assert entered.wait(10)
+        assert child_completed.wait(5)
+        received_at, proof = received["capture_slot_released"]
+        assert proof.adapter_released and proof.writer_released
+        assert proof.raw_frames == req.target_samples
+        assert received_at - proof.target_reached_at < .5
+        saved, _ = sf.read(req.path, dtype="float32", always_2d=True)
+        np.testing.assert_array_equal(saved, np.tile([8.25, 2.5], (8190, 1)))
+        # The external handler remains blocked for longer than the real deadline.
+        assert not unblock.wait(.65)
+        assert completed.wait(2), "supervisor is still waiting for logging I/O"
+        assert outcomes == ["accepted"]
+        assert observations and observations[0][1]
+        assert observations[0][0] - session._target_reached_at < .5
+        assert session.released.wait(5)
+        saved, _ = sf.read(req.path, dtype="float32", always_2d=True)
+        np.testing.assert_array_equal(saved, np.tile([8.25, 2.5], (8190, 1)))
+        service.shutdown()
+        assert service.closed.wait(5), "logging consumer holds shutdown open"
+        assert not service.is_path_leased(req.path)
+        assert not unblock.is_set()
+    finally:
+        unblock.set()
+        service.shutdown()
+        assert service.closed.wait(10)
+        for thread in service.threads:
+            thread.join(3)
+            assert not thread.is_alive()
 
 
 @pytest.fixture

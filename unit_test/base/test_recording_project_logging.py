@@ -4,6 +4,7 @@ import multiprocessing
 import queue
 import re
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -69,6 +70,47 @@ def test_recording_service_acquires_handler_before_supervisor(tmp_path, monkeypa
             assert service._supervisor.is_alive()
         finally:
             stop_service(service)
+
+
+def test_finalizing_record_preserves_project_source_time_and_once_only_callback(
+        tmp_path, monkeypatch, caplog):
+    with isolated_project_logger(tmp_path, monkeypatch) as state:
+        service = RecordingService()
+        callbacks = []
+        session = RecordingSession(service, request(tmp_path), RecordingCallbacks(
+            finalizing=lambda session: callbacks.append(time.monotonic())))
+        before = time.monotonic()
+        try:
+            service._notify_finalizing(session)
+            service._notify_finalizing(session)
+        finally:
+            stop_service(service)
+        after = time.monotonic()
+        assert len(callbacks) == 1
+        record, = [r for r in caplog.records if "stage=finalizing_observed" in r.msg]
+        assert record.name == "core" and record.levelno == logging.INFO
+        assert record.filename == "recording_service.py"
+        assert record.funcName == "_notify_finalizing"
+        assert record.args[0] == session.request.request_id
+        assert before <= record.args[1] <= callbacks[0] <= after
+        logged = read_project_log(state, "recording_service.py")
+        assert logged.count(b"stage=finalizing_observed") == 1
+        assert len(rotating_handlers(state.logger)) == 1
+
+
+@pytest.mark.parametrize("guard", ["cancel_requested", "_terminal"])
+def test_finalizing_guards_do_not_start_logging_consumer(tmp_path, guard):
+    service = RecordingService()
+    calls = []
+    session = RecordingSession(service, request(tmp_path), RecordingCallbacks(
+        finalizing=lambda session: calls.append(session)))
+    setattr(session, guard, True)
+    try:
+        service._notify_finalizing(session)
+        assert calls == []
+        assert service._timing_logger.thread is None
+    finally:
+        stop_service(service)
 
 
 def test_ve_stream_acquires_project_handler(tmp_path, monkeypatch):
