@@ -60,7 +60,7 @@ class ToolbarRowLayout(QLayout):
                 width = entry.item.widget().sizeHint().width()
                 minimums.append(width)
                 preferred.append(width)
-            elif entry.role == "serial":
+            elif entry.role in ("serial", "action"):
                 width = entry.minimum if compact else entry.preferred
                 minimums.append(width)
                 preferred.append(width)
@@ -105,8 +105,13 @@ class ToolbarRowLayout(QLayout):
         compact = rect.width() < self.sizeHint().width()
         entries, minimums, widths = self._budgets(compact)
         for entry in entries:
+            widget = entry.item.widget()
             if entry.role in ("label", "serial"):
-                entry.item.widget().set_compact(compact)
+                widget.set_compact(compact)
+            elif entry.role == "action":
+                width = entry.minimum if compact else entry.preferred
+                if widget.width() != width:
+                    widget.setFixedWidth(width)
         margins = self.contentsMargins()
         area = rect.adjusted(margins.left(), margins.top(),
                              -margins.right(), -margins.bottom())

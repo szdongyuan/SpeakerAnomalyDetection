@@ -60,7 +60,7 @@ def field_labels(toolbar):
 
 def ordered_controls(toolbar):
     labels = field_labels(toolbar)
-    groups = [[toolbar.player_btn], [toolbar.data_btn], [toolbar.serial_trigger_btn],
+    groups = [[toolbar.player_btn, toolbar.data_btn, toolbar.serial_trigger_btn],
               [labels[0], toolbar.lineedit_type],
               [labels[1], toolbar.using_file_combobox],
               [labels[2], toolbar.sample_number_lineedit],
@@ -68,7 +68,7 @@ def ordered_controls(toolbar):
               [toolbar.barcode_scanner_box, toolbar.lineedit_s_or_n]]
     dividers = sorted((w for w in toolbar.findChildren(QFrame)
                        if w.frameShape() == QFrame.VLine), key=lambda w: w.x())
-    assert len(dividers) == 8
+    assert len(dividers) == 6
     return [widget for group, divider in zip(groups, dividers) for widget in [*group, divider]]
 
 
@@ -78,7 +78,7 @@ def assert_row(window, toolbar, width):
     assert toolbar.height() == 42
     assert 617 <= toolbar.minimumSizeHint().width() <= 1028
     controls = ordered_controls(toolbar)
-    assert len(controls) == 22
+    assert len(controls) == 20
     assert all(widget.isVisible() for widget in controls)
     rects = [QRect(widget.mapTo(toolbar, QPoint()), widget.size())
              for widget in controls]
@@ -92,7 +92,10 @@ def assert_row(window, toolbar, width):
                    toolbar.sample_number_lineedit, toolbar.current_round_spinbox):
         assert widget.width() >= 55
         assert widget.height() == 35
-    assert toolbar.player_btn.width() == toolbar.data_btn.width() == 48
+    expected_action_width = 48 if toolbar.serial_trigger_btn.compact else 120
+    assert toolbar.player_btn.width() == expected_action_width
+    assert toolbar.data_btn.width() == expected_action_width
+    assert toolbar.player_btn.height() == toolbar.data_btn.height() == 40
     assert toolbar.serial_trigger_btn.width() == (48 if toolbar.serial_trigger_btn.compact else 124)
     assert toolbar.reset_round_button.width() == 52
     horizontal = [w for w in toolbar.findChildren(QFrame) if w.frameShape() == QFrame.HLine]
@@ -137,6 +140,8 @@ def test_single_row_at_real_parent_width(width, scale, toolbar_host, ui_qapp, mo
     assert rect.contains(switch.fontMetrics().boundingRect(rect, Qt.AlignLeft | Qt.AlignVCenter, switch.text()))
     if width == 1030:
         assert toolbar.serial_trigger_btn.compact
+    if width == 1920 and scale == 1:
+        assert not toolbar.serial_trigger_btn.compact
     if width == 1920:
         assert toolbar.lineedit_type.width() == 160
         assert toolbar.using_file_combobox.width() == 200
@@ -321,13 +326,22 @@ def test_popup_scan_reset_and_status_survive_resize(toolbar_host, ui_qapp):
         assert_row(window, toolbar, width)
         assert toolbar.serial_trigger_btn.text() == "已连接"
         assert toolbar.data_btn.isEnabled()
+        assert toolbar.data_btn.analysis_state == toolbar.data_btn.STATE_ANALYZING
         assert toolbar.data_btn.status_badge.text() == "7/20"
         assert toolbar.data_btn.rect().contains(toolbar.data_btn.status_badge.geometry())
-    toolbar.data_btn.set_analyzing(1234, 9999, "A口")
-    assert toolbar.data_btn.rect().contains(toolbar.data_btn.status_badge.geometry())
-    assert toolbar.data_btn.status_badge.text() == "1234/9999"
-    assert "1234/9999" in toolbar.data_btn.toolTip()
-    assert "A口" in toolbar.data_btn.toolTip()
+    for index, width in enumerate((1920, 1030, 1920)):
+        window.resize(width, 760)
+        ui_qapp.processEvents()
+        if index == 0:
+            toolbar.data_btn.set_analyzing(1234, 9999, "A口")
+            wide_badge_width = toolbar.data_btn.status_badge.width()
+        if width == 1920:
+            assert toolbar.data_btn.status_badge.width() == wide_badge_width
+        assert toolbar.data_btn.rect().contains(toolbar.data_btn.status_badge.geometry())
+        assert toolbar.data_btn.analysis_state == toolbar.data_btn.STATE_ANALYZING
+        assert toolbar.data_btn.status_badge.text() == "1234/9999"
+        assert "1234/9999" in toolbar.data_btn.toolTip()
+        assert "A口" in toolbar.data_btn.toolTip()
 
 
 def test_render_toolbar_review_images(toolbar_host, ui_qapp, tmp_path):
@@ -392,6 +406,8 @@ def test_serial_states_paint_without_losing_native_status(scale, toolbar_host, u
     scale_fonts(toolbar, scale)
     ui_qapp.processEvents()
     button = toolbar.serial_trigger_btn
+    row = toolbar.layout().itemAt(1).layout()
+    wide_width = max(1920, row.sizeHint().width() + 2)
     host = StatusHost()
     host.serial_trigger_btn = button
     painted = []
@@ -405,7 +421,7 @@ def test_serial_states_paint_without_losing_native_status(scale, toolbar_host, u
     for index, (status, text, color) in enumerate(cases):
         if status is not None:
             host.on_serial_trigger_status_changed(status)
-        for width in (1030, 1920, 1030, 1920, 1030):
+        for width in (1030, wide_width, 1030, wide_width, 1030):
             window.resize(width, 760)
             ui_qapp.processEvents()
             image = button.grab().toImage()
