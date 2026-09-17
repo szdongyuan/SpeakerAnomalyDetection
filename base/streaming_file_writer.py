@@ -34,6 +34,8 @@ class StreamingWavWriter:
         self.channels = channels
         self.logger = LogManager.set_log_handler("streaming_core")
         self._terminal_attempted = False
+        self._defer_finalization_log = False
+        self._finalization_log_pending = False
         self.is_open = False
 
         try:
@@ -113,11 +115,27 @@ class StreamingWavWriter:
             else:
                 self.wave_file.close()
 
-            self.logger.info(f"StreamingWavWriter finalized. Total frames: {self.total_frames}")
+            self._finalization_log_pending = True
+            if not getattr(self, "_defer_finalization_log", False):
+                self.emit_finalization_log()
 
         except Exception as e:
             self.logger.error(f"Error finalizing WAV file: {e}")
             raise
+
+    def defer_finalization_log(self):
+        """Let a capture owner publish physical release before optional log I/O.
+
+        This only defers the success diagnostic. The owner must still call
+        ``finalize`` (including any subclass override) and handle close errors.
+        """
+        self._defer_finalization_log = True
+
+    def emit_finalization_log(self):
+        """Emit a successfully closed writer's deferred diagnostic at most once."""
+        if getattr(self, "_finalization_log_pending", False):
+            self._finalization_log_pending = False
+            self.logger.info(f"StreamingWavWriter finalized. Total frames: {self.total_frames}")
 
     def __enter__(self):
         """Context manager entry."""

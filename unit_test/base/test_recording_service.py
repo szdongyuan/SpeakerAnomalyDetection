@@ -260,6 +260,12 @@ def services(tmp_path):
         service.shutdown()
         assert service.closed.wait(12), service.diagnostics
         assert service.worker_pid is None
+        # Service closure cannot wait for optional logging I/O. In these tests
+        # handlers are ungated, so explicitly verify its requested drain exits.
+        consumer = service._timing_logger.thread
+        if consumer is not None and consumer.ident is not None:
+            consumer.join(3)
+            assert not consumer.is_alive()
         assert not any(thread.is_alive() for thread in service.threads)
 
 
@@ -1065,6 +1071,7 @@ def test_duplicate_pending_preview_does_not_grant_extra_credit(tmp_path, service
 def test_repeated_healthy_and_retired_workers_do_not_accumulate_threads(tmp_path, services):
     service = services()
     generations = []
+    timing_consumer = None
     for index in range(6):
         events = Events()
         session = service.start(request(tmp_path, request_id=str(index)), events.callbacks)
@@ -1077,7 +1084,13 @@ def test_repeated_healthy_and_retired_workers_do_not_accumulate_threads(tmp_path
         else:
             session.accept_result()
         assert session.released.wait(5)
-        eventually(lambda: len(service.threads) <= 4)
+        if timing_consumer is None:
+            timing_consumer = service._timing_logger.thread
+        assert service._timing_logger.thread is timing_consumer
+        assert timing_consumer.name == "recording-timing-log"
+        assert timing_consumer in service.threads and timing_consumer.is_alive()
+        eventually(lambda: len([thread for thread in service.threads
+                                if thread is not timing_consumer]) <= 4)
     assert generations == [1, 1, 2, 2, 3, 3]
 
 
