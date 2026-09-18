@@ -18,6 +18,7 @@ from ui.sequence.sequencement_count_board import SequenceCountBoard
 
 from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
 from ui.sequence.sequence_widget_test_metadata_ops import SequenceWidgetTestMetadataOpsMixin
+from ui.sequence.sequence_widget_progress_ops import SequenceWidgetProgressOpsMixin
 from ui.sequence.sequence_widget_round_reset_ops import SequenceWidgetRoundResetOpsMixin
 from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
@@ -33,6 +34,7 @@ from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOps
 class SequenceWindow(
     SequenceWidgetUiOpsMixin,
     SequenceWidgetTestMetadataOpsMixin,
+    SequenceWidgetProgressOpsMixin,
     SequenceWidgetRoundResetOpsMixin,
     SequenceWidgetBarcodeOpsMixin,
     SequenceWidgetSerialTriggerOpsMixin,
@@ -236,4 +238,5 @@ class SequenceWindow(
         self.init_lineedit_text()
         self.init_ui()
         self._serial_trigger_runtime_initialized = False
+        self._init_product_progress_runtime()
         self.restore_scanner_checkbox_state()

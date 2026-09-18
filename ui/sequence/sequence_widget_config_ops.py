@@ -241,6 +241,8 @@ class SequenceWidgetConfigOpsMixin:
             # 回到只读：依赖失去焦点（lineedit_*_lose_focus 已处理）。
             if event.type() == QEvent.MouseButtonPress:
                 if obj is self.lineedit_type:
+                    if getattr(self, "_analysis_round_config_locked", False):
+                        return True
                     try:
                         if isinstance(obj, QLineEdit) and obj.isReadOnly():
                             obj.setReadOnly(False)
