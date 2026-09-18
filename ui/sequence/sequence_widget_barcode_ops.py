@@ -902,10 +902,6 @@ class SequenceWidgetBarcodeOpsMixin:
         ):
             QMessageBox.warning(self, "警告", "请先录制声音！")
             return
-        if self.sequence_config:
-            if self.sequence_config[0]["seq1"]["acq"]["mode"] == "IMPORT_AUDIO":
-                QMessageBox.warning(self, "警告", "当前为导入音频模式，无需点击 OK/NG 按钮。")
-                return
         previous_label = (
             self.recorded_signal_info.get("labels", "not_labeled")
             if isinstance(self.recorded_signal_info, dict)
@@ -928,7 +924,7 @@ class SequenceWidgetBarcodeOpsMixin:
         self.data_struct.store_wave_data_multi = None
         clear_wav_calibration_state = getattr(
             self,
-            "_clear_imported_wav_calibration_state",
+            "_clear_audio_source_analysis_state",
             None,
         )
         if callable(clear_wav_calibration_state):

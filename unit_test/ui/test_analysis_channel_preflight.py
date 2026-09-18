@@ -43,22 +43,6 @@ def test_live_preflight_maps_physical_channels_and_returns_ordered_skips():
         result.local_channels["new"] = 0
 
 
-def test_import_preflight_uses_wav_local_columns():
-    result = preflight_analysis_channels(
-        _config(
-            ("spl-left", "SPL", {"analysis_channel": 0}),
-            ("spec-right", "Spec", {"analysis_channel": 1}),
-            ("fba-missing", "FBA", {"analysis_channel": 2}),
-        ),
-        active_input_channels=[9, 12],
-        imported_channel_count=2,
-    )
-
-    assert result.local_channels == {"spl-left": 0, "spec-right": 1}
-    assert result.skipped[0].available_channels == (0, 1)
-    assert result.skipped[0].requested_channel == 2
-
-
 def test_preflight_only_handles_explicit_channel_protocol_types():
     assert REQUIRED_CHANNEL_ANALYSIS_TYPES == frozenset({"SPL", "Spec", "FBA"})
     assert PASSIVE_CHANNEL_ANALYSIS_TYPES == frozenset({"AI", "FFT", "LOUD"})
@@ -100,17 +84,6 @@ def test_all_recorded_channels_missing_marks_base_item_as_fully_skipped():
     assert result.local_channels == {}
     assert result.fully_skipped_items == ("item",)
     assert [skip.item_key for skip in result.skipped] == ["item--通道3", "item--通道8"]
-
-
-def test_import_preflight_ignores_recorded_channel_list():
-    result = preflight_analysis_channels(
-        _config(("item", "SPL", {"analysis_channel": 1, "analysis_channels": [0, 7]})),
-        active_input_channels=[0, 7],
-        imported_channel_count=2,
-    )
-
-    assert result.local_channels == {"item": 1}
-    assert result.skipped == ()
 
 
 @pytest.mark.parametrize(

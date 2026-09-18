@@ -399,15 +399,6 @@ class SequenceWidgetSerialTriggerOpsMixin:
                 "serial_product_start_rejected reason=当前产品工况或测试队列无法加载"
             )
             return False
-        if getattr(self, "_is_import_audio_mode", lambda: False)():
-            reason = (
-                "当前工况绑定了 IMPORT_AUDIO 测试队列，串口触发不支持导入音频，"
-                "请更换为录音测试队列。"
-            )
-            self.default_logger.warning(f"serial_product_start_rejected reason={reason}")
-            self._cancel_prepared_serial_product_condition()
-            self._show_serial_product_notice_once("产品测试无法开始", reason)
-            return False
 
         preflight = getattr(self, "checked_work_status_message", None)
         if callable(preflight) and preflight():

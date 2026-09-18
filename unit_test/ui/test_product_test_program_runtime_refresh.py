@@ -404,7 +404,7 @@ def test_valid_product_program_switch_refreshes_serial_match_candidates():
     assert host.data_struct.wav_calibration_warning_shown is False
 
 
-def test_legacy_queue_switch_clears_imported_wav_metadata(monkeypatch):
+def test_legacy_queue_switch_clears_wav_metadata(monkeypatch):
     host = SimpleNamespace(
         player_status_flag=False,
         using_file_combobox=_ComboBoxStub(None),

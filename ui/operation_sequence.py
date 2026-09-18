@@ -36,10 +36,7 @@ from consts.recording_preview_consts import (
 )
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
-from ui.acquisition_config_window import (
-    RecordConfigWindow,
-    ImportAudioConfigWindow,
-)
+from ui.acquisition_config_window import RecordConfigWindow
 
 from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
@@ -52,8 +49,8 @@ from ui.ui_analysis_config.loudness_config_dialog import LoudnessConfigWindow
 from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 
 
-SUPPORTED_ACQ_ITEMS = ["录制音频", "导入音频"]
-SUPPORTED_ACQ_MODES = {"RECORD_ONLY", "IMPORT_AUDIO"}
+SUPPORTED_ACQ_ITEMS = ["录制音频"]
+SUPPORTED_ACQ_MODES = {"RECORD_ONLY"}
 SUPPORTED_ANALYSIS_ITEMS = [
     "声压级 (SPL) ",
     "频谱分析 (Spec) ",
@@ -866,18 +863,13 @@ class OptionList(QListView):
                     speaker_channels=self.speaker_channels,
                     ve_profile_provider=self.ve_profile_provider,
                 )
-            elif self.config[0].mode == "IMPORT_AUDIO":
-                model = ImportAudioConfigWindow(self.config[0].detail, mic=self.mic)
             else:
                 return
 
             result = model.exec()
             if result is not None:
                 self.config[0].detail = result
-                if self.config[0].mode == "RECORD_ONLY":
-                    self.signal_len = int(result["total_time"] * result["sample_rate"])
-                else:
-                    self.signal_len = 0
+                self.signal_len = int(result["total_time"] * result["sample_rate"])
                 self._notify_config_changed()
             return
 
@@ -912,7 +904,7 @@ class OptionList(QListView):
         if type in {"SPL", "Spec", "FBA"}:
             if mode == "RECORD_ONLY":
                 restrict_analysis_channel = True
-            elif mode != "IMPORT_AUDIO":
+            else:
                 self.default_logger.warning(
                     f"Cannot open {type} config for unsupported acquisition mode: {mode}"
                 )
@@ -1009,38 +1001,33 @@ class OptionList(QListView):
                     model_consts.RECORDING_ROOT_CONFIG_KEY: "",
                 }
             else:
-                if sequence_config.mode == "RECORD_ONLY":
-                    try:
-                        preview_time_mode = resolve_recording_preview_time_mode(
-                            sequence_config.detail
+                try:
+                    preview_time_mode = resolve_recording_preview_time_mode(
+                        sequence_config.detail
+                    )
+                except ValueError as exc:
+                    if not isinstance(sequence_config.detail, Mapping):
+                        self.default_logger.error(
+                            f"Failed to load the default config file. {exc}"
                         )
-                    except ValueError as exc:
-                        if not isinstance(sequence_config.detail, Mapping):
-                            self.default_logger.error(
-                                f"Failed to load the default config file. {exc}"
-                            )
-                            self.clear_option_list()
-                            return
-                        preview_time_mode = sequence_config.detail.get(
-                            RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
-                        )
-                    # Own the loaded detail and retain fields belonging to other
-                    # recording features. Invalid explicit values remain repairable.
-                    detail = copy.deepcopy(sequence_config.detail)
-                    detail.setdefault("total_time", 4.0)
-                    if (self.mic or {}).get("backend") != VE_BACKEND:
-                        detail.setdefault("sample_rate", 44100)
-                    detail.setdefault("use_streaming_recording", False)
-                    detail[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] = preview_time_mode
-                    detail.setdefault(model_consts.RECORDING_ROOT_CONFIG_KEY, "")
-                    for key in tuple(detail):
-                        if key.startswith("monitor_"):
-                            del detail[key]
-                    sequence_config.detail = detail
-                elif sequence_config.mode == "IMPORT_AUDIO":
-                    sequence_config.detail = {
-                        "sample_rate": int(sequence_config.detail.get("sample_rate", 44100))
-                    }
+                        self.clear_option_list()
+                        return
+                    preview_time_mode = sequence_config.detail.get(
+                        RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
+                    )
+                # Own the loaded detail and retain fields belonging to other
+                # recording features. Invalid explicit values remain repairable.
+                detail = copy.deepcopy(sequence_config.detail)
+                detail.setdefault("total_time", 4.0)
+                if (self.mic or {}).get("backend") != VE_BACKEND:
+                    detail.setdefault("sample_rate", 44100)
+                detail.setdefault("use_streaming_recording", False)
+                detail[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] = preview_time_mode
+                detail.setdefault(model_consts.RECORDING_ROOT_CONFIG_KEY, "")
+                for key in tuple(detail):
+                    if key.startswith("monitor_"):
+                        del detail[key]
+                sequence_config.detail = detail
 
             self.sound_item_type = sequence_config.name.lstrip()
 
@@ -1074,8 +1061,7 @@ class OptionList(QListView):
 
             rate = sequence_config.detail.get("sample_rate", 44100)
             duration = sequence_config.detail.get("total_time", 4.0)
-            if (sequence_config.mode != "IMPORT_AUDIO"
-                    and type(rate) is int and isinstance(duration, (int, float))):
+            if type(rate) is int and isinstance(duration, (int, float)):
                 self.signal_len = duration * rate
             else:
                 self.signal_len = 0
@@ -1488,22 +1474,17 @@ class OptionList(QListView):
         seq_item = SequenceData(seq_name)
         seq_item.name = item_text
 
-        if item_text == SUPPORTED_ACQ_ITEMS[0]:
-            seq_item.mode = "RECORD_ONLY"
-            seq_item.detail = {
-                "total_time": 4.0,
-                "sample_rate": 44100,
-                "use_streaming_recording": False,
-                RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: PREVIEW_TIME_MODE_RELATIVE_LATEST,
-                model_consts.RECORDING_ROOT_CONFIG_KEY: "",
-            }
-            self.signal_len = seq_item.detail.get(
-                "total_time", 4.0
-            ) * seq_item.detail.get("sample_rate", 44100)
-        elif item_text == SUPPORTED_ACQ_ITEMS[1]:
-            seq_item.mode = "IMPORT_AUDIO"
-            seq_item.detail = {"sample_rate": 44100}
-            self.signal_len = 0
+        seq_item.mode = "RECORD_ONLY"
+        seq_item.detail = {
+            "total_time": 4.0,
+            "sample_rate": 44100,
+            "use_streaming_recording": False,
+            RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: PREVIEW_TIME_MODE_RELATIVE_LATEST,
+            model_consts.RECORDING_ROOT_CONFIG_KEY: "",
+        }
+        self.signal_len = seq_item.detail.get(
+            "total_time", 4.0
+        ) * seq_item.detail.get("sample_rate", 44100)
 
         self.config.append(seq_item)
         self.model().insertRow(0, list_item)

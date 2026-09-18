@@ -26,10 +26,6 @@ PRODUCT_TRIGGER_MODE_MIXED = "mixed"
 
 # Validation rules
 INVALID_PROJECT_NAME_CHARS = '<>:"/\\|?*_'
-MIXED_ACQUISITION_MODE_ERROR = (
-    "同一产品测试配置不能同时包含导入音频和录制音频工况，"
-    "请统一各工况测试队列的采集模式后重试"
-)
 LIMIT_RULE_ANALYSIS_TYPES = {
     "SPL",
     "SPLF",

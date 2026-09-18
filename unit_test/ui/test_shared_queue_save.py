@@ -25,8 +25,11 @@ def editor(app, tmp_path, monkeypatch):
     registry = products / "registry.json"
     queues = tmp_path / "queues.json"
     target = tmp_path / "Q.json"
-    payload = [{"seq1": {"acq": {"name": "导入音频", "mode": "IMPORT_AUDIO",
-                                "detail": {"sample_rate": 44100}},
+    payload = [{"seq1": {"acq": {"name": "录制音频", "mode": "RECORD_ONLY",
+                                "detail": {"sample_rate": 44100, "total_time": 4.0,
+                                           "use_streaming_recording": False,
+                                           "recording_preview_time_mode": "relative_latest",
+                                           "recording_root": ""}},
                          "analysis_list": {"display_sequence": [], "default_ai": None,
                                            "auto_analysis": True}}}]
     write_json(target, payload)

@@ -43,8 +43,8 @@ class SequenceWidgetRoundResetOpsMixin:
         if not group_id or group_id != self._round_reset_group_id:
             return
         path = os.path.abspath(info["file_path"])
-        # Imported source WAVs and previously existing paths are never owned here.
-        if info.get("source_type") == "imported" or os.path.lexists(path):
+        # Previously existing paths are never owned here.
+        if os.path.lexists(path):
             return
         key = uuid.uuid4().hex
         info["round_data_group_id"] = group_id
@@ -214,7 +214,7 @@ class SequenceWidgetRoundResetOpsMixin:
                     lines.append("上次删除未完成，本次重试剩余文件和记录。")
                 lines.extend([
                     self._round_deletion_summary(group_id),
-                    "对应数据库记录同步删除，报告及导入源文件保留。",
+                    "对应数据库记录同步删除，报告保留。",
                 ])
             else:
                 lines.append("未勾选时保留已保存的数据和报告。")

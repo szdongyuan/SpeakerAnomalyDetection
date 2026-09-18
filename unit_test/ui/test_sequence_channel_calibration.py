@@ -27,7 +27,6 @@ from ui.ui_analysis_config.config_normalization import (
     normalize_analysis_channel,
     normalize_analysis_channels,
 )
-from base.wav_calibration_metadata import resolve_wav_channel_v2pa_factor
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -286,11 +285,8 @@ def build_sequence(
     factor_map=None,
     loader_error=None,
     active_input_channels=None,
-    import_audio=False,
     items=None,
     legacy_factor=9.5,
-    wav_metadata=None,
-    wav_resolver=resolve_wav_channel_v2pa_factor,
 ):
     events = []
     created = []
@@ -352,8 +348,6 @@ def build_sequence(
             "_show_missing_mic_channel_calibration_warning",
             "_abort_live_mic_calibration_batch",
             "_show_analysis_channel_preflight_warning",
-            "_prepare_imported_wav_calibration_batch",
-            "_show_imported_wav_calibration_warning",
             "_run_analysis_impl",
             "instance_analysis_class",
         ],
@@ -368,7 +362,6 @@ def build_sequence(
             "MULTI_CHANNEL_ANALYSIS_TYPES": MULTI_CHANNEL_ANALYSIS_TYPES,
             "normalize_analysis_channel": normalize_analysis_channel,
             "normalize_analysis_channels": normalize_analysis_channels,
-            "resolve_wav_channel_v2pa_factor": wav_resolver,
             "extract_ai_runtime_state": lambda *_args: {
                 "has_ai_analysis": False,
                 "scores": {},
@@ -380,12 +373,10 @@ def build_sequence(
     sequence.mic = DEVICE
     sequence.v2pa_factor = legacy_factor
     sequence._active_input_channels = list(active_input_channels or [0])
-    sequence._is_import_audio_mode = lambda: import_audio
     sequence.data_struct = SimpleNamespace(
         analysis_result_dict={},
         store_wave_data_multi=None,
         wav_calibration_warning_shown=False,
-        wav_calibration_metadata=wav_metadata,
     )
     sequence.analysis_window = []
     sequence._analysis_result_summary_window = None
@@ -525,54 +516,6 @@ def test_calibration_file_error_aborts_whole_live_batch(error):
     )
     assert str(error) in sequence.default_logger.error.call_args.args[0]
     sequence._capture_excel_export_cache.assert_not_called()
-
-
-@pytest.mark.parametrize("recorded_channels", [None, [0, 7]])
-def test_imported_items_use_requested_wav_factor_and_preflight_local_column(recorded_channels):
-    resolver = mock.Mock(side_effect=resolve_wav_channel_v2pa_factor)
-    sequence, loader, messages, _events, created = build_sequence(
-        loader_error=MicCalibrationFormatError("must not load"),
-        import_audio=True,
-        legacy_factor=99.0,
-        wav_resolver=resolver,
-        wav_metadata={
-            "recorded_channels": [
-                {
-                    "wav_channel_index": 0,
-                    "v2pa_factor": 2.5,
-                    "standard_spl": 94.0,
-                    "calibrated": True,
-                },
-                {
-                    "wav_channel_index": 1,
-                    "v2pa_factor": 7.0,
-                    "standard_spl": 114.0,
-                    "calibrated": True,
-                },
-            ]
-        },
-        items=[
-            ("spl", "SPL", {"analysis_channel": 0}),
-            ("spec", "Spec", {"analysis_channel": 1}),
-            ("fba", "FBA", {"analysis_channel": 0}),
-        ],
-    )
-    sequence.data_struct.store_wave_data_multi = np.zeros((8, 2))
-    if recorded_channels is not None:
-        for key in sequence.analysis_config["display_sequence"]:
-            sequence.analysis_config[key]["analysis_channels"] = recorded_channels
-
-    sequence._run_analysis_impl(show_windows=False)
-
-    loader.assert_not_called()
-    messages.warning.assert_not_called()
-    messages.critical.assert_not_called()
-    assert [instance.v2pa_factor for instance in created] == [2.5, 7.0, 2.5]
-    assert [
-        instance.analysis_config["analysis_channel"] for instance in created
-    ] == [0, 1, 0]
-    assert [call.args[1] for call in resolver.call_args_list] == [0, 1, 0]
-    assert all(not instance._sequence_multi_channel_expansion for instance in created)
 
 
 @pytest.mark.parametrize("item_type", ["SPL", "Spec", "FBA", "AI", "LP", "FFT", "LOUD"])
@@ -747,191 +690,6 @@ def test_real_spl_runtime_reads_distinct_recorded_columns_and_judges_each_channe
         for instance in sequence.analysis_window:
             instance.close()
         app.processEvents()
-
-
-def test_real_imported_spl_overall_judgment_uses_one_wav_column_and_file_calibration(monkeypatch):
-    from ui.signal_analysis_window import Spl
-
-    app = QApplication.instance() or QApplication([])
-    sequence, loader, messages, _events, _created = build_sequence(
-        import_audio=True,
-        legacy_factor=99.0,
-        loader_error=MicCalibrationFormatError("must not load"),
-        wav_metadata={
-            "recorded_channels": [{
-                "wav_channel_index": 1,
-                "v2pa_factor": 2.0,
-                "standard_spl": 94.0,
-                "calibrated": True,
-            }],
-        },
-        items=[("item", "SPL", {
-            "analysis_channel": 1,
-            "analysis_channels": [2, 7],
-            "weighting": "Z",
-            "limit_checked": True,
-            "limit_metric": "overall_spl",
-            "scalar_upper_value": 65.0,
-            "show_overall_spl": False,
-        })],
-    )
-    monkeypatch.setattr(
-        sequence,
-        "_get_legacy_analysis_class_mapping",
-        lambda: {"SPL": Spl},
-    )
-    sequence.data_struct.store_wave_data_multi = np.column_stack([
-        np.full(2401, 0.2), np.full(2401, 0.01),
-    ])
-    sequence.data_struct.store_wave_data = np.full(2401, 99.0)
-    sequence.data_struct.sample_rate = 48000
-
-    try:
-        assert sequence._run_analysis_impl(show_windows=False) is True
-        assert len(sequence.analysis_window) == 1
-        instance = sequence.analysis_window[0]
-        assert instance.analysis_config["analysis_channel"] == 1
-        assert instance.v2pa_factor == 2.0
-        assert instance.result["overall_spl"] == pytest.approx(60.0)
-        assert sequence.data_struct.analysis_result_dict["item--通道2"][0] is True
-        loader.assert_not_called()
-        messages.warning.assert_not_called()
-    finally:
-        for instance in sequence.analysis_window:
-            instance.close()
-        app.processEvents()
-
-
-@pytest.mark.parametrize(
-    "metadata",
-    [
-        None,
-        {"recorded_channels": "malformed"},
-        {
-            "recorded_channels": [
-                {
-                    "wav_channel_index": 0,
-                    "v2pa_factor": 2.5,
-                    "standard_spl": 94.0,
-                    "calibrated": True,
-                }
-            ]
-        },
-        {
-            "recorded_channels": [
-                {
-                    "wav_channel_index": 1,
-                    "v2pa_factor": None,
-                    "standard_spl": None,
-                    "calibrated": False,
-                }
-            ]
-        },
-    ],
-    ids=["absent", "malformed", "missing-record", "uncalibrated"],
-)
-def test_imported_wav_factor_fallback_warns_once_and_executes_valid_items(metadata):
-    sequence, loader, messages, events, created = build_sequence(
-        import_audio=True,
-        legacy_factor=99.0,
-        wav_metadata=metadata,
-        items=[
-            ("spl", "SPL", {"analysis_channel": 1}),
-            ("spec", "Spec", {"analysis_channel": 1}),
-            ("fba", "FBA", {"analysis_channel": 1}),
-        ],
-    )
-    sequence.data_struct.store_wave_data_multi = np.zeros((8, 2))
-
-    assert sequence._run_analysis_impl(show_windows=False) is True
-
-    loader.assert_not_called()
-    messages.warning.assert_called_once_with(
-        sequence,
-        "音频校准数据缺失",
-        "该音频文件未包含有效校准数据，分析结果仅供参考。",
-    )
-    assert [instance.v2pa_factor for instance in created] == [1.0, 1.0, 1.0]
-    assert [event[0] for event in events] == [
-        "warning",
-        "calculate",
-        "calculate_spec",
-        "calculate_fba",
-    ]
-
-
-def test_imported_wav_warning_type_error_propagates_without_marking_shown():
-    sequence, _loader, messages, _events, _created = build_sequence(
-        import_audio=True,
-    )
-    messages.warning.side_effect = TypeError("invalid Qt parent")
-
-    with pytest.raises(TypeError, match="invalid Qt parent"):
-        sequence._show_imported_wav_calibration_warning(True)
-
-    assert sequence.data_struct.wav_calibration_warning_shown is False
-
-    messages.warning.side_effect = None
-    sequence._show_imported_wav_calibration_warning(True)
-
-    assert messages.warning.call_count == 2
-    assert sequence.data_struct.wav_calibration_warning_shown is True
-
-
-def test_imported_warning_order_skips_missing_channel_and_rewarns_next_run():
-    sequence, loader, messages, events, _created = build_sequence(
-        import_audio=True,
-        legacy_factor=99.0,
-        items=[
-            ("missing", "SPL", {"analysis_channel": 2}),
-            ("valid", "Spec", {"analysis_channel": 1}),
-        ],
-    )
-    sequence.data_struct.store_wave_data_multi = np.zeros((8, 2))
-
-    assert sequence._run_analysis_impl(show_windows=False) is True
-    assert [event[0] for event in events] == [
-        "warning",
-        "warning",
-        "calculate_spec",
-    ]
-    assert messages.warning.call_args_list[1].args[2] == (
-        "该音频文件未包含有效校准数据，分析结果仅供参考。"
-    )
-    assert sequence._imported_wav_channel_v2pa_factors == {"valid": 1.0}
-
-    events.clear()
-    assert sequence._run_analysis_impl(show_windows=False) is True
-    assert [event[0] for event in events] == [
-        "warning",
-        "warning",
-        "calculate_spec",
-    ]
-    assert messages.warning.call_count == 4
-    loader.assert_not_called()
-
-
-def test_imported_all_missing_channels_only_emit_preflight_warning():
-    resolver = mock.Mock(side_effect=resolve_wav_channel_v2pa_factor)
-    sequence, loader, messages, events, created = build_sequence(
-        import_audio=True,
-        wav_resolver=resolver,
-        items=[
-            ("missing-spl", "SPL", {"analysis_channel": 2}),
-            ("missing-fba", "FBA", {"analysis_channel": 3}),
-        ],
-    )
-    sequence.data_struct.store_wave_data_multi = np.zeros((8, 2))
-
-    assert sequence._run_analysis_impl(show_windows=False) is False
-
-    messages.warning.assert_called_once()
-    assert messages.warning.call_args.args[1] == "分析通道不存在"
-    assert [event[0] for event in events] == ["warning"]
-    assert sequence._imported_wav_channel_v2pa_factors == {}
-    assert created == []
-    resolver.assert_not_called()
-    loader.assert_not_called()
 
 
 def test_preflight_warns_once_before_calibration_and_only_runs_valid_items():

@@ -139,17 +139,6 @@ class SequenceWidgetConfigOpsMixin:
             )
         return True, ""
 
-    def _validate_active_product_program_acquisition_modes(self):
-        manager = self._get_product_program_manager()
-        config_path = self._get_active_product_program_path()
-        if not config_path:
-            return True, ""
-        load_code, program_data = LoadUiConfig.load_data_from_json(config_path)
-        if load_code != error_code.OK or not isinstance(program_data, dict):
-            return True, ""
-        errors = manager.validate_acquisition_modes(program_data)
-        return not errors, "\n".join(errors)
-
     def load_active_product_test_pdf_report_config(self):
         return {"enabled": False, "save_dir": ""}
 
@@ -634,7 +623,7 @@ class SequenceWidgetConfigOpsMixin:
             self.data_struct.store_wave_data_multi = None
             clear_wav_calibration_state = getattr(
                 self,
-                "_clear_imported_wav_calibration_state",
+                "_clear_audio_source_analysis_state",
                 None,
             )
             if callable(clear_wav_calibration_state):
@@ -672,7 +661,7 @@ class SequenceWidgetConfigOpsMixin:
         self.data_struct.store_wave_data_multi = None
         clear_wav_calibration_state = getattr(
             self,
-            "_clear_imported_wav_calibration_state",
+            "_clear_audio_source_analysis_state",
             None,
         )
         if callable(clear_wav_calibration_state):
@@ -725,9 +714,6 @@ class SequenceWidgetConfigOpsMixin:
             self.sequence_config = result
             seq = self.sequence_config[0]["seq1"]
             self.analysis_config = seq.get("analysis_list", {})
-            mode = seq["acq"]["mode"]
-            if mode == "IMPORT_AUDIO":
-                self.replayer_btn.setDisabled(True)
             if self.count_board:
                 self.count_board.analysis_config = seq.get("analysis_list", {})
                 self._refresh_test_mode_availability()

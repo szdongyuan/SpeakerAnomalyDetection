@@ -187,12 +187,7 @@ class SequenceWidgetStreamingOpsMixin:
         recorded_path = getattr(self, "recorded_path", None) or recorded_signal_info.get("file_path")
         if not recorded_path and not recorded_signal_info:
             return
-        source_type = str(recorded_signal_info.get("source_type") or "").strip()
-        session_id = (
-            ""
-            if source_type == "imported"
-            else str(getattr(self, "_current_recent_session_id", "") or "")
-        )
+        session_id = str(getattr(self, "_current_recent_session_id", "") or "")
 
         self._condition_record_cache[key] = {
             "group_id": (
@@ -421,12 +416,9 @@ class SequenceWidgetStreamingOpsMixin:
         session_id = ""
         if isinstance(record, dict):
             recorded_signal_info = dict(record.get("recorded_signal_info", {}) or {})
-            source_type = str(recorded_signal_info.get("source_type") or "").strip()
             session_id = str(record.get("session_id") or "")
             session_record = (getattr(self, "recent_test_session_by_id", {}) or {}).get(session_id)
-            if source_type == "imported":
-                session_id = ""
-            elif getattr(self, "product_test_condition_configs", None):
+            if getattr(self, "product_test_condition_configs", None):
                 record_group = record.get("group_id") or recorded_signal_info.get("round_data_group_id")
                 if (
                     not self._condition_key_matches_record(key, session_record)
@@ -1464,7 +1456,7 @@ class SequenceWidgetStreamingOpsMixin:
                 self.data_struct.store_wave_data_multi = None
                 clear_wav_calibration_state = getattr(
                     self,
-                    "_clear_imported_wav_calibration_state",
+                    "_clear_audio_source_analysis_state",
                     None,
                 )
                 if callable(clear_wav_calibration_state):

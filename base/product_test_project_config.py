@@ -16,7 +16,6 @@ from consts.product_test_project_consts import (
     GROUP_NAME_KEY,
     INVALID_PROJECT_NAME_CHARS,
     LIMIT_RULE_ANALYSIS_TYPES,
-    MIXED_ACQUISITION_MODE_ERROR,
     OUTPUT_LOAD_KEY,
     PRODUCT_TRIGGER_MODE_MANUAL,
     PRODUCT_TRIGGER_MODE_MIXED,
@@ -127,25 +126,6 @@ def is_manual_project_play_allowed(conditions_or_project):
 
 
 class ProductTestProjectValidator(object):
-    @staticmethod
-    def validate_acquisition_modes(project_data, queue_catalog):
-        acquisition_modes = set()
-        for _group_index, _group, _condition_index, condition in iter_test_conditions(
-            project_data
-        ):
-            test_queue = str(condition.get(TEST_QUEUE_KEY, "") or "").strip()
-            queue_info = queue_catalog.get(test_queue)
-            if not isinstance(queue_info, dict):
-                continue
-            acquisition_mode = str(
-                queue_info.get("acquisition_mode") or ""
-            ).strip().upper()
-            if acquisition_mode in {"IMPORT_AUDIO", "RECORD_ONLY"}:
-                acquisition_modes.add(acquisition_mode)
-        if len(acquisition_modes) > 1:
-            return [MIXED_ACQUISITION_MODE_ERROR]
-        return []
-
     @staticmethod
     def validate_test_queue_references(project_data, queue_catalog):
         errors = []
@@ -585,14 +565,6 @@ class ProductTestProjectConfigManager(object):
                 return False, f"删除产品测试配置文件失败：{error}"
         return True, file_name
 
-    def validate_acquisition_modes(self, project_data, queue_catalog=None):
-        if queue_catalog is None:
-            queue_catalog = self.load_queue_catalog()
-        return ProductTestProjectValidator.validate_acquisition_modes(
-            project_data,
-            queue_catalog,
-        )
-
     def validate_project(self, project_data, current_file, queue_catalog=None):
         registry = self.load_registry()
         if queue_catalog is None:
@@ -671,10 +643,6 @@ class ProductTestProjectConfigManager(object):
                 queue_catalog,
             )
         )
-        if not errors:
-            errors.extend(
-                self.validate_acquisition_modes(project_data, queue_catalog)
-            )
         return errors
 
     def load_queue_catalog(self):
@@ -801,23 +769,20 @@ class ProductTestProjectConfigManager(object):
         acquisition_detail = acquisition.get("detail", {})
         analysis_list = sequence_data.get("analysis_list", {})
         display_sequence = analysis_list.get("display_sequence", [])
-        if acquisition_mode not in {"RECORD_ONLY", "IMPORT_AUDIO"}:
+        if acquisition_mode != "RECORD_ONLY":
             info["reason"] = f"不支持的采集模式：{acquisition_mode or '-'}"
             return info
-        if acquisition_mode == "RECORD_ONLY":
-            try:
-                resolve_recording_preview_time_mode(acquisition_detail)
-            except ValueError as exc:
-                info["reason"] = str(exc)
-                return info
+        try:
+            resolve_recording_preview_time_mode(acquisition_detail)
+        except ValueError as exc:
+            info["reason"] = str(exc)
+            return info
         duration = acquisition_detail.get("total_time")
         sample_rate = acquisition_detail.get("sample_rate")
-        if acquisition_mode == "RECORD_ONLY" and (
-            not isinstance(duration, (int, float)) or duration <= 0
-        ):
+        if not isinstance(duration, (int, float)) or duration <= 0:
             info["reason"] = "录音时长无效"
             return info
-        info["duration"] = duration if acquisition_mode == "RECORD_ONLY" else None
+        info["duration"] = duration
         if not isinstance(sample_rate, (int, float)) or sample_rate <= 0:
             info["reason"] = "采样率无效"
             return info

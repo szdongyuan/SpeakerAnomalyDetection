@@ -751,7 +751,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
         data = getattr(self, "data_struct", None)
         if (data is not None and getattr(data, "store_wave_data", None) is None
                 and getattr(data, "store_wave_data_multi", None) is None):
-            clear = getattr(self, "_clear_imported_wav_calibration_state", None)
+            clear = getattr(self, "_clear_audio_source_analysis_state", None)
             if callable(clear):
                 clear()
             else:

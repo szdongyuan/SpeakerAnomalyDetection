@@ -202,9 +202,9 @@ def test_deletion_uses_full_round_ledger_not_recent_twenty_records(host, tmp_pat
         host.recent_test_sessions.append(str(index))
     report = tmp_path / "report.pdf"
     report.write_bytes(b"report")
-    source = tmp_path / "import.wav"
+    source = tmp_path / "existing.wav"
     source.write_bytes(b"source")
-    host._register_round_recording({"file_path": str(source), "source_type": "imported"})
+    host._register_round_recording({"file_path": str(source)})
     host._register_round_file(infos[0], str(report))
     for name in ("raw.csv", "analysis.csv", "plot.png"):
         path = tmp_path / name
@@ -434,34 +434,6 @@ def test_reset_does_not_emit_a_new_barcode_scan(host):
     assert not host._barcode_debounce_timer.isActive()
 
 
-def test_imported_working_copy_is_owned_but_source_is_preserved(host, tmp_path, monkeypatch):
-    import numpy as np
-    from ui.sequence import sequence_widget_analysis_ops as analysis_ops
-
-    start_round(host)
-    source = tmp_path / "source.wav"
-    source.write_bytes(b"original")
-    working = tmp_path / "working.wav"
-    monkeypatch.setattr(analysis_ops.QFileDialog, "getOpenFileName", lambda *args: (str(source), ""))
-    monkeypatch.setattr(analysis_ops, "inspect_wav_calibration_metadata", lambda *args, **kwargs: SimpleNamespace(status=None, metadata=None))
-    monkeypatch.setattr(analysis_ops, "resolve_wav_plot_channels", lambda *args, **kwargs: (0,))
-    monkeypatch.setattr(analysis_ops, "get_recorded_info", lambda *args, **kwargs: (str(working), {"file_path": str(working)}))
-    host._snapshot_import_presentation_state = Mock(return_value={})
-    host._decode_audio_file = Mock(return_value=(np.zeros((10, 1)), 48000))
-    host._clear_imported_wav_calibration_state = Mock()
-    host._apply_audio_to_data_struct = Mock()
-    host._resolve_recording_name_suffix = Mock(return_value="")
-    host.run = Mock(return_value=True)
-    host._capture_imported_product_condition_record = Mock()
-    host._complete_imported_product_condition_step = Mock()
-    assert host.import_audio_and_analyze()
-    assert host._round_record_for_info(host.recorded_signal_info).files == {str(working)}
-    host._confirm_round_reset = Mock(return_value=True)
-    host._on_reset_current_round()
-    assert not working.exists()
-    assert source.read_bytes() == b"original"
-
-
 def test_reset_unlocks_real_configuration_control(host):
     from ui.sequence.sequence_widget_analysis_process_ops import SequenceWidgetAnalysisProcessOpsMixin
 
@@ -646,16 +618,12 @@ def test_new_round_only_exposes_conditions_recorded_in_that_round(host, tmp_path
 
 
 @pytest.mark.parametrize("host", [RuntimeResetHost], indirect=True)
-def test_current_round_import_can_be_marked_repeatedly(host, tmp_path):
-    group = start_round(host)
-    working = tmp_path / "import-copy.wav"
-    working.write_bytes(b"audio")
-    host._condition_record_cache["a"] = {
-        "group_id": group,
-        "recorded_path": str(working),
-        "recorded_signal_info": {"file_path": str(working), "source_type": "imported"},
-        "session_id": "",
-    }
+def test_current_round_recording_can_be_marked_repeatedly(host, tmp_path):
+    start_round(host)
+    info = add_record(host, tmp_path / "recorded.wav")
+    host.recorded_path = info["file_path"]
+    host.recorded_signal_info = info
+    host._cache_condition_record("a")
     host._relabel_stored_audio_record = Mock(side_effect=lambda path, info, label: (
         error_code.OK, "ok", path, {**info, "labels": label},
     ))

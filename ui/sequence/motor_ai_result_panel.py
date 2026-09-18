@@ -40,7 +40,6 @@ class MotorAiResultPanel(QWidget):
         "测试异常",
     }
     PUBLIC_STAGE_ALIASES = {
-        "等待导入": "等待开始",
         "分析排队": "分析中",
         "分段分析": "分析中",
         "本轮录音完成，等待分析": "分析中",
@@ -436,8 +435,6 @@ class MotorAiResultPanel(QWidget):
             display_text = "等待开始"
         elif raw_stage in self.PUBLIC_STAGE_TEXTS:
             display_text = raw_stage
-        elif raw_stage.endswith(" 等待导入"):
-            display_text = "等待开始"
         elif raw_stage.endswith(" 数据保存中"):
             display_text = "数据保存中"
         elif raw_stage.endswith(" 分析中"):
@@ -475,7 +472,7 @@ class MotorAiResultPanel(QWidget):
         tone = tone or self._guess_tone(result)
         row = self.rows[key]
         previous_result = str(row.get("result") or "")
-        auto_select_stage = result in ("准备采集", "采集中", "等待导入")
+        auto_select_stage = result in ("准备采集", "采集中")
         should_auto_select = auto_select_stage and result != previous_result
         if result in ("待判定", "未标记") and row.get("analysis_completed"):
             result, tone = self._summarize_channel_results(row.get("channel_results"))
@@ -483,7 +480,7 @@ class MotorAiResultPanel(QWidget):
             result, tone = "待判定", "pending"
         row["result"] = result
         row["tone"] = tone
-        if self._is_pending_result(result, tone) or result in ("准备采集", "采集中", "等待导入"):
+        if self._is_pending_result(result, tone) or result in ("准备采集", "采集中"):
             row["runtime_details"] = {}
             row["completed_channels"] = 0
             row["analysis_completed"] = False
