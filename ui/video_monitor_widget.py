@@ -188,11 +188,10 @@ class VideoMonitorWidget(QWidget):
         if status.recording == "failed":
             recording_message = f"录像失败：{status.recording_detail}"
             message = f"{recording_message}\n摄像头：{message}" if message else recording_message
-        elif status.recording == "interrupted" and status.connection == "ready":
-            message = "录像已结束，存在中断；已有文件已保留"
+        # Historical gaps stay in the session result/tooltip, not over a healthy preview.
         self.canvas.set_message(
             message, clear_image=status.connection != "ready",
             warning=status.connection in {"unavailable", "reconnecting"}
-            or status.recording in {"failed", "interrupted"},
+            or status.recording == "failed",
         )
         self.record_button.setToolTip(message or status.detail)

@@ -5,6 +5,9 @@ import re
 import threading
 import time
 
+from base.video.capture_diagnostics import CaptureDiagnostics
+from base.video.mjpeg_decoder import MjpegDecoder
+
 
 @dataclass(frozen=True)
 class CameraDevice:
@@ -79,6 +82,7 @@ class CapturePump:
         self.stop_event = threading.Event()
         self.last_progress = time.monotonic()
         self.frames = 0
+        self.diagnostics = CaptureDiagnostics(config)
         self.thread = threading.Thread(target=self._run, name="VideoCapture", daemon=True)
 
     def start(self):
@@ -93,13 +97,21 @@ class CapturePump:
 
         last_error = ""
         while not self.stop_event.is_set():
+            self.diagnostics.begin_attempt()
             try:
                 self.last_progress = time.monotonic()
-                with self.opener(self.config) as source:
+                with av.logging.Capture(local=True) as logs:
+                    try:
+                        source = self.opener(self.config)
+                    finally:
+                        self.diagnostics.add_logs(logs)
+                with source as source:
+                    self.diagnostics.opened(source)
                     ready = False
-                    for frame in source.decode(video=0):
+                    for frame in self._decode(source):
                         if self.stop_event.is_set():
                             return
+                        self.diagnostics.stage = "frame_dispatch"
                         if (frame.width, frame.height) != (self.config.width, self.config.height):
                             raise ValueError("摄像头实际分辨率与设置不一致，拒绝静默降级")
                         # On Windows/Python 3.12 monotonic may have ~15 ms resolution.
@@ -107,16 +119,55 @@ class CapturePump:
                         stamp = time.perf_counter()
                         self.last_progress = time.monotonic()
                         if not ready:
+                            self.diagnostics.first_frame()
                             self.on_connection(True, "")
                             ready, last_error = True, ""
                         self.frames += 1
                         self.on_frame(frame, stamp)
                     if not self.stop_event.is_set():
+                        self.diagnostics.stage = "end_of_stream"
                         raise OSError("摄像头停止输出画面")
             except (OSError, ValueError, av.error.FFmpegError) as exc:
                 message = str(exc)[:1000]
                 if message != last_error:
                     self.on_connection(False, message)
                     last_error = message
+                self.last_progress = time.monotonic()
+                self.diagnostics.failed(exc)
             self.last_progress = time.monotonic()
+            if not self.stop_event.is_set():
+                self.diagnostics.retry()
             self.stop_event.wait(2)
+
+    def _decode(self, source):
+        """Preserve input evidence and reassemble MJPEG before decoding images."""
+        import av
+
+        codec = source.streams.video[0].codec_context
+        mjpeg = MjpegDecoder(codec, self.config) if codec.name == "mjpeg" else None
+        packets = iter(source.demux(video=0))
+        while not self.stop_event.is_set():
+            self.diagnostics.stage = "demux"
+            with av.logging.Capture(local=True) as logs:
+                try:
+                    packet = next(packets, None)
+                finally:
+                    self.diagnostics.add_logs(logs)
+            if packet is None:
+                if mjpeg is not None and not self.stop_event.is_set():
+                    self.diagnostics.stage = "decode"
+                    with av.logging.Capture(local=True) as logs:
+                        try:
+                            frames = mjpeg.finish()
+                        finally:
+                            self.diagnostics.add_logs(logs)
+                    yield from frames
+                return
+            self.diagnostics.remember(packet)
+            self.diagnostics.stage = "decode"
+            with av.logging.Capture(local=True) as logs:
+                try:
+                    frames = mjpeg.feed(packet) if mjpeg is not None else packet.decode()
+                finally:
+                    self.diagnostics.add_logs(logs)
+            yield from frames
