@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
 from base.channel_layout import load_channel_layout, save_channel_layout
 from consts import ui_style_const
 from consts.recording_preview_consts import PLOT_PRESENTATION_COMPLETE
+from ui.custom_ui_widget.waveform_time_axis import WaveformTimeAxis
 from ui.sequence.channel_plot_workspace import (
     ChannelPlotPresentationMixin,
     ChannelPlotWorkspace,
@@ -68,7 +69,7 @@ class AnalysisWaveformRow(ChannelPlotPresentationMixin, QFrame):
         label_layout.addWidget(self.direction_editor)
         label_layout.addStretch(1)
 
-        self.plot_widget = pg.PlotWidget(self)
+        self.plot_widget = pg.PlotWidget(self, axisItems={"bottom": WaveformTimeAxis()})
         self.plot_widget.setObjectName("fiveChannelPlot")
         self.plot_widget.setMinimumHeight(72)
         self.plot_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
