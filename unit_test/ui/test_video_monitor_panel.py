@@ -98,6 +98,59 @@ def test_camera_failure_and_recovery_keep_recording_error_visible(ui_qapp, tmp_p
         bridge._timer.stop()
 
 
+@pytest.mark.parametrize("had_gap", [False, True])
+def test_manual_stop_restores_preview_and_preserves_session_result(ui_qapp, tmp_path, had_gap):
+    bridge = VideoServiceBridge(StubService())
+    bridge._timer.stop()
+    widget = VideoMonitorWidget(bridge)
+    state = VideoState(1)
+    state.apply(Event(EventKind.READY, 1, 1, 1))
+    state.request_start("s1")
+    state.apply(Event(EventKind.STARTED, 1, 2, 2, "s1"))
+    if had_gap:
+        state.apply(Event(EventKind.RECOVERING, 1, 3, 3, "s1", detail="采集曾中断"))
+        state.apply(Event(EventKind.STARTED, 1, 4, 4, "s1"))
+    picture = QImage(320, 180, QImage.Format_RGB888)
+    picture.fill(QColor("#6997AE"))
+    try:
+        bridge.service.status = state.status
+        widget.update_status(state.status, 4)
+        widget.record_button.click()
+        assert bridge.service.calls == ["stop"]
+        assert state.request_stop()
+        widget.update_status(state.status, 4)
+        assert widget.record_button.text() == "正在保存…"
+        detail = "已结束，存在中断" if had_gap else "已保存"
+        state.apply(Event(EventKind.COMPLETED, 1, 5, 5, "s1", detail=detail))
+        widget.canvas.set_image(picture)
+        for _ in range(3):  # Repeated status polling must not restore the old warning.
+            widget.update_status(state.status, 3)
+            assert widget.canvas.message == ""
+            assert not widget.canvas.warning
+            assert widget.canvas.image == picture
+        assert state.status.had_gap == had_gap
+        assert state.status.recording == ("interrupted" if had_gap else "completed")
+        assert widget.record_button.toolTip() == detail
+        assert widget.record_button.text() == "开始录像" and widget.record_button.isEnabled()
+        widget.resize(568, 350)
+        widget.show()
+        ui_qapp.processEvents()
+        screenshot = tmp_path / f"video-stopped-gap-{had_gap}.png"
+        assert widget.grab().save(str(screenshot))
+        print(f"\nStopped video preview: {screenshot}")
+        state.apply(Event(EventKind.OFFLINE, 1, 6, 6, detail="摄像头连接已断开"))
+        widget.update_status(state.status, 3)
+        assert widget.canvas.message == "摄像头连接已断开"
+        assert widget.canvas.warning and widget.canvas.image.isNull()
+        state.apply(Event(EventKind.READY, 1, 7, 7))
+        widget.canvas.set_image(picture)
+        widget.update_status(state.status, 3)
+        assert not widget.canvas.message and not widget.canvas.warning
+        assert widget.record_button.toolTip() == detail
+    finally:
+        widget.close()
+
+
 @pytest.mark.parametrize(
     "size, margin_points",
     [((548, 296), [(4, 148), (543, 148)]),
