@@ -67,7 +67,6 @@ def preflight_analysis_channels(
     analysis_config: Mapping[str, Any] | None,
     *,
     active_input_channels: Any,
-    imported_channel_count: int | None = None,
 ) -> AnalysisChannelPreflight:
     """Map configured channels to array columns and return invalid items as values."""
     config = analysis_config if isinstance(analysis_config, Mapping) else {}
@@ -75,14 +74,7 @@ def preflight_analysis_channels(
     if not isinstance(display_sequence, (list, tuple)):
         display_sequence = ()
 
-    if imported_channel_count is None:
-        available_channels = _available_live_channels(active_input_channels)
-    else:
-        try:
-            count = max(0, int(imported_channel_count))
-        except (TypeError, ValueError, OverflowError):
-            count = 0
-        available_channels = tuple(range(count))
+    available_channels = _available_live_channels(active_input_channels)
 
     local_channels: dict[str, int] = {}
     skipped = []
@@ -94,8 +86,7 @@ def preflight_analysis_channels(
             continue
         item_type = str(item_config.get("type") or "")
         uses_channel_list = (
-            imported_channel_count is None
-            and item_type in MULTI_CHANNEL_ANALYSIS_TYPES
+            item_type in MULTI_CHANNEL_ANALYSIS_TYPES
             and "analysis_channels" in item_config
         )
         if not uses_channel_list and item_type not in REQUIRED_CHANNEL_ANALYSIS_TYPES:

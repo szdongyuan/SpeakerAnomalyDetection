@@ -15,7 +15,7 @@ from ui.operation_sequence import (
     OptionList,
 )
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
-from ui.ui_analysis_config.common_widgets import AnalysisChannelSpinBoxWidget
+from ui.ui_analysis_config.common_widgets import AnalysisChannelSpinBoxWidget, MultiChannelSelectorWidget
 
 
 @pytest.fixture(scope="module")
@@ -60,7 +60,7 @@ def test_fba_is_registered_and_dispatches_its_config_dialog(qapp):
     dialog = OptionList.create_config_dialog(
         SimpleNamespace(
             mic_channels=[0, 1],
-            config=[SimpleNamespace(mode="IMPORT_AUDIO")],
+            config=[SimpleNamespace(mode="RECORD_ONLY")],
             default_logger=SimpleNamespace(warning=lambda message: None),
         ),
         None,
@@ -71,8 +71,8 @@ def test_fba_is_registered_and_dispatches_its_config_dialog(qapp):
     )
 
     assert isinstance(dialog, FbaConfigWindow)
-    assert isinstance(dialog.channel_selector, AnalysisChannelSpinBoxWidget)
-    assert dialog.channel_selector.current_channel() == 1
+    assert isinstance(dialog.channel_selector, MultiChannelSelectorWidget)
+    assert dialog.channel_selector.selected_channels() == [1]
     dialog.close()
 
 

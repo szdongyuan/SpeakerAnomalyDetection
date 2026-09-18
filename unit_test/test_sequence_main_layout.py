@@ -341,12 +341,12 @@ class TestSequenceMainLayout(unittest.TestCase):
 
     def test_waveform_restores_display_only_channel_rows_and_grid(self):
         panel = AnalysisWaveformPanel(
-            condition_configs=[{"key": "import", "condition_name": "导入工况"}],
+            condition_configs=[{"key": "recording", "condition_name": "录音工况"}],
         )
         self.addCleanup(panel.close)
         panel.set_channels([0, 2])
         panel.set_mode("mark")
-        panel.set_condition_audio_path("import", "fixture.wav")
+        panel.set_condition_audio_path("recording", "fixture.wav")
         self.assertEqual(panel.findChildren(QPushButton), [])
         first, second = panel.all_subwindows()
         self.assertEqual(first.channel_caption.text(), "CH1")
@@ -2076,75 +2076,6 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(widget._condition_record_cache["01"]["session_id"], "recent_1")
         self.assertEqual(widget.channel_workspace.results, [("01", "NG")])
 
-    def test_waveform_mark_imported_record_does_not_bind_recording_session(self):
-        widget = _DummySequenceWidget()
-        widget.count_board.mode = "mark"
-        widget.channel_workspace = _DummyChannelWorkspace(["01", "03"])
-        widget._current_recent_session_id = "recent_3"
-
-        with tempfile.TemporaryDirectory() as folder:
-            old_path = os.path.join(folder, "imported_6000.wav")
-            new_path = os.path.join(folder, "imported_6000_ok.wav")
-            with open(old_path, "wb") as f:
-                f.write(b"RIFF")
-            widget._condition_record_cache = {
-                "01": {
-                    "recorded_path": old_path,
-                    "recorded_signal_info": {
-                        "file_path": old_path,
-                        "labels": "not_labeled",
-                        "source_type": "imported",
-                    },
-                    "session_id": "",
-                }
-            }
-            widget.recorded_path = old_path
-            widget.recorded_signal_info = dict(
-                widget._condition_record_cache["01"]["recorded_signal_info"]
-            )
-            current_session_updates = []
-            widget._update_current_recent_session_result = current_session_updates.append
-            widget.recent_test_sessions = ["recent_1", "recent_3"]
-            widget.recent_test_session_by_id = {
-                "recent_1": {
-                    "session_id": "recent_1",
-                    "group_id": "group_1",
-                    "condition_key": "01",
-                    "result_label": "not labeled",
-                    "recorded_path": old_path,
-                },
-                "recent_3": {
-                    "session_id": "recent_3",
-                    "group_id": "group_1",
-                    "condition_key": "03",
-                    "result_label": "not labeled",
-                    "recorded_path": "7500.wav",
-                },
-            }
-            widget._relabel_stored_audio_record = lambda _path, _info, label: (
-                error_code.OK,
-                "ok",
-                new_path,
-                {
-                    "file_path": new_path,
-                    "labels": label,
-                    "source_type": "imported",
-                },
-            )
-
-            widget.on_waveform_condition_mark_clicked("01", "OK")
-
-        self.assertEqual(
-            widget.recent_test_session_by_id["recent_1"]["result_label"],
-            "not labeled",
-        )
-        self.assertEqual(
-            widget.recent_test_session_by_id["recent_3"]["result_label"],
-            "not labeled",
-        )
-        self.assertEqual(widget._condition_record_cache["01"]["session_id"], "")
-        self.assertEqual(current_session_updates, [])
-        self.assertEqual(widget.channel_workspace.results, [("01", "OK")])
 
     def test_waveform_mark_falls_back_to_recent_history_when_cache_missing(self):
         widget = _DummySequenceWidget()

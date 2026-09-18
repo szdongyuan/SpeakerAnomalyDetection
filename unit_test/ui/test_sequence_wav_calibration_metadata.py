@@ -23,7 +23,7 @@ STREAMING_OPS_PATH = (
 )
 
 
-def test_data_struct_initializes_and_clears_imported_wav_metadata_state():
+def test_data_struct_initializes_and_clears_wav_metadata_state():
     previous_instance = DataDealStruct._instance
     try:
         DataDealStruct._instance = None
@@ -46,7 +46,7 @@ def test_data_struct_initializes_and_clears_imported_wav_metadata_state():
         DataDealStruct._instance = previous_instance
 
 
-def test_replacing_or_clearing_audio_clears_imported_factor_and_warning_state():
+def test_replacing_or_clearing_audio_clears_metadata_and_warning_state():
     data_struct = SimpleNamespace(
         wav_calibration_metadata={"recorded_channels": []},
         wav_calibration_metadata_authoritative=True,
@@ -54,18 +54,16 @@ def test_replacing_or_clearing_audio_clears_imported_factor_and_warning_state():
     )
     host = SimpleNamespace(
         data_struct=data_struct,
-        _imported_wav_channel_v2pa_factors={"spl": 2.5},
         _analysis_preflight_warning_shown=True,
         _analysis_preflight_skips={"spl": object()},
         _analysis_channel_local_columns={"spl": 0},
     )
 
-    SequenceWidgetAnalysisOpsMixin._clear_imported_wav_calibration_state(host)
+    SequenceWidgetAnalysisOpsMixin._clear_audio_source_analysis_state(host)
 
     assert data_struct.wav_calibration_metadata is None
     assert data_struct.wav_calibration_metadata_authoritative is False
     assert data_struct.wav_calibration_warning_shown is False
-    assert host._imported_wav_channel_v2pa_factors == {}
     assert host._analysis_preflight_warning_shown is False
     assert host._analysis_preflight_skips == {}
     assert host._analysis_channel_local_columns == {}
@@ -93,7 +91,6 @@ def test_audio_lifecycle_reset_removes_stale_skip_from_okng_and_report_state():
         _analysis_preflight_warning_shown=True,
         _analysis_preflight_skips={"spl": stale_skip},
         _analysis_channel_local_columns={"spl": 0},
-        _imported_wav_channel_v2pa_factors={"spl": 2.5},
     )
     can_output_ok_ng = SequenceWidgetStreamingOpsMixin._can_output_ok_ng.__get__(
         host
@@ -101,7 +98,7 @@ def test_audio_lifecycle_reset_removes_stale_skip_from_okng_and_report_state():
 
     assert can_output_ok_ng()[0] is False
 
-    SequenceWidgetAnalysisOpsMixin._clear_imported_wav_calibration_state(host)
+    SequenceWidgetAnalysisOpsMixin._clear_audio_source_analysis_state(host)
 
     assert can_output_ok_ng() == (True, "")
     assert build_analysis_report_items(

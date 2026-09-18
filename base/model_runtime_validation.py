@@ -7,7 +7,7 @@ from consts import error_code
 
 
 def should_validate_model_duration(mode, acq_mode=None):
-    # Keep live analysis, imported audio, and history-view analysis consistent.
+    # Keep live analysis and history-view analysis consistent.
     # Otherwise the same recording may get an OK/NG result during testing, but
     # later fail when the user clicks "查看".
     return True

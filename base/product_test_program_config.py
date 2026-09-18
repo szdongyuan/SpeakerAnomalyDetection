@@ -19,10 +19,6 @@ PRODUCT_TRIGGER_MODE_MANUAL = "manual"
 PRODUCT_TRIGGER_MODE_SERIAL = "serial"
 PRODUCT_TRIGGER_MODE_MIXED = "mixed"
 INVALID_CONFIG_NAME_CHARS = '<>:"/\\|?*'
-MIXED_ACQUISITION_MODE_ERROR = (
-    "同一产品测试配置不能同时包含导入音频和录制音频工况，"
-    "请统一各工况测试队列的采集模式后重试"
-)
 LIMIT_RULE_ANALYSIS_TYPES = {
     "SPL",
     "SPLF",
@@ -88,28 +84,6 @@ def normalize_pdf_report_config(value):
 
 
 class ProductTestProgramValidator(object):
-    @staticmethod
-    def validate_acquisition_modes(program_data, queue_catalog):
-        acquisition_modes = set()
-        for sub_config in program_data.get("sub_configs", []):
-            if not isinstance(sub_config, dict):
-                continue
-            test_queue = str(
-                sub_config.get("test_queue", "") or ""
-            ).strip()
-            queue_info = queue_catalog.get(test_queue)
-            if not isinstance(queue_info, dict):
-                continue
-            acquisition_mode = str(
-                queue_info.get("acquisition_mode") or ""
-            ).strip().upper()
-            if acquisition_mode in {"IMPORT_AUDIO", "RECORD_ONLY"}:
-                acquisition_modes.add(acquisition_mode)
-
-        if len(acquisition_modes) > 1:
-            return [MIXED_ACQUISITION_MODE_ERROR]
-        return []
-
     @staticmethod
     def validate_test_queue_references(program_data, queue_catalog):
         errors = []
@@ -448,14 +422,6 @@ class ProductTestProgramConfigManager(object):
             return False, "配置文件已存在，但注册表更新失败"
         return True, target_file
 
-    def validate_acquisition_modes(self, program_data, queue_catalog=None):
-        if queue_catalog is None:
-            queue_catalog = self.load_queue_catalog()
-        return ProductTestProgramValidator.validate_acquisition_modes(
-            program_data,
-            queue_catalog,
-        )
-
     def _collect_save_errors(
         self,
         program_data,
@@ -478,10 +444,6 @@ class ProductTestProgramConfigManager(object):
                 queue_catalog,
             )
         )
-        if not errors:
-            errors.extend(
-                self.validate_acquisition_modes(program_data, queue_catalog)
-            )
         return errors
 
     def validate_program(self, program_data, current_file, queue_catalog=None):
@@ -654,23 +616,20 @@ class ProductTestProgramConfigManager(object):
         acquisition_detail = acquisition.get("detail", {})
         analysis_list = sequence_data.get("analysis_list", {})
         display_sequence = analysis_list.get("display_sequence", [])
-        if acquisition_mode not in {"RECORD_ONLY", "IMPORT_AUDIO"}:
+        if acquisition_mode != "RECORD_ONLY":
             info["reason"] = f"不支持的采集模式：{acquisition_mode or '-'}"
             return info
-        if acquisition_mode == "RECORD_ONLY":
-            try:
-                resolve_recording_preview_time_mode(acquisition_detail)
-            except ValueError as exc:
-                info["reason"] = str(exc)
-                return info
+        try:
+            resolve_recording_preview_time_mode(acquisition_detail)
+        except ValueError as exc:
+            info["reason"] = str(exc)
+            return info
         duration = acquisition_detail.get("total_time")
         sample_rate = acquisition_detail.get("sample_rate")
-        if acquisition_mode == "RECORD_ONLY" and (
-            not isinstance(duration, (int, float)) or duration <= 0
-        ):
+        if not isinstance(duration, (int, float)) or duration <= 0:
             info["reason"] = "录音时长无效"
             return info
-        info["duration"] = duration if acquisition_mode == "RECORD_ONLY" else None
+        info["duration"] = duration
         if not isinstance(sample_rate, (int, float)) or sample_rate <= 0:
             info["reason"] = "采样率无效"
             return info

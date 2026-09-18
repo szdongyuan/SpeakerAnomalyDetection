@@ -155,10 +155,7 @@ class SequenceWidgetUiOpsMixin:
             return
 
         self._pending_configured_input_channels = None
-        if presentation_owner == "direct_import":
-            self._end_direct_import_presentation(channels)
-        else:
-            self._apply_input_channel_workspace_mapping(channels)
+        self._apply_input_channel_workspace_mapping(channels)
         self.default_logger.info(
             f"Channel waveform workspace ready, input channels: {list(channels)}"
         )
@@ -179,33 +176,6 @@ class SequenceWidgetUiOpsMixin:
             workspace.clear_plots()
         return True
 
-    def _end_direct_import_presentation(self, channels=None) -> bool:
-        if (
-            getattr(self, "_waveform_presentation_owner", "hardware")
-            != "direct_import"
-        ):
-            return False
-
-        if channels is None:
-            channels = getattr(self, "_configured_input_channels", None)
-        self._waveform_presentation_owner = "hardware"
-        if channels is None:
-            self._active_input_channels = []
-            workspace = getattr(self, "channel_workspace", None)
-            if workspace is not None:
-                workspace.clear_plots()
-            return True
-
-        changed = self._apply_input_channel_workspace_mapping(channels)
-        if not changed:
-            workspace = getattr(self, "channel_workspace", None)
-            if workspace is not None:
-                workspace.clear_plots()
-        return True
-
-    def _begin_new_recording_presentation(self) -> bool:
-        """Hand file-owned plots back to hardware before recording setup."""
-        return self._end_direct_import_presentation()
 
     def _snapshot_recording_input_channels(self, recorded_dict: dict):
         selection_error = str(getattr(self, "_channel_selection_error", "") or "")
@@ -218,7 +188,6 @@ class SequenceWidgetUiOpsMixin:
             )
 
         run_channels = tuple(configured)
-        self._begin_new_recording_presentation()
         active_channels = tuple(
             getattr(self, "_active_input_channels", ()) or ()
         )
@@ -354,7 +323,7 @@ class SequenceWidgetUiOpsMixin:
         self.data_struct.store_wave_data_multi = None
         clear_wav_calibration_state = getattr(
             self,
-            "_clear_imported_wav_calibration_state",
+            "_clear_audio_source_analysis_state",
             None,
         )
         if callable(clear_wav_calibration_state):

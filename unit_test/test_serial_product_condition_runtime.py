@@ -207,8 +207,6 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
     def clear_all_direction_waveforms(self):
         self.cleared_waveforms += 1
 
-    def _is_import_audio_mode(self):
-        return False
 
     def _get_active_product_condition_key(self):
         return self._active_product_condition_key
@@ -866,27 +864,6 @@ def test_close_frame_is_included_in_match_candidates_and_cannot_duplicate_condit
         assert "报文重复" in str(error)
     else:
         raise AssertionError("close frame must not duplicate a condition frame")
-
-
-def test_serial_trigger_rejects_import_audio_queue(monkeypatch):
-    warnings = []
-    monkeypatch.setattr(
-        "ui.sequence.sequence_widget_serial_trigger_ops.QMessageBox.warning",
-        lambda *_args: warnings.append(_args[-1]),
-    )
-    host = _SerialProductHost()
-    host._is_import_audio_mode = lambda: True
-
-    host.on_serial_full_frame_received(_payload(FRAME_6000))
-
-    assert host.started == []
-    assert host.reset_count == 0
-    assert host.discarded_groups == []
-    assert host._manual_product_condition_group_id == ""
-    assert host._manual_product_condition_index == 0
-    assert warnings == [
-        "当前工况绑定了 IMPORT_AUDIO 测试队列，串口触发不支持导入音频，请更换为录音测试队列。"
-    ]
 
 
 def test_error_dialog_suppresses_reentrant_frames_and_duplicate_warning(monkeypatch):

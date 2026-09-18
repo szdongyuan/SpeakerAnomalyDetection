@@ -201,18 +201,6 @@ def test_missing_microphone_releases_first_prepared_round(host):
 
 
 @pytest.mark.parametrize("partly_complete", [False, True])
-def test_import_cancel_releases_only_an_empty_round(host, partly_complete):
-    host._prepare_next_manual_product_condition_recording()
-    if partly_complete:
-        host._manual_product_condition_completed_keys = {"a"}
-        host._manual_product_condition_index = 1
-        host._prepare_next_manual_product_condition_recording()
-    host._abort_imported_product_condition_step()
-    assert host.toolsbar.sample_number_lineedit.isReadOnly() is partly_complete
-    assert bool(host._manual_product_condition_group_id) is partly_complete
-
-
-@pytest.mark.parametrize("partly_complete", [False, True])
 def test_recording_service_busy_releases_only_an_empty_round(host, partly_complete):
     host._prepare_next_manual_product_condition_recording()
     if partly_complete:

@@ -840,7 +840,7 @@ class ChannelSelectorWidget(QWidget):
         config = cfg or {}
         result = {"analysis_channel": int(config.get("analysis_channel", 0) or 0)}
         if "analysis_channels" in config:
-            # Editing an imported WAV column must not erase recorded selections.
+            # Editing the single channel must preserve saved channel selections.
             result["analysis_channels"] = normalize_analysis_channels(config)
         return result
 
@@ -852,7 +852,7 @@ class ChannelSelectorWidget(QWidget):
 
 
 class MultiChannelSelectorWidget(QWidget):
-    """Direct recorded-input selection; imported audio remains single-select."""
+    """Select physical recording inputs for multichannel analysis."""
 
     CHANNELS_PER_ROW = 8
 

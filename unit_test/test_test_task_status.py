@@ -170,13 +170,6 @@ def test_round_completion_keeps_flow_and_verdict_separate(host, result):
     assert host._manual_product_condition_group_id == ""
 
 
-def test_import_preparation_does_not_claim_recording(host):
-    host.queue_modes["queue_6000"] = "IMPORT_AUDIO"
-    host.on_clicked_player_btn()
-    assert host.left_panel.stage_label.text() == "等待开始"
-    assert row_text(host) == "等待导入"
-
-
 @pytest.mark.parametrize("text", ["检测中", "未标记", "完成"])
 def test_summary_only_displays_judgement_for_nonfinal_states(host, text):
     host.left_panel.set_final_result(text)

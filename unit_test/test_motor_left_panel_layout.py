@@ -708,8 +708,6 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         cases = {
             "": "等待开始",
             "等待开始": "等待开始",
-            "等待导入": "等待开始",
-            "A口 / 0.1 等待导入": "等待开始",
             "采集中": "",
             "正转检测中": "",
             "反转检测中": "",

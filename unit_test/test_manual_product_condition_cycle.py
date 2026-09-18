@@ -74,10 +74,8 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
             {"key": "q7000", "condition_name": "7000", "test_queue": "queue_7000"},
             {"key": "q8000", "condition_name": "8000", "test_queue": "queue_8000"},
         ]
-        self.queue_modes = {}
         self.loaded_queues = []
         self.started = []
-        self.imported = []
         self.cleared_waveforms = 0
         self.clicked_player_flag = False
         self.sequence_config = []
@@ -110,7 +108,7 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
             {
                 "seq1": {
                     "acq": {
-                        "mode": self.queue_modes.get(queue_name, "RECORD_ONLY"),
+                        "mode": "RECORD_ONLY",
                         "detail": {"sample_rate": 44100},
                     },
                     "analysis_list": {},
@@ -129,45 +127,13 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
     def start_this_play(self, label="not_labeled"):
         self.started.append((label, self._active_product_condition_key, self._resolve_recording_name_suffix()))
 
-    def import_audio_and_analyze(self):
-        self.imported.append(self._active_product_condition_key)
 
     def _maybe_export_product_test_pdf(self, group_id, overall_result):
         self.pdf_export_calls.append((group_id, overall_result))
 
 
 class TestManualProductConditionCycle(unittest.TestCase):
-    def test_play_button_routes_import_queue_to_current_product_condition(self):
-        widget = _DummyManualCycleWidget()
-        widget.queue_modes["queue_6000"] = "IMPORT_AUDIO"
 
-        widget.on_clicked_player_btn()
-
-        self.assertEqual(widget.imported, ["q6000"])
-        self.assertEqual(widget.started, [])
-
-    def test_play_button_blocks_mixed_acquisition_product_config(self):
-        widget = _DummyManualCycleWidget()
-        widget._validate_active_product_program_acquisition_modes = lambda: (
-            False,
-            "请统一各工况测试队列的采集模式后重试",
-        )
-
-        with patch(
-            "ui.sequence.sequence_widget_analysis_ops.QMessageBox.warning"
-        ) as warning:
-            widget.on_clicked_player_btn()
-
-        warning.assert_called_once_with(
-            widget,
-            "产品测试配置不可用",
-            "请统一各工况测试队列的采集模式后重试",
-        )
-        self.assertEqual(widget.loaded_queues, [])
-        self.assertEqual(widget.imported, [])
-        self.assertEqual(widget.started, [])
-        self.assertEqual(widget._manual_product_condition_index, 0)
-        self.assertEqual(widget._manual_product_condition_group_id, "")
 
     def test_manual_and_unified_product_results_share_one_summary(self):
         widget = _DummyManualCycleWidget()

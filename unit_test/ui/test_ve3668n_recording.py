@@ -337,47 +337,30 @@ def test_busy_and_cancel_restore_channel_selection_without_new_request(host_fact
     host.run.assert_not_called()
 
 
-def test_imported_file_keeps_rate_outside_ve_whitelist(host_factory, tmp_path):
+def test_recent_audio_keeps_rate_outside_ve_whitelist(host_factory, tmp_path):
     host = host_factory()
-    host.sequence_config[0]["seq1"]["acq"]["mode"] = "IMPORT_AUDIO"
     path = tmp_path / "historical.wav"
     samples = np.tile(np.float32([8.25, 2.5]), (320, 1))
     sf.write(path, samples, 96000, subtype="FLOAT")
-    host._load_audio_file_to_data_struct(str(path), sample_rate=sf.info(path).samplerate)
+    host._load_audio_file_to_data_struct(str(path), sample_rate=sf.info(path).samplerate, presentation_owner="recent_view")
     assert host.data_struct.sample_rate == 96000
     np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, samples)
 
 
 @pytest.mark.parametrize("sources", [("none", "none"), ("measured", "none"),
                                      ("none", "measured"), ("measured", "measured")])
-def test_imported_vk_wav_analysis_keeps_uncalibrated_provenance_and_voltage(host_factory, tmp_path, sources):
+def test_recent_vk_wav_keeps_uncalibrated_provenance_and_voltage(host_factory, tmp_path, sources):
     from base.wav_calibration_metadata import append_wav_calibration_metadata
     from unit_test.base.ve3668n_fakes import wav_metadata
 
     host = host_factory()
-    host.sequence_config[0]["seq1"]["acq"]["mode"] = "IMPORT_AUDIO"
     path = tmp_path / "existing-v1.wav"
     samples = np.tile(np.float32([8.25, 2.5]), (320, 1))
     sf.write(path, samples, 44100, subtype="FLOAT")
     metadata = wav_metadata(sources)
     assert append_wav_calibration_metadata(path, metadata)
     original = path.read_bytes()
-    host._load_audio_file_to_data_struct(str(path), sample_rate=44100)
-    host.analysis_config = {
-        "display_sequence": ["first", "second"],
-        "first": {"type": "SPL", "analysis_channel": 0},
-        "second": {"type": "SPL", "analysis_channel": 1},
-    }
-    host._analysis_channel_local_columns = {"first": 0, "second": 1}
-    host._live_mic_channel_v2pa_factors = {7: 99.0, 1: 42.0}
-
-    fallback = host._prepare_imported_wav_calibration_batch(["first", "second"])
-
-    assert fallback is ("none" in sources)
-    assert host._imported_wav_channel_v2pa_factors == {
-        key: 10.0 if source == "measured" else 1.0
-        for key, source in zip(("first", "second"), sources)
-    }
+    host._load_audio_file_to_data_struct(str(path), sample_rate=44100, presentation_owner="recent_view")
     assert host.data_struct.wav_calibration_metadata == metadata
     np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, samples)
     assert path.read_bytes() == original
@@ -583,7 +566,7 @@ def test_current_product_rate_change_during_ve_wins_at_next_soundcard_admission(
 
 
 @pytest.mark.parametrize("after_ve", [False, True])
-def test_soundcard_admission_uses_product_rate_not_imported_file_rate(host_factory, tmp_path, after_ve):
+def test_soundcard_admission_uses_product_rate_after_recent_audio(host_factory, tmp_path, after_ve):
     from unit_test.base.recording_process_fakes import device_info as soundcard
     host = host_factory()
     acq = host.sequence_config[0]["seq1"]["acq"]
@@ -591,17 +574,15 @@ def test_soundcard_admission_uses_product_rate_not_imported_file_rate(host_facto
     if after_ve:
         session, _, audio = started_audio(host)
         finish_ve_capture(host, session, audio)
-    acq["mode"] = "IMPORT_AUDIO"
-    path = tmp_path / "imported.wav"
+    path = tmp_path / "recent.wav"
     samples = np.full((320, 2), .05, dtype=np.float32)
     sf.write(path, samples, 96000, subtype="FLOAT")
-    host._load_audio_file_to_data_struct(str(path), sample_rate=96000)
+    host._load_audio_file_to_data_struct(str(path), sample_rate=96000, presentation_owner="recent_view")
     host.mic = soundcard()
     host.mic_channels = [0, 1]
     host.refresh_channel_windows()
     assert host.data_struct.sample_rate == 96000
     np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, samples)
-    acq.pop("mode")
     recorded, actual_rate = host.reset_work_pram("not_labeled")
     assert actual_rate == recorded["sr"] == 32000
     assert recorded["num_frames"] == 1600 and recorded["startup_trim_samples"] == 320

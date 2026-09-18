@@ -529,31 +529,6 @@ def test_project_record_queue_with_non_mapping_detail_is_unavailable(
     assert info["reason"] == "recording acquisition detail must be a mapping"
 
 
-def test_project_import_queue_ignores_invalid_recording_preview_field(tmp_path):
-    manager = make_manager(tmp_path)
-    queue_path = tmp_path / "import.json"
-    queue_data = [{
-        "seq1": {
-            "acq": {
-                "mode": "IMPORT_AUDIO",
-                "detail": {
-                    "sample_rate": 48000,
-                    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: "broken",
-                },
-            },
-            "analysis_list": {
-                "display_sequence": ["分析项1"],
-                "分析项1": {"type": "SPL", "limit_checked": True},
-            },
-        }
-    }]
-    assert LoadUiConfig.save_data_to_json(queue_data, str(queue_path))
-
-    info = manager._load_queue_info(str(queue_path))
-
-    assert info["available"] is True
-
-
 def test_import_rejects_legacy_but_loads_duplicate_without_writing(tmp_path):
     manager = make_manager(tmp_path)
     legacy_path = tmp_path / "legacy.json"
