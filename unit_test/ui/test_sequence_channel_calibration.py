@@ -388,8 +388,6 @@ def build_sequence(
         size=lambda: SimpleNamespace(width=lambda: 1600, height=lambda: 900)
     )
     sequence._hide_analysis_window = mock.Mock()
-    sequence._capture_excel_export_cache = mock.Mock()
-    sequence._maybe_export_excel_results = mock.Mock()
     sequence._can_output_ok_ng = mock.Mock(return_value=(False, ""))
     sequence._sync_left_panel_analysis_details = mock.Mock()
     sequence.count_board = SimpleNamespace(mode="view")
@@ -515,7 +513,6 @@ def test_calibration_file_error_aborts_whole_live_batch(error):
         "输入校准文件错误，本次分析已停止",
     )
     assert str(error) in sequence.default_logger.error.call_args.args[0]
-    sequence._capture_excel_export_cache.assert_not_called()
 
 
 @pytest.mark.parametrize("item_type", ["SPL", "Spec", "FBA", "AI", "LP", "FFT", "LOUD"])
@@ -545,7 +542,7 @@ def test_recorded_item_expands_with_physical_calibration_and_local_columns(item_
     assert sequence.analysis_config["item"]["analysis_channel"] == 0
 
 
-def test_recorded_multichannel_results_and_export_cache_do_not_overwrite():
+def test_recorded_multichannel_results_do_not_overwrite():
     sequence, _loader, _messages, _events, _created = build_sequence(
         factor_map={0: 1.0, 2: 3.0},
         active_input_channels=[0, 2],
@@ -557,17 +554,10 @@ def test_recorded_multichannel_results_and_export_cache_do_not_overwrite():
     )
 
     sequence._run_analysis_impl(show_windows=False)
-    sequence.recorded_path = "recorded.wav"
-    SequenceWidgetAnalysisOpsMixin._capture_excel_export_cache(sequence)
 
     assert sequence.data_struct.analysis_result_dict == {
         "item--通道1": (True, 0.0), "item--通道3": (True, 0.0),
     }
-    cached = sequence._excel_export_cache["analysis_items_data"]
-    assert list(cached) == ["item--通道1", "item--通道3"]
-    assert [entry["raw_channel"] for entry in cached.values()] == [0, 2]
-    assert all(entry["config_key"] == "item" for entry in cached.values())
-    assert all(entry["multi_channel_expansion"] for entry in cached.values())
 
 
 def test_partly_missing_recorded_item_runs_valid_channel_and_keeps_runtime_name():
@@ -598,7 +588,6 @@ def test_all_recorded_channels_missing_does_not_load_calibration_or_analyze():
 
     assert created == []
     loader.assert_not_called()
-    sequence._capture_excel_export_cache.assert_not_called()
     messages.warning.assert_called_once()
 
 
@@ -730,8 +719,6 @@ def test_preflight_warns_once_before_calibration_and_only_runs_valid_items():
         "missing-fba",
     ]
     assert sequence.data_struct.analysis_result_dict == {}
-    sequence._capture_excel_export_cache.assert_called_once()
-    sequence._maybe_export_excel_results.assert_called_once()
 
 
 def test_all_preflight_items_skipped_returns_false_retains_audio_and_rewarns():
@@ -753,8 +740,6 @@ def test_all_preflight_items_skipped_returns_false_retains_audio_and_rewarns():
     assert created == []
     assert not any(event[0] == "calculate" for event in events)
     assert sequence.data_struct.store_wave_data_multi is audio
-    sequence._capture_excel_export_cache.assert_not_called()
-    sequence._maybe_export_excel_results.assert_not_called()
     assert sequence._analysis_preflight_warning_shown is True
 
 
@@ -770,7 +755,6 @@ def test_preflight_returns_false_when_only_remaining_item_is_not_executable():
     assert sequence._run_analysis_impl(show_windows=False) is False
     loader.assert_not_called()
     assert created == []
-    sequence._capture_excel_export_cache.assert_not_called()
 
 
 def test_rsc_does_not_enter_microphone_factor_resolution():
@@ -1128,12 +1112,6 @@ class StreamingAnalysisHost(
 
     def _drain_queued_directional_trigger(self):
         self.events.append("drain_trigger")
-
-    def _capture_excel_export_cache(self):
-        return None
-
-    def _maybe_export_excel_results(self):
-        return None
 
     def _can_output_ok_ng(self):
         return False, ""

@@ -36,7 +36,6 @@ from ui.ui_analysis_config.common_widgets import (
 )
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
-from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
 from ui.ui_analysis_config.fft_config_dialog import FftConfigWindow
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
@@ -221,7 +220,6 @@ def test_semantic_combobox_uses_complete_shared_frame(qapp):
         ReferenceSpectrumConfigWindow,
         AIConfigWindow,
         LPConfigWindow,
-        ExcelConfigWindow,
     ],
 )
 def test_all_analysis_entrypoints_use_semantic_layout(dialog_class):
@@ -265,10 +263,6 @@ def test_migrated_analysis_dialogs_keep_existing_config_contracts(
                 "cutoff_freq": 12000,
             },
             "RSC 1": {},
-            "Excel 1": {
-                "file_base": "analysis_results",
-                "save_items": ["LP 1"],
-            },
         }
     )
     dialogs = [
@@ -279,21 +273,18 @@ def test_migrated_analysis_dialogs_keep_existing_config_contracts(
             "RSC 1",
             available_channels=[0, 1],
         ),
-        ExcelConfigWindow(manager, "Excel 1"),
     ]
 
     assert [dialog.semantic_group_keys() for dialog in dialogs] == [
         ["input", "compute"],
         ["input", "detection"],
         ["reference", "compute", "judgment", "display"],
-        ["output"],
     ]
     assert dialogs[0].get_default_config() == {
         "analyse_model_name": "demo-model",
         "analysis_channel": 1,
     }
     assert dialogs[1].get_default_config()["analysis_channel"] == 1
-    assert dialogs[3].get_default_config()["file_base"] == "analysis_results"
 
     for dialog in dialogs:
         dialog.close()

@@ -114,7 +114,7 @@ class SequenceWidgetRoundResetOpsMixin:
     def _round_reset_busy(self):
         if any(bool(getattr(self, name, False)) for name in (
             "player_status_flag", "_record_workflow_busy",
-            "_product_test_program_config_dialog_open", "_excel_spool_build_in_progress",
+            "_product_test_program_config_dialog_open",
         )):
             return True
         if self._analysis_has_pending_tasks():
@@ -322,8 +322,6 @@ class SequenceWidgetRoundResetOpsMixin:
         self._awaiting_ok_ng = False
         self.data_struct.clear_data()
         self.data_struct.analysis_result_dict = {}
-        self._excel_export_cache = None
-        self._excel_exported_record_id = None
         self._close_analysis_windows()
         self._analysis_pending_manual_view = None
         self._set_manual_analysis_button_state("idle")

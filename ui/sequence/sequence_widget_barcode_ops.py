@@ -908,7 +908,6 @@ class SequenceWidgetBarcodeOpsMixin:
             else "not_labeled"
         )
         self.update_audio_label_info()
-        self._maybe_export_excel_results()
         save_code, save_msg = self.update_recorded_signal_info_to_db()
         if save_code != error_code.OK:
             QMessageBox.warning(self, "提示", f"更新音频标签失败: {save_msg}")
@@ -1007,7 +1006,7 @@ class SequenceWidgetBarcodeOpsMixin:
     def _finalize_test_run(self, label: str, update_recent_session: bool = True):
         """
         Finalize a test-mode run by applying the summarized OK/NG label,
-        exporting results, updating DB label, and resetting UI state.
+        updating the DB label and resetting UI state.
         """
         if label not in ("OK", "NG", "not_labeled"):
             return
@@ -1016,7 +1015,6 @@ class SequenceWidgetBarcodeOpsMixin:
         except Exception:
             return
 
-        self._maybe_export_excel_results()
         save_code, save_msg = self.update_recorded_signal_info_to_db()
         if save_code != error_code.OK:
             QMessageBox.warning(self, "提示", f"更新音频标签失败: {save_msg}")

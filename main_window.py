@@ -3,7 +3,7 @@ import sys
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
-from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox, QDialog
+from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox
 
 from base.log_manager import LogManager
 from base.db_manager import DataSave
@@ -965,45 +965,8 @@ class MainWindow(QMainWindow):
         # Close any other sub windows/dialogs that may still be open.
         self._close_all_subwindows()
 
-        # Best-effort: rebuild daily Excel from CSV spool before exit (fast_mode).
-        # Retry loop if there are failures (e.g., Excel file is open)
-        if hasattr(self, "sequence_window") and self.sequence_window is not None:
-            while True:
-                # Show "saving" dialog
-                saving_dialog = QDialog(self)
-                saving_dialog.setWindowTitle("正在保存")
-                saving_dialog.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
-                saving_dialog.setFixedSize(250, 80)
-                layout = QVBoxLayout(saving_dialog)
-                label = QLabel("正在保存数据，请稍候...")
-                label.setAlignment(Qt.AlignCenter)
-                layout.addWidget(label)
-                saving_dialog.show()
-                QApplication.processEvents()
-
-                try:
-                    failures = self.sequence_window.flush_excel_spool_build(on_close=False)
-                except Exception as e:
-                    failures = [("unknown", str(e))]
-
-                saving_dialog.close()
-
-                if not failures:
-                    break
-
-                msg_box = QMessageBox(self)
-                msg_box.setIcon(QMessageBox.Warning)
-                msg_box.setWindowTitle("Excel同步失败")
-                msg_box.setText("无法将数据同步到Excel文件，可能是文件被占用或权限不足。\n请关闭相关Excel文件后重试。")
-                retry_btn = msg_box.addButton("重试", QMessageBox.AcceptRole)
-                msg_box.addButton("忽略", QMessageBox.RejectRole)
-                msg_box.setDefaultButton(retry_btn)
-                msg_box.exec_()
-
-                if msg_box.clickedButton() == retry_btn:
-                    continue
-                else:
-                    break
+        if sequence is not None:
+            sequence._wait_for_raw_audio_csv_exports()
 
         self._shutdown_product_pdf_exporter_before_exit()
         event.accept()

@@ -46,7 +46,6 @@ from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
 from ui.ui_analysis_config.fft_config_dialog import FftConfigWindow
 from ui.ui_analysis_config.loudness_config_dialog import LoudnessConfigWindow
-from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 
 
 SUPPORTED_ACQ_ITEMS = ["录制音频"]
@@ -66,7 +65,6 @@ SUPPORTED_ANALYSIS_TYPES = {
     "FBA",
     "FFT",
     "LOUD",
-    "Excel",
 }
 MULTI_CHANNEL_ANALYSIS_TYPES = {
     "SPL",
@@ -966,8 +964,6 @@ class OptionList(QListView):
                 available_channels=available_channels,
                 allow_multiple_channels=allow_multiple_channels,
             )
-        if type == "Excel":
-            return ExcelConfigWindow(config_manager, name)
         return None
 
     def init_config_info(self, config_file):
@@ -1171,18 +1167,6 @@ class OptionList(QListView):
     def delete_item_config(self, name):
         if not name:
             return
-        # Remove deleted items from any Excel export selection list to avoid stale references
-        try:
-            for _, cfg in self.config[0].analysis_list.items():
-                if not isinstance(cfg, dict):
-                    continue
-                if cfg.get("type") != "Excel":
-                    continue
-                save_items = cfg.get("save_items")
-                if isinstance(save_items, list) and name in save_items:
-                    cfg["save_items"] = [x for x in save_items if x != name]
-        except Exception:
-            pass
         if name in self.config[0].analysis_list:
             del self.config[0].analysis_list[name]
 
@@ -1264,21 +1248,6 @@ class OptionList(QListView):
             if not new_name in self.all_ai_item:
                 ai_index = self.all_ai_item.index(old_name)
                 self.all_ai_item[ai_index] = new_name
-        # Keep Excel export item's selection in sync when other items are renamed
-        try:
-            for _, cfg in self.config[0].analysis_list.items():
-                if not isinstance(cfg, dict):
-                    continue
-                if cfg.get("type") != "Excel":
-                    continue
-                save_items = cfg.get("save_items")
-                if isinstance(save_items, list) and old_name in save_items:
-                    cfg["save_items"] = [
-                        new_name if x == old_name else x for x in save_items
-                    ]
-        except Exception:
-            # Never block rename flow
-            pass
 
     def is_edit_model_item(self, topLeft, bottomRight, roles):
         if Qt.EditRole in roles:
