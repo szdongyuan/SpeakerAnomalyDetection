@@ -1,6 +1,5 @@
 import copy
 import os
-import threading
 from datetime import datetime
 
 import numpy as np
@@ -9,13 +8,6 @@ from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from consts import error_code, model_consts
 from base.ai_runtime_policy import extract_ai_runtime_state
-from base.excel_result_exporter import (
-    build_excel_from_csv_spool,
-    export_analysis_to_csv_spool,
-    export_analysis_to_excel,
-    resolve_excel_output_path,
-    resolve_excel_spool_dir,
-)
 from base.load_config import LoadUiConfig
 from base.analysis_artifact_paths import AnalysisStorageContext
 from base.recording_process_protocol import FrozenConfig
@@ -2147,8 +2139,6 @@ class SequenceWidgetAnalysisOpsMixin(
         previous_waveform_display_override_direction = str(
             getattr(self, "_waveform_display_override_direction", "") or ""
         )
-        previous_excel_export_cache = self._excel_export_cache
-        previous_excel_exported_record_id = self._excel_exported_record_id
         previous_workspace_plot_states = (
             self._snapshot_channel_workspace_plot_states()
         )
@@ -2228,8 +2218,6 @@ class SequenceWidgetAnalysisOpsMixin(
             )
             self._direction_waveform_cache = previous_direction_waveform_cache
             self._waveform_display_override_direction = previous_waveform_display_override_direction
-            self._excel_export_cache = previous_excel_export_cache
-            self._excel_exported_record_id = previous_excel_exported_record_id
             pending_channels = getattr(
                 self,
                 "_pending_configured_input_channels",
@@ -2437,8 +2425,6 @@ class SequenceWidgetAnalysisOpsMixin(
             self.data_struct.sample_rate = recording_device["input_config"]["sample_rate"]
         else:
             self.data_struct.sample_rate = product_sample_rate
-        self._excel_export_cache = None
-        self._excel_exported_record_id = None
 
         # Use provided token if available (for replay), otherwise use current run token.
         recording_token = str(count) if count is not None else str(getattr(self, "_current_run_recording_token", "") or "")
@@ -3129,11 +3115,6 @@ class SequenceWidgetAnalysisOpsMixin(
                 else:
                     self._hide_analysis_window(instance)
 
-            # Cache last analysis results for Excel export (export happens on OK/NG / test finalization)
-            self._capture_excel_export_cache()
-            # Mark mode previously only exported on OK/NG click; now export immediately after analysis
-            # so results are always saved to CSV (spool) regardless of whether OK/NG is clicked.
-            self._maybe_export_excel_results()
             product_outcome = None
             can_output, _reason = self._can_output_ok_ng()
             ai_runtime_state = extract_ai_runtime_state(self.analysis_window, self.analysis_config)
@@ -3387,249 +3368,6 @@ class SequenceWidgetAnalysisOpsMixin(
             summary.activateWindow()
         except Exception:
             pass
-
-    def _capture_excel_export_cache(self):
-        """
-        Cache current analysis results for later Excel export.
-
-        Export may be triggered immediately after analysis (and also on OK/NG click / test finalization),
-        with per-record dedupe to avoid duplicate writes when users rerun analysis.
-        """
-        try:
-            record_id = None
-            if isinstance(self.recorded_signal_info, dict):
-                record_id = self.recorded_signal_info.get("file_path")
-            if not record_id:
-                record_id = self.recorded_path
-
-            now_dt = datetime.now()
-            sn = ""
-            # Second column includes accurate time (to seconds): YYYY/M/D HH:MM:SS
-            time_part = now_dt.strftime("%H:%M:%S")
-            date_text = f"{now_dt.year}/{now_dt.month}/{now_dt.day} {time_part}"
-            if isinstance(self.recorded_signal_info, dict):
-                sn = self.recorded_signal_info.get("barcode") or ""
-
-            analysis_items_data = {}
-            for inst in self.analysis_window or []:
-                key = getattr(inst, "_sequence_analysis_key", None)
-                if not key:
-                    continue
-                cfg = self.analysis_config.get(key)
-                if not isinstance(cfg, dict):
-                    continue
-                t = cfg.get("type")
-                if not t or t == "Excel":
-                    continue
-                item = {"type": t, "result": getattr(inst, "result", None)}
-                detail = getattr(inst, "export_detail", None)
-                if isinstance(detail, dict):
-                    item.update(detail)
-                runtime_key = getattr(inst, "_sequence_runtime_key", key)
-                item.update({
-                    "config_key": key,
-                    "result_key": getattr(inst, "title_name", runtime_key),
-                    "raw_channel": getattr(inst, "_analysis_raw_channel", None),
-                    "multi_channel_expansion": bool(
-                        getattr(inst, "_sequence_multi_channel_expansion", False)
-                    ),
-                })
-                analysis_items_data[runtime_key] = item
-
-            self._excel_export_cache = {
-                "record_id": record_id,
-                "sn": sn,
-                "sample_number": (self.recorded_signal_info or {}).get("sample_number"),
-                "test_round": (self.recorded_signal_info or {}).get("test_round"),
-                "date_text": date_text,
-                "analysis_items_data": analysis_items_data,
-                "analysis_result_dict": dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
-            }
-        except Exception as e:
-            self.default_logger.error(f"capture_excel_export_cache_error: {e}")
-            self._excel_export_cache = None
-
-    def _schedule_excel_spool_build(self, excel_cfg_list):
-        """
-        Debounced Excel builder for CSV-spool mode.
-
-        - Per record: only append to CSV (fast)
-        - On idle: rebuild the daily .xlsx from CSV (write_only, faster than incremental save)
-        """
-        try:
-            pending = []
-            for cfg_name, excel_cfg in list(excel_cfg_list or []):
-                try:
-                    file_path = resolve_excel_output_path(excel_cfg)
-                    spool_dir = resolve_excel_spool_dir(excel_cfg, file_path=file_path)
-                    pending.append((cfg_name, excel_cfg, file_path, spool_dir))
-                except Exception as e:
-                    self.default_logger.error(f"excel_spool_schedule_path_error[{cfg_name}]: {e}")
-            self._excel_spool_build_pending_cfgs = pending
-            self._excel_spool_build_timer.start(self._excel_spool_build_delay_ms)
-        except Exception as e:
-            self.default_logger.error(f"excel_spool_schedule_error: {e}")
-
-    def _on_excel_spool_build_timeout(self):
-        """
-        Called after a quiet period to rebuild .xlsx from CSV spool in a background thread.
-        """
-        try:
-            # Avoid running during active play/record; keep cycle time stable.
-            if getattr(self, "player_status_flag", False):
-                self._excel_spool_build_timer.start(self._excel_spool_build_delay_ms)
-                return
-
-            with self._excel_spool_build_lock:
-                if self._excel_spool_build_in_progress:
-                    self._excel_spool_build_timer.start(self._excel_spool_build_delay_ms)
-                    return
-                pending = list(self._excel_spool_build_pending_cfgs or [])
-                if not pending:
-                    return
-                self._excel_spool_build_in_progress = True
-
-            def _worker(cfgs):
-                try:
-                    for cfg_name, excel_cfg, file_path, spool_dir in cfgs:
-                        ret = build_excel_from_csv_spool(excel_cfg, file_path=file_path, spool_dir=spool_dir)
-                        if ret.ok:
-                            self.default_logger.info(f"excel_spool_build_ok[{cfg_name}]: {ret.message}")
-                        else:
-                            self.default_logger.warning(f"excel_spool_build_fail[{cfg_name}]: {ret.message}")
-                except Exception as e:
-                    self.default_logger.error(f"excel_spool_build_error: {e}")
-                finally:
-                    with self._excel_spool_build_lock:
-                        self._excel_spool_build_in_progress = False
-
-            t = threading.Thread(target=_worker, args=(pending,), daemon=False)
-            self._excel_spool_build_thread = t
-            t.start()
-        except Exception as e:
-            self.default_logger.error(f"excel_spool_build_timeout_error: {e}")
-            with self._excel_spool_build_lock:
-                self._excel_spool_build_in_progress = False
-
-    def _maybe_export_excel_results(self):
-        """
-        Export selected analysis items to Excel, if the global Excel analysis item exists in config.
-        Shows retry dialog on failure allowing user to close open files and retry.
-        """
-        # Find Excel exporter config(s)
-        excel_cfg_list = []
-        for k, v in (self.analysis_config or {}).items():
-            if not isinstance(v, dict):
-                continue
-            if v.get("type") == "Excel":
-                excel_cfg_list.append((k, v))
-        if not excel_cfg_list:
-            return
-
-        record_id = None
-        if isinstance(self.recorded_signal_info, dict):
-            record_id = self.recorded_signal_info.get("file_path")
-        if not record_id:
-            record_id = self.recorded_path
-        if not record_id:
-            return
-
-        if self._excel_exported_record_id == record_id:
-            return
-
-        cache = self._excel_export_cache
-        if not isinstance(cache, dict) or cache.get("record_id") != record_id:
-            self.default_logger.warning("excel_export_skip: no matching cached analysis results for current record")
-            return
-
-        sn = cache.get("sn") or ""
-        now_dt = datetime.now()
-        date_text = f"{now_dt.year}/{now_dt.month}/{now_dt.day} {now_dt.strftime('%H:%M:%S')}"
-        analysis_items_data = cache.get("analysis_items_data") or {}
-        analysis_result_dict = cache.get("analysis_result_dict") or {}
-
-        # Retry loop for export operations
-        while True:
-            all_ok = True
-            spool_cfgs = []
-            failed_exports = []
-
-            for cfg_name, excel_cfg in excel_cfg_list:
-                use_spool = bool(excel_cfg.get("fast_mode", True))
-                if use_spool:
-                    spool_cfgs.append((cfg_name, excel_cfg))
-                    ret = export_analysis_to_csv_spool(
-                        excel_cfg,
-                        sn=sn,
-                        date_text=date_text,
-                        analysis_items_data=analysis_items_data,
-                        analysis_config=self.analysis_config,
-                        analysis_result_dict=analysis_result_dict,
-                    )
-                else:
-                    ret = export_analysis_to_excel(
-                        excel_cfg,
-                        sn=sn,
-                        date_text=date_text,
-                        analysis_items_data=analysis_items_data,
-                        analysis_config=self.analysis_config,
-                        analysis_result_dict=analysis_result_dict,
-                    )
-                if ret.ok:
-                    if use_spool:
-                        self.default_logger.info(f"excel_spool_ok[{cfg_name}]: {ret.message}")
-                    else:
-                        self.default_logger.info(f"excel_export_ok[{cfg_name}]: {ret.message}")
-                else:
-                    all_ok = False
-                    if use_spool:
-                        self.default_logger.error(f"excel_spool_fail[{cfg_name}]: {ret.message}")
-                    else:
-                        self.default_logger.error(f"excel_export_fail[{cfg_name}]: {ret.message}")
-                    failed_exports.append((cfg_name, ret.message))
-
-            if all_ok:
-                self._excel_exported_record_id = record_id
-                if spool_cfgs:
-                    self._schedule_excel_spool_build(spool_cfgs)
-                break
-
-            failure_details = "\n".join(
-                f"{cfg_name}：{message}"
-                for cfg_name, message in failed_exports
-            )
-            config_incomplete = any(
-                message == "未选择需要保存的分析项"
-                for _, message in failed_exports
-            )
-
-            msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Warning)
-            if config_incomplete:
-                msg_box.setWindowTitle("Excel导出配置不完整")
-                msg_box.setText(
-                    f"{failure_details}\n\n"
-                    "请在测试队列配置的“结果导出 (Excel)”中至少勾选一个分析项；"
-                    "如不需要导出，请删除该 Excel 导出项。"
-                )
-                msg_box.addButton("知道了", QMessageBox.RejectRole)
-                msg_box.exec_()
-                break
-
-            msg_box.setWindowTitle("Excel结果导出失败")
-            msg_box.setText(
-                f"无法保存Excel结果，具体原因如下：\n{failure_details}\n\n"
-                "请根据上述原因处理后重试。"
-            )
-            retry_btn = msg_box.addButton("重试", QMessageBox.AcceptRole)
-            msg_box.addButton("忽略", QMessageBox.RejectRole)
-            msg_box.setDefaultButton(retry_btn)
-            msg_box.exec_()
-
-            if msg_box.clickedButton() == retry_btn:
-                continue
-            else:
-                break
 
     def instance_analysis_class(self, key, type, params):
         """Expand recorded channels without duplicating the saved analysis item."""

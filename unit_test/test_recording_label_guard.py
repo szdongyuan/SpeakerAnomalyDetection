@@ -94,9 +94,6 @@ class _SuccessfulGlobalLabelWidget(SequenceWidgetBarcodeOpsMixin):
     def update_audio_label_info(self):
         self.recorded_signal_info["labels"] = "OK"
 
-    def _maybe_export_excel_results(self):
-        return None
-
     def update_recorded_signal_info_to_db(self):
         return error_code.OK, "saved"
 

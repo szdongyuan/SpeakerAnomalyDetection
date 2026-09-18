@@ -92,12 +92,6 @@ class _SilentRunWidget(QWidget, SequenceWidgetAnalysisOpsMixin):
     def _set_analysis_window_geometry(self, key, geo):
         self.persisted_geometry.append((key, dict(geo)))
 
-    def _capture_excel_export_cache(self):
-        return None
-
-    def _maybe_export_excel_results(self):
-        return None
-
     def _can_output_ok_ng(self):
         return False, ""
 
@@ -132,8 +126,6 @@ class _DummySequenceWidget(SequenceWidgetAnalysisOpsMixin):
             stft_flag=0,
         )
         self.count_board = SimpleNamespace(mode="test")
-        self._excel_export_cache = {"cached": True}
-        self._excel_exported_record_id = "current.wav"
         self.analysis_config = self.sequence_config[0]["seq1"]["analysis_list"]
         self.count_board.analysis_config = self.analysis_config
         self._active_input_channels = [0]

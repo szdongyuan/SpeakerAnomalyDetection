@@ -786,6 +786,14 @@ class ProductTestProjectConfigManager(object):
         if not isinstance(sample_rate, (int, float)) or sample_rate <= 0:
             info["reason"] = "采样率无效"
             return info
+        if isinstance(display_sequence, list):
+            display_sequence = [
+                name for name in display_sequence
+                if not (
+                    isinstance(analysis_list.get(name), dict)
+                    and analysis_list[name].get("type") == "Excel"
+                )
+            ]
         if not isinstance(display_sequence, list) or not display_sequence:
             info["reason"] = "未配置分析项"
             return info

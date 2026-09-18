@@ -74,16 +74,6 @@ class SequenceWindow(
         self.signal_info = {}
         self.analysis_window = []
         self._analysis_result_summary_window = None
-        self._excel_export_cache = None
-        self._excel_exported_record_id = None
-        self._excel_spool_build_delay_ms = 30_000
-        self._excel_spool_build_timer = QTimer(self)
-        self._excel_spool_build_timer.setSingleShot(True)
-        self._excel_spool_build_timer.timeout.connect(self._on_excel_spool_build_timeout)
-        self._excel_spool_build_in_progress = False
-        self._excel_spool_build_pending_cfgs = []
-        self._excel_spool_build_lock = threading.Lock()
-        self._excel_spool_build_thread = None
         self._raw_audio_csv_export_lock = threading.Lock()
         self._raw_audio_csv_export_threads = set()
 

@@ -9,7 +9,7 @@ from base.recording_waveform_preparation import prepare_waveform_display_data
 
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QDialog, QLabel, QSplitter
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QSplitter
 
 from base.play_and_record import resolve_startup_trim_samples
 from base.analysis_artifact_paths import (
@@ -23,11 +23,6 @@ from base.recording_preview_config import (
 from base.recording_settings import (
     merge_audio_validation_thresholds,
     validate_recorded_audio,
-)
-from base.excel_result_exporter import (
-    build_excel_from_csv_spool,
-    resolve_excel_output_path,
-    resolve_excel_spool_dir,
 )
 from base.file_ops import FileOps
 from base.load_config import LoadUiConfig
@@ -1227,7 +1222,7 @@ class SequenceWidgetStreamingOpsMixin:
                 json.dump(mark_result_template, f, indent=4)
 
     def closeEvent(self, event):
-        """窗口关闭时释放硬件资源，并强制等待Excel同步完成"""
+        """窗口关闭时等待原始音频 CSV 保存完成并释放硬件资源"""
         cleanup_streaming = getattr(self, "_cleanup_streaming_resources", None)
         if callable(cleanup_streaming):
             cleanup_streaming()
@@ -1258,42 +1253,7 @@ class SequenceWidgetStreamingOpsMixin:
             super().closeEvent(event)
             return
 
-        while True:
-            # Show "saving" dialog
-            saving_dialog = QDialog(self)
-            saving_dialog.setWindowTitle("正在保存")
-            saving_dialog.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
-            saving_dialog.setFixedSize(250, 80)
-            layout = QVBoxLayout(saving_dialog)
-            label = QLabel("正在保存数据，请稍候...")
-            label.setAlignment(Qt.AlignCenter)
-            layout.addWidget(label)
-            saving_dialog.show()
-            QApplication.processEvents()
-
-            try:
-                failures = self.flush_excel_spool_build(on_close=True)
-            except Exception as e:
-                failures = [("unknown", str(e))]
-
-            saving_dialog.close()
-
-            if not failures:
-                break
-
-            msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Warning)
-            msg_box.setWindowTitle("Excel同步失败")
-            msg_box.setText("无法将数据同步到Excel文件，可能是文件被占用或权限不足。\n请关闭相关Excel文件后重试。")
-            retry_btn = msg_box.addButton("重试", QMessageBox.AcceptRole)
-            msg_box.addButton("忽略", QMessageBox.RejectRole)
-            msg_box.setDefaultButton(retry_btn)
-            msg_box.exec_()
-
-            if msg_box.clickedButton() == retry_btn:
-                continue
-            else:
-                break
+        self._wait_for_raw_audio_csv_exports()
 
         if hasattr(self, "hw_manager"):
             self.hw_manager.stop()
@@ -1305,85 +1265,6 @@ class SequenceWidgetStreamingOpsMixin:
         if callable(shutdown_product_pdf):
             shutdown_product_pdf()
         super().closeEvent(event)
-
-    def flush_excel_spool_build(self, *, on_close: bool = False) -> list[tuple[str, str]]:
-        """
-        Best-effort: stop the idle-timer, wait for any ongoing background build, then rebuild
-        the daily .xlsx from the CSV spool so the final Excel exists on exit.
-
-        Returns:
-            A list of (cfg_name, error_message) tuples for any failed builds.
-            Empty list means all builds succeeded or there was nothing to build.
-        """
-        failures: list[tuple[str, str]] = []
-
-        self._wait_for_raw_audio_csv_exports()
-
-        try:
-            self._excel_spool_build_timer.stop()
-        except Exception:
-            pass
-
-        try:
-            t = getattr(self, "_excel_spool_build_thread", None)
-            if t is not None and getattr(t, "is_alive", None) and t.is_alive():
-                try:
-                    self.default_logger.info("excel_spool_build_wait_on_exit: waiting for background build thread...")
-                except Exception:
-                    pass
-                try:
-                    t.join()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        # Discover all Excel configs from analysis_config instead of relying on pending list
-        # This ensures we don't miss any configs that should be synced
-        try:
-            excel_cfg_list = []
-            for k, v in (self.analysis_config or {}).items():
-                if not isinstance(v, dict):
-                    continue
-                if v.get("type") == "Excel" and v.get("enabled", True):
-                    # Only process fast_mode configs that use CSV spool
-                    if v.get("fast_mode", True):
-                        excel_cfg_list.append((k, v))
-
-            if not excel_cfg_list:
-                return failures
-
-            for cfg_name, excel_cfg in excel_cfg_list:
-                try:
-                    file_path = resolve_excel_output_path(excel_cfg)
-                    spool_dir = resolve_excel_spool_dir(excel_cfg, file_path=file_path)
-                except Exception as e:
-                    self.default_logger.error(f"excel_spool_build_path_error[{cfg_name}]: {e}")
-                    continue
-
-                ret = build_excel_from_csv_spool(excel_cfg, file_path=file_path, spool_dir=spool_dir)
-                if ret.ok:
-                    self.default_logger.info(
-                        f"excel_spool_build_on_exit_ok[{cfg_name}]: {ret.message}"
-                        if not on_close
-                        else f"excel_spool_build_on_close_ok[{cfg_name}]: {ret.message}"
-                    )
-                else:
-                    self.default_logger.warning(
-                        f"excel_spool_build_on_exit_fail[{cfg_name}]: {ret.message}"
-                        if not on_close
-                        else f"excel_spool_build_on_close_fail[{cfg_name}]: {ret.message}"
-                    )
-                    failures.append((cfg_name, ret.message))
-        except Exception as e:
-            try:
-                tag = "excel_spool_build_on_close_error" if on_close else "excel_spool_build_on_exit_error"
-                self.default_logger.error(f"{tag}: {e}")
-                failures.append(("unknown", str(e)))
-            except Exception:
-                failures.append(("unknown", str(e)))
-
-        return failures
 
     def reset_test_reord(self):
         """

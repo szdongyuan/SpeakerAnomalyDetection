@@ -105,6 +105,8 @@ def build_analysis_task_request(
         if not key or not isinstance(parameters, dict):
             continue
         analysis_type = str(parameters.get("type") or "").strip()
+        if analysis_type == "Excel":
+            continue
         if analysis_type not in SUPPORTED_ANALYSIS_TYPES:
             if not is_segmented:
                 continue

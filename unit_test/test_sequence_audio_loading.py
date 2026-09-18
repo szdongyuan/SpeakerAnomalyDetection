@@ -113,7 +113,6 @@ class _RecordingAnalysisHost(SequenceWidgetAnalysisOpsMixin):
         self.replayer_btn = _ButtonSpy()
         self._awaiting_ok_ng = False
         self._sn_clear_on_next_scan = False
-        self.excel_calls = 0
         self.product_results = []
 
     def screen(self):
@@ -122,12 +121,6 @@ class _RecordingAnalysisHost(SequenceWidgetAnalysisOpsMixin):
 
     def instance_analysis_class(self, _key, _type, _params):
         self.analysis_window.append(_AnalysisInstance(self))
-
-    def _capture_excel_export_cache(self):
-        self.excel_calls += 1
-
-    def _maybe_export_excel_results(self):
-        self.excel_calls += 1
 
     def _can_output_ok_ng(self):
         return True, ""

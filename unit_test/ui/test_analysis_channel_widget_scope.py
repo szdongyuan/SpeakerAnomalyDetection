@@ -9,7 +9,6 @@ from ui.ui_analysis_config.common_widgets import (
     AnalysisChannelSpinBoxWidget,
     ChannelSelectorWidget,
 )
-from ui.ui_analysis_config.excel_config_dialog import ExcelConfigWindow
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
 from ui.ui_analysis_config.reference_spectrum_config_dialog import (
@@ -139,10 +138,9 @@ def test_lp_retains_legacy_channel_coercion(
     ("dialog_type", "model_type", "args"),
     [
         (ReferenceSpectrumConfigWindow, "RSC", ([0, 1],)),
-        (ExcelConfigWindow, "Excel", ()),
     ],
 )
-def test_rsc_and_excel_gain_no_analysis_channel_field(qapp, dialog_type, model_type, args):
+def test_rsc_gains_no_analysis_channel_field(qapp, dialog_type, model_type, args):
     dialog = dialog_type(_ConfigManager({model_type: {}}), model_type, *args)
 
     assert dialog.findChildren(AnalysisChannelSpinBoxWidget) == []
