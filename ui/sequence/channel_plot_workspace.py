@@ -23,6 +23,7 @@ from consts.recording_preview_consts import (
     PREVIEW_TIME_MODE_CUMULATIVE,
     PREVIEW_TIME_MODE_RELATIVE_LATEST,
 )
+from ui.custom_ui_widget.waveform_time_axis import WaveformTimeAxis
 
 
 @dataclass(frozen=True)
@@ -357,7 +358,7 @@ class ChannelPlotSubWindow(ChannelPlotPresentationMixin, QFrame):
         self._initialize_plot_presentation_lifecycle()
         self._canvas = canvas
         self.channel_index = int(channel_index)
-        self.plot_widget = pg.PlotWidget()
+        self.plot_widget = pg.PlotWidget(axisItems={"bottom": WaveformTimeAxis()})
         self.plot_item = None
         self._set_presentation_mode(PLOT_PRESENTATION_COMPLETE)
 
