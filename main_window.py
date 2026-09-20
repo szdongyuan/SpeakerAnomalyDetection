@@ -88,7 +88,6 @@ class MainWindow(QMainWindow):
         # set the menubar action
         self.function_action_product_test_program = QAction("产品测试程序配置", self)
         self.function_action_test_sequence = QAction("测试队列", self)
-        self.function_action_ai_training = QAction("训练AI模型", self)
         self.function_audio_manager = QAction("音频数据管理", self)
         self.function_action_report_export = QAction("报告导出", self)
         self.function_action_exit = QAction("退出", self)
@@ -105,7 +104,6 @@ class MainWindow(QMainWindow):
         self.widget_list_engineer = self.widget_list_operator + [
             self.function_action_product_test_program,
             self.function_action_test_sequence,
-            self.function_action_ai_training,
             self.hardware_action_selection,
             self.hardware_action_calibration,
         ]
@@ -587,9 +585,6 @@ class MainWindow(QMainWindow):
         self.function_action_test_sequence.triggered.disconnect()
         self.function_action_test_sequence.triggered.connect(self.analysis_model_select)
         function_menu.addSeparator()
-        function_menu.addAction(self.function_action_ai_training)
-        self.function_action_ai_training.triggered.disconnect()
-        self.function_action_ai_training.triggered.connect(self.on_ai_window_init)
         function_menu.addAction(self.function_audio_manager)
         self.function_audio_manager.triggered.disconnect()
         self.function_audio_manager.triggered.connect(self.on_audio_manager_init)
@@ -719,12 +714,6 @@ class MainWindow(QMainWindow):
         dlg = ArchiveAudioDataDialog(LogManager.set_log_handler("core"))
         dlg.exec()
 
-    @staticmethod
-    def on_ai_window_init():
-        from ui.ai_window import AiWindow
-
-        dlg = AiWindow(LogManager.set_log_handler("train"))
-        dlg.exec()
 
     def on_analysis_report_export(self):
         from ui.analysis_report_export_dialog import AnalysisReportExportDialog

@@ -182,7 +182,7 @@ class SequenceWidgetConfigOpsMixin:
 
         load_code, result = LoadUiConfig().load_sequence_config_from_json(queue_path)
         if load_code != error_code.OK or not isinstance(result, list) or not result:
-            return False, "测试队列配置读取失败"
+            return False, str(result) if isinstance(result, str) else "测试队列配置读取失败"
         if not isinstance(result[0], dict) or "seq1" not in result[0]:
             return False, "测试队列配置格式错误"
 
@@ -730,7 +730,7 @@ class SequenceWidgetConfigOpsMixin:
                 QMessageBox.warning(
                     self,
                     "提示",
-                    "当前未找到可用配置文件。\n"
+                    (f"{result}\n" if isinstance(result, str) else "当前未找到可用配置文件。\n") +
                     "请在上方【使用配置】下拉框中选择配置；\n"
                     "如无可选项，请到【功能-测试队列】中保存或导入配置。",
                 )

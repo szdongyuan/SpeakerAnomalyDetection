@@ -107,13 +107,13 @@ def test_one_wav_keeps_all_analysis_item_csvs_in_one_directory(tmp_path):
 
     spl_overall_path = build_csv_path(context, stem, "声压级1", "总体声压级")
     spl_realtime_path = build_csv_path(context, stem, "声压级1", "实时声压级")
-    ai_path = build_csv_path(context, stem, "AI1", "模型输出")
+    fft_path = build_csv_path(context, stem, "FFT1", "FFT频谱")
 
-    assert spl_overall_path.parent == spl_realtime_path.parent == ai_path.parent
+    assert spl_overall_path.parent == spl_realtime_path.parent == fft_path.parent
     assert spl_overall_path.parent.name == stem
     assert spl_overall_path.name == "声压级1_总体声压级.csv"
     assert spl_realtime_path.name == "声压级1_实时声压级.csv"
-    assert ai_path.name == "AI1_模型输出.csv"
+    assert fft_path.name == "FFT1_FFT频谱.csv"
 
 
 def test_pdf_name_and_directory_follow_report_boundary(tmp_path):

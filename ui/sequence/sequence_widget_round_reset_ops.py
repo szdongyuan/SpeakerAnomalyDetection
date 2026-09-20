@@ -327,6 +327,6 @@ class SequenceWidgetRoundResetOpsMixin:
         self._set_manual_analysis_button_state("idle")
         self.data_btn.setEnabled(False)
         self.replayer_btn.setEnabled(False)
-        self.left_panel.reset_ai_result_panel()
+        self.left_panel.reset_result_panel()
         self.left_panel.set_current_stage("等待开始", tone="pending")
         self._persist_test_metadata_ui_state()

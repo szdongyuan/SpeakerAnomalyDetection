@@ -72,7 +72,7 @@ def test_curve_header_only_unknown_images_and_label_conflicts(tmp_path):
     assert item_channels(unknown)[0] == (("", "未记录通道"),)
 
 
-def test_scalar_only_ai_invalid_values_and_broken_csv(tmp_path):
+def test_unsupported_ai_and_broken_scalar_csv(tmp_path):
     wav, _, data = recording(tmp_path)
     write_csv(data / "AI_模型输出.csv", [
         ["通道", "模型输出值", "result"], ["CH3", "0.1250", "NG"], ["CH4", "nan", ""],
@@ -81,8 +81,8 @@ def test_scalar_only_ai_invalid_values_and_broken_csv(tmp_path):
     (data / "其他.csv").write_text("unrecognized", encoding="utf-8")
     result = discover_recording_results(str(wav))
     assert "暂不支持" in result.issues[0]
-    values = read_item_scalars(next(i for i in result.items if i.name == "AI"))
-    assert [(v.value, v.unit) for v in values.values] == [("0.1250", ""), ("数值不可用", "")]
+    assert all(i.name != "AI" for i in result.items)
+    assert any("AI_模型输出.csv" in issue for issue in result.issues)
     broken = read_item_scalars(next(i for i in result.items if i.name == "声压级"))
     assert not broken.values and "数值读取失败" in broken.issues[0]
 

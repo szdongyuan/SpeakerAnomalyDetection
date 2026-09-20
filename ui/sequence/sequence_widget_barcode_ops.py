@@ -360,7 +360,7 @@ class SequenceWidgetBarcodeOpsMixin:
     def _sync_active_recording_direction_from_trigger(self) -> str:
         return self._set_active_recording_direction(getattr(self, "_current_trigger_direction", ""))
 
-    def _clear_ai_cycle_runtime_state(self):
+    def _clear_direction_cycle_runtime_state(self):
         cancel_pending_serial_trigger_delay = getattr(self, "_cancel_pending_serial_trigger_delay", None)
         if callable(cancel_pending_serial_trigger_delay):
             cancel_pending_serial_trigger_delay()
@@ -377,9 +377,8 @@ class SequenceWidgetBarcodeOpsMixin:
         self._clear_active_recording_direction()
         self._reset_mark_cycle_summary_state()
         self._manual_direction_fallback_next_direction = "forward"
-        self._ai_cycle_started_at = ""
+        self._direction_cycle_started_at = ""
         self._current_cycle_first_direction = ""
-        self._ai_cycle_direction_results = {"forward": None, "reverse": None}
         self._current_cycle_recorded_count = None
         self._pending_serial_trigger_direction = ""
         self._queued_directional_trigger = ""
@@ -392,22 +391,17 @@ class SequenceWidgetBarcodeOpsMixin:
             except Exception:
                 pass
 
-    def _reset_ai_cycle_panel_state(self):
-        self._ai_cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    def _reset_direction_cycle_panel_state(self):
+        self._direction_cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._current_cycle_first_direction = ""
-        self._ai_cycle_direction_results = {"forward": None, "reverse": None}
         self._reset_mark_cycle_summary_state()
         clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
         if callable(clear_all_direction_waveforms):
             clear_all_direction_waveforms()
         if getattr(self, "left_panel", None) is not None:
-            self.left_panel.set_current_timestamp(self._ai_cycle_started_at)
+            self.left_panel.set_current_timestamp(self._direction_cycle_started_at)
             self.left_panel.set_forward_result("待检测", tone="pending")
-            if hasattr(self.left_panel, "set_forward_scores"):
-                self.left_panel.set_forward_scores(None, None)
             self.left_panel.set_reverse_result("待检测", tone="pending")
-            if hasattr(self.left_panel, "set_reverse_scores"):
-                self.left_panel.set_reverse_scores(None, None)
             self.left_panel.set_final_result("待判定", tone="pending")
 
     def _start_directional_workflow(self, direction: str):
@@ -424,7 +418,7 @@ class SequenceWidgetBarcodeOpsMixin:
                 # Start of a new directional cycle: release previous cycle count reservation
                 # so each forward leg can reserve (+1) exactly once.
                 self._current_cycle_recorded_count = None
-                self._reset_ai_cycle_panel_state()
+                self._reset_direction_cycle_panel_state()
                 self._current_cycle_first_direction = "forward"
             self._manual_direction_fallback_next_direction = "reverse"
             # Lock S/N for the whole forward+reverse cycle in TEST mode only,
@@ -435,8 +429,8 @@ class SequenceWidgetBarcodeOpsMixin:
             if self._should_lock_sn_for_cycle():
                 self._lock_sn_for_cycle()
         else:
-            if not getattr(self, "_ai_cycle_started_at", ""):
-                self._reset_ai_cycle_panel_state()
+            if not getattr(self, "_direction_cycle_started_at", ""):
+                self._reset_direction_cycle_panel_state()
                 self._current_cycle_first_direction = "reverse"
             self._manual_direction_fallback_next_direction = "forward"
             if policy == "any_order_pair" and self._should_lock_sn_for_cycle() and not first_direction:
@@ -471,65 +465,6 @@ class SequenceWidgetBarcodeOpsMixin:
         else:
             self.left_panel.set_current_stage("反转录音完成，等待分析", tone="pending")
 
-    def _update_ai_cycle_result_after_analysis(self, label: str, ai_scores=None):
-        direction = self._normalize_trigger_direction(getattr(self, "_current_trigger_direction", ""))
-        if direction not in ("forward", "reverse"):
-            return None
-        if label not in ("OK", "NG"):
-            return None
-        ai_scores = dict(ai_scores or {})
-
-        result_cache = dict(getattr(self, "_ai_cycle_direction_results", {}) or {})
-        result_cache[direction] = label
-        self._ai_cycle_direction_results = result_cache
-        left_panel = getattr(self, "left_panel", None)
-        first_direction = self._normalize_trigger_direction(getattr(self, "_current_cycle_first_direction", ""))
-        if not first_direction:
-            first_direction = direction
-            self._current_cycle_first_direction = first_direction
-
-        if direction == "forward":
-            if left_panel is not None:
-                left_panel.set_forward_result(label)
-                if hasattr(left_panel, "set_forward_scores"):
-                    left_panel.set_forward_scores(
-                        ai_scores.get("ok_score"),
-                        ai_scores.get("ng_score"),
-                    )
-        else:
-            if left_panel is not None:
-                left_panel.set_reverse_result(label)
-                if hasattr(left_panel, "set_reverse_scores"):
-                    left_panel.set_reverse_scores(
-                        ai_scores.get("ok_score"),
-                        ai_scores.get("ng_score"),
-                    )
-
-        if not self._is_direction_cycle_complete(first_direction, direction):
-            if self._get_direction_cycle_policy_for_current_mode() == "any_order_pair":
-                waiting_direction = self._opposite_direction(first_direction)
-                waiting_stage = "等待正转" if waiting_direction == "forward" else "等待反转"
-            else:
-                waiting_stage = "等待反转"
-            if left_panel is not None:
-                left_panel.set_current_stage(waiting_stage, tone="pending")
-                left_panel.set_final_result("待判定", tone="pending")
-            return None
-
-        forward_label = result_cache.get("forward")
-        reverse_label = result_cache.get("reverse")
-        if forward_label in ("OK", "NG") and reverse_label in ("OK", "NG"):
-            final_label = "OK" if forward_label == "OK" and reverse_label == "OK" else "NG"
-            final_tone = "ok" if final_label == "OK" else "ng"
-            if left_panel is not None:
-                left_panel.set_final_result(final_label, tone=final_tone)
-                left_panel.set_current_stage("循环完成", tone=final_tone)
-            return final_label
-        else:
-            if left_panel is not None:
-                left_panel.set_current_stage("等待反转", tone="pending")
-                left_panel.set_final_result("待判定", tone="pending")
-            return None
 
     @staticmethod
     def _resolve_serial_trigger_delay_ms(config) -> int:
@@ -943,7 +878,7 @@ class SequenceWidgetBarcodeOpsMixin:
         # the next scan replace the contents cleanly.
         #
         # The test-mode automated path does not route through this handler
-        # for cycle teardown; _finalize_test_run + _clear_ai_cycle_runtime_state
+        # for cycle teardown; _finalize_test_run + _clear_direction_cycle_runtime_state
         # own that flow and they release the lock themselves when the cycle
         # actually completes.
 

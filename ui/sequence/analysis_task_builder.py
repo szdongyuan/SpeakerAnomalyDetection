@@ -7,6 +7,7 @@ import os
 from uuid import uuid4
 
 import soundfile as sf
+from base.analysis_config_validation import validate_analysis_config
 
 from base.analysis_segments import build_segment_plan, normalize_segmented_analysis, recording_duration
 from base.analysis_process_protocol import (
@@ -48,6 +49,10 @@ def build_analysis_task_request(
         raise AnalysisTaskBuildError("所选档位的 WAV 文件不存在")
     if not isinstance(analysis_config, dict):
         raise AnalysisTaskBuildError("当前分析配置无效")
+    try:
+        validate_analysis_config(analysis_config)
+    except ValueError as exc:
+        raise AnalysisTaskBuildError(str(exc)) from exc
 
     try:
         with sf.SoundFile(absolute_path, mode="r") as source_file:
@@ -150,7 +155,7 @@ def build_analysis_task_request(
         )
     if not instances:
         raise AnalysisTaskBuildError(
-            "当前配置没有可执行的 SPL、Spec、FBA、AI 或 FFT 分析项"
+            "当前配置没有可执行的 SPL、Spec、FBA 或 FFT 分析项"
         )
 
     try:

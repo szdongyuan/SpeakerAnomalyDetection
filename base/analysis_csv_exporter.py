@@ -101,23 +101,6 @@ def _build_tables(analysis_type, config, outputs, channel_labels):
                 channel_labels,
             ),
         )
-    if analysis_type == "AI":
-        header = ("通道", "模型输出值", "判定阈值", "result")
-        rows = []
-        for output in outputs:
-            metrics = dict(output.get("metrics") or {})
-            rows.append(
-                (
-                    format_channel_name(
-                        int(output["raw_channel"]),
-                        channel_labels,
-                    ),
-                    _csv_number(metrics.get("model_output_value")),
-                    _csv_number(metrics.get("decision_threshold")),
-                    str(output.get("judgement") or ""),
-                )
-            )
-        return (("模型输出", header, rows),)
     return ()
 
 

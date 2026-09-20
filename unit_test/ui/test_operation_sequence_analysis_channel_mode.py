@@ -8,7 +8,6 @@ from PyQt5.QtWidgets import QApplication, QTreeView, QWidget
 
 from base.load_config import LoadUiConfig
 from ui.operation_sequence import AnalysisModelSelect, OptionList
-from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.common_widgets import ChannelSelectorWidget, MultiChannelSelectorWidget
 from ui.ui_analysis_config.fft_config_dialog import FftConfigWindow
 from ui.ui_analysis_config.loudness_config_dialog import LoudnessConfigWindow
@@ -149,10 +148,8 @@ def test_new_recorded_analysis_item_defaults_to_all_hardware_channels(monkeypatc
     assert config["analysis_channels"] == [0, 2, 7]
 
 
-@pytest.mark.parametrize("analysis_type", ["SPL", "Spec", "FBA", "AI", "LP", "FFT", "LOUD"])
+@pytest.mark.parametrize("analysis_type", ["SPL", "Spec", "FBA", "LP", "FFT", "LOUD"])
 def test_record_only_routes_multiple_selected_channels(qapp, monkeypatch, analysis_type):
-    monkeypatch.setattr(AIConfigWindow, "load_model_name_from_db", lambda _self: [])
-    monkeypatch.setattr(AIConfigWindow, "cheack_model_list", lambda _self: None)
     option = _option("RECORD_ONLY")
     dialog = OptionList.create_config_dialog(
         option,

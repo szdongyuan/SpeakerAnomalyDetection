@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from PyQt5.QtWidgets import QApplication
 
-from ui.sequence.motor_ai_result_panel import MotorAiResultPanel
+from ui.sequence.motor_result_panel import MotorResultPanel
 from unit_test.test_manual_product_condition_cycle import _DummyManualCycleWidget
 
 
@@ -15,7 +15,7 @@ def host():
     for index, condition in enumerate(widget.product_test_condition_configs):
         condition["group_name"] = "A口" if index < 2 else "B口"
         condition["display_name"] = f"{condition['group_name']} / {condition['condition_name']}"
-    widget.left_panel = MotorAiResultPanel(
+    widget.left_panel = MotorResultPanel(
         condition_configs=widget.product_test_condition_configs
     )
     widget.left_panel.set_channels(list(range(5)))

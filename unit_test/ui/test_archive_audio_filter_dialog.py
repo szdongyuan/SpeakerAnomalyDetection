@@ -11,7 +11,6 @@ from PyQt5.QtWidgets import QApplication, QMessageBox
 from base.audio_record_filter import UNKNOWN, parse_audio_filter_metadata
 from base.recording_management import RecordingManager
 from consts import error_code
-from ui.ai_select_audio_data import SelectAudioDataView
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from ui.archive_audio_filter_dialog import ArchiveAudioFilterDialog
 from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog, FilterAudioDialog
@@ -200,15 +199,6 @@ def test_metadata_is_cached_by_identity_and_refreshed_when_path_changes(archive,
     assert row[0] not in archive._audio_filter_cache
 
 
-def test_ai_selection_still_uses_legacy_filter_and_hides_unlabeled(archive):
-    ai = SelectAudioDataView(Mock(), {}, True)
-    dialog = ai.create_filter_dialog({})
-    assert isinstance(dialog, FilterAudioDialog)
-    assert dialog.select_not_label_check_box.isHidden()
-    assert dialog.rotation_speed_combobox is not None
-    assert all(row[5] in ("OK", "NG") for row in ai.all_audio_data)
-    dialog.close()
-    ai.close()
 
 
 def test_filtering_does_not_open_database_or_scan_for_new_files(archive, monkeypatch):

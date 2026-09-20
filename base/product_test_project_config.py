@@ -8,6 +8,7 @@ import os
 from base.analysis_segments import segment_condition_fields, normalize_segmented_analysis, segment_count
 from base.hardware_trigger.serial_full_frame_matcher import normalize_hex_frame
 from base.load_config import LoadUiConfig
+from base.analysis_config_validation import validate_analysis_config
 from base.recording_preview_config import resolve_recording_preview_time_mode
 from consts import error_code
 from consts.product_test_project_consts import (
@@ -768,6 +769,11 @@ class ProductTestProjectConfigManager(object):
         info["acquisition_mode"] = acquisition_mode
         acquisition_detail = acquisition.get("detail", {})
         analysis_list = sequence_data.get("analysis_list", {})
+        try:
+            validate_analysis_config(analysis_list)
+        except ValueError as exc:
+            info["reason"] = str(exc)
+            return info
         display_sequence = analysis_list.get("display_sequence", [])
         if acquisition_mode != "RECORD_ONLY":
             info["reason"] = f"不支持的采集模式：{acquisition_mode or '-'}"
@@ -809,7 +815,7 @@ class ProductTestProjectConfigManager(object):
         ):
             info["can_auto_judge"] = True
         else:
-            info["judgment_reason"] = "未配置可输出 OK/NG 的 AI 或规则阈值"
+            info["judgment_reason"] = "未配置可输出 OK/NG 的规则阈值"
         return info
 
     @staticmethod
@@ -817,10 +823,7 @@ class ProductTestProjectConfigManager(object):
         for item_name in display_sequence:
             item_config = analysis_list.get(item_name, {})
             normalized_type = str(item_config.get("type", "") or "").upper()
-            if normalized_type == "AI":
-                if str(item_config.get("analyse_model_name", "") or "").strip():
-                    return True
-            elif normalized_type == "RSC":
+            if normalized_type == "RSC":
                 has_reference = bool(
                     str(item_config.get("reference_source_path", "") or "").strip()
                 )

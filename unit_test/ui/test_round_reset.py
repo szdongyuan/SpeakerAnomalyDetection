@@ -470,7 +470,7 @@ def test_reset_task_panel_returns_to_first_port_and_clears_details(
     host.product_test_condition_configs = conditions
     left_panel = MotorDetectionLeftPanel(None, condition_configs=conditions)
     host.left_panel = left_panel
-    panel = left_panel.ai_result_panel
+    panel = left_panel.result_panel
     left_panel.set_channels(list(range(5)))
     left_panel.set_current_round(7)
     try:

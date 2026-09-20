@@ -10,7 +10,7 @@ import os
 from base.recording_process_protocol import FrozenConfig
 
 
-SUPPORTED_ANALYSIS_TYPES = frozenset({"SPL", "Spec", "FBA", "AI", "FFT"})
+SUPPORTED_ANALYSIS_TYPES = frozenset({"SPL", "Spec", "FBA", "FFT"})
 TASK_SOURCES = frozenset({"自动分析", "手动查看"})
 INSTANCE_EXECUTION_STATUSES = frozenset({"分析完成", "分析失败"})
 TASK_EXECUTION_STATUSES = frozenset({"分析完成", "结果不完整", "分析失败"})

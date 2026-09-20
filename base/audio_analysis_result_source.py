@@ -134,7 +134,7 @@ def discover_recording_results(wav_path, *, application_root=DEFAULT_DIR,
                 state = states.setdefault(key, {"name": key, "images": [], "csv": [], "channels": []})
                 state["csv"].append((role, str(path)))
                 # Curve channels are encoded in the header. Do not read curve rows.
-                if role not in {"总体声压级", "模型输出"}:
+                if role != "总体声压级":
                     try:
                         with path.open(encoding="utf-8-sig", newline="") as stream:
                             header = next(csv.reader(stream), [])
@@ -166,7 +166,7 @@ def _saved_number(value):
 def read_item_scalars(item, *, cancel_requested=None):
     values, issues = [], []
     for role, filename in item.csv_files:
-        if role not in {"总体声压级", "模型输出"}:
+        if role != "总体声压级":
             continue
         _check_cancel(cancel_requested)
         try:
@@ -174,13 +174,8 @@ def read_item_scalars(item, *, cancel_requested=None):
                 reader = csv.DictReader(stream)
                 if "通道" not in (reader.fieldnames or ()):
                     raise ValueError("缺少通道列")
-                if role == "总体声压级":
-                    columns, unit = resolve_overall_spl_csv_columns(reader.fieldnames)
-                    column = columns[0]
-                else:
-                    column, unit = "模型输出值", ""
-                    if column not in reader.fieldnames:
-                        raise ValueError("缺少模型输出值列")
+                columns, unit = resolve_overall_spl_csv_columns(reader.fieldnames)
+                column = columns[0]
                 for row in reader:
                     _check_cancel(cancel_requested)
                     segment, channel, label = _channel(row.get("通道"))

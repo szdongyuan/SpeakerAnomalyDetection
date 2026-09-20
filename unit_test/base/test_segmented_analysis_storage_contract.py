@@ -44,22 +44,16 @@ def test_segmented_worker_never_opens_database(tmp_path, monkeypatch, existing_d
 
 def test_only_overall_spl_csv_changes_when_segmentation_is_enabled(tmp_path, monkeypatch):
     import base.analysis_worker as worker
-    import base.analysis_algorithm_adapters as adapters
     from ui.sequence.analysis_task_builder import build_analysis_task_request
 
     monkeypatch.setattr(worker, "render_analysis_png", lambda plot: b"preview")
 
-    def fake_ai(signal, rate, config, factor, **context):
-        return {"judgement": "OK", "metrics": {"model_output_value": float(abs(signal).max())},
-                "curve": {}, "plot": {"kind": "values", "values": {}}}
-
-    monkeypatch.setitem(adapters._HANDLERS, "AI", fake_ai)
     saved = []
     for segmented in (False, True):
         folder = tmp_path / str(segmented)
         folder.mkdir()
         request = make_request(folder)
-        kinds = ["SPL", "FBA", "FFT", "AI", "Spec"]
+        kinds = ["SPL", "FBA", "FFT", "Spec"]
         config = {"display_sequence": kinds}
         config.update({kind: {"type": kind, "analysis_channels": [0], "weighting": "Z",
                              "show_overall_spl": True, "limit_checked": False,
@@ -77,13 +71,13 @@ def test_only_overall_spl_csv_changes_when_segmentation_is_enabled(tmp_path, mon
         result = list(events.queue)[-1][1]
         assert result.execution_status == '分析完成'
         files = {p.name: p.read_bytes() for p in folder.rglob('*.csv')}
-        assert len(files) == 5 and len(list(folder.rglob('*.png'))) == 5
+        assert len(files) == 4 and len(list(folder.rglob('*.png'))) == 4
         assert len(list(folder.rglob('*.wav'))) == 1
         saved.append(files)
         if segmented:
             rows = build_segment_report_results(result, config)
             assert len(rows) == 2
-            assert len(result.segments[0].instance_results) == 5
+            assert len(result.segments[0].instance_results) == 4
             fba = [next(i for i in s.instance_results if i.analysis_type == 'FBA') for s in result.segments]
             assert fba[0].metrics['overall_weighted_db'] != fba[1].metrics['overall_weighted_db']
     assert saved[0].keys() == saved[1].keys()

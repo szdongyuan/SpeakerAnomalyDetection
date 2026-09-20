@@ -29,7 +29,6 @@ from ui.serial_discrete_input_config_dialog import (
     SerialDiscreteInputConfigDialog,
 )
 from ui.custom_ui_widget.audio_data_manage_dialog import FilterAudioDialog
-from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.common_widgets import (
     ChannelSelectorWidget,
     SemanticAnalysisConfigDialogBase,
@@ -75,7 +74,6 @@ def test_feature_stylesheet_is_appended_after_shared_rules():
         BaseConfigWindow,
         ProductTestProgramConfigDialog,
         SerialDiscreteInputConfigDialog,
-        AIConfigWindow,
         ArchiveAudioDataDialog,
         FilterAudioDialog,
         SplConfigWindow,
@@ -218,7 +216,6 @@ def test_semantic_combobox_uses_complete_shared_frame(qapp):
         FftConfigWindow,
         FbaConfigWindow,
         ReferenceSpectrumConfigWindow,
-        AIConfigWindow,
         LPConfigWindow,
     ],
 )
@@ -242,17 +239,8 @@ def test_migrated_analysis_dialogs_keep_existing_config_contracts(
     qapp,
     monkeypatch,
 ):
-    monkeypatch.setattr(
-        AIConfigWindow,
-        "load_model_name_from_db",
-        lambda self: ["demo-model"],
-    )
     manager = _ConfigManager(
         {
-            "AI 1": {
-                "analysis_channel": 1,
-                "analyse_model_name": "demo-model",
-            },
             "LP 1": {
                 "analysis_channel": 1,
                 "trigger_threshold": 10,
@@ -266,7 +254,6 @@ def test_migrated_analysis_dialogs_keep_existing_config_contracts(
         }
     )
     dialogs = [
-        AIConfigWindow(manager, "AI 1", available_channels=[0, 1]),
         LPConfigWindow(manager, "LP 1", available_channels=[0, 1]),
         ReferenceSpectrumConfigWindow(
             manager,
@@ -276,15 +263,10 @@ def test_migrated_analysis_dialogs_keep_existing_config_contracts(
     ]
 
     assert [dialog.semantic_group_keys() for dialog in dialogs] == [
-        ["input", "compute"],
         ["input", "detection"],
         ["reference", "compute", "judgment", "display"],
     ]
-    assert dialogs[0].get_default_config() == {
-        "analyse_model_name": "demo-model",
-        "analysis_channel": 1,
-    }
-    assert dialogs[1].get_default_config()["analysis_channel"] == 1
+    assert dialogs[0].get_default_config()["analysis_channel"] == 1
 
     for dialog in dialogs:
         dialog.close()

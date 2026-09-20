@@ -7,7 +7,7 @@ import pytest
 from unit_test.ui.test_recording_process_integration import main_host
 from ui.sequence.recording_process_context import RecordingProcessContext
 
-@pytest.mark.parametrize("types", [("SPL",), ("FBA",), ("SPEC",), ("AI", "FFT")])
+@pytest.mark.parametrize("types", [("SPL",), ("FBA",), ("SPEC",), ("FBA", "FFT")])
 def test_accepted_released_capture_enters_original_queue_once(ui_qapp, tmp_path, monkeypatch, types):
     from ui.sequence import sequence_widget_streaming_ops as streaming
     from consts import error_code
@@ -91,7 +91,7 @@ def queue_host(ui_qapp, tmp_path, monkeypatch, types=("SPL",), auto=True):
     return host, session, context
 
 
-@pytest.mark.parametrize("types", [("SPL",), ("FBA",), ("Spec",), ("AI", "FFT")])
+@pytest.mark.parametrize("types", [("SPL",), ("FBA",), ("Spec",), ("FBA", "FFT")])
 @pytest.mark.parametrize("auto", [True, False])
 def test_completion_uses_original_task_builder_and_disabled_analysis_setting(ui_qapp, tmp_path, monkeypatch, types, auto):
     host, session, context = queue_host(ui_qapp, tmp_path, monkeypatch, types, auto)

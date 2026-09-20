@@ -25,12 +25,6 @@ DEFAULT_LOG = {
     "backup_count": 9,
     "log_format": DEFAULT_LOG_FORMATTER,
 }
-AI_LOG = {
-    "log_name": LOG_DIR + "ai.log",
-    "max_size": 2 * MB,
-    "backup_count": 9,
-    "log_format": DEFAULT_LOG_FORMATTER,
-}
 DEBUG_LOG = {
     "log_name": LOG_DIR + "debug.log",
     "max_size": 1 * MB,
@@ -47,9 +41,6 @@ TEST_LOG = {
 
 LOG_MAPPING = {
     "core": DEFAULT_LOG,
-    "train": AI_LOG,
-    "evaluate": AI_LOG,
-    "predict": AI_LOG,
     "debug": DEBUG_LOG,
     "test": TEST_LOG,
     "db_core": DEFAULT_LOG,
@@ -62,7 +53,6 @@ MODULES_LOAD = [
     ("加载路径", "consts.running_consts"),
     ("加载日志模块", "base.log_manager"),
     ("加载数据库模块", "base.db_manager"),
-    ("加载 AI 模型训练模块", "ui.ai_window"),
     ("加载 校准模块", "ui.calibration_window"),
     ("加载 硬件选择模块", "ui.hardware_window"),
     ("加载 分析流程模块", "ui.sequence.sequence_widget"),

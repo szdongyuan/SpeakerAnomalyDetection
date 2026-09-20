@@ -76,8 +76,8 @@ def _candidate(tmp_path):
                 image_files=((1, str(spl_png)), (2, str(second_png))),
             ),
             CandidateAnalysisItem(
-                AnalysisItemIdentity("custom_ai", "AI"),
-                csv_files=(("模型输出", str(tmp_path / "missing-ai.csv")),),
+                AnalysisItemIdentity("custom_fft", "FFT"),
+                csv_files=(("FFT频谱", str(tmp_path / "missing-fft.csv")),),
             ),
         ),
         channel_labels=(("CH1", "前"), ("CH2", "后")),
@@ -97,7 +97,7 @@ def test_html_uses_exact_selected_item_and_channel_label_headings(tmp_path):
     )
 
     assert "custom_spl（SPL）" in report_html
-    assert "custom_ai" not in report_html
+    assert "custom_fft" not in report_html
     assert "CH1（前）" in report_html
     assert "CH2（后）" in report_html
     assert "72.5" in report_html
@@ -379,40 +379,6 @@ def test_missing_selected_item_is_reported_as_incomplete(tmp_path):
     assert any("未找到该分析项" in warning for warning in warnings)
 
 
-def test_ai_without_optional_chart_is_not_marked_incomplete(tmp_path):
-    wav_path = tmp_path / "ai.wav"
-    wav_path.write_bytes(b"RIFF-test")
-    ai_csv = tmp_path / "ai_模型输出.csv"
-    _write_csv(
-        ai_csv,
-        ("通道", "模型输出值", "判定阈值", "result"),
-        (("CH1(前)", "0.82", "0.7", "OK"),),
-    )
-    candidate = ReportCandidate(
-        wav_path=str(wav_path),
-        project="ProjectA",
-        model="M1",
-        sample="S001",
-        label="OK",
-        database_status="matched",
-        analysis_items=(
-            CandidateAnalysisItem(
-                AnalysisItemIdentity("custom_ai", "AI"),
-                csv_files=(("模型输出", str(ai_csv)),),
-            ),
-        ),
-        channel_labels=(("CH1", "前"),),
-        channel_mapping_source="录制时通道映射快照",
-    )
-
-    _html_text, warnings = build_analysis_report_html(
-        [candidate],
-        [AnalysisItemIdentity("custom_ai", "AI")],
-        report_content="values_and_charts",
-        generated_at=datetime(2026, 9, 2, 9, 0, 0),
-    )
-
-    assert warnings == ()
 
 
 def test_export_analysis_report_pdf_generates_one_pdf(tmp_path):

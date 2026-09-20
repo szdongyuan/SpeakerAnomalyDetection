@@ -1,4 +1,5 @@
 from base.analysis_segments import segment_condition_fields
+from base.analysis_config_validation import validate_sequence_config
 
 import json
 import os
@@ -151,7 +152,10 @@ class LoadUiConfig(object):
         try:
             with open(json_file_path, "r", encoding="utf-8") as json_file:
                 analysis_config = json.load(json_file)
+                validate_sequence_config(analysis_config)
                 return error_code.OK, analysis_config
+        except ValueError as e:
+            return error_code.INVALID_DATA_LOADING, str(e)
         except Exception as e:
             err_msg = "Failed to load analysis sequence data from json.%s" % (str(e)[:50])
             return error_code.INVALID_DATA_LOADING, err_msg

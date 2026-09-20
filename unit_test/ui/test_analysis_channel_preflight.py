@@ -45,7 +45,7 @@ def test_live_preflight_maps_physical_channels_and_returns_ordered_skips():
 
 def test_preflight_only_handles_explicit_channel_protocol_types():
     assert REQUIRED_CHANNEL_ANALYSIS_TYPES == frozenset({"SPL", "Spec", "FBA"})
-    assert PASSIVE_CHANNEL_ANALYSIS_TYPES == frozenset({"AI", "FFT", "LOUD"})
+    assert PASSIVE_CHANNEL_ANALYSIS_TYPES == frozenset({"FFT", "LOUD"})
 
     result = preflight_analysis_channels(
         _config(
@@ -61,7 +61,7 @@ def test_preflight_only_handles_explicit_channel_protocol_types():
     assert result.skipped == ()
 
 
-@pytest.mark.parametrize("item_type", ["SPL", "Spec", "FBA", "AI", "LP", "FFT", "LOUD"])
+@pytest.mark.parametrize("item_type", ["SPL", "Spec", "FBA", "LP", "FFT", "LOUD"])
 def test_recorded_channel_list_keeps_valid_channels_when_one_is_missing(item_type):
     result = preflight_analysis_channels(
         _config(("item", item_type, {"analysis_channels": [7, 0, 2]})),

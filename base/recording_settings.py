@@ -2,7 +2,7 @@
 
 Owns ``configs/recording_settings.json`` (defaults shared across all
 product configs) and :func:`validate_recorded_audio` (the gate that
-rejects silent / stuck / unplugged recordings before they reach AI).
+rejects silent / stuck / unplugged recordings before they reach analysis).
 
 Startup trim uses the queue's ``seqN.acq.detail.startup_trim_ms`` value,
 falling back directly to the code default of 100 ms. An explicit ``0``

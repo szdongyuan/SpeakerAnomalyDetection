@@ -1,4 +1,4 @@
-"""Project-aware filters for the archive; legacy AI selection keeps its dialog."""
+"""Project-aware filters for archived audio recordings."""
 
 from collections import Counter
 import copy

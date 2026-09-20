@@ -122,15 +122,15 @@ def test_bad_image_preserves_values_and_verdict_and_other_valid_chart(tmp_path, 
     assert numeric_warnings == ()
 
 
-@pytest.mark.parametrize("kind", ["FBA", "FFT", "Spec", "AI"])
+@pytest.mark.parametrize("kind", ["FBA", "FFT", "Spec"])
 def test_corrupt_images_of_other_analysis_items_are_reported(tmp_path, kind):
     candidate = _candidate(tmp_path)
     png = tmp_path / "broken.png"
     png.write_bytes(b"invalid")
     curve = tmp_path / "result.csv"
-    _write_csv(curve, ["通道", "模型输出值", "result"], [("CH1", ".8", "OK")])
+    _write_csv(curve, ["频率Hz", "CH1_Y轴dB"], [("100", "60")])
     identity = AnalysisItemIdentity("item1", kind)
-    item = CandidateAnalysisItem(identity, csv_files=(("模型输出", str(curve)),),
+    item = CandidateAnalysisItem(identity, csv_files=(("曲线", str(curve)),),
                                  image_files=((1, str(png)),))
     candidate = replace(candidate, analysis_items=(item,))
     record = report._prepare_record(candidate, identity, "values_and_charts")
@@ -205,7 +205,6 @@ def test_segment_image_issues_do_not_mask_actual_missing_values(tmp_path, blank_
     assert len(warnings) == (2 if blank_value else 1)
 
 
-@pytest.mark.parametrize("kind", ["SPL", "AI"])
 @pytest.mark.parametrize("mode", ["values_only", "values_and_charts"])
 @pytest.mark.parametrize("values,missing", [
     (("72.5", ""), ("CH2",)),
@@ -215,20 +214,14 @@ def test_segment_image_issues_do_not_mask_actual_missing_values(tmp_path, blank_
     (("inf", "72.5"), ("CH1",)),
     (("0", "72.5"), ()),
 ])
-def test_empty_whole_record_measurements_are_retained_and_reported(tmp_path, kind, mode, values, missing):
+def test_empty_whole_record_measurements_are_retained_and_reported(tmp_path, mode, values, missing):
     candidate = _candidate(tmp_path)
-    identity = AnalysisItemIdentity("item1", kind)
+    identity = AnalysisItemIdentity("item1", "SPL")
     path = tmp_path / "measurements.csv"
-    if kind == "SPL":
-        header = ["通道", *overall_spl_csv_columns("A"), "result"]
-        rows = [(f"CH{n}", value, "", "80", "" if f"CH{n}" in missing else "OK")
-                for n, value in enumerate(values, 1)]
-        role = "总体声压级"
-    else:
-        header = ["通道", "模型输出值", "判定阈值", "result"]
-        rows = [(f"CH{n}", value, "80", "" if f"CH{n}" in missing else "OK")
-                for n, value in enumerate(values, 1)]
-        role = "模型输出"
+    header = ["通道", *overall_spl_csv_columns("A"), "result"]
+    rows = [(f"CH{n}", value, "", "80", "" if f"CH{n}" in missing else "OK")
+            for n, value in enumerate(values, 1)]
+    role = "总体声压级"
     _write_csv(path, header, rows)
     item = CandidateAnalysisItem(identity, csv_files=((role, str(path)),),
                                  image_files=candidate.analysis_items[0].image_files)

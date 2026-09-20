@@ -7,7 +7,6 @@ from PyQt5.QtCore import QSize
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from consts import error_code, model_consts
-from base.ai_runtime_policy import extract_ai_runtime_state
 from base.load_config import LoadUiConfig
 from base.analysis_artifact_paths import AnalysisStorageContext
 from base.recording_process_protocol import FrozenConfig
@@ -613,7 +612,7 @@ class SequenceWidgetAnalysisOpsMixin(
 
         return str(getattr(self, "_current_trigger_direction", "") or "").strip()
 
-    def _sync_left_panel_analysis_details(self, ai_runtime_state=None) -> bool:
+    def _sync_left_panel_analysis_details(self) -> bool:
         left_panel = getattr(self, "left_panel", None)
         set_details = getattr(left_panel, "set_condition_analysis_details", None)
         if not callable(set_details):
@@ -623,7 +622,7 @@ class SequenceWidgetAnalysisOpsMixin(
         if not condition_key:
             return False
 
-        detail_values = self._build_left_panel_analysis_details(ai_runtime_state)
+        detail_values = self._build_left_panel_analysis_details()
         set_channel_results = getattr(left_panel, "set_condition_channel_results", None)
         if callable(set_channel_results):
             set_channel_results(condition_key, self._build_left_panel_channel_results())
@@ -635,7 +634,7 @@ class SequenceWidgetAnalysisOpsMixin(
         """Project runtime results by physical channel; never reuse a channel's verdict."""
         column_names = {
             "SPL": "SPL", "SPLF": "SPL", "FBA": "FBA", "FFT": "FFT",
-            "AI": "AI分析", "LOUD": "响度", "Loudness": "响度", "PRB": "响度",
+            "LOUD": "响度", "Loudness": "响度", "PRB": "响度",
         }
         analysis_config = getattr(self, "analysis_config", {}) or {}
         result_dict = getattr(getattr(self, "data_struct", None), "analysis_result_dict", {}) or {}
@@ -650,18 +649,16 @@ class SequenceWidgetAnalysisOpsMixin(
             runtime_key = getattr(instance, "_sequence_runtime_key", instance.title_name)
             result_value = result_dict.get(runtime_key)
             judgement = self._analysis_judgement_text(result_value)
-            reason = "未判定" if analysis_type == "AI" else self._analysis_judgement_or_reason(config, result_value)
+            reason = self._analysis_judgement_or_reason(config, result_value)
             value = judgement or reason
             channel = channels.setdefault(raw_channel, {"columns": {}, "judgements": [], "details": {}})
             channel["columns"].setdefault(column, []).append(value)
-            if judgement or analysis_type == "AI" or config.get("limit_checked", False):
+            if judgement or config.get("limit_checked", False):
                 channel["judgements"].append(judgement)
             if column == "SPL":
                 detail = self._format_spl_left_panel_detail(instance, config, judgement)
             elif column == "响度":
                 detail = self._format_loudness_left_panel_detail(instance, config, judgement)
-            elif column == "AI分析":
-                detail = self._format_ai_left_panel_detail(instance=instance)
             else:
                 detail = value
             channel["details"].setdefault(column, []).append(f"{runtime_key}：{detail}")
@@ -686,7 +683,7 @@ class SequenceWidgetAnalysisOpsMixin(
             return "OK"
         return "待判定"
 
-    def _build_left_panel_analysis_details(self, ai_runtime_state=None) -> dict:
+    def _build_left_panel_analysis_details(self) -> dict:
         detail_values = {}
         analysis_config = getattr(self, "analysis_config", {}) or {}
         result_dict = getattr(getattr(self, "data_struct", None), "analysis_result_dict", {}) or {}
@@ -704,8 +701,6 @@ class SequenceWidgetAnalysisOpsMixin(
                 detail_values["SPL"] = self._format_spl_left_panel_detail(instance, item_config, judgement)
             elif analysis_type in ("LOUD", "Loudness", "PRB"):
                 detail_values["响度"] = self._format_loudness_left_panel_detail(instance, item_config, judgement)
-            elif analysis_type == "AI":
-                detail_values["AI分析"] = self._format_ai_left_panel_detail(ai_runtime_state, instance)
             elif analysis_type == "FBA":
                 detail_values["FBA"] = self._merge_ok_ng_detail(
                     detail_values.get("FBA"),
@@ -717,8 +712,6 @@ class SequenceWidgetAnalysisOpsMixin(
                     self._analysis_judgement_or_reason(item_config, result_dict.get(title_name)),
                 )
 
-        if ai_runtime_state and "AI分析" not in detail_values and ai_runtime_state.get("has_ai_analysis"):
-            detail_values["AI分析"] = self._format_ai_left_panel_detail(ai_runtime_state, None)
         return detail_values
 
     @staticmethod
@@ -767,20 +760,6 @@ class SequenceWidgetAnalysisOpsMixin(
             return "--"
         return f"{numeric:.{digits}f}"
 
-    @staticmethod
-    def _format_left_panel_percent(value) -> str:
-        if value in (None, ""):
-            return "--"
-        text = str(value).strip()
-        if not text:
-            return "--"
-        if text.endswith("%"):
-            return text
-        try:
-            numeric = float(text)
-        except (TypeError, ValueError):
-            return text
-        return f"{numeric:.2f}%"
 
     @staticmethod
     def _append_judgement_text(detail_text: str, judgement: str) -> str:
@@ -953,37 +932,6 @@ class SequenceWidgetAnalysisOpsMixin(
             return None
         return numeric * 100.0
 
-    def _format_ai_left_panel_detail(self, ai_runtime_state=None, instance=None) -> str:
-        state = dict(ai_runtime_state or {})
-        if instance is not None:
-            export_detail = getattr(instance, "export_detail", None)
-            if isinstance(export_detail, dict):
-                scores = dict(state.get("scores") or {})
-                if scores.get("ok_score") in (None, ""):
-                    scores["ok_score"] = export_detail.get("ok_score")
-                if scores.get("ng_score") in (None, ""):
-                    scores["ng_score"] = export_detail.get("ng_score")
-                state["scores"] = scores
-                if not state.get("label"):
-                    state["label"] = export_detail.get("label")
-                if not state.get("blocked_message"):
-                    state["blocked_message"] = export_detail.get("blocked_message")
-
-        scores = state.get("scores") or {}
-        label = str(state.get("label") or "").strip().upper()
-        if label not in ("OK", "NG"):
-            label = ""
-        blocked_message = str(state.get("blocked_message") or "").strip()
-
-        text = (
-            f"OK Score：{self._format_left_panel_percent(scores.get('ok_score'))}；"
-            f"NG Score：{self._format_left_panel_percent(scores.get('ng_score'))}"
-        )
-        if label:
-            return f"{text}；判定：{label}"
-        if blocked_message:
-            return f"{text}；判定：未判定（{blocked_message}）"
-        return f"{text}；判定：未判定"
 
     def _manual_product_condition_keys(self):
         return [
@@ -2941,6 +2889,13 @@ class SequenceWidgetAnalysisOpsMixin(
         the respective calculations for each instance and displays the windows. The window positions are
         adjusted based on the screen size to ensure they do not overlap.
         """
+        from base.analysis_config_validation import validate_analysis_config
+
+        try:
+            validate_analysis_config(self.analysis_config or {})
+        except ValueError as exc:
+            QMessageBox.warning(self, "不支持的测试队列", str(exc))
+            return
         self._analysis_preflight_skips = {}
         self._analysis_channel_local_columns = {}
         self._analysis_preflight_warning_shown = False
@@ -3050,10 +3005,6 @@ class SequenceWidgetAnalysisOpsMixin(
                             continue
                     elif hasattr(instance, "calculate_thd"):
                         instance.calculate_thd()
-                    elif hasattr(instance, "calculate_ai_scores"):
-                        instance.calculate_ai_scores(
-                            self.count_board.mode, self.analysis_config, self.sequence_config[0]["seq1"]["acq"]["mode"]
-                        )
                     elif hasattr(instance, "calculate_spec"):
                         instance.calculate_spec()
                     elif hasattr(instance, "calculate_peak_detection"):
@@ -3117,40 +3068,11 @@ class SequenceWidgetAnalysisOpsMixin(
 
             product_outcome = None
             can_output, _reason = self._can_output_ok_ng()
-            ai_runtime_state = extract_ai_runtime_state(self.analysis_window, self.analysis_config)
-            has_ai_analysis = bool(ai_runtime_state.get("has_ai_analysis", False))
-            ai_scores = ai_runtime_state.get("scores") or {"ok_score": None, "ng_score": None}
-            self._sync_left_panel_analysis_details(ai_runtime_state)
+            self._sync_left_panel_analysis_details()
             cycle_final_label = None
             label = product_outcome.label if product_outcome is not None else None
             if can_output and product_outcome is None:
                 _passed, label = self._summarize_ok_ng()
-                update_ai_cycle_result = getattr(self, "_update_ai_cycle_result_after_analysis", None)
-                if (
-                    has_ai_analysis
-                    and callable(update_ai_cycle_result)
-                    and label in ("OK", "NG")
-                ):
-                    cycle_final_label = update_ai_cycle_result(
-                        label,
-                        ai_scores=ai_scores,
-                    )
-            elif (
-                product_outcome is not None
-                and product_outcome.judgment_status == "judged"
-                and has_ai_analysis
-                and label in ("OK", "NG")
-            ):
-                update_ai_cycle_result = getattr(
-                    self,
-                    "_update_ai_cycle_result_after_analysis",
-                    None,
-                )
-                if callable(update_ai_cycle_result):
-                    cycle_final_label = update_ai_cycle_result(
-                        label,
-                        ai_scores=ai_scores,
-                    )
             if self.count_board.mode == "test":
                 # Test mode: decide label from analysis_result_dict summary and auto-finalize.
                 if not can_output and product_outcome is None:
@@ -3236,9 +3158,9 @@ class SequenceWidgetAnalysisOpsMixin(
                                 update_recent_session=not directional_cycle_active,
                             )
                         if directional_cycle_active:
-                            clear_ai_cycle_runtime_state = getattr(self, "_clear_ai_cycle_runtime_state", None)
-                            if callable(clear_ai_cycle_runtime_state):
-                                clear_ai_cycle_runtime_state()
+                            clear_direction_cycle_runtime_state = getattr(self, "_clear_direction_cycle_runtime_state", None)
+                            if callable(clear_direction_cycle_runtime_state):
+                                clear_direction_cycle_runtime_state()
 
         if show_windows:
             # Show summary window at the end (also in test mode), only if dict is not empty
