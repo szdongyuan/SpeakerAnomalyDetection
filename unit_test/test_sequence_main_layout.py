@@ -479,7 +479,7 @@ class TestSequenceMainLayout(unittest.TestCase):
         widget._refresh_waveform_condition_metadata()
         panel = widget.channel_workspace
         panel.all_subwindows()[0].set_data([0, 1], [0.5, -0.5])
-        widget.left_panel.ai_result_panel.select_condition("second")
+        widget.left_panel.result_panel.select_condition("second")
         self.assertIn("第二档", panel.current_condition_label.text())
         self.assertIn("600秒", panel.duration_label.text())
         self.assertIn("FFT", panel.test_items_label.text())
@@ -532,7 +532,7 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertIsInstance(left_sidebar_splitter, QSplitter)
         self.assertEqual(left_sidebar_splitter.orientation(), Qt.Vertical)
         self.assertEqual(left_sidebar_splitter.count(), 2)
-        self.assertIs(left_sidebar_splitter.widget(0), widget.left_panel.ai_result_panel)
+        self.assertIs(left_sidebar_splitter.widget(0), widget.left_panel.result_panel)
         self.assertIs(left_sidebar_splitter.widget(1), widget.left_panel.video_monitor_panel)
         self.assertIs(main_splitter.widget(1), widget.channel_workspace)
         self.assertIsInstance(widget.channel_workspace, AnalysisWaveformPanel)
@@ -547,7 +547,7 @@ class TestSequenceMainLayout(unittest.TestCase):
 
         self.assertGreaterEqual(widget.channel_workspace.width(), 900)
         self.assertGreaterEqual(widget.channel_workspace.height(), 700)
-        self.assertGreater(widget.channel_workspace.width(), widget.left_panel.ai_result_panel.width())
+        self.assertGreater(widget.channel_workspace.width(), widget.left_panel.result_panel.width())
         self.assertTrue(widget.recent_session_panel.isHidden())
 
     def test_threshold_analyses_can_output_ok_ng(self):
@@ -1430,15 +1430,15 @@ class TestSequenceMainLayout(unittest.TestCase):
         widget.show()
         self.app.processEvents()
 
-        ai_card = widget.left_panel.ai_result_panel.findChild(MotorSectionCard)
+        result_card = widget.left_panel.result_panel.findChild(MotorSectionCard)
         video_card = widget.left_panel.video_monitor_panel.findChild(MotorSectionCard)
 
-        self.assertIsNotNone(ai_card)
+        self.assertIsNotNone(result_card)
         self.assertIsNotNone(video_card)
-        self.assertEqual(ai_card.height(), widget.left_panel.ai_result_panel.height())
+        self.assertEqual(result_card.height(), widget.left_panel.result_panel.height())
         self.assertEqual(video_card.height(), widget.left_panel.video_monitor_panel.height())
 
-        task_header = widget.left_panel.ai_result_panel.findChild(QWidget, "testTaskHeader")
+        task_header = widget.left_panel.result_panel.findChild(QWidget, "testTaskHeader")
         self.assertIsNotNone(task_header)
         self.assertEqual(task_header.height(), widget.left_panel.video_monitor_panel.header.height())
 

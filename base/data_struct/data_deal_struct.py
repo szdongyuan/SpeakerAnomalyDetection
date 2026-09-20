@@ -45,7 +45,6 @@ class DataDealStruct(object):
 
         # self.hd_flag = 0
         # self.fr_flag = 0
-        # self.ai_flag = 0
 
     def clear_wav_calibration_context(self):
         """Clear provenance only when its associated audio is replaced/cleared."""

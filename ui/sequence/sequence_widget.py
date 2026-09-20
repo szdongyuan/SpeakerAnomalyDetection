@@ -142,9 +142,8 @@ class SequenceWindow(
         self._current_trigger_direction = ""
         self._active_recording_direction = ""
         self._manual_direction_fallback_next_direction = "forward"
-        self._ai_cycle_started_at = ""
+        self._direction_cycle_started_at = ""
         self._current_cycle_first_direction = ""
-        self._ai_cycle_direction_results = {"forward": None, "reverse": None}
         self._mark_cycle_direction_labels = {"forward": "not_labeled", "reverse": "not_labeled"}
         self._mark_cycle_summary_label = ""
         self._direction_waveform_cache = {"forward": None, "reverse": None}

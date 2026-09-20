@@ -74,21 +74,6 @@ def test_mixed_report_splits_modes_and_preserves_values_and_charts(tmp_path, lab
     assert html.count('data:image/png;base64,') == len(candidates)
 
 
-def test_historical_other_items_keep_whole_values_without_segment_rows(tmp_path):
-    from base.analysis_report import _prepare_segment_records
-    overall = tmp_path / 'spl.csv'
-    overall.write_text('通道,总体声压级dB\n输出负载0A_CH1,30\n输出负载0.3A_CH1,50\n', encoding='utf-8-sig')
-    ai = tmp_path / 'ai.csv'
-    ai.write_text('通道,模型输出值,result\nCH1,0.99,OK\n', encoding='utf-8-sig')
-    identity = AnalysisItemIdentity('AI1', 'AI')
-    candidate = ReportCandidate(str(tmp_path / 'source.wav'), '项目', '产品', '样本', analysis_items=(
-        CandidateAnalysisItem(AnalysisItemIdentity('SPL1', 'SPL'), csv_files=(('总体声压级', str(overall)),)),
-        CandidateAnalysisItem(identity, csv_files=(('模型输出', str(ai)),)),
-    ))
-    records = _prepare_segment_records(candidate, identity, 'values_only')
-    assert len(records) == 1 and records[0].segment_label == ''
-    assert records[0].scalar_values[0][1].value == '0.99'
-    assert not records[0].issues
 
 
 def test_csv_channel_label_underscore_does_not_change_segment_or_physical_channel(tmp_path):

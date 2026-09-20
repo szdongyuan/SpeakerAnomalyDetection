@@ -351,11 +351,6 @@ class AnalysisMultichannelResultWindow(QWidget):
         form = QFormLayout(page)
         labels = (
             ("最终判定", payload.get("result")),
-            ("评分模型", payload.get("model_name")),
-            ("模型输出值", payload.get("model_output_value")),
-            ("判定阈值", payload.get("decision_threshold")),
-            ("OK Score", payload.get("ok_score")),
-            ("NG Score", payload.get("ng_score")),
         )
         for name, value in labels:
             if value is not None and value != "":

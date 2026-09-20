@@ -441,7 +441,7 @@ def test_delete_missing_project_only_removes_registry_record(tmp_path):
     assert manager.load_registry() == {"active_file": None, "configs": []}
 
 
-def test_queue_catalog_exposes_duration_analysis_and_ai_judgment(tmp_path):
+def test_queue_catalog_rejects_removed_ai_analysis(tmp_path):
     manager = make_manager(
         tmp_path,
         {
@@ -455,10 +455,9 @@ def test_queue_catalog_exposes_duration_analysis_and_ai_judgment(tmp_path):
 
     info = manager.load_queue_catalog()["AI测试"]
 
-    assert info["available"] is True
-    assert info["duration"] == 600
-    assert info["analysis_items"] == ["分析项1"]
-    assert info["can_auto_judge"] is True
+    assert info["available"] is False
+    assert info["can_auto_judge"] is False
+    assert "已移除的 AI" in info["reason"]
 
 
 def test_project_without_threshold_can_run_in_test_mode_as_not_labeled(tmp_path):

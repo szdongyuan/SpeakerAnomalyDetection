@@ -399,7 +399,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
         if not context.processing_notified or not self._is_active_recording_process(context.session):
             return
         left_panel = getattr(self, "left_panel", None)
-        panel = getattr(left_panel, "ai_result_panel", left_panel)
+        panel = getattr(left_panel, "result_panel", left_panel)
         if getattr(panel, "stage_text", None) == "数据保存中":
             left_panel.set_current_stage(stage_text, tone=tone)
         row = getattr(panel, "rows", {}).get(context.processing_condition, {})

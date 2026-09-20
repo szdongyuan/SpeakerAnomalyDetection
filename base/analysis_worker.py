@@ -544,14 +544,6 @@ def _extract_output(instance_request, calculation, judgement, source, image_payl
                 "upper": upper_values.tolist(),
             },
         }
-    if analysis_type == "AI":
-        return {
-            "metrics": metrics,
-            "display_payload": {"kind": "values", **metrics, "result": judgement}
-            if source == "手动查看"
-            else {},
-            "csv_curve": {},
-        }
     if analysis_type == "Spec":
         return {
             "metrics": {},
@@ -567,8 +559,6 @@ def _extract_output(instance_request, calculation, judgement, source, image_payl
 
 
 def _contributes_to_final(analysis_type, config):
-    if analysis_type == "AI":
-        return True
     if analysis_type in {"SPL", "FBA", "FFT"}:
         return bool((config or {}).get("limit_checked", False))
     return False

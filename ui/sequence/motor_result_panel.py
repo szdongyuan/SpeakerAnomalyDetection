@@ -19,14 +19,13 @@ from consts import ui_style_const
 from ui.sequence.motor_panel_common import MotorSectionCard
 
 
-class MotorAiResultPanel(QWidget):
+class MotorResultPanel(QWidget):
     condition_selected = pyqtSignal(str)
 
-    DETAIL_LABEL_ORDER = ("SPL", "响度", "AI分析", "FBA", "FFT", "Spec")
+    DETAIL_LABEL_ORDER = ("SPL", "响度", "FBA", "FFT", "Spec")
     ANALYSIS_COLUMN_HEADERS = {
         "SPL": "SPL判定",
         "响度": "响度判定",
-        "AI分析": "AI判定",
         "FBA": "1/3倍频程",
         "FFT": "FFT",
         "Spec": "Spec",
@@ -514,21 +513,6 @@ class MotorAiResultPanel(QWidget):
             self.condition_selected.emit(self.selected_key)
         return True
 
-    def set_condition_scores(self, condition, ok_score=None, ng_score=None):
-        key = self._resolve_key(condition)
-        if not key:
-            return False
-        if ok_score in (None, "") and ng_score in (None, ""):
-            self._clear_condition_runtime_detail(key, "AI分析")
-            return True
-        ai_text = (
-            f"OK Score：{self._format_percent(ok_score)}；"
-            f"NG Score：{self._format_percent(ng_score)}"
-        )
-        result = str(self.rows.get(key, {}).get("result") or "").strip().upper()
-        if result in ("OK", "NG"):
-            ai_text = f"{ai_text}；判定：{result}"
-        return self.set_condition_analysis_details(key, {"AI分析": ai_text})
 
     def set_condition_analysis_details(self, condition, detail_values):
         key = self._resolve_key(condition)
@@ -640,15 +624,7 @@ class MotorAiResultPanel(QWidget):
     def set_reverse_result(self, result_text: str, tone: str = None):
         return self._set_by_index(1, result_text, tone)
 
-    def set_forward_scores(self, ok_score=None, ng_score=None):
-        if not self.conditions:
-            return False
-        return self.set_condition_scores(self.conditions[0]["key"], ok_score, ng_score)
 
-    def set_reverse_scores(self, ok_score=None, ng_score=None):
-        if len(self.conditions) <= 1:
-            return False
-        return self.set_condition_scores(self.conditions[1]["key"], ok_score, ng_score)
 
     def _set_by_index(self, index, result_text, tone=None):
         if index >= len(self.conditions):
@@ -1029,8 +1005,6 @@ class MotorAiResultPanel(QWidget):
             return "FFT"
         if normalized_type in ("Spec",):
             return "Spec"
-        if normalized_type in ("AI",):
-            return "AI分析"
         if normalized_type in ("LOUD", "Loudness", "PRB") or "响度" in name or "loud" in lowered_name:
             return "响度"
         return ""

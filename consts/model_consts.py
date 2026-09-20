@@ -1,20 +1,11 @@
 import os
 import sys
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 
 DEFAULT_DIR = os.path.split(os.path.realpath(__file__))[0].replace("\\", "/") + "/../"
 # DEFAULT_DIR = os.path.dirname(os.path.realpath(sys.argv[0])).replace("\\", "/") + "/"
 
-MODEL_PATH = DEFAULT_DIR + "models/model_name.keras"
-CONFIG_PATH = "configs/ai_model_config/config.yml"
-TRAIN_PATH = DEFAULT_DIR + "audio_data/train"
-TEST_PATH = DEFAULT_DIR + "audio_data/test"
-TRAIN_OK_PATH = DEFAULT_DIR + "audio_data/train/OK"
-TRAIN_NG_PATH = DEFAULT_DIR + "audio_data/train/NG"
-TEST_OK_PATH = DEFAULT_DIR + "audio_data/test/OK"
-TEST_NG_PATH = DEFAULT_DIR + "audio_data/test/NG"
 STORED_SAMPLE_PATH = DEFAULT_DIR + "audio_data/stored_sample"
 STORED_RECORDED_PATH = DEFAULT_DIR + "audio_data/stored_data"
 STORED_RECORDED_UNLABELED_PATH = DEFAULT_DIR + "audio_data/stored_data/not_labeled"

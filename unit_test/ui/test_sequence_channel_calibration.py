@@ -313,7 +313,6 @@ def build_sequence(
 
     def get_class_mapping():
         return {
-            "AI": make_analysis,
             "FFT": make_analysis,
             "LOUD": make_analysis,
             "SPL": make_analysis,
@@ -515,7 +514,7 @@ def test_calibration_file_error_aborts_whole_live_batch(error):
     assert str(error) in sequence.default_logger.error.call_args.args[0]
 
 
-@pytest.mark.parametrize("item_type", ["SPL", "Spec", "FBA", "AI", "LP", "FFT", "LOUD"])
+@pytest.mark.parametrize("item_type", ["SPL", "Spec", "FBA", "LP", "FFT", "LOUD"])
 def test_recorded_item_expands_with_physical_calibration_and_local_columns(item_type):
     params = {"analysis_channel": 0, "analysis_channels": [7, 2], "limit_checked": True}
     sequence, loader, messages, _events, created = build_sequence(
@@ -1227,3 +1226,18 @@ def test_recording_attempt_is_blocked_while_player_is_active(monkeypatch):
 
     assert host.events == []
     build.assert_not_called()
+
+
+def test_recorded_ai_item_is_rejected_before_calibration_or_execution():
+    sequence, loader, messages, _events, created = build_sequence(
+        factor_map={0: 1.0},
+        active_input_channels=[0],
+        items=[("legacy_ai", "AI", {"analysis_channel": 0})],
+    )
+
+    assert sequence._run_analysis_impl(show_windows=False) is None
+
+    loader.assert_not_called()
+    assert created == []
+    messages.warning.assert_called_once()
+    assert "已移除的 AI" in messages.warning.call_args.args[2]

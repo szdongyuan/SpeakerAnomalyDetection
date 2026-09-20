@@ -112,8 +112,8 @@ def test_calibration_skips_display_preparation(tmp_path):
 
 @pytest.mark.parametrize("stage", ["数据保存中", "正转 数据保存中"])
 def test_actual_panel_recognizes_processing(ui_qapp, stage):
-    from ui.sequence.motor_ai_result_panel import MotorAiResultPanel
-    panel = MotorAiResultPanel()
+    from ui.sequence.motor_result_panel import MotorResultPanel
+    panel = MotorResultPanel()
     panel.set_current_stage(stage)
     assert panel.stage_label.text() == "数据保存中"
     panel.close()
@@ -124,7 +124,7 @@ def test_actual_panel_recognizes_processing(ui_qapp, stage):
 def test_background_preparation_keeps_qt_responsive_and_publishes_without_scans(ui_qapp, service, tmp_path, monkeypatch, caplog, drop_finalizing, actual_workspace):
     caplog.set_level(logging.INFO)
     import base.recording_result_reader as reader_module
-    from ui.sequence.motor_ai_result_panel import MotorAiResultPanel
+    from ui.sequence.motor_result_panel import MotorResultPanel
     from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
     from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
     entered, release, ticked = threading.Event(), threading.Event(), threading.Event()
@@ -141,7 +141,7 @@ def test_background_preparation_keeps_qt_responsive_and_publishes_without_scans(
         return original(reader)
     monkeypatch.setattr(reader_module.ResultReader, "_validate_metadata", block_reader)
     host = main_host(service, tmp_path, streaming=False)
-    panel = MotorAiResultPanel()
+    panel = MotorResultPanel()
     panel.set_condition_configs([{"key":"forward", "name":"正转"}])
     panel.resize(640, 500)
     panel.show()
@@ -269,11 +269,11 @@ def test_cancelled_and_replaced_session_cannot_restore_processing(ui_qapp, tmp_p
     from types import SimpleNamespace
     from base.recording_service import RecordingSession, RecordingCallbacks
     from ui.sequence.recording_process_context import RecordingProcessContext
-    from ui.sequence.motor_ai_result_panel import MotorAiResultPanel
+    from ui.sequence.motor_result_panel import MotorResultPanel
     from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
     service = SimpleNamespace(cancel=mock.Mock())
     host = main_host(service, tmp_path)
-    panel = MotorAiResultPanel(condition_configs=[{"key":"forward", "name":"正转"}])
+    panel = MotorResultPanel(condition_configs=[{"key":"forward", "name":"正转"}])
     host.left_panel = panel
     workspace = AnalysisWaveformPanel(condition_configs=[
         {"key":"forward", "name":"正转"}, {"key":"reverse", "name":"反转"}])

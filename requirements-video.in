@@ -1,4 +1,4 @@
-# Optional video dependencies, compatible with this project's NumPy/TensorFlow baseline.
+# Optional video dependencies, compatible with this project's NumPy baseline.
 numpy==1.26.4
 opencv-python-headless==4.11.0.86
 av==16.1.0

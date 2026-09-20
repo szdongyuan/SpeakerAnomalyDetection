@@ -24,7 +24,7 @@ from consts import model_consts
 from consts.running_consts import DEFAULT_DIR
 
 
-_SUPPORTED_TYPES = frozenset({"SPL", "Spec", "FBA", "AI", "FFT"})
+_SUPPORTED_TYPES = frozenset({"SPL", "Spec", "FBA", "FFT"})
 
 
 @dataclass(frozen=True, order=True)
@@ -60,7 +60,7 @@ class CandidateAnalysisItem:
     @property
     def has_scalar_values(self) -> bool:
         return any(
-            role in {"总体声压级", "模型输出"} for role, _ in self.csv_files)
+            role == "总体声压级" for role, _ in self.csv_files)
 
     @property
     def has_charts(self) -> bool:

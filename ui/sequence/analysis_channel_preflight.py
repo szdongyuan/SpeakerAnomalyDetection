@@ -13,7 +13,7 @@ from ui.ui_analysis_config.config_normalization import (
 
 
 REQUIRED_CHANNEL_ANALYSIS_TYPES = frozenset({"SPL", "Spec", "FBA"})
-PASSIVE_CHANNEL_ANALYSIS_TYPES = frozenset({"AI", "FFT", "LOUD"})
+PASSIVE_CHANNEL_ANALYSIS_TYPES = frozenset({"FFT", "LOUD"})
 MULTI_CHANNEL_ANALYSIS_TYPES = (
     REQUIRED_CHANNEL_ANALYSIS_TYPES | PASSIVE_CHANNEL_ANALYSIS_TYPES | {"LP"}
 )

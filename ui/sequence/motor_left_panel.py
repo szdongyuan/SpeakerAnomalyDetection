@@ -2,7 +2,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QFrame, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from consts import ui_style_const
-from ui.sequence.motor_ai_result_panel import MotorAiResultPanel
+from ui.sequence.motor_result_panel import MotorResultPanel
 from ui.sequence.motor_video_monitor_panel import MotorVideoMonitorPanel
 
 
@@ -12,7 +12,7 @@ class MotorDetectionLeftPanel(QWidget):
     """
     Composite left sidebar for motor detection mode.
 
-    It delegates the top AI-result area and the bottom video-monitor area to two
+    It delegates the top test-result area and the bottom video-monitor area to two
     dedicated sub-widgets so later business wiring can evolve independently.
     """
 
@@ -23,14 +23,14 @@ class MotorDetectionLeftPanel(QWidget):
         self.count_board = summary_widget
         if self.count_board is not None:
             self.count_board.hide()
-        self.ai_result_panel = MotorAiResultPanel(self, condition_configs=condition_configs)
-        self.ai_result_panel.condition_selected.connect(self.condition_selected.emit)
+        self.result_panel = MotorResultPanel(self, condition_configs=condition_configs)
+        self.result_panel.condition_selected.connect(self.condition_selected.emit)
         self.video_monitor_panel = MotorVideoMonitorPanel(self)
         self._init_ui()
 
     @property
     def selected_condition_key(self):
-        return self.ai_result_panel.viewed_key
+        return self.result_panel.viewed_key
 
     def _init_ui(self):
         # The two inner sections are normally moved into outer QSplitters
@@ -42,7 +42,7 @@ class MotorDetectionLeftPanel(QWidget):
 
         self.content_widget = QWidget(self)
         self.content_layout = QVBoxLayout()
-        self.content_layout.addWidget(self.ai_result_panel)
+        self.content_layout.addWidget(self.result_panel)
         self.content_layout.addWidget(self.video_monitor_panel)
         self.content_layout.addStretch(1)
         self.content_layout.setContentsMargins(0, 0, 6, 0)
@@ -65,7 +65,7 @@ class MotorDetectionLeftPanel(QWidget):
 
     def take_split_sections(self):
         return (
-            self._detach_section_widget(self.ai_result_panel),
+            self._detach_section_widget(self.result_panel),
             self._detach_section_widget(self.video_monitor_panel),
         )
 
@@ -82,8 +82,8 @@ class MotorDetectionLeftPanel(QWidget):
             widget.setParent(None)
         return widget
 
-    def reset_ai_result_panel(self):
-        self.ai_result_panel.reset()
+    def reset_result_panel(self):
+        self.result_panel.reset()
 
     def set_current_barcode(self, barcode: str):
         # Kept for compatibility with the existing workflow, but barcode is no
@@ -96,49 +96,43 @@ class MotorDetectionLeftPanel(QWidget):
         return None
 
     def set_current_stage(self, stage_text: str, tone: str = "pending"):
-        self.ai_result_panel.set_current_stage(stage_text, tone=tone)
+        self.result_panel.set_current_stage(stage_text, tone=tone)
 
     def clear_current_stage(self):
-        self.ai_result_panel.clear_current_stage()
+        self.result_panel.clear_current_stage()
 
     def set_forward_result(self, result_text: str, tone: str = None):
-        self.ai_result_panel.set_forward_result(result_text, tone=tone)
+        self.result_panel.set_forward_result(result_text, tone=tone)
 
     def set_reverse_result(self, result_text: str, tone: str = None):
-        self.ai_result_panel.set_reverse_result(result_text, tone=tone)
+        self.result_panel.set_reverse_result(result_text, tone=tone)
 
     def set_final_result(self, result_text: str, tone: str = None):
-        self.ai_result_panel.set_final_result(result_text, tone=tone)
+        self.result_panel.set_final_result(result_text, tone=tone)
 
     def get_automatic_round_result(self):
-        return self.ai_result_panel.get_automatic_round_result()
+        return self.result_panel.get_automatic_round_result()
 
-    def set_forward_scores(self, ok_score=None, ng_score=None):
-        self.ai_result_panel.set_forward_scores(ok_score, ng_score)
 
-    def set_reverse_scores(self, ok_score=None, ng_score=None):
-        self.ai_result_panel.set_reverse_scores(ok_score, ng_score)
 
     def set_condition_result(self, condition, result_text: str, tone: str = None):
-        return self.ai_result_panel.set_condition_result(condition, result_text, tone=tone)
+        return self.result_panel.set_condition_result(condition, result_text, tone=tone)
 
-    def set_condition_scores(self, condition, ok_score=None, ng_score=None):
-        return self.ai_result_panel.set_condition_scores(condition, ok_score, ng_score)
 
     def set_condition_analysis_details(self, condition, detail_values):
-        return self.ai_result_panel.set_condition_analysis_details(condition, detail_values)
+        return self.result_panel.set_condition_analysis_details(condition, detail_values)
 
     def set_condition_channel_results(self, condition, channel_results):
-        return self.ai_result_panel.set_condition_channel_results(condition, channel_results)
+        return self.result_panel.set_condition_channel_results(condition, channel_results)
 
     def set_channels(self, channels):
-        self.ai_result_panel.set_channels(channels)
+        self.result_panel.set_channels(channels)
 
     def set_current_round(self, round_number):
-        self.ai_result_panel.set_current_round(round_number)
+        self.result_panel.set_current_round(round_number)
 
     def set_condition_configs(self, condition_configs):
-        self.ai_result_panel.set_condition_configs(condition_configs)
+        self.result_panel.set_condition_configs(condition_configs)
 
     def refresh_condition_configs(self, condition_configs):
-        return self.ai_result_panel.refresh_condition_configs(condition_configs)
+        return self.result_panel.refresh_condition_configs(condition_configs)

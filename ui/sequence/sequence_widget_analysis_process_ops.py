@@ -794,7 +794,6 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             "SPL": "SPL",
             "FBA": "FBA",
             "FFT": "FFT",
-            "AI": "AI分析",
             "Spec": "Spec",
         }
         channels = {}

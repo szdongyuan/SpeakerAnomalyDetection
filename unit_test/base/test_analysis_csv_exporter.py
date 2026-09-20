@@ -159,36 +159,10 @@ def test_fft_csv_places_threshold_curves_after_channel_values(tmp_path):
     ]
 
 
-def test_ai_uses_one_numeric_row_per_channel(tmp_path):
+def test_removed_ai_does_not_create_csv(tmp_path):
     records = export_item_csvs(
-        _context(tmp_path),
-        "共同主名",
-        "AI1",
-        "AI",
-        {},
-        [
-            {
-                "raw_channel": 0,
-                "judgement": "OK",
-                "metrics": {
-                    "model_output_value": 0.82,
-                    "decision_threshold": 0.70,
-                },
-            },
-            {
-                "raw_channel": 1,
-                "judgement": "NG",
-                "metrics": {
-                    "model_output_value": 0.61,
-                    "decision_threshold": 0.70,
-                },
-            },
-        ],
-        {"CH1": "前"},
+        _context(tmp_path), "recording", "legacy", "AI", {},
+        [{"raw_channel": 0, "metrics": {"model_output_value": 0.9}}],
     )
-    rows = _read(records[0].file_path)
-    assert rows == [
-        ["通道", "模型输出值", "判定阈值", "result"],
-        ["CH1(前)", "0.82", "0.7", "OK"],
-        ["CH2", "0.61", "0.7", "NG"],
-    ]
+    assert records == ()
+    assert not list(tmp_path.rglob("*.csv"))

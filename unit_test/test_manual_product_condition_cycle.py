@@ -362,13 +362,7 @@ class TestManualProductConditionCycle(unittest.TestCase):
             "FFT--通道1": (False, 1.5),
         }
 
-        synced = widget._sync_left_panel_analysis_details(
-            {
-                "has_ai_analysis": True,
-                "label": "OK",
-                "scores": {"ok_score": 71.6, "ng_score": 28.4},
-            }
-        )
+        synced = widget._sync_left_panel_analysis_details()
 
         self.assertTrue(synced)
         condition, detail_values = widget.left_panel.analysis_details[-1]
@@ -379,7 +373,7 @@ class TestManualProductConditionCycle(unittest.TestCase):
             "稳态平均响度：4.20 sone；最大瞬态响度：8.10 sone；"
             "特征响度总贡献：12.34 sone；特征响度超限总量：116.29 cSones；判定：OK",
         )
-        self.assertEqual(detail_values["AI分析"], "OK Score：71.60%；NG Score：28.40%；判定：OK")
+        self.assertNotIn("AI分析", detail_values)
         self.assertEqual(detail_values["FBA"], "OK")
         self.assertEqual(detail_values["FFT"], "NG")
 

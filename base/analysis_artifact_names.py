@@ -16,7 +16,6 @@ CSV_ROLES = (
     ("实时声压级", "SPL", False),
     ("频段能量", "FBA", False),
     ("FFT频谱", "FFT", False),
-    ("模型输出", "AI", True),
 )
 
 def parse_csv_artifact(path: Path):
@@ -39,7 +38,6 @@ def infer_analysis_type(key: str) -> str:
         ("频段能量", "FBA"),
         ("FFT", "FFT"),
         ("快速傅里叶", "FFT"),
-        ("AI", "AI"),
     )
     for hint, analysis_type in hints:
         if hint in normalized:

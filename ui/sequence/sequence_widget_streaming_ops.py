@@ -798,7 +798,6 @@ class SequenceWidgetStreamingOpsMixin:
         Decide whether current analysis_config is expected to produce OK/NG output.
 
         We rely on analysis_result_dict being written by a subset of analysis widgets:
-        - AI always writes (label + deviation)
         - RSC always writes (overall OK/NG + max exceed)
         - SPL/SPLF/FR/HD/RB/PRB/LOUD/FBA/FFT write only when threshold/compare is enabled.
         """
@@ -828,9 +827,6 @@ class SequenceWidgetStreamingOpsMixin:
             if not isinstance(item_cfg, dict):
                 continue
             t = str(item_cfg.get("type") or "").strip()
-            if t == "AI":
-                candidates.append(key)
-                continue
             if t == "RSC":
                 has_reference = bool(str(item_cfg.get("reference_source_path") or "").strip())
                 current_only_mode = bool(item_cfg.get("view_current_only_without_reference", False))
@@ -1116,9 +1112,9 @@ class SequenceWidgetStreamingOpsMixin:
             self.left_panel.selected_condition_key
         )
 
-        ai_result_panel, video_monitor_panel = self.left_panel.take_split_sections()
-        if ai_result_panel is not None:
-            ai_result_panel.setMinimumWidth(340)
+        result_panel, video_monitor_panel = self.left_panel.take_split_sections()
+        if result_panel is not None:
+            result_panel.setMinimumWidth(340)
         if video_monitor_panel is not None:
             video_monitor_panel.setMinimumWidth(340)
 
@@ -1134,7 +1130,7 @@ class SequenceWidgetStreamingOpsMixin:
         v_video = max(260, screen_height - v_task)
 
         left_sidebar_splitter = QSplitter(Qt.Vertical)
-        left_sidebar_splitter.addWidget(ai_result_panel)
+        left_sidebar_splitter.addWidget(result_panel)
         left_sidebar_splitter.addWidget(video_monitor_panel)
         left_sidebar_splitter.setChildrenCollapsible(False)
         left_sidebar_splitter.setStretchFactor(0, 3)
@@ -1426,7 +1422,7 @@ class SequenceWidgetStreamingOpsMixin:
     def _reset_runtime_state_for_mode_switch(self):
         # When switching mode mid-cycle (e.g. after only forward is recorded), do not
         # carry over directional state/counter reservation into the next mode.
-        clear_cycle_runtime = getattr(self, "_clear_ai_cycle_runtime_state", None)
+        clear_cycle_runtime = getattr(self, "_clear_direction_cycle_runtime_state", None)
         if callable(clear_cycle_runtime):
             clear_cycle_runtime()
         try:
@@ -2140,7 +2136,7 @@ class SequenceWidgetStreamingOpsMixin:
                 # sound-card / DAC power-on transient before the quality gate
                 # sees them, so a pop cannot keep an otherwise-dead recording
                 # above threshold. The just-finalized WAV is rewritten so the
-                # file on disk matches the in-memory buffer used by the AI /
+                # file on disk matches the in-memory buffer used by analysis /
                 # plotting / DB. Configs can explicitly set
                 # ``startup_trim_ms`` to 0 when verbatim capture is required.
                 trim_samples = resolve_startup_trim_samples(acq_detail, sample_rate)
@@ -2470,7 +2466,7 @@ class SequenceWidgetStreamingOpsMixin:
 
         Called after :meth:`_on_streaming_complete` drops the leading
         startup transient so the file on disk matches the in-memory buffer
-        used by the AI pipeline / plotting / DB. Any failure is logged but
+        used by analysis / plotting / DB. Any failure is logged but
         not raised: the in-memory data is still the source of truth for
         analysis and DB, and the untrimmed-but-otherwise-valid WAV on disk
         can be retrimmed later if needed.
@@ -2496,9 +2492,9 @@ class SequenceWidgetStreamingOpsMixin:
         Removes the just-finalized WAV file, drops the placeholder
         recent-session row inserted at recording start, resets the
         directional cycle / waveform state, re-enables the play & replay
-        buttons and shows a warning popup. Skips DB persistence and AI
+        buttons and shows a warning popup. Skips DB persistence and
         analysis entirely so the bad audio cannot pollute downstream
-        statistics or training data.
+        statistics.
         """
         _run_optional_streaming_cleanup(
             self,
@@ -2544,7 +2540,7 @@ class SequenceWidgetStreamingOpsMixin:
                     f"discard_recent_session_after_invalid_recording_failed: {e}"
                 )
 
-        clear_cycle_runtime = getattr(self, "_clear_ai_cycle_runtime_state", None)
+        clear_cycle_runtime = getattr(self, "_clear_direction_cycle_runtime_state", None)
         if callable(clear_cycle_runtime):
             try:
                 clear_cycle_runtime()
@@ -2576,11 +2572,7 @@ class SequenceWidgetStreamingOpsMixin:
             try:
                 left_panel.set_current_stage("录音异常，循环已作废", tone="ng")
                 left_panel.set_forward_result("待检测", tone="pending")
-                if hasattr(left_panel, "set_forward_scores"):
-                    left_panel.set_forward_scores(None, None)
                 left_panel.set_reverse_result("待检测", tone="pending")
-                if hasattr(left_panel, "set_reverse_scores"):
-                    left_panel.set_reverse_scores(None, None)
                 left_panel.set_final_result("已作废", tone="ng")
             except Exception as e:
                 self.default_logger.warning(

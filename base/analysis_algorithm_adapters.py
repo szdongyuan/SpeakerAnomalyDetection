@@ -455,89 +455,6 @@ def _calculate_spec(signal, sample_rate, config, _v2pa_factor, **_context):
     }
 
 
-def _calculate_ai(
-    signal,
-    sample_rate,
-    config,
-    _v2pa_factor,
-    *,
-    source,
-    sequence_snapshot,
-):
-    from base.model_runtime_validation import validate_model_duration
-    from base.predict_model import predict_from_audio
-    from base.training_model_management import TrainingModelManagement
-    from consts import error_code
-    from consts.running_consts import DEFAULT_DIR
-
-    model_name = str(config.get("analyse_model_name") or "").strip()
-    if not model_name:
-        raise ValueError("未配置 AI 分析模型")
-    manager = TrainingModelManagement()
-    code, query_result = manager.get_model_path_from_db(model_name)
-    if code != error_code.OK or not query_result:
-        raise ValueError("模型不存在，请重新选择")
-    model_path, config_path = query_result[0]
-    model_path = os.path.abspath(os.path.join(DEFAULT_DIR, model_path))
-    config_path = os.path.abspath(os.path.join(DEFAULT_DIR, config_path))
-    if not os.path.isfile(model_path):
-        raise ValueError("模型不存在，请重新选择")
-
-    sequence_configs = sequence_snapshot.get("sequence_config") or []
-    acq_mode = None
-    if sequence_configs and isinstance(sequence_configs[0], dict):
-        acq_mode = sequence_configs[0].get("seq1", {}).get("acq", {}).get("mode")
-    mode = "test" if source == "自动分析" else "view"
-    matched, message = validate_model_duration(
-        model_name,
-        len(signal),
-        sample_rate=sample_rate,
-        config_path=config_path,
-        model_manager=manager,
-    )
-    if not matched:
-        raise ValueError(message or f"{mode}/{acq_mode or ''} 模型时长不匹配")
-
-    return_text, prediction_config = predict_from_audio(
-        signals=[np.asarray(signal, dtype=np.float32)],
-        file_names=["modelpredict.wav"],
-        fs=[sample_rate],
-        load_model_path=model_path,
-        config_path=config_path,
-    )
-    response = json.loads(return_text)
-    if response.get("ret_code") != error_code.OK:
-        raise RuntimeError(str(response.get("ret_msg") or "AI 分析失败"))
-    prediction = response.get("result") or []
-    if not prediction or len(prediction[0]) < 3:
-        raise RuntimeError("AI 未产生分析结果")
-    label = str(prediction[0][1] or "").upper()
-    if label not in {"OK", "NG"}:
-        raise RuntimeError("AI 未产生 OK/NG 判定")
-    output_value = float(prediction[0][2])
-    threshold = _finite_or_none((prediction_config or {}).get("acc_req"))
-    metrics = {
-        "model_output_value": output_value,
-        "decision_threshold": threshold,
-        "ok_score": round(output_value * 100.0, 2),
-        "ng_score": round((1.0 - output_value) * 100.0, 2),
-        "model_name": model_name,
-    }
-    return {
-        "judgement": label,
-        "metrics": metrics,
-        "curve": {},
-        "plot": {
-            "kind": "values",
-            "title": "AI 分析结果",
-            "values": {
-                "最终判定": label,
-                "评分模型": model_name,
-                "模型输出值": output_value,
-                "判定阈值": threshold,
-            },
-        },
-    }
 
 
 _HANDLERS = {
@@ -545,7 +462,6 @@ _HANDLERS = {
     "FBA": _calculate_fba,
     "FFT": _calculate_fft,
     "Spec": _calculate_spec,
-    "AI": _calculate_ai,
 }
 
 

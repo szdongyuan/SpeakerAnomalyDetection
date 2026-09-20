@@ -7,7 +7,7 @@ from base.load_config import LoadUiConfig
 from consts import error_code
 from consts import ui_style_const
 INPUT_CHANNEL_LABELS = tuple(f"CH{index}" for index in range(1, 6))
-from ui.sequence.motor_ai_result_panel import MotorAiResultPanel
+from ui.sequence.motor_result_panel import MotorResultPanel
 from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
 from ui.sequence.motor_panel_common import MotorSectionCard
 from ui.sequence.motor_video_monitor_panel import MotorVideoMonitorPanel
@@ -29,7 +29,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         first_widget = content_layout.itemAt(0).widget()
         second_widget = content_layout.itemAt(1).widget()
 
-        self.assertIsInstance(first_widget, MotorAiResultPanel)
+        self.assertIsInstance(first_widget, MotorResultPanel)
         self.assertIsInstance(second_widget, MotorVideoMonitorPanel)
         self.assertIs(second_widget, panel.video_monitor_panel)
         self.assertFalse(summary_widget.isVisible())
@@ -52,14 +52,14 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
             live_label.styleSheet(),
         )
 
-    def test_ai_result_panel_uses_condition_names(self):
+    def test_result_panel_uses_condition_names(self):
         summary_widget = QWidget()
         condition_configs = LoadUiConfig.load_product_test_program_condition_configs()
         panel = MotorDetectionLeftPanel(summary_widget, condition_configs=condition_configs)
         panel.set_channels(list(range(5)))
         expected_names = [item["condition_name"] for item in condition_configs]
 
-        self.assertEqual(panel.ai_result_panel.condition_names, expected_names)
+        self.assertEqual(panel.result_panel.condition_names, expected_names)
         if condition_configs:
             self.assertTrue(panel.set_condition_result(condition_configs[-1]["key"], "NG"))
 
@@ -69,11 +69,11 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
 
         panel.clear_current_stage()
 
-        self.assertEqual(panel.ai_result_panel.stage_text, "")
-        self.assertEqual(panel.ai_result_panel.stage_label.text(), "")
+        self.assertEqual(panel.result_panel.stage_text, "")
+        self.assertEqual(panel.result_panel.stage_label.text(), "")
 
-    def test_ai_result_panel_uses_test_task_structure(self):
-        panel = MotorAiResultPanel(
+    def test_result_panel_uses_test_task_structure(self):
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "group_name": "A口",
@@ -127,7 +127,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         )
 
     def test_initial_conditions_are_not_marked_as_user_viewed(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {"condition_name": "0.1", "key": "01"},
                 {"condition_name": "0.3", "key": "02"},
@@ -140,7 +140,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertNotIn("#2F80C9", panel.rows["02"]["button"].styleSheet())
 
     def test_automatic_recording_selection_does_not_become_user_view(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {"condition_name": "0.1", "key": "01"},
                 {"condition_name": "0.3", "key": "02"},
@@ -164,7 +164,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         )
 
     def test_port_selector_popup_uses_readable_text_colors(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {"group_name": "A口", "condition_name": "0.1", "key": "01"},
                 {"group_name": "B口", "condition_name": "0.1", "key": "02"},
@@ -180,8 +180,8 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertIn("selection-color: #FFFFFF", style)
         self.assertIn("QComboBox QAbstractItemView::item:selected", style)
 
-    def test_ai_result_summary_row_has_clear_visual_grouping(self):
-        panel = MotorAiResultPanel(
+    def test_result_result_summary_row_has_clear_visual_grouping(self):
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "group_name": "A口",
@@ -205,7 +205,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertIn("background:#EEF3F8", panel.port_result_value.styleSheet())
 
     def test_selected_condition_expands_channel_judgement_table(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "group_name": "A口",
@@ -240,7 +240,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         ])
 
     def test_channel_analysis_columns_follow_selected_condition_queue(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "condition_name": "0.1",
@@ -300,7 +300,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
             }
         ]
         with patch.object(
-            MotorAiResultPanel,
+            MotorResultPanel,
             "_load_queue_catalog_safely",
             return_value={"测试队列A": {"path": "queue-a.json"}},
         ), patch.object(
@@ -308,7 +308,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
             "load_data_from_json",
             return_value=(error_code.OK, queue_data),
         ):
-            panel = MotorAiResultPanel(
+            panel = MotorResultPanel(
                 condition_configs=[
                     {
                         "condition_name": "0.1",
@@ -328,7 +328,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         )
 
     def test_port_selection_filters_condition_rows(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "group_name": "A口",
@@ -356,7 +356,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(panel.port_index_label.text(), "第2/2个")
 
     def test_port_rows_show_gear_names_without_global_sequence_numbers(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {"group_name": "A口", "condition_name": "0.1", "key": "01"},
                 {"group_name": "A口", "condition_name": "0.3", "key": "02"},
@@ -378,7 +378,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertTrue(all("index" not in row["labels"] for row in panel.rows.values()))
 
     def test_condition_results_update_progress_and_compact_summary(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "group_name": "A口",
@@ -414,7 +414,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertNotIn("background:#FCE8E8", panel.rows["02"]["button"].styleSheet())
 
     def test_channel_results_update_selected_channel_table(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "group_name": "A口",
@@ -466,7 +466,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
             "display_sequence": ["声压级 (SPL) 1"],
             "声压级 (SPL) 1": {"type": "SPL"},
         }
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "condition_name": "0.1",
@@ -521,7 +521,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         )
 
     def test_recording_highlight_stays_on_recording_row_when_viewing_history(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {"condition_name": "0.1", "key": "01"},
                 {"condition_name": "0.3", "key": "02"},
@@ -547,7 +547,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertNotIn("recording_marker", panel.rows["02"])
 
     def test_analysis_running_state_does_not_look_like_recording_or_steal_view(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {"condition_name": "0.1", "key": "01"},
                 {"condition_name": "0.3", "key": "02"},
@@ -571,7 +571,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
                         "key": f"{port_index}-{gear_index}",
                     }
                 )
-        panel = MotorAiResultPanel(condition_configs=configs)
+        panel = MotorResultPanel(condition_configs=configs)
         panel.set_channels([0, 1])
 
         for key in ("0-0", "0-1"):
@@ -594,7 +594,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(panel.progress_label.text(), "档位进度：0/2")
 
     def test_completed_analysis_without_threshold_counts_as_unjudged_gear(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {"group_name": "A口", "condition_name": "0.1", "key": "01"},
                 {"group_name": "A口", "condition_name": "0.3", "key": "02"},
@@ -616,7 +616,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(panel.progress_label.text(), "档位进度：1/2")
 
     def test_round_summary_uses_all_automatic_gear_results(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "group_name": port,
@@ -644,7 +644,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(panel.get_automatic_round_result(), ("NG", "ng", True))
 
     def test_round_summary_keeps_failed_analysis_pending_for_retry(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {"condition_name": "0.1", "key": "01"},
                 {"condition_name": "0.3", "key": "02"},
@@ -663,7 +663,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         )
 
     def test_round_summary_completes_without_judgment_when_no_item_contributes(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {"condition_name": "0.1", "key": "01"},
                 {"condition_name": "0.3", "key": "02"},
@@ -682,7 +682,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         )
 
     def test_current_stage_updates_visible_task_status(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {"condition_name": "档位1", "trigger_state": "01"},
             ]
@@ -704,7 +704,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(panel.stage_label.toolTip(), "")
 
     def test_public_task_stage_is_limited_to_approved_statuses(self):
-        panel = MotorAiResultPanel()
+        panel = MotorResultPanel()
         cases = {
             "": "等待开始",
             "等待开始": "等待开始",
@@ -754,8 +754,8 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
                 self.assertEqual(panel.stage_label.text(), expected_stage)
                 self.assertIn(panel.stage_label.text(), approved)
 
-    def test_ai_result_panel_keeps_rows_when_condition_keys_repeat(self):
-        panel = MotorAiResultPanel(
+    def test_result_panel_keeps_rows_when_condition_keys_repeat(self):
+        panel = MotorResultPanel(
             condition_configs=[
                 {"condition_name": "6000", "trigger_state": "", "test_queue": "默认配置"},
                 {"condition_name": "7000", "trigger_state": "", "test_queue": "3"},
@@ -768,8 +768,8 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(len(panel.rows), 3)
         self.assertEqual(len({item["key"] for item in panel.conditions}), 3)
 
-    def test_ai_final_result_stays_near_panel_bottom(self):
-        panel = MotorAiResultPanel(
+    def test_result_final_result_stays_near_panel_bottom(self):
+        panel = MotorResultPanel(
             condition_configs=[
                 {"condition_name": "6000", "trigger_state": "01"},
                 {"condition_name": "7000", "trigger_state": "02"},
@@ -785,9 +785,9 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
 
         self.assertLessEqual(bottom_gap, 14)
 
-    def test_ai_result_detail_toggles_on_same_condition_click(self):
+    def test_result_result_detail_toggles_on_same_condition_click(self):
         condition_configs = [{"key": "gear", "condition_name": "6000 rpm"}]
-        panel = MotorAiResultPanel(condition_configs=condition_configs)
+        panel = MotorResultPanel(condition_configs=condition_configs)
         panel.set_channels(list(range(5)))
         key = condition_configs[0]["key"]
 
@@ -798,7 +798,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertTrue(panel.detail_frame.isHidden())
 
     def test_analysis_config_drives_columns_without_legacy_detail_rows(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "condition_name": "6000",
@@ -851,7 +851,6 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
             [
                 {"key": "SPL", "header": "SPL判定"},
                 {"key": "响度", "header": "响度判定"},
-                {"key": "AI分析", "header": "AI判定"},
                 {"key": "FBA", "header": "1/3倍频程"},
                 {"key": "FFT", "header": "FFT"},
             ],
@@ -862,7 +861,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertNotIn("AI分析", labels)
 
     def test_channel_columns_hide_unconfigured_candidate_items(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "condition_name": "6000",
@@ -889,12 +888,11 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
             [
                 {"key": "SPL", "header": "SPL判定"},
                 {"key": "响度", "header": "响度判定"},
-                {"key": "AI分析", "header": "AI判定"},
             ],
         )
 
     def test_legacy_analysis_result_api_keeps_state_without_extra_rows(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "condition_name": "6000",
@@ -929,14 +927,12 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
                 "FFT": "NG",
             },
         )
-        panel.set_condition_scores("6000", 71.6, 28.4)
 
         self.assertEqual(
             panel.rows["6000"]["runtime_details"],
             {
                 "SPL": "总体声压：72.35 dB；判定：OK",
                 "响度": "稳态平均响度：4.20 sone；最大瞬态响度：8.10 sone；判定：OK",
-                "AI分析": "OK Score：71.60%；NG Score：28.40%；判定：OK",
                 "FBA": "OK",
                 "FFT": "NG",
             },
@@ -944,7 +940,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(panel.detail_frame.layout().count(), 1)
 
     def test_pending_condition_result_clears_runtime_detail_values(self):
-        panel = MotorAiResultPanel(
+        panel = MotorResultPanel(
             condition_configs=[
                 {
                     "condition_name": "6000",
@@ -971,7 +967,6 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
             "6000",
             {
                 "SPL": "总体声压：72.35 dB；判定：OK",
-                "AI分析": "OK Score：71.60%；NG Score：28.40%；判定：OK",
                 "FBA": "NG",
                 "FFT": "NG",
             },

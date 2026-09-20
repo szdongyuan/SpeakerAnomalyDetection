@@ -38,24 +38,6 @@ def _load_signal_analysis_module_without_heavy_optional_imports():
             "librosa.sequence",
             dtw=lambda *args, **kwargs: None,
         ),
-        "base.model_runtime_validation": _stub_module(
-            "base.model_runtime_validation",
-            build_blocked_ai_export_detail=lambda *args, **kwargs: {},
-            should_validate_model_duration=lambda *args, **kwargs: False,
-            validate_model_duration=lambda *args, **kwargs: None,
-        ),
-        "base.predict_model": _stub_module(
-            "base.predict_model",
-            predict_from_audio=lambda *args, **kwargs: None,
-        ),
-        "base.training_model_management": _stub_module(
-            "base.training_model_management",
-            TrainingModelManagement=type(
-                "TrainingModelManagement",
-                (),
-                {},
-            ),
-        ),
     }
     previous_modules = {
         name: sys.modules.get(name)

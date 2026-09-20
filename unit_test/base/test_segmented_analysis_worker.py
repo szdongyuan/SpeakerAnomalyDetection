@@ -49,7 +49,7 @@ def make_request(tmp_path, *, short=False, bad_item=False):
             "mode": "output_load", "load_values": [0, 0.3], "analysis_seconds": 1}})
 
 
-@pytest.mark.parametrize("short,bad_item", [(False, False), (True, False), (False, True), (False, "AI")])
+@pytest.mark.parametrize("short,bad_item", [(False, False), (True, False), (False, True), (False, "UNKNOWN")])
 def test_segments_use_actual_windows_and_failures_do_not_skip_later_items(tmp_path, monkeypatch, short, bad_item):
     import base.analysis_worker as worker
     monkeypatch.setattr(worker, "render_analysis_png", lambda plot: b"preview")
@@ -92,7 +92,6 @@ def test_segments_use_actual_windows_and_failures_do_not_skip_later_items(tmp_pa
 @pytest.mark.parametrize("mode", ["output_load", "time"])
 def test_every_segment_runs_all_types_and_unknown_items_fail_explicitly(tmp_path, monkeypatch, mode):
     import base.analysis_worker as worker
-    import base.analysis_algorithm_adapters as adapters
     plot_payloads = []
     def capture_plot(plot):
         plot_payloads.append(dict(plot))
@@ -100,16 +99,10 @@ def test_every_segment_runs_all_types_and_unknown_items_fail_explicitly(tmp_path
     monkeypatch.setattr(worker, 'render_analysis_png', capture_plot)
     request = make_request(tmp_path)
     config = request.analysis_config_snapshot.to_dict()
-    config['display_sequence'] = ['未知', 'AI', 'SPL', 'FBA', 'FFT', 'Spec']
+    config['display_sequence'] = ['未知', 'SPL', 'FBA', 'FFT', 'Spec']
     for kind in config['display_sequence']:
         config[kind] = {'type': kind, 'analysis_channels': [0], 'weighting': 'Z',
                         'limit_checked': False, 'show_overall_spl': True, 'f_max': 3500, 'n_fft': 1024}
-    ai_lengths = []
-    def fake_ai(signal, rate, config, factor, **context):
-        ai_lengths.append(len(signal))
-        return {'judgement': 'OK', 'metrics': {'model_output_value': .9}, 'curve': {},
-                'plot': {'kind': 'values', 'values': {}}}
-    monkeypatch.setitem(adapters._HANDLERS, 'AI', fake_ai)
     condition = request.condition_snapshot.to_dict()
     if mode == "time":
         condition["segmented_analysis"] = {
@@ -125,10 +118,9 @@ def test_every_segment_runs_all_types_and_unknown_items_fail_explicitly(tmp_path
     result = list(events.queue)[-1][1]
     assert len(result.segments) == 2
     for segment in result.segments:
-        assert len(segment.instance_results) == 6
+        assert len(segment.instance_results) == 5
         assert segment.instance_results[0].execution_status == '分析失败'
         assert all(i.execution_status == '分析完成' for i in segment.instance_results[1:])
-    assert ai_lengths == [32000, 8000, 8000]
     time_plots = [plot for plot in plot_payloads if 'segment_boundaries' in plot]
     assert len(time_plots) == 2  # SPL and Spec only; frequency plots remain unchanged.
     assert all(plot['segment_boundaries'] == [2] for plot in time_plots)
@@ -141,7 +133,7 @@ def test_every_segment_runs_all_types_and_unknown_items_fail_explicitly(tmp_path
     assert all('segment_annotations' not in plot for plot in plot_payloads if 'segment_boundaries' not in plot)
     assert all(plot['recording_time_range'] == [0, 4] for plot in time_plots)
     assert result.execution_status == '结果不完整'
-    assert list(events.queue)[-2][1].completed_instances == 18
+    assert list(events.queue)[-2][1].completed_instances == 15
 
 
 def test_manual_view_keeps_whole_time_axis_and_dashed_boundaries_without_saving(tmp_path, monkeypatch):
@@ -227,7 +219,7 @@ def test_time_mode_csv_uses_interval_end_labels(tmp_path, monkeypatch):
 def test_failed_segments_log_identity_window_and_reason_without_csv_columns(tmp_path, monkeypatch):
     import base.analysis_worker as worker
     monkeypatch.setattr(worker, 'render_analysis_png', lambda plot: b'preview')
-    request = make_request(tmp_path, short=True, bad_item='AI')
+    request = make_request(tmp_path, short=True, bad_item='UNKNOWN')
     events, logs = Queue(), Queue()
     analysis_worker_main(request, events, logs)
     result = list(events.queue)[-1][1]

@@ -39,7 +39,6 @@ _CHART_MAX_HEIGHT = 340
 _TYPE_UNITS = {
     "FBA": "dB",
     "FFT": "dB",
-    "AI": "",
     "Spec": "dB",
     "未知": "",
 }
@@ -291,11 +290,6 @@ def _prepare_record(
     else:
         if identity.analysis_type == "SPL":
             scalar_values, segment_groups, input_voltage, unit, scalar_issues = _read_spl_csv(item)
-        elif identity.analysis_type == "AI":
-            scalar_values, scalar_issues = _read_scalar_csv(
-                item.csv_path("模型输出"), value_column="模型输出值",
-                lower_column="", upper_column="判定阈值",
-            )
         else:
             scalar_issues = []
         issues.extend(scalar_issues)
@@ -303,7 +297,7 @@ def _prepare_record(
             f"{channel} 测量值缺失"
             for channel, cell in scalar_values.items() if cell.value == "—"
         )
-        if identity.analysis_type in {"SPL", "AI"} and not (scalar_values or segment_groups):
+        if identity.analysis_type == "SPL" and not (scalar_values or segment_groups):
             issues.append("未找到该分析项的标量结果")
         if identity.analysis_type in {"FBA", "FFT"} and not any(
             Path(path).is_file() for _role, path in item.csv_files
@@ -389,35 +383,6 @@ def _read_spl_csv(item):
     return values, groups, voltage, unit, []
 
 
-def _read_scalar_csv(
-    path: str,
-    *,
-    value_column: str,
-    lower_column: str,
-    upper_column: str,
-):
-    if not path:
-        return {}, []
-    source = Path(path)
-    if not source.is_file():
-        return {}, [f"CSV 文件缺失：{source.name}"]
-    values = {}
-    try:
-        with source.open("r", encoding="utf-8-sig", newline="") as stream:
-            for row in csv.DictReader(stream):
-                channel = _physical_channel_name(row.get("通道"))
-                value = _format_number(row.get(value_column))
-                if not channel:
-                    continue
-                values[channel] = _ScalarCell(
-                    value=value or "—",
-                    judgement=str(row.get("result") or "").strip().upper(),
-                    lower_limit=_format_number(row.get(lower_column)) if lower_column else "",
-                    upper_limit=_format_number(row.get(upper_column)) if upper_column else "",
-                )
-    except (OSError, csv.Error, UnicodeError) as error:
-        return {}, [f"CSV 读取失败：{source.name}：{error}"]
-    return values, []
 
 
 def _build_summary_html(

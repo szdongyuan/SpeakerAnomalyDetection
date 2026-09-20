@@ -144,8 +144,6 @@ def _process_result_measurement(analysis_type, metrics):
             else ("dB SPL" if weighting == "Z" else f"dB({weighting}) SPL")
         )
         return _format_measurement(metrics.get("peak_value")), unit
-    if analysis_type == "AI":
-        return _format_measurement(metrics.get("model_output_value")), "-"
     if analysis_type == "Spec":
         return "-", "dB"
     return "-", "-"
