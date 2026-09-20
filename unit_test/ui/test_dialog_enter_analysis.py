@@ -124,7 +124,52 @@ def test_analysis_auxiliary_enter_uses_existing_confirmation(analysis, dialogs, 
     assert dialog.semantic_ok_btn.isDefault()
 
 
-def test_analysis_parameter_editors_never_click(analysis, enter, ui_qapp):
+def test_analysis_numeric_second_enter_accepts_committed_config(analysis, dialogs, enter, ui_qapp):
+    dialog, manager = analysis
+    if isinstance(dialog, FftConfigWindow):
+        dialog.channel_selector.combo_box.setCurrentIndex(1)
+        spin, text, key, expected = dialog.overlap_spin, "25", "overlap_ratio", 0.25
+    else:
+        dialog.channel_selector.spin_box.setValue(2)
+        if isinstance(dialog, SplConfigWindow):
+            dialog.threshold_widget.limit_checkbox.setChecked(True)
+            dialog.scalar_upper_check.setChecked(True)
+            spin, text, key, expected = dialog.scalar_upper_spin, "73.5", "scalar_upper_value", 73.5
+        elif isinstance(dialog, SpecConfigWindow):
+            dialog.custom_limit_checkbox.setChecked(True)
+            spin, text, key, expected = dialog.top_limit_spinbox, "85", "top_limit", 85
+        else:
+            spin, text, key, expected = dialog.f_min_spin, "100", "f_min", 100
+    dialog.section_scroll_area.ensureWidgetVisible(spin)
+    assert spin.isVisible() and spin.isEnabled()
+    spin.setKeyboardTracking(False)
+    editor = spin.lineEdit()
+    editor.setFocus()
+    editor.selectAll()
+    QTest.keyClicks(editor, text)
+    finished, accepted_configs = [], []
+    spin.editingFinished.connect(lambda: finished.append(spin.value()))
+    dialog.accepted.connect(lambda: accepted_configs.append(dialog.get_default_config()))
+    seen = clicks(dialog)
+    press(editor, enter, ui_qapp)
+    assert spin.value() == float(text)
+    assert finished == [float(text)]
+    assert seen == []
+    assert accepted_configs == []
+    assert dialogs[1] == []
+    assert dialog.isVisible()
+    press(editor, enter, ui_qapp)
+    assert seen == [dialog.semantic_ok_btn]
+    assert dialog.result() == QDialog.Accepted
+    assert not dialog.isVisible()
+    assert len(accepted_configs) == 1
+    assert accepted_configs[0]["analysis_channel"] == 1
+    assert accepted_configs[0][key] == expected
+    assert manager.saved == []
+    assert dialogs[1] == []
+
+
+def test_analysis_parameter_editors_first_enter_never_click(analysis, enter, ui_qapp):
     dialog, manager = analysis
     if isinstance(dialog, SpecConfigWindow):
         dialog.custom_limit_checkbox.setChecked(True)
@@ -145,6 +190,10 @@ def test_analysis_parameter_editors_never_click(analysis, enter, ui_qapp):
                else dialog.channel_selector.spin_box)
     assert channel in editors
     for editor in editors:
+        # The spinbox and its QLineEdit are both visited; each gets a fresh focus.
+        dialog.semantic_cancel_btn.setFocus()
+        ui_qapp.processEvents()
+        assert dialog.focusWidget() is dialog.semantic_cancel_btn
         dialog.section_scroll_area.ensureWidgetVisible(editor)
         press(editor, enter, ui_qapp)
         assert seen == []
@@ -152,12 +201,44 @@ def test_analysis_parameter_editors_never_click(analysis, enter, ui_qapp):
     assert manager.saved == []
 
 
-def test_analysis_invalid_limits_still_validate(analysis, dialogs, enter, ui_qapp):
+@pytest.mark.parametrize("analysis", [FbaConfigWindow], indirect=True)
+def test_analysis_combo_and_multiline_repeated_enter_stays_native(analysis, dialogs, enter, ui_qapp):
     dialog, manager = analysis
+    combo = dialog.strategy_combo
+    combo.setCurrentText("自定义")
+    assert not combo.isEditable()
+    editor = dialog.custom_bands_edit
+    editor.setPlainText("20, 200")
+    seen = clicks(dialog)
+    for _ in range(3):
+        press(combo, enter, ui_qapp)
+        assert combo.currentText() == "自定义"
+        assert seen == []
+    assert editor.isVisible() and editor.isEnabled()
+    editor.setFocus()
+    QTest.keyClick(editor, Qt.Key_End, Qt.ControlModifier)
+    for count in range(1, 4):
+        press(editor, enter, ui_qapp)
+        assert editor.toPlainText() == "20, 200" + "\n" * count
+        assert seen == []
+        assert dialog.isVisible()
+    assert dialogs[1] == []
+    assert manager.saved == []
+
+
+@pytest.mark.parametrize("location", ["auxiliary", "second-enter"])
+def test_analysis_invalid_limits_still_validate(analysis, dialogs, enter, ui_qapp, location):
+    dialog, manager = analysis
+    if isinstance(dialog, FftConfigWindow):
+        dialog.channel_selector.combo_box.setCurrentIndex(1)
+    else:
+        dialog.channel_selector.spin_box.setValue(2)
     if isinstance(dialog, SpecConfigWindow):
         dialog.custom_limit_checkbox.setChecked(True)
         dialog.top_limit_spinbox.setValue(20)
         dialog.bottom_limit_spinbox.setValue(30)
+        spin = dialog.bottom_limit_spinbox
+        warning = "上下限配置数据错误，请检查配置!"
     else:
         if isinstance(dialog, SplConfigWindow):
             dialog.limit_metric_combo.setCurrentIndex(dialog.limit_metric_combo.findData("curve_y"))
@@ -169,11 +250,28 @@ def test_analysis_invalid_limits_still_validate(analysis, dialogs, enter, ui_qap
         threshold.constant_lower_check.setChecked(True)
         threshold.constant_upper_spin.setValue(20)
         threshold.constant_lower_spin.setValue(30)
+        spin = threshold.constant_lower_spin
+        warning = "固定上下限配置错误：下限不能大于上限"
     seen = clicks(dialog)
-    press(dialog.semantic_cancel_btn, enter, ui_qapp)
+    accepted = []
+    dialog.accepted.connect(lambda: accepted.append(True))
+    if location == "second-enter":
+        dialog.section_scroll_area.ensureWidgetVisible(spin)
+        assert spin.isVisible() and spin.isEnabled()
+        finished = []
+        spin.editingFinished.connect(lambda: finished.append(spin.value()))
+        press(spin.lineEdit(), enter, ui_qapp)
+        assert finished == [30]
+        assert seen == []
+        assert dialogs[1] == []
+        assert dialog.isVisible()
+        press(spin.lineEdit(), enter, ui_qapp)
+    else:
+        press(dialog.semantic_cancel_btn, enter, ui_qapp)
     assert seen == [dialog.semantic_ok_btn]
     assert dialog.isVisible()
-    assert dialogs[1]
+    assert dialogs[1] == [warning]
+    assert accepted == []
     assert manager.saved == []
 
 

@@ -3,7 +3,7 @@
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QObject, Qt
 from PyQt5.QtWidgets import (
-    QAbstractSpinBox, QApplication, QComboBox, QLineEdit, QPlainTextEdit,
+    QAbstractSpinBox, QApplication, QComboBox, QDateTimeEdit, QLineEdit, QPlainTextEdit,
     QPushButton, QTextEdit, QWidget,
 )
 
@@ -51,24 +51,32 @@ class _HeldEnterGuard(QObject):
 
 
 class DialogEnterPolicy(QObject):
+    """Keep the native first Enter and confirm subsequent unchanged input."""
+
     def __init__(self, dialog, confirm_button=None):
         super().__init__(dialog)
         self._dialog = dialog
         self._confirm_button = confirm_button
         self._dispatching_input = False
         self._preedit_widget = None
+        self._ready_input = None
+        self._tracked_input = None
+        self._input_epoch = 0
+        self._input_connections = []
         self._held_enter = _HeldEnterGuard(dialog)
         self._watch(dialog)
 
     def set_confirm_button(self, button_or_none):
+        if button_or_none is not self._confirm_button:
+            self._reset_input()
         self._confirm_button = button_or_none
         self._watch(self._dialog)
 
     def _watch(self, obj):
-        if not isinstance(obj, QWidget) or obj.window() is not self._dialog:
+        if not isinstance(obj, QWidget):
             return
         obj.installEventFilter(self)
-        if isinstance(obj, QPushButton):
+        if obj.window() is self._dialog and isinstance(obj, QPushButton):
             obj.setAutoDefault(False)
             obj.setDefault(obj is self._confirm_button)
         for child in obj.children():
@@ -83,8 +91,73 @@ class DialogEnterPolicy(QObject):
             obj = obj.parentWidget()
         return False
 
+    def _single_line_input(self, obj):
+        if not isinstance(obj, QWidget):
+            return None
+        while obj.focusProxy() is not None:
+            obj = obj.focusProxy()
+        while obj is not None and obj is not self._dialog:
+            if isinstance(obj, QAbstractSpinBox):
+                return obj, obj.findChild(QLineEdit)
+            if isinstance(obj, QComboBox):
+                return (obj, obj.lineEdit()) if obj.isEditable() else None
+            if isinstance(obj, QLineEdit):
+                parent = obj.parentWidget()
+                if isinstance(parent, (QAbstractSpinBox, QComboBox)):
+                    return parent, obj
+                return obj, obj
+            obj = obj.parentWidget()
+        return None
+
+    def _reset_input(self):
+        self._ready_input = None
+        self._input_epoch += 1
+
+    def _text_changed(self):
+        self._ready_input = None
+        # Native normalization belongs to the first Enter. Lifecycle changes
+        # still advance the epoch while native handling is running.
+        if not self._dispatching_input:
+            self._input_epoch += 1
+
+    def _input_destroyed(self):
+        self._disconnect_input(destroying=self.sender())
+        self._reset_input()
+        self._tracked_input = None
+
+    def _disconnect_input(self, destroying=None):
+        for owner, signal, slot in self._input_connections:
+            if owner is not destroying and not sip.isdeleted(owner):
+                signal.disconnect(slot)
+        self._input_connections.clear()
+
+    def _track_input(self, single_line):
+        if single_line == self._tracked_input:
+            return
+        self._disconnect_input()
+        self._reset_input()
+        self._tracked_input = single_line
+        line = single_line[1]
+        self._input_connections = [
+            (line, line.textChanged, self._text_changed),
+            (line, line.destroyed, self._input_destroyed),
+        ]
+        owner = single_line[0]
+        if isinstance(owner, QDateTimeEdit):
+            self._input_connections.append((owner, owner.dateTimeChanged, self._text_changed))
+        elif isinstance(owner, QAbstractSpinBox) and hasattr(owner, 'valueChanged'):
+            self._input_connections.append((owner, owner.valueChanged, self._text_changed))
+        for owner, signal, slot in self._input_connections:
+            signal.connect(slot)
+
     def eventFilter(self, obj, event):
-        if not isinstance(obj, QWidget) or obj.window() is not self._dialog:
+        if not isinstance(obj, QWidget):
+            return False
+        if obj.window() is not self._dialog:
+            # Observe owned temporary windows only for invalidation; their
+            # keyboard handling and default buttons remain independent.
+            if event.type() == QEvent.Show and (obj.isModal() or obj.windowType() == Qt.Popup):
+                self._reset_input()
             return False
         if event.type() == QEvent.ChildAdded:
             # ChildAdded is sent before construction completes: only attach a
@@ -95,9 +168,18 @@ class DialogEnterPolicy(QObject):
         elif event.type() == QEvent.Show:
             self._watch(obj)
         elif event.type() == QEvent.InputMethod:
+            self._reset_input()
             self._preedit_widget = obj if event.preeditString() else None
-        elif event.type() == QEvent.FocusOut and obj is self._preedit_widget:
-            self._preedit_widget = None
+        elif event.type() == QEvent.WindowBlocked:
+            self._reset_input()
+        elif event.type() == QEvent.FocusOut:
+            if obj is self._preedit_widget:
+                self._preedit_widget = None
+            if self._tracked_input is not None and obj in self._tracked_input:
+                self._reset_input()
+        elif event.type() == QEvent.Hide:
+            if obj is self._dialog or (self._tracked_input is not None and obj in self._tracked_input):
+                self._reset_input()
         if event.type() not in (QEvent.KeyPress, QEvent.KeyRelease):
             return False
         # KeypadModifier describes the physical key, not a command shortcut.
@@ -108,6 +190,13 @@ class DialogEnterPolicy(QObject):
             return False
         if event.type() == QEvent.KeyRelease:
             return False
+        modal = QApplication.activeModalWidget()
+        if (
+            (modal is not None and modal is not self._dialog)
+            or QApplication.activePopupWidget() is not None
+        ):
+            self._reset_input()
+            return True
         if self._dispatching_input:
             # Native editors may ignore Enter after emitting editingFinished.
             # Stop the same event at the first non-editor ancestor, even if a
@@ -119,29 +208,54 @@ class DialogEnterPolicy(QObject):
                 self._held_enter.arm()
                 return False
             return True
-        if self._is_input(obj):
+        receiver = self._dialog.focusWidget() if obj is self._dialog else obj
+        # A spin box's inner line edit points its focus proxy back to the
+        # outer control. Preserve native delivery to either actual input;
+        # only resolve proxy containers that do not handle editing themselves.
+        while (
+            isinstance(receiver, QWidget)
+            and not self._is_input(receiver)
+            and receiver.focusProxy() is not None
+        ):
+            receiver = receiver.focusProxy()
+        single_line = self._single_line_input(receiver)
+        if single_line is not None:
+            self._track_input(single_line)
+            if event.isAutoRepeat():
+                return True
+        if single_line is not None and single_line == self._ready_input:
+            self._click_confirm()
+            return True
+        if self._is_input(receiver):
+            epoch = self._input_epoch
             self._dispatching_input = True
             try:
-                QApplication.sendEvent(obj, event)
+                QApplication.sendEvent(receiver, event)
             finally:
                 self._dispatching_input = False
-            return True
-        if obj is self._dialog and self._is_input(self._dialog.focusWidget()):
+            if (
+                single_line is not None
+                and epoch == self._input_epoch
+                and not sip.isdeleted(single_line[1])
+                and self._single_line_input(self._dialog.focusWidget()) == single_line
+                and single_line[1].hasAcceptableInput()
+                and self._preedit_widget is None
+                and not event.isAutoRepeat()
+            ):
+                self._ready_input = single_line
             return True
         if self._preedit_widget is not None:
             return True
         if event.isAutoRepeat():
             return True
-        modal = QApplication.activeModalWidget()
-        if modal is not None and modal is not self._dialog:
-            return True
-        if QApplication.activePopupWidget() is not None:
-            return True
+        self._click_confirm()
+        return True
+
+    def _click_confirm(self):
         button = self._confirm_button
         if button is not None and not sip.isdeleted(button) and button.isVisible() and button.isEnabled():
             self._held_enter.arm()
             button.click()
-        return True
 
 
 def install_dialog_enter_policy(dialog, confirm_button=None):
