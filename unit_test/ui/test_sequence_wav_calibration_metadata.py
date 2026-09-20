@@ -324,6 +324,7 @@ def test_streaming_record_only_appends_metadata_after_finalize(monkeypatch):
         get_recorded_data_multi=lambda: np.array([[0.1], [0.2]], dtype=np.float32),
     )
     window = _stream_window("record_only", processor, writer, metadata)
+    window.plot_waveform_to_workspace = lambda data, rate: calls.append(("plot", rate))
 
     monkeypatch.setattr(
         sequence_widget,
@@ -340,6 +341,7 @@ def test_streaming_record_only_appends_metadata_after_finalize(monkeypatch):
 
     assert ("finalize", None) in calls
     assert ("record.wav", metadata) in calls
+    assert calls.index(("plot", 48000)) > calls.index(("record.wav", metadata))
 
 
 def test_streaming_play_and_record_rewrites_final_wav_with_metadata(monkeypatch):
@@ -431,6 +433,7 @@ def _stream_window(mode, processor, writer, metadata):
         streaming_wav_writer=writer,
         streaming_stimulus_data=None,
         streaming_plot_item=None,
+        plot_waveform_to_workspace=lambda *args: None,
         streaming_temp_path="record_temp.wav",
         recorded_path="record.wav",
         recorded_signal_info={},

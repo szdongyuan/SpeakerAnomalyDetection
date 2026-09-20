@@ -40,6 +40,7 @@ from ui.custom_ui_widget.widgets import (
     MessageBox,
 )
 from ui.load_stimulus_dialog import LoadStimulusDialog
+from ui.adaptive_waveform import AdaptiveWaveformItem
 
 
 class PreferredFrequencySpinBox(DoubleSpinBox):
@@ -2271,7 +2272,9 @@ class StimulusWindow(QDialog):
         sample_rate = self.stimulus_info["sample_rate"]
         if self.stimulus_data is not None:
             signal_duration = np.linspace(0, len(self.stimulus_data) - 1, len(self.stimulus_data)) / sample_rate
-            self.plot_stimulus.plot(signal_duration, self.stimulus_data, pen=pyqtgraph.mkPen("b", width=2))
+            self.plot_stimulus.addItem(AdaptiveWaveformItem(
+                signal_duration, self.stimulus_data, pen=pyqtgraph.mkPen("b", width=2)
+            ))
             self.plot_stimulus.setLabel("left", "Amplitude", **{"font-size": "20px"})
             self.plot_stimulus.setLabel("bottom", "Time (s)", **{"font-size": "20px"})
             font = QFont()

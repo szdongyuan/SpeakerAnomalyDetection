@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 )
 
 from consts import ui_style_const
+from ui.adaptive_waveform import AdaptiveWaveformItem
 from ui.custom_ui_widget.widgets import PushButton, Label
 from ui.sequence.channel_plot_workspace_controller import ChannelPlotWorkspaceController
 from ui.sequence.channel_plot_workspace_model import ChannelPlotWorkspaceModel
@@ -147,11 +148,12 @@ class ChannelPlotSubWindow(QFrame):
         self.plot_widget.clear()
         self.plot_item = None
 
-    def set_data(self, x, y) -> None:
+    def set_data(self, x, y, *, streaming=False) -> None:
         if self.plot_item is None:
-            self.plot_item = self.plot_widget.plot(x, y, pen="k")
+            self.plot_item = AdaptiveWaveformItem(x, y, pen="k", streaming=streaming)
+            self.plot_widget.addItem(self.plot_item)
         else:
-            self.plot_item.setData(x, y)
+            self.plot_item.setData(x, y, streaming=streaming)
 
 
 class ChannelPlotCanvas(QWidget):

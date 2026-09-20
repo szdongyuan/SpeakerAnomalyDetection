@@ -1624,7 +1624,7 @@ def test_record_only_streaming_chunk_writes_float64_multi_payload_without_downca
     window.channel_workspace = types.SimpleNamespace(
         all_subwindows=lambda: [
             types.SimpleNamespace(
-                set_data=lambda time_axis, data: plotted.append(np.asarray(data).copy()),
+                set_data=lambda time_axis, data, **kwargs: plotted.append((np.asarray(data).copy(), kwargs)),
                 clear_plot=lambda: None,
             )
         ]
@@ -1634,6 +1634,7 @@ def test_record_only_streaming_chunk_writes_float64_multi_payload_without_downca
 
     window.on_audio_chunk_received_rec(payload)
 
+    assert plotted[0][1] == {"streaming": True}
     assert written_chunks[0].dtype == np.float64
     assert window.streaming_buffer_multi[0].dtype == np.float64
     np.testing.assert_array_equal(written_chunks[0], payload["multi"])
@@ -1642,6 +1643,7 @@ def test_record_only_streaming_chunk_writes_float64_multi_payload_without_downca
 def test_play_record_streaming_chunk_writes_float64_mono_payload_without_downcast():
     namespace = _build_method_namespace()
     written_chunks = []
+    plot_options = []
 
     window = _build_fake_window(namespace, use_streaming=True, mode="PLAY_AND_RECORD")
     window.streaming_mode = "play_record"
@@ -1651,7 +1653,7 @@ def test_play_record_streaming_chunk_writes_float64_mono_payload_without_downcas
     )
     window.channel_workspace = types.SimpleNamespace(
         all_subwindows=lambda: [
-            types.SimpleNamespace(set_data=lambda time_axis, data: None),
+            types.SimpleNamespace(set_data=lambda time_axis, data, **kwargs: plot_options.append(kwargs)),
         ]
     )
 
@@ -1660,6 +1662,7 @@ def test_play_record_streaming_chunk_writes_float64_mono_payload_without_downcas
 
     window.on_audio_chunk_received_playrec({"mono": mono, "multi": multi})
 
+    assert plot_options == [{"streaming": True}]
     assert written_chunks[0].dtype == np.float64
     np.testing.assert_array_equal(written_chunks[0], mono)
 
