@@ -6,7 +6,10 @@ from unittest.mock import Mock
 import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QAbstractButton, QComboBox, QDialogButtonBox, QLineEdit, QPushButton
+from PyQt5.QtWidgets import (
+    QAbstractButton, QAbstractSpinBox, QComboBox, QDialogButtonBox, QLineEdit,
+    QPushButton,
+)
 
 from base.video.config import VideoConfig
 from ui.acquisition_config_window import BaseConfigWindow, RecordConfigWindow
@@ -136,6 +139,54 @@ def test_system_editors_preserve_values_without_clicking(system_dialog, enter):
     assert window.isVisible()
 
 
+@pytest.mark.parametrize("system_dialog", ["record", "serial", "video", "login",
+                                           "add-account", "change-password"], indirect=True)
+@pytest.mark.parametrize("reset", ["edit", "focus"])
+def test_system_second_enter_confirms_and_reset_restarts_native(
+        system_dialog, enter, reset, ui_qapp, tmp_path):
+    window, target, auxiliary, editors, callbacks = system_dialog
+    if isinstance(window, VideoSettingsDialog):
+        window.folder.setText(str(tmp_path))
+    clicks = watch_buttons(window)
+    for editor in (widget for widget in editors if isinstance(widget, QLineEdit)):
+        finished = []
+        editor.editingFinished.connect(lambda editor=editor, finished=finished:
+                                       finished.append(editor.text()))
+        for cycle in range(2):
+            before = editor.text()
+            # Editable QComboBox emits twice through its native inner editor.
+            native_signals = 2 if isinstance(editor.parentWidget(), QComboBox) else 1
+            prior_signals = len(finished)
+            prior_clicks, prior_callbacks = len(clicks), len(callbacks)
+            enter(editor)
+            ui_qapp.processEvents()
+            focused = window.focusWidget()
+            assert focused is editor or focused is editor.parentWidget()
+            assert editor.text() == before
+            assert finished[prior_signals:] == [before] * native_signals
+            assert len(clicks) == prior_clicks
+            assert len(callbacks) == prior_callbacks
+            enter(editor)
+            assert clicks[prior_clicks:] == [target]
+            assert len(callbacks) == prior_callbacks + 1
+            assert finished[prior_signals:] == [before] * native_signals
+            assert window.isVisible()
+            if cycle == 0:
+                if reset == "edit":
+                    parent = editor.parentWidget()
+                    if isinstance(parent, QAbstractSpinBox):
+                        parent.setValue(parent.value() + parent.singleStep())
+                    else:
+                        editor.setText(before + "1")
+                    assert editor.text() != before
+                else:
+                    auxiliary.setFocus()
+                    ui_qapp.processEvents()
+                    assert window.focusWidget() is auxiliary
+                    editor.setFocus()
+                    ui_qapp.processEvents()
+
+
 def test_system_auxiliary_focus_clicks_only_confirm(system_dialog, enter):
     window, target, auxiliary, editors, callbacks = system_dialog
     clicks = watch_buttons(window)
@@ -172,10 +223,11 @@ def test_calibration_enter_never_clicks_buttons(opened, monkeypatch, enter, tab_
                if button.isVisible() and button.isEnabled()]
     assert buttons and editors
     for widget in editors + buttons + [window.tabwidget.tabBar()]:
-        enter(widget)
-        assert clicks == []
-        assert callbacks == []
-        assert window.isVisible()
+        for _ in range(3):
+            enter(widget)
+            assert clicks == []
+            assert callbacks == []
+            assert window.isVisible()
     QTest.mouseClick(window.cal_btn, Qt.LeftButton)
     assert clicks == [window.cal_btn]
     assert callbacks == ["clicked_calibration_button"]

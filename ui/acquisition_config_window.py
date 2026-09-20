@@ -235,8 +235,6 @@ class RecordConfigWindow(BaseConfigWindow):
         )
         self.streaming_recording_checkbox.toggled.connect(self._on_streaming_recording_toggled)
 
-        self._on_streaming_recording_toggled(self.streaming_recording_checkbox.isChecked())
-
         grid_layout.addWidget(label_time, 0, 0)
         grid_layout.addWidget(self.time_input, 0, 1)
         grid_layout.addWidget(label_samplerate, 1, 0)
@@ -248,6 +246,7 @@ class RecordConfigWindow(BaseConfigWindow):
         advanced_layout.addWidget(self.preview_time_mode_label, 1, 0)
         advanced_layout.addWidget(self.preview_time_mode_combo, 1, 1)
         advanced_layout.addWidget(self.preview_time_mode_error_label, 2, 0, 1, 2)
+        self._on_streaming_recording_toggled(self.streaming_recording_checkbox.isChecked())
         self.ve_range_combo = QComboBox()
         self.ve_range_combo.setObjectName("ve_range_combo")
         for index, label in enumerate(VE_RANGE_LABELS):
