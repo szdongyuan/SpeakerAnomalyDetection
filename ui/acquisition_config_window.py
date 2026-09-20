@@ -29,6 +29,7 @@ from consts.ve3668n_consts import (
     VE_SAMPLE_RATE_MIN, VE_SAMPLE_RATE_MAX, VE_SAMPLE_RATES,
 )
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.vkinging_presentation import device_display_name, ve_failure_text
 
 
@@ -58,6 +59,7 @@ class BaseConfigWindow(ConfigDialogBase):
         cancel_btn.clicked.connect(self.on_click_cancel_btn)
         ok_btn = QPushButton(" 确 认")
         ok_btn.clicked.connect(self.on_click_ok_btn)
+        self.ok_btn = ok_btn
 
         btn_layout.addWidget(cancel_btn)
         btn_layout.addStretch()
@@ -102,6 +104,7 @@ class RecordConfigWindow(BaseConfigWindow):
             margins.left(), margins.top(), margins.right(), margins.bottom() + 3)
         self.main_layout.addStretch()
         self.main_layout.addLayout(btn_layout)
+        install_dialog_enter_policy(self, self.ok_btn)
 
     def create_in_group(self):
         in_group_box = QGroupBox("输入")

@@ -15,6 +15,7 @@ from base.analysis_artifact_paths import (
 from base.test_round_data import RoundDataRecord
 from base.recording_management import RecordingManager
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 class SequenceWidgetRoundResetOpsMixin:
@@ -194,10 +195,8 @@ class SequenceWidgetRoundResetOpsMixin:
         layout.addLayout(details_layout)
         cancel = QPushButton("取消")
         cancel.setObjectName("roundResetCancelButton")
-        cancel.setDefault(True)
         confirm = QPushButton("重置")
         confirm.setObjectName("roundResetConfirmButton")
-        confirm.setAutoDefault(False)
         confirm.clicked.connect(dialog.accept)
         cancel.clicked.connect(dialog.reject)
         button_layout = QHBoxLayout()
@@ -225,6 +224,7 @@ class SequenceWidgetRoundResetOpsMixin:
         if self._round_reset_delete_failed:
             delete_box.setChecked(True)
             delete_box.setEnabled(False)
+        install_dialog_enter_policy(dialog, confirm)
         if dialog.exec() != dialog.Accepted:
             return None
         return delete_box.isChecked()

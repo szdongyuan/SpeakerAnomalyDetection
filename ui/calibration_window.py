@@ -45,6 +45,7 @@ from base.soundcard_calibration_manager import (
 from consts import ui_style_const, error_code
 from consts.running_consts import DEFAULT_DIR
 from ui.vkinging_presentation import device_display_name, ve_failure_text
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 class CalibrationWindow(QDialog):
@@ -59,6 +60,7 @@ class CalibrationWindow(QDialog):
         self.input_device = input_device
         self.input_channels = list(input_channels or [])
         self.init_ui()
+        install_dialog_enter_policy(self, None)
 
     def init_ui(self):
         """

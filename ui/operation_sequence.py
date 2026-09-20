@@ -36,6 +36,7 @@ from consts.recording_preview_consts import (
 )
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.acquisition_config_window import RecordConfigWindow
 
 from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
@@ -498,7 +499,7 @@ class AnalysisModelSelect(ConfigDialogBase):
         save_btn.clicked.connect(self.save_btn_clicked)
         ok_btn = QPushButton("保存")
         ok_btn.clicked.connect(self.ok_btn_clicked)
-        ok_btn.setDefault(True)
+        install_dialog_enter_policy(self, ok_btn)
         load_btn.setMinimumWidth(100)
         save_btn.setMinimumWidth(100)
         ok_btn.setMinimumWidth(100)

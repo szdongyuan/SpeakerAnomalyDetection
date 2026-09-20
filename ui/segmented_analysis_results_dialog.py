@@ -3,6 +3,7 @@
 from PyQt5.QtWidgets import QComboBox, QDialog, QHeaderView, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout
 
 from ui.sequence.analysis_report_snapshot import build_segment_report_results
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 class SegmentedAnalysisResultsDialog(QDialog):
@@ -26,6 +27,7 @@ class SegmentedAnalysisResultsDialog(QDialog):
         layout.addWidget(self.table)
         self.segment_selector.currentIndexChanged.connect(self._show_segment)
         self._show_segment(0)
+        install_dialog_enter_policy(self, None)
 
     def _show_segment(self, index):
         items = self.rows[index]["analysis_items"]

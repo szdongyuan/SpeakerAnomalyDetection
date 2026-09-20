@@ -24,6 +24,7 @@ from consts.acoustic_analysis.curve_style_consts import (
     UPPER_LIMIT_COLOR,
 )
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.curve_style import (
     build_curve_color_config,
     normalize_curve_color,
@@ -60,6 +61,7 @@ class PresetColorDialog(ConfigDialogBase):
         self.footer_layout.addWidget(self.cancel_button)
         self.footer_layout.addWidget(self.confirm_button)
         layout.addLayout(self.footer_layout)
+        install_dialog_enter_policy(self, self.confirm_button)
 
     def _create_palette_layout(self):
         grid = QGridLayout()

@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
 from base.audio_analysis_result_source import item_channels
 from ui.audio_analysis_result_loader import AudioAnalysisResultLoader
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 class AnalysisImageView(QGraphicsView):
@@ -173,6 +174,7 @@ class ArchiveAudioAnalysisDialog(ConfigDialogBase):
         screen = self.screen().availableGeometry()
         self.resize(min(self.width(), screen.width() - 40), min(self.height(), screen.height() - 60))
         self._build_ui()
+        install_dialog_enter_policy(self, None)
         QTimer.singleShot(0, self._discover)
 
     def _build_ui(self):

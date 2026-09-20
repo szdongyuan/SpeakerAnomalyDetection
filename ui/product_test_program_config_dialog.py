@@ -34,6 +34,7 @@ from base.product_test_program_config import (
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR, PRODUCT_TEST_REPORT_DIR
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.path_selector_utils import load_path_selector_folder_icon
 
 
@@ -89,6 +90,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self._set_member_connect()
         self._load_options()
         self._load_initial_program()
+        install_dialog_enter_policy(self, self.save_btn)
 
     def _init_ui(self):
         self.setObjectName("productTestProgramDialog")

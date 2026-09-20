@@ -52,6 +52,7 @@ from consts.product_test_project_consts import (
 )
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.output_load_config_dialog import OutputLoadConfigDialog
 from base.analysis_segments import normalize_segmented_analysis, segment_condition_fields, segment_count
 
@@ -355,6 +356,7 @@ class _CopyConditionsDialog(ConfigDialogBase):
         layout.addWidget(all_checkbox)
         layout.addWidget(scroll_area)
         layout.addWidget(buttons)
+        install_dialog_enter_policy(self, buttons.button(QDialogButtonBox.Ok))
 
     def _set_all_checked(self, checked):
         for checkbox in self._checkboxes:
@@ -421,6 +423,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self._init_ui()
         self._connect_signals()
         self._load_initial_project()
+        install_dialog_enter_policy(self, self.save_btn)
 
     def _init_ui(self):
         self.setObjectName("productTestProjectDialog")

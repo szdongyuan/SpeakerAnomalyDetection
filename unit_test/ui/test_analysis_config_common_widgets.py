@@ -693,7 +693,8 @@ def test_semantic_dialog_footer_buttons_call_callbacks(qapp):
     assert calls == ["default", "restore", "cancel", "ok"]
 
 
-def test_semantic_dialog_enter_does_not_trigger_buttons(qapp):
+@pytest.mark.parametrize("key, modifiers", [(Qt.Key_Return, Qt.NoModifier), (Qt.Key_Enter, Qt.KeypadModifier)])
+def test_semantic_dialog_enter_protects_input_and_confirms_elsewhere(qapp, key, modifiers):
     dialog = SemanticAnalysisConfigDialogBase()
     input_widget = QLineEdit()
     dialog.add_semantic_section("input", widget=input_widget)
@@ -708,16 +709,14 @@ def test_semantic_dialog_enter_does_not_trigger_buttons(qapp):
     input_widget.setFocus()
     qapp.processEvents()
 
-    QTest.keyClick(input_widget, Qt.Key_Return)
+    QTest.keyClick(input_widget, key, modifiers)
     qapp.processEvents()
 
     assert calls == []
-    assert all(
-        not button.autoDefault() and not button.isDefault()
-        for button in dialog.findChildren(QPushButton)
-    )
+    dialog.semantic_default_btn.setFocus()
+    QTest.keyClick(dialog.semantic_default_btn, key, modifiers)
+    assert calls == ["ok"]
 
     dialog.semantic_default_btn.click()
-
-    assert calls == ["default"]
+    assert calls == ["ok", "default"]
     dialog.close()

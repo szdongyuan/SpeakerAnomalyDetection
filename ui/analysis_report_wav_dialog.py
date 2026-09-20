@@ -35,6 +35,7 @@ from PyQt5.QtWidgets import (
 )
 
 from consts import ui_style_const
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 _NATURAL_PART_RE = re.compile(r"(\d+)")
@@ -531,6 +532,7 @@ class CandidateFilterDialog(QDialog):
 
         self.cancel_button.clicked.connect(self.reject)
         self.apply_button.clicked.connect(self._apply_filters)
+        install_dialog_enter_policy(self, self.apply_button)
 
     def reload(self):
         for _label, column in self.FILTER_FIELDS:
@@ -630,6 +632,7 @@ class AnalysisReportWavDialog(QDialog):
         self.filter_button.clicked.connect(self._show_filter_dialog)
         self.cancel_button.clicked.connect(self.reject)
         self.confirm_button.clicked.connect(self.accept)
+        install_dialog_enter_policy(self, self.confirm_button)
 
     def _select_all_changed(self, state):
         self.candidate_model.set_paths_checked(

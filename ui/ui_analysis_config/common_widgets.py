@@ -39,6 +39,7 @@ from consts.harmonic_detection_consts import (
 )
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.custom_ui_widget.widgets import (
     CheckBox,
     ComboBox,
@@ -108,7 +109,10 @@ class AnalysisConfigDialogBase(ConfigDialogBase):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        # Enter in a parameter field must not invoke a persistent dialog action.
+        # Installed policies refresh defaults on Show before this handler.
+        if hasattr(self, "_enter_policy"):
+            return
+        # Preserve the legacy behavior for dialogs without an explicit footer.
         for button in self.findChildren(QPushButton):
             button.setAutoDefault(False)
             button.setDefault(False)
@@ -122,6 +126,7 @@ class AnalysisConfigDialogBase(ConfigDialogBase):
         btn_layout.addWidget(default_btn)
         btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
+        install_dialog_enter_policy(self, ok_btn)
         return btn_layout
 
     def show_default_save_popup(self, success_flag: bool) -> None:
@@ -411,6 +416,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         footer_layout.addStretch()
         footer_layout.addWidget(self.semantic_cancel_btn)
         footer_layout.addWidget(self.semantic_ok_btn)
+        install_dialog_enter_policy(self, self.semantic_ok_btn)
         return footer_layout
 
     def set_semantic_button_callbacks(

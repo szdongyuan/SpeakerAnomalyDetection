@@ -31,6 +31,7 @@ from consts.acoustic_analysis.curve_style_consts import (
     UPPER_LIMIT_COLOR,
 )
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.curve_style import (
     normalize_curve_color,
     resolve_curve_colors,
@@ -719,6 +720,7 @@ class _ManualLimitEditorDialog(ConfigDialogBase):
         layout.addWidget(self.limit_graph)
         layout.addLayout(button_layout)
 
+        install_dialog_enter_policy(self, self.confirm_button)
         self.editor.config_changed.connect(self._refresh_preview)
         self._refresh_preview()
 

@@ -23,15 +23,16 @@ def qapp():
     yield app
 
 
-def test_confirmation_displays_all_counts_and_enter_defaults_to_cancel(qapp):
+def test_confirmation_displays_all_counts_and_enter_confirms(qapp):
     dialog = ArchiveAudioDeleteDialog({"wav": 9, "raw_csv": 4, "images": 30, "analysis_csv": 20}, 10)
     text = "\n".join(label.text() for label in dialog.findChildren(QLabel))
     for phrase in ("10 条录音", "9 个文件", "4 个文件", "30 个文件", "20 个文件", "10 条对应数据库记录", "不可恢复"):
         assert phrase in text
-    assert dialog.cancel_button.isDefault()
+    assert dialog.delete_button.isDefault()
+    assert not dialog.cancel_button.isDefault()
     assert not dialog.delete_button.autoDefault()
     QTimer.singleShot(0, lambda: QTest.keyClick(dialog, Qt.Key_Return))
-    assert dialog.exec() == dialog.Rejected
+    assert dialog.exec() == dialog.Accepted
     dialog.close()
 
 
@@ -64,7 +65,10 @@ def test_only_missing_files_use_short_remove_prompt(qapp, recording_count):
     assert len(labels) == 1
     assert "从列表中移除" in labels[0].text()
     assert dialog.delete_button.text() == "从列表移除"
-    assert dialog.cancel_button.isDefault()
+    assert dialog.delete_button.isDefault()
+    assert not dialog.cancel_button.isDefault()
+    QTimer.singleShot(0, lambda: QTest.keyClick(dialog, Qt.Key_Return))
+    assert dialog.exec() == dialog.Accepted
     dialog.close()
     # A missing WAV with surviving results must still confirm real file deletion.
     counts["analysis_csv"] = 1

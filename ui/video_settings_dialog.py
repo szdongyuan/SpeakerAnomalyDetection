@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
 )
 
 from consts import ui_style_const
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 class VideoSettingsDialog(QDialog):
@@ -130,6 +131,9 @@ class VideoSettingsDialog(QDialog):
             ):
                 widget.setEnabled(False)
             self.buttons.button(QDialogButtonBox.Save).setEnabled(False)
+        install_dialog_enter_policy(
+            self, self.buttons.button(QDialogButtonBox.Close if read_only else QDialogButtonBox.Save)
+        )
 
     def set_devices(self, devices, error=""):
         selected = self.devices.currentData() or self.config.device_id

@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
 
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 try:
     from serial.tools import list_ports
@@ -66,6 +67,7 @@ class SerialDiscreteInputConfigDialog(ConfigDialogBase):
         self._init_ui()
         self._set_member_connect()
         self._set_values_from_config()
+        install_dialog_enter_policy(self, self.ok_btn)
 
     def _init_ui(self):
         self.setWindowTitle("串口离散输入触发配置")

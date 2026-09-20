@@ -15,6 +15,7 @@ from base.save_data import save_audio_simple
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.graph_widget import DraggablePlotWidget
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 class AudioClipExtractionDialog(QDialog):
@@ -127,6 +128,7 @@ class AudioClipExtractionDialog(QDialog):
         ok_btn.clicked.connect(self.on_click_ok_btn)
         layout.addStretch()
         layout.addWidget(ok_btn)
+        install_dialog_enter_policy(self, ok_btn)
         return layout
 
     def open_audio_file(self):
