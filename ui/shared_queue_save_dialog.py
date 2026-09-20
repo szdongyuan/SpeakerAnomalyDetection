@@ -5,6 +5,8 @@ import os
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QLabel, QMessageBox, QPlainTextEdit, QSizePolicy, QStyle
 
+from ui.dialog_enter_policy import install_dialog_enter_policy
+
 
 class SharedQueueSaveDialog(QMessageBox):
     def __init__(self, target_path, result, parent=None):
@@ -26,7 +28,7 @@ class SharedQueueSaveDialog(QMessageBox):
         self.save_button.setText("确认")
         self.cancel_button = self.button(QMessageBox.Cancel)
         self.cancel_button.setText("取消")
-        self.setDefaultButton(self.cancel_button)
+        self.setDefaultButton(self.save_button)
         self.setEscapeButton(self.cancel_button)
 
         rows = list(dict.fromkeys(
@@ -62,6 +64,7 @@ class SharedQueueSaveDialog(QMessageBox):
             self._size_details()
         else:
             self.details.hide()
+        install_dialog_enter_policy(self, self.save_button)
 
     def _size_details(self):
         label = self.findChild(QLabel, "qt_msgbox_label")

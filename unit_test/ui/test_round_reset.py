@@ -359,7 +359,8 @@ def test_reset_dialog_freezes_target_and_defaults_to_keep(host, monkeypatch):
         cancel = dialog.findChild(QPushButton, "roundResetCancelButton")
         assert dialog.windowTitle() == "重置当前测试轮次"
         assert checkbox.text() == "同时删除本轮数据"
-        assert cancel.isDefault()
+        assert not cancel.isDefault()
+        assert dialog.findChild(QPushButton, "roundResetConfirmButton").isDefault()
         results.append(checkbox.isChecked())
         assert not results[-1]
         assert details.text() == "未勾选时保留已保存的数据和报告。"

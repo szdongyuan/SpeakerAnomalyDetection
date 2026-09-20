@@ -16,6 +16,7 @@ from base.audio_record_filter import (
 )
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 _SELECT_FIELDS = (
@@ -41,6 +42,7 @@ class ArchiveAudioFilterDialog(ConfigDialogBase):
         self._build_ui()
         self._restore_filters()
         self.apply_config_dialog_theme()
+        install_dialog_enter_policy(self, self.apply_button)
 
     def _build_ui(self):
         layout = QVBoxLayout(self)

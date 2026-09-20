@@ -43,6 +43,7 @@ from base.analysis_report_source import (
     scan_project,
 )
 from consts import model_consts, ui_style_const
+from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.analysis_report_wav_dialog import (
     AnalysisReportWavDialog,
     CandidateTableModel,
@@ -513,6 +514,7 @@ class AnalysisReportExportDialog(QDialog):
         self.include_charts_checkbox.stateChanged.connect(self._refresh_summary)
         self.cancel_button.clicked.connect(self._cancel_or_close)
         self.export_button.clicked.connect(self._start_export)
+        install_dialog_enter_policy(self, self.export_button)
 
     def _choose_project(self):
         initial = self.project_path_edit.text().strip() or os.getcwd()

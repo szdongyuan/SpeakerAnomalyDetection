@@ -11,6 +11,7 @@ from base.system_intervction.hardware_intervction import get_mac_address
 from base.log_manager import LogManager
 from consts import error_code, model_consts, ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 ACCESS_LVL_DICT = {"管理员": "Admin", "工程师": "Engineer", "操作员": "Operator"}
 
@@ -98,6 +99,7 @@ class LoginWindow(QDialog):
 
         self.setLayout(layout)
         self.login_button.setDefault(True)
+        install_dialog_enter_policy(self, self.login_button)
 
         self.setStyleSheet(
             ui_style_const.qcombobox_style
@@ -271,6 +273,7 @@ class AddAccountWindow(QDialog):
         layout.setContentsMargins(25, 10, 25, 10)
 
         self.setLayout(layout)
+        install_dialog_enter_policy(self, add_user_button)
 
         self.setStyleSheet(
             ui_style_const.qcombobox_style
@@ -375,6 +378,7 @@ class ChangePwdWindow(QDialog):
         layout.setContentsMargins(25, 10, 25, 10)
 
         self.setLayout(layout)
+        install_dialog_enter_policy(self, change_pwd_button)
 
         self.setStyleSheet(
             ui_style_const.qpushbutton_style

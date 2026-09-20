@@ -32,6 +32,7 @@ from ui.vkinging_presentation import device_display_name, ve_failure_text
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 class SingleCheckTableView(QTableView):
@@ -333,6 +334,7 @@ class HardwareSelectionView(ConfigDialogBase):
 
         self.resize(980, 560)
         self.apply_config_dialog_theme()
+        install_dialog_enter_policy(self, self.ok_btn)
 
     @staticmethod
     def _wrap_table_group(title: str, table: QTableView) -> QGroupBox:

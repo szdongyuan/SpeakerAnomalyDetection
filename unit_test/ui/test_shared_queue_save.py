@@ -397,9 +397,9 @@ def test_real_shared_message_decision_controls_queue_write(editor, action, incom
     QTimer.singleShot(0, decide)
     window.ok_btn_clicked()
     assert observed == [True]
-    assert (target.read_bytes() != before[0]) is (action == "confirm")
+    assert (target.read_bytes() != before[0]) is (action in ("confirm", "enter"))
     assert registry.read_bytes() == before[1]
-    if action != "confirm":
+    if action not in ("confirm", "enter"):
         assert window.dirty and window.isVisible()
         assert window.select_list.config[0].detail["sample_rate"] == 48000
 

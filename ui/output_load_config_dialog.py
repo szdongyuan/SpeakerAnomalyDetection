@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
 from base.analysis_segments import TIME_UNIT_SECONDS, build_segment_plan, normalize_segmented_analysis
 from base.config_number_format import config_number_decimals, format_config_number
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 class OutputLoadConfigDialog(ConfigDialogBase):
@@ -100,6 +101,7 @@ class OutputLoadConfigDialog(ConfigDialogBase):
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
+        install_dialog_enter_policy(self, self.buttons.button(QDialogButtonBox.Ok))
         for button in self.mode_buttons.values():
             button.toggled.connect(self._refresh)
         for spin in (self.duration_input, self.interval_input):

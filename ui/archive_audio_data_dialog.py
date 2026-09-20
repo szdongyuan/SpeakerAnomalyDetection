@@ -32,6 +32,7 @@ from ui.archive_audio_filter_dialog import ArchiveAudioFilterDialog
 from ui.archive_audio_package_dialog import ArchiveAudioPackageDialog
 from ui.archive_audio_analysis_dialog import ArchiveAudioAnalysisDialog
 from ui.audio_package_thread import AudioPackageThread
+from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.custom_ui_widget.audio_data_manage_dialog import (
     AudioDataManageDialog,
     extract_audio_file_name,
@@ -95,6 +96,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._rebuild_play_buttons()
         self._update_order_button_text()
         self.init_ui()
+        install_dialog_enter_policy(self, None)
 
     def _refresh_audio_filter_metadata(self):
         previous = self._audio_filter_cache

@@ -3,6 +3,7 @@
 from PyQt5.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 class ArchiveAudioPackageDialog(ConfigDialogBase):
@@ -48,6 +49,7 @@ class ArchiveAudioPackageDialog(ConfigDialogBase):
         for checkbox in self.checkboxes.values():
             checkbox.toggled.connect(self._update_continue_button)
         self._update_continue_button()
+        install_dialog_enter_policy(self, self.continue_button)
 
     def selected_kinds(self):
         return {kind for kind, checkbox in self.checkboxes.items() if checkbox.isChecked()}

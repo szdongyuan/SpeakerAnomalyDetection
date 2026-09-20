@@ -3,6 +3,7 @@
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from ui.config_dialog_base import ConfigDialogBase
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 class ArchiveAudioDeleteDialog(ConfigDialogBase):
@@ -44,11 +45,9 @@ class ArchiveAudioDeleteDialog(ConfigDialogBase):
         buttons.addStretch()
         self.cancel_button = QPushButton("取消")
         self.delete_button = QPushButton("从列表移除" if missing_files else "确认删除")
-        self.cancel_button.setDefault(True)
-        self.delete_button.setAutoDefault(False)
-        self.cancel_button.setFocus()
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.delete_button)
         layout.addLayout(buttons)
         self.cancel_button.clicked.connect(self.reject)
         self.delete_button.clicked.connect(self.accept)
+        install_dialog_enter_policy(self, self.delete_button)

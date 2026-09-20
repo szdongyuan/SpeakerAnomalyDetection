@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import QHBoxLayout, QMessageBox, QPushButton, QWidget
 
 from consts import ui_style_const
+from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
 class MotorModeSwitchPanel(QWidget):
@@ -75,10 +76,11 @@ class MotorModeSwitchPanel(QWidget):
         msg_box.setText("切换模式将重新计算汇总信息，是否继续？")
         msg_box.setIcon(QMessageBox.Question)
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        msg_box.setDefaultButton(QMessageBox.No)
+        msg_box.setDefaultButton(QMessageBox.Yes)
         msg_box.button(QMessageBox.Yes).setText("确定")
         msg_box.button(QMessageBox.No).setText("取消")
         msg_box.setStyleSheet(self._MODE_SWITCH_DIALOG_STYLE)
+        install_dialog_enter_policy(msg_box, msg_box.button(QMessageBox.Yes))
         return msg_box.exec_() == QMessageBox.Yes
 
     def _on_test_clicked(self):
