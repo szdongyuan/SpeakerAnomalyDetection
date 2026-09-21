@@ -42,8 +42,9 @@ def test_main_initializes_logger_before_ui_and_discovery(main_window_harness, mo
     monkeypatch.setattr(log_manager.LogManager, "set_log_handler", acquire)
 
     def inspect(window):
-        acquire.assert_called_once_with("core")
+        assert acquire.call_args_list == [mock.call("core"), mock.call("core")]
         assert window.default_logger is logger
+        assert window.video_controller._logger is logger
         assert window.ve_discovery is None
         setup(window)
 

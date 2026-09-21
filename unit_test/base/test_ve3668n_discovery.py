@@ -245,6 +245,68 @@ def fake_service(tmp_path, mode, **kwargs):
         sdk_options={"trace_path": str(tmp_path / "trace.jsonl"), "mode": mode}, **kwargs)
 
 
+def test_blocked_discovery_drains_tail_before_actual_terminate(tmp_path, monkeypatch):
+    service = discovery.DiscoveryService(
+        sdk_factory="unit_test.base.ve3668n_fakes.discovery_factory",
+        sdk_options={"trace_path": str(tmp_path / "trace.jsonl"),
+                     "mode": "block_probe", "log_directory": str(tmp_path)},
+        deadline=20, retire_timeout=.05)
+    processes, _ = track_resources(service, monkeypatch)
+    terminated = []
+    try:
+        service.start()
+        wait_for_stage(tmp_path, "probe")
+        child = processes[0]
+        real_terminate = child.terminate
+
+        def terminate():
+            assert child.is_alive()
+            log = tmp_path / "main.log"
+            terminated.append(log.read_text() if log.exists() else "")
+            real_terminate()
+
+        monkeypatch.setattr(child, "terminate", terminate)
+        began = time.monotonic()
+        service.cancel()
+        assert time.monotonic() - began < .2
+        assert service.wait_idle(5)
+        assert len(terminated) == 1
+        for index in range(3):
+            assert f"discovery-tail={index}" in terminated[0]
+        assert '"stage": "closed"' not in (tmp_path / "trace.jsonl").read_text()
+        assert child._closed
+    finally:
+        close_service(service)
+
+
+@pytest.mark.parametrize("failure,status", [("blocked", "timeout"), ("error", "drained-with-errors")])
+def test_discovery_log_failure_is_reported_by_surviving_parent(
+        tmp_path, monkeypatch, caplog, failure, status):
+    service = discovery.DiscoveryService(
+        sdk_factory="unit_test.base.ve3668n_fakes.discovery_factory",
+        sdk_options={"trace_path": str(tmp_path / "trace.jsonl"), "mode": "block_probe",
+                     "log_directory": str(tmp_path), "log_failure": failure},
+        deadline=20, retire_timeout=.05)
+    processes, _ = track_resources(service, monkeypatch)
+    try:
+        service.start()
+        wait_for_stage(tmp_path, "probe")
+        pid = processes[0].pid
+        began = time.monotonic()
+        service.cancel()
+        assert time.monotonic() - began < .2
+        assert service.wait_idle(4)
+        assert time.monotonic() - began < 4
+        assert processes[0]._closed
+        assert f"pid={pid}" in caplog.text
+        assert f"status={status}" in caplog.text
+        assert "reason=discovery retirement" in caplog.text
+        if failure == "error":
+            assert "injected discovery log write failure" in caplog.text
+    finally:
+        close_service(service)
+
+
 @pytest.mark.parametrize("mode", ["block_factory", "block_probe", "block_close"])
 def test_deadline_retires_blocked_native_factory_probe_or_close(tmp_path, monkeypatch, mode):
     service = fake_service(tmp_path, mode, deadline=.5, retire_timeout=.05)
@@ -399,10 +461,13 @@ def test_held_process_start_reports_deadline_before_release_and_keeps_ownership(
         assert not gate.processes[0]._closed
         assert all(not endpoint.closed for endpoint in gate.pipes)
         assert service.poll_result() == event
+        drain = service._unreaped.log_drain
+        assert drain.child_endpoint is not None
         gate.release.set()
         assert service.wait_idle(3)
         assert all(child._closed for child in gate.processes)
         assert all(endpoint.closed for endpoint in gate.pipes)
+        assert drain.child_endpoint is None
         assert gate.unsafe_access == []
         assert gate.threads[0].name == "ve-discovery-launcher"
         assert not gate.threads[0].is_alive()
@@ -605,7 +670,8 @@ def test_parent_death_exits_helper_even_while_native_is_blocked(tmp_path, mode):
     context = multiprocessing.get_context("spawn")
     receive, send = context.Pipe(duplex=False)
     parent = context.Process(target=discovery_orphan_parent, args=(send, {
-        "trace_path": str(tmp_path / "trace.jsonl"), "mode": mode}))
+        "trace_path": str(tmp_path / "trace.jsonl"), "mode": mode,
+        "log_directory": str(tmp_path)}))
     handle = None
     try:
         parent.start()
@@ -618,6 +684,10 @@ def test_parent_death_exits_helper_even_while_native_is_blocked(tmp_path, mode):
         parent.join(2)
         assert not parent.is_alive()
         wait_until(lambda: _winapi.WaitForSingleObject(handle, 0) == 0, timeout=2)
+        log = tmp_path / "main.log"
+        contents = log.read_text() if log.exists() else ""
+        for index in range(3):
+            assert f"discovery-tail={index}" in contents
     finally:
         if parent.is_alive():
             parent.kill()
@@ -912,9 +982,13 @@ def test_unconfirmed_death_retains_ownership_and_does_not_claim_idle(tmp_path, m
         if action == "close":
             assert not service.wait_closed(.05)
         assert child.is_alive()
+        drain = service._unreaped.log_drain
+        assert drain.child_endpoint is not None
+        assert drain.poll().status == "no-runtime"
         monkeypatch.setattr(child, "kill", real_kill)
         assert service.wait_idle(2)
         assert child._closed
+        assert drain.child_endpoint is None
         assert all(endpoint.closed for endpoint in pipes)
     finally:
         if real_kill is not None:

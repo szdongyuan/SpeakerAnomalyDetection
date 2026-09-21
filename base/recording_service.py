@@ -23,6 +23,7 @@ import threading
 import time
 
 from base.log_manager import LogManager
+from base.log_exit import ProcessLogDrain, run_with_log_drain
 from base.recording_timing_logger import RecordingTimingLogger
 from base.recording_process_protocol import (
     CaptureSlotReleased, FrozenConfig, RecordingCancelled, RecordingEvent,
@@ -119,7 +120,7 @@ class RecordingSession:
 
 
 class _Worker:
-    def __init__(self, generation, process, control, preview, ready_deadline):
+    def __init__(self, generation, process, control, preview, ready_deadline, log_drain=None):
         self.generation, self.process = generation, process
         self.control, self.preview = control, preview
         self.outgoing = queue.Queue(maxsize=8)
@@ -130,6 +131,8 @@ class _Worker:
         self.retiring = False
         self.kill_deadline = None
         self.kill_reported = False
+        self.log_drain = log_drain
+        self.log_drain_reported = False
 
 
 @dataclass
@@ -700,14 +703,18 @@ class RecordingService:
             preview, child_preview = context.Pipe(duplex=False)
             rollback.callback(preview.close)
             child_endpoints.callback(child_preview.close)
+            log_drain = ProcessLogDrain.create(context, clock=self._clock)
+            rollback.callback(log_drain.close)
             self._generation += 1
-            process = context.Process(target=recording_worker,
-                args=(child_control, child_preview, self._generation, self._backend_factory,
-                      self._backend_options, self._cancel_timeout, self._preview_interval),
+            process = context.Process(target=run_with_log_drain,
+                args=(recording_worker,
+                      (child_control, child_preview, self._generation, self._backend_factory,
+                       self._backend_options, self._cancel_timeout, self._preview_interval),
+                      log_drain.child_endpoint),
                 name=f"recording-worker-{self._generation}")
             rollback.callback(process.close)
             worker = _Worker(self._generation, process, control, preview,
-                             self._clock() + self._ready_timeout)
+                             self._clock() + self._ready_timeout, log_drain)
             try:
                 process.start()
             finally:
@@ -1566,7 +1573,6 @@ class RecordingService:
         with self._lock:
             worker.retiring = True
             self._ownership_uncertain = True
-            worker.kill_deadline = self._clock() + self._terminate_timeout
             pending = self._pending_ve_release
             self._pending_ve_release = None
             sessions = [session for session in self._sessions.values()
@@ -1591,13 +1597,38 @@ class RecordingService:
                 failure_stage, failure_message = stage, message
             self._fail(session, failure_stage, failure_message,
                        cause_failure if session is cause_session else None)
-        if worker.process.is_alive():
-            worker.process.terminate()
+        if worker.log_drain is not None:
+            worker.log_drain.begin(f"{stage}: {message}")
+        self._advance_retirement(worker)
+
+    def _report_log_drain(self, worker, result):
+        if worker.log_drain_reported:
+            return
+        worker.log_drain_reported = True
+        if result.status in ("timeout", "drained-with-errors"):
+            pending = "unknown" if result.stats is None else result.stats["pending"]
+            self._logger.error(
+                "Recording log drain generation=%s pid=%s reason=%s status=%s pending=%s stats=%s detail=%s",
+                worker.generation, worker.process.pid, worker.log_drain.reason or "self-exit",
+                result.status, pending, result.stats, result.detail)
+
+    def _advance_retirement(self, worker):
+        if worker.kill_deadline is not None or not worker.process.is_alive():
+            return
+        if worker.log_drain is not None:
+            result = worker.log_drain.poll()
+            if result is None:
+                return
+            self._report_log_drain(worker, result)
+        worker.kill_deadline = self._clock() + self._terminate_timeout
+        worker.process.terminate()
 
     def _retire(self, worker):
         self._retire_generation(worker)
 
     def _dead(self, worker):
+        if worker.log_drain is not None:
+            self._report_log_drain(worker, worker.log_drain.poll(already_dead=True))
         pending_prewarm = self._pending_ve_prewarm
         sessions = [session for session in self._sessions.values()
                     if session.generation == worker.generation]
@@ -1632,6 +1663,8 @@ class RecordingService:
         worker.control.close()
         worker.preview.close()
         worker.process.close()
+        if worker.log_drain is not None:
+            worker.log_drain.close()
         self._worker = None
         self._ownership_uncertain = False
         self._retained_ve_signature = None
@@ -1671,7 +1704,9 @@ class RecordingService:
                 self._dead(worker)
                 worker = None
             elif worker.retiring:
-                if now >= worker.kill_deadline and not worker.kill_reported:
+                self._advance_retirement(worker)
+                if (worker.kill_deadline is not None
+                        and now >= worker.kill_deadline and not worker.kill_reported):
                     worker.process.kill()
                     worker.kill_reported = True
                     self._diagnose("Worker exit not yet confirmed; restart remains disabled")

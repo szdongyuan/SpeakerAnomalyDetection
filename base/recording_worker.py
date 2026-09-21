@@ -1,7 +1,6 @@
 """Spawn entry point. Capture, control sends and preview sends never share a wait."""
 import importlib
 import multiprocessing
-import os
 import queue
 import threading
 import time
@@ -9,6 +8,7 @@ from dataclasses import dataclass
 from contextlib import ExitStack
 
 from base.log_manager import LogManager
+from base.log_exit import exit_with_log_drain
 from base.recording_capture import RecordingCapture, sounddevice_backend
 from base.recording_process_protocol import (
     CaptureSlotReleased,
@@ -125,7 +125,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
             if parent is not None and not parent.is_alive():
                 broken.set()
                 if not finished.wait(cancel_timeout):
-                    os._exit(1)
+                    exit_with_log_drain(1)
                 return
 
     threading.Thread(target=parent_watch, name="recording-parent-watch", daemon=True).start()
@@ -319,7 +319,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                             emit_terminal(state)
                     break
                 if now >= stopping:
-                    os._exit(1)
+                    exit_with_log_drain(1)
 
             if not broken.is_set() and control.poll(.01):
                 command = control.recv()
@@ -656,7 +656,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
             sender.join(.2)
         finished.set()
         if controller_close_failed or capture_cleanup_failed or audio_cleanup_failed:
-            os._exit(1)
+            exit_with_log_drain(1)
         if audio_backend is not None:
             try:
                 # sounddevice's helper decrements its initialization count, so
@@ -666,6 +666,6 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                 # Native teardown can raise arbitrary backend exceptions. Do
                 # not retry via atexit after uncertain library cleanup.
                 logger.exception("Failed to terminate worker audio library")
-                os._exit(1)
+                exit_with_log_drain(1)
         control.close()
         preview.close()

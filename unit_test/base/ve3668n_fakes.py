@@ -558,9 +558,25 @@ class MetadataOwnershipFaults:
             boundary.wrapped.close()
 
 
-def discovery_factory(*, trace_path=None, mode="normal"):
+def discovery_factory(*, trace_path=None, mode="normal", log_directory=None,
+                      log_failure=None):
     """Importable spawn factory; no SDK/DLL even in the unpatched child."""
     first = trace_path is None or not Path(trace_path).exists()
+    if log_directory is not None:
+        from unit_test.base.log_manager_process_fakes import configure
+        logger = configure(log_directory).set_log_handler("core")
+        if log_failure is not None:
+            from base import log_manager
+
+            def fail_write(sink, message):
+                assert sink.is_locked
+                if log_failure == "blocked":
+                    threading.Event().wait()
+                raise OSError("injected discovery log write failure")
+
+            log_manager._BatchFileHandler.do_write = fail_write
+        for index in range(3):
+            logger.info("discovery-tail=%d", index)
     discovery_trace(trace_path, "factory")
     if mode == "block_factory":
         threading.Event().wait()
