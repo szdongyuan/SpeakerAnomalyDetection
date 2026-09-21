@@ -204,6 +204,8 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
         self._token_seq += 1
         return f"round-{self._token_seq}"
 
+    _generate_product_condition_group_id = _generate_recording_token
+
     def clear_all_direction_waveforms(self):
         self.cleared_waveforms += 1
 

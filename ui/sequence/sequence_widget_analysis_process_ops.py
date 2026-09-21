@@ -1180,6 +1180,9 @@ class SequenceWidgetAnalysisProcessOpsMixin:
 
     def _lock_analysis_round_config(self):
         self._analysis_round_config_locked = True
+        model_edit = getattr(self, "lineedit_type", None)
+        if model_edit is not None:
+            model_edit.setReadOnly(True)
         combo = getattr(self, "using_file_combobox", None)
         if combo is not None:
             combo.setEnabled(False)

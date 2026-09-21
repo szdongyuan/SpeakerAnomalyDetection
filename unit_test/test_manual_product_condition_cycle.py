@@ -121,6 +121,8 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
         self._token_seq += 1
         return f"token_{self._token_seq}"
 
+    _generate_product_condition_group_id = _generate_recording_token
+
     def clear_all_direction_waveforms(self):
         self.cleared_waveforms += 1
 
