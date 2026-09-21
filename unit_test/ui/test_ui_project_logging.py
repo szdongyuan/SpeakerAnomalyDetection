@@ -8,11 +8,11 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from concurrent_log_handler import ConcurrentRotatingFileHandler
+from base.log_manager import LogManager
 
 from base.recording_service import RecordingCallbacks
 from ui.recording_service_bridge import RecordingServiceBridge
-from unit_test.logging_test_support import isolated_project_logger
+from unit_test.logging_test_support import isolated_project_logger, managed_handlers
 
 
 def _assert_file_fault(state, caplog, message, cause):
@@ -23,8 +23,7 @@ def _assert_file_fault(state, caplog, message, cause):
     assert record.levelno == logging.ERROR
     assert record.exc_info[0] is RuntimeError
     assert str(record.exc_info[1]) == cause
-    for handler in state.logger.handlers:
-        handler.flush()
+    assert LogManager.flush(timeout=2)
     data = state.path.read_bytes()
     assert f"core ERROR {message}".encode() in data
     assert f"RuntimeError: {cause}".encode() in data
@@ -85,8 +84,7 @@ def test_bridge_initializes_logger_before_service_assignment(ui_qapp, tmp_path, 
     with isolated_project_logger(tmp_path, monkeypatch) as state:
         def assign(bridge, value):
             assert bridge._logger is state.logger
-            assert any(isinstance(handler, ConcurrentRotatingFileHandler)
-                       for handler in bridge._logger.handlers)
+            assert managed_handlers(bridge._logger)
             assigned.append(value)
 
         monkeypatch.setattr(RecordingServiceBridge, "service", property(fset=assign), raising=False)

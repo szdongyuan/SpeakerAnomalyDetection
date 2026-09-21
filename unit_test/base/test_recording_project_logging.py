@@ -8,7 +8,7 @@ import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from concurrent_log_handler import ConcurrentRotatingFileHandler
+from base.log_manager import LogManager
 import numpy as np
 import pytest
 import soundfile as sf
@@ -20,17 +20,11 @@ from unit_test.base.recording_process_fakes import ControlledWriter, FakeBackend
 from unit_test.base.test_recording_capture import request
 from unit_test.base.test_ve3668n_capture import make_stream
 from unit_test.base.ve3668n_fakes import CaptureSDK
-from unit_test.logging_test_support import isolated_project_logger
-
-
-def rotating_handlers(logger):
-    return [handler for handler in logger.handlers
-            if isinstance(handler, ConcurrentRotatingFileHandler)]
+from unit_test.logging_test_support import isolated_project_logger, managed_handlers
 
 
 def read_project_log(state, source):
-    for handler in state.logger.handlers:
-        handler.flush()
+    assert LogManager.flush(timeout=2)
     assert state.path.exists(), "business diagnostic did not reach the project file"
     data = state.path.read_bytes()
     assert re.search(rb"\[" + re.escape(source.encode("ascii")) + rb":[1-9][0-9]*\]", data)
@@ -49,7 +43,7 @@ def test_recording_capture_acquires_project_handler(tmp_path, monkeypatch):
     with isolated_project_logger(tmp_path, monkeypatch) as state:
         capture = RecordingCapture(request(tmp_path), backend=FakeBackend())
         assert capture._logger is state.logger
-        assert len(rotating_handlers(state.logger)) == 1
+        assert len(managed_handlers(state.logger)) == 1
 
 
 def test_recording_service_acquires_handler_before_supervisor(tmp_path, monkeypatch):
@@ -59,7 +53,7 @@ def test_recording_service_acquires_handler_before_supervisor(tmp_path, monkeypa
 
         def start(service, thread, **kwargs):
             assert service._logger is state.logger
-            assert len(rotating_handlers(state.logger)) == 1
+            assert len(managed_handlers(state.logger)) == 1
             starts.append(thread)
             return original(service, thread, **kwargs)
 
@@ -95,7 +89,7 @@ def test_finalizing_record_preserves_project_source_time_and_once_only_callback(
         assert before <= record.args[1] <= callbacks[0] <= after
         logged = read_project_log(state, "recording_service.py")
         assert logged.count(b"stage=finalizing_observed") == 1
-        assert len(rotating_handlers(state.logger)) == 1
+        assert len(managed_handlers(state.logger)) == 1
 
 
 @pytest.mark.parametrize("guard", ["cancel_requested", "_terminal"])
@@ -118,7 +112,7 @@ def test_ve_stream_acquires_project_handler(tmp_path, monkeypatch):
         stream, *_ = make_stream(tmp_path)
         try:
             assert stream._logger is state.logger
-            assert len(rotating_handlers(state.logger)) == 1
+            assert len(managed_handlers(state.logger)) == 1
         finally:
             stream.close()
 
@@ -128,11 +122,11 @@ def test_instances_share_handler_that_survives_service_and_stream_shutdown(tmp_p
         service = RecordingService()
         stream = None
         try:
-            handler, = rotating_handlers(state.logger)
+            handler, = managed_handlers(state.logger)
             stream, _, _, _, failures = make_stream(tmp_path)
             capture = RecordingCapture(request(tmp_path), backend=FakeBackend())
             assert stream._logger is capture._logger is service._logger is state.logger
-            assert rotating_handlers(state.logger) == [handler]
+            assert managed_handlers(state.logger) == [handler]
             assert stream.start()
             assert stream.done.wait(3)
         finally:
@@ -143,7 +137,7 @@ def test_instances_share_handler_that_survives_service_and_stream_shutdown(tmp_p
                     assert not stream._owner.is_alive()
             stop_service(service)
         assert failures == [] and stream.handles_released
-        assert rotating_handlers(state.logger) == [handler]
+        assert managed_handlers(state.logger) == [handler]
         service._diagnose("shared-handler-after-shutdown-probe")
         logged = read_project_log(state, "recording_service.py")
         assert logged.count(b"core ERROR shared-handler-after-shutdown-probe") == 1
@@ -340,7 +334,8 @@ def test_discovery_pipe_failure_preserves_cleanup(tmp_path, monkeypatch, caplog,
         watchers.append(thread)
         return thread
 
-    monkeypatch.setattr(discovery.threading, "Thread", track_thread)
+    monkeypatch.setattr(discovery, "threading", SimpleNamespace(
+        Thread=track_thread, Event=threading.Event, Condition=threading.Condition))
     with isolated_project_logger(tmp_path, monkeypatch) as state:
         if setup_failure:
             error = PermissionError("discovery-logger-setup-probe")
@@ -372,9 +367,11 @@ def test_discovery_logger_exists_before_supervisor(tmp_path, monkeypatch):
         starts = []
 
         def start(thread):
+            if thread.name == "project-log-consumer":
+                return original_start(thread)
             service = thread._target.__self__
             assert service._logger is state.logger
-            assert len(rotating_handlers(state.logger)) == 1
+            assert len(managed_handlers(state.logger)) == 1
             starts.append(thread)
             return original_start(thread)
 
@@ -456,7 +453,8 @@ def test_worker_fatal_and_sender_exit_cleanup_reach_project_file(
             elif not blocked_preview and self.name == "recording-preview-sender":
                 self.target(*self.args)
 
-    monkeypatch.setattr(worker_module.threading, "Thread", ControlledThread)
+    monkeypatch.setattr(worker_module, "threading",
+                        SimpleNamespace(Thread=ControlledThread, Event=threading.Event))
     with isolated_project_logger(tmp_path, monkeypatch) as state:
         worker_module.recording_worker(control, preview, 7, None, {})
         control.close.assert_called_once_with()

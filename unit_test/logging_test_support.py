@@ -6,33 +6,55 @@ from types import SimpleNamespace
 from base import log_manager
 
 
+def managed_handlers(logger):
+    """Project routes, independent of the consumer-owned file sink type."""
+    return [handler for handler in logger.handlers
+            if isinstance(handler, log_manager._ProjectQueueHandler)]
+
+
 @contextmanager
 def isolated_project_logger(tmp_path, monkeypatch):
+    manager = log_manager.LogManager
+    previous_runtime = manager._runtime
+    if previous_runtime is not None:
+        assert previous_runtime.flush(2), "pre-existing runtime did not drain"
     logger = logging.getLogger("core")
-    original = (logger.handlers[:], logger.level, logger.propagate, logger.disabled)
-    for handler in original[0]:
-        logger.removeHandler(handler)
+    originals = {
+        name: (item, item.handlers[:], item.level, item.propagate, item.disabled)
+        for name, item in logging.Logger.manager.loggerDict.copy().items()
+        if isinstance(item, logging.Logger)
+    }
+    for item, handlers, *_ in originals.values():
+        for handler in handlers:
+            if item is logger or isinstance(handler, log_manager._ProjectQueueHandler):
+                item.removeHandler(handler)
+    manager._runtime = None
     logger.setLevel(logging.INFO)
     logger.propagate = True
     logger.disabled = False
     path = tmp_path / "logs" / "main.log"
+    config = {"log_name": str(path),
+              "log_format": "%(name)s %(levelname)s %(message)s [%(filename)s:%(lineno)d]"}
     monkeypatch.setattr(log_manager, "LOG_DIR", str(path.parent))
-    monkeypatch.setattr(log_manager, "LOG_MAPPING", {"core": {
-        "log_name": str(path),
-        "log_format": "%(name)s %(levelname)s %(message)s [%(filename)s:%(lineno)d]",
-    }})
+    monkeypatch.setattr(log_manager, "DEFAULT_LOG", config)
+    monkeypatch.setattr(log_manager, "LOG_MAPPING", {
+        "core": config,
+        "debug": dict(config, log_name=str(path.with_name("debug.log"))),
+        "test": dict(config, log_name=str(path.with_name("test.log"))),
+    })
     try:
         yield SimpleNamespace(logger=logger, path=path)
     finally:
-        for handler in logger.handlers[:]:
-            logger.removeHandler(handler)
-            if handler not in original[0]:
-                handler.close()
-        for handler in original[0]:
-            logger.addHandler(handler)
-        logger.setLevel(original[1])
-        logger.propagate = original[2]
-        logger.disabled = original[3]
+        assert manager.shutdown_all(2), "test-owned logging runtime did not stop"
+        for name, item in logging.Logger.manager.loggerDict.copy().items():
+            if not isinstance(item, logging.Logger):
+                continue
+            original = originals.get(name, (item, [], logging.NOTSET, True, False))
+            item.handlers[:] = original[1]
+            item.setLevel(original[2])
+            item.propagate = original[3]
+            item.disabled = original[4]
+        manager._runtime = previous_runtime
 
 
 def spawn_sender_fault(directory):
@@ -57,5 +79,4 @@ def spawn_sender_fault(directory):
             _send_loop(BrokenConnection(), outgoing, broken)
             assert broken.is_set()
             assert outgoing.unfinished_tasks == 0
-            for handler in state.logger.handlers:
-                handler.flush()
+            assert log_manager.LogManager.flush(timeout=2)

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from concurrent_log_handler import ConcurrentRotatingFileHandler
+from unit_test.logging_test_support import isolated_project_logger, managed_handlers
 
 from base import log_manager
 from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
@@ -21,31 +21,8 @@ from unit_test.ui.test_ve3668n_prewarm_trigger import _completion
 
 @pytest.fixture(autouse=True)
 def isolated_core_logger(tmp_path, monkeypatch):
-    """Detach user handlers without closing them; restore the exact logger state."""
-    logger = logging.getLogger("core")
-    original = (logger.handlers[:], logger.level, logger.propagate, logger.disabled)
-    for handler in original[0]:
-        logger.removeHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = True
-    logger.disabled = False
-    path = tmp_path / "logs" / "main.log"
-    monkeypatch.setattr(log_manager, "LOG_DIR", str(path.parent))
-    monkeypatch.setattr(log_manager, "LOG_MAPPING", {"core": {
-        "log_name": str(path), "log_format": "%(name)s %(levelname)s %(message)s",
-    }})
-    try:
-        yield SimpleNamespace(logger=logger, path=path)
-    finally:
-        for handler in logger.handlers[:]:
-            logger.removeHandler(handler)
-            if handler not in original[0]:
-                handler.close()
-        for handler in original[0]:
-            logger.addHandler(handler)
-        logger.setLevel(original[1])
-        logger.propagate = original[2]
-        logger.disabled = original[3]
+    with isolated_project_logger(tmp_path, monkeypatch) as state:
+        yield state
 
 
 def assert_core_fault(caplog, machine_id, cause, level=logging.WARNING):
@@ -218,10 +195,8 @@ def test_real_discovery_fault_is_written_to_project_file(
         mic_device=device_info(machine_id=machine_id), mic_channels=[7, 1]))
     controller.view.ve_controls.discovery.service.deliver(diagnostics=(cause,))
     ui_qapp.processEvents()
-    handlers = isolated_core_logger.logger.handlers
-    assert any(isinstance(handler, ConcurrentRotatingFileHandler) for handler in handlers)
-    for handler in handlers:
-        handler.flush()
+    assert managed_handlers(isolated_core_logger.logger)
+    assert log_manager.LogManager.flush(timeout=2)
     # LogManager uses the platform encoding; these diagnostic probes are ASCII.
     contents = isolated_core_logger.path.read_bytes()
     assert b"core WARNING" in contents

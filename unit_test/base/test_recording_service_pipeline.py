@@ -199,21 +199,49 @@ def release_probe_slot(probe):
         1, probe.session.request.request_id, "capture_slot_released", slot_payload(probe)))
 
 
-def test_valid_slot_release_opens_admission_but_retains_busy_session(monkeypatch, tmp_path):
+@pytest.mark.parametrize("release_delay", [0, .75])
+def test_valid_slot_release_opens_admission_but_retains_busy_session(
+    monkeypatch, tmp_path, release_delay,
+):
     probe = ve_probe(monkeypatch, tmp_path)
     probe.clock.advance(.1)
     probe.service._event(probe.worker, RecordingEvent(
         1, probe.session.request.request_id, "progress",
         RecordingProgress(probe.session.request.request_id, 1,
                           probe.session.request.target_samples, 100.1)))
+    probe.clock.advance(release_delay)
     probe.service._event(probe.worker, RecordingEvent(
         1, probe.session.request.request_id, "capture_slot_released", slot_payload(probe)))
     evidence = probe.service.session_diagnostics(probe.session.request.request_id)
     assert probe.service.busy and probe.service.can_start_recording
     assert evidence["target_reached_at"] == 100.1
-    assert evidence["capture_slot_released_at"] == 100.1
+    assert evidence["capture_slot_released_at"] == 100.1 + release_delay
+    assert probe.clock() == 100.1 + release_delay
     assert evidence["lifecycle_counts"] == VeLifecycleCounts(1, 1, 1, 0, 0, 0)
     assert evidence["admission_reason"] is None
+
+
+def test_pending_slot_release_expires_at_one_second(monkeypatch, tmp_path):
+    probe = ve_probe(monkeypatch, tmp_path)
+    probe.clock.advance(.1)
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.session.request.request_id, "progress",
+        RecordingProgress(probe.session.request.request_id, 1,
+                          probe.session.request.target_samples, 100.1)))
+    probe.clock.advance(.75)
+    probe.service._tick()
+    assert not probe.worker.retiring
+    assert probe.session.failure is None
+    assert probe.service._capture_session is probe.session
+    assert not probe.service.can_start_recording
+
+    probe.clock.advance(.25)
+    assert probe.clock() == 101.1
+    probe.service._tick()
+    assert probe.worker.retiring
+    assert probe.session.failure.stage == "capture_release_timeout"
+    assert probe.session.failure.message == "capture slot release exceeded target + 1.0 seconds"
+    assert not probe.service.can_start_recording
 
 
 def test_capacity_full_slot_release_records_backpressure_evidence(monkeypatch, tmp_path):
@@ -426,7 +454,7 @@ def test_current_generation_slot_contradictions_retire_without_opening_admission
             RecordingProgress(probe.session.request.request_id, 1,
                               probe.session.request.target_samples, 100.1)))
     if fault == "late":
-        probe.clock.advance(.51)
+        probe.clock.advance(1.01)
     payload = slot_payload(probe, writer_released=False) if fault == "false_flag" else slot_payload(probe)
     request_id = "wrong" if fault == "wrong_id" else probe.session.request.request_id
     if fault == "wrong_id":
@@ -435,6 +463,9 @@ def test_current_generation_slot_contradictions_retire_without_opening_admission
         1, request_id, "capture_slot_released", payload))
     assert probe.worker.retiring and not probe.service.can_start_recording
     assert probe.service._capture_session is probe.session
+    if fault == "late":
+        assert probe.session.failure.stage == "capture_release_timeout"
+        assert probe.session.failure.message == "capture slot release exceeded target + 1.0 seconds"
 
 
 def test_generation_retirement_fans_out_active_and_finalizer_once(monkeypatch, tmp_path):
@@ -563,15 +594,15 @@ def test_duplicate_target_progress_cannot_replace_t0_or_extend_slot_deadline(mon
         RecordingProgress(probe.session.request.request_id, 1,
                           probe.session.request.target_samples, 100.1)))
     assert probe.session._target_reached_at == 100.1
-    assert probe.session._slot_release_deadline == 100.6
+    assert probe.session._slot_release_deadline == 101.1
     probe.clock.advance(.39)
     probe.service._event(probe.worker, RecordingEvent(
         1, probe.session.request.request_id, "progress",
         RecordingProgress(probe.session.request.request_id, 1,
                           probe.session.request.target_samples, 100.49)))
     assert probe.session._target_reached_at == 100.1
-    assert probe.session._slot_release_deadline == 100.6
-    probe.clock.advance(.12)
+    assert probe.session._slot_release_deadline == 101.1
+    probe.clock.advance(.62)
     probe.service._tick()
     assert probe.worker.retiring
     assert probe.session.failure.stage == "capture_release_timeout"
@@ -724,7 +755,7 @@ def test_authoritative_t1_after_atomic_slot_change_cannot_open_late_admission(mo
                           probe.session.request.target_samples, 100.1)))
 
     def transition_clock():
-        return 100.61 if probe.service._capture_session is None else 100.59
+        return 101.11 if probe.service._capture_session is None else 101.09
 
     monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=transition_clock))
     probe.service._event(probe.worker, RecordingEvent(
