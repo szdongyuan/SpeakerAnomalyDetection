@@ -1017,25 +1017,34 @@ def serial_conditions(host):
     return frames
 
 
-@pytest.mark.parametrize("next_frame_index", [1, 2])
-def test_existing_serial_trigger_order_and_completed_frames_survive_restart(factory, next_frame_index):
+@pytest.mark.parametrize("waiting_idle", [False, True])
+def test_serial_port_boundary_and_completed_frames_survive_restart(factory, waiting_idle):
     original = factory()
     frames = serial_conditions(original)
     begin_partial_round(original)
+    original._serial_product_port_index = 0 if waiting_idle else 1
+    original._serial_product_waiting_port_idle = waiting_idle
     original._save_product_test_progress_before_exit()
     reopened = factory()
     serial_conditions(reopened)
+    reopened._serial_trigger_config = {}  # Startup has not started the listener yet.
     assert reopened._offer_product_test_resume()
-    assert reopened._manual_product_condition_index == 1
-    assert reopened._manual_product_condition_completed_keys == {"a"}
-    assert not reopened._serial_product_waiting_port_idle
+    assert reopened._serial_product_port_index == (0 if waiting_idle else 1)
+    assert reopened._serial_product_waiting_port_idle == waiting_idle
+    serial_conditions(reopened)
     reopened._can_prepare_recording_workflow = Mock(return_value=True)
     reopened._start_serial_product_condition = Mock(return_value=True)
+    reopened.on_serial_full_frame_received({"raw_hex": frames[2]})
+    reopened._start_serial_product_condition.assert_not_called()
     reopened.on_serial_full_frame_received({"raw_hex": frames[0]})
     reopened._start_serial_product_condition.assert_not_called()
-    # Existing develop behavior: any unfinished condition may be triggered.
-    reopened.on_serial_full_frame_received({"raw_hex": frames[next_frame_index]})
-    reopened._start_serial_product_condition.assert_called_once_with(frames[next_frame_index])
+    if waiting_idle:
+        reopened.on_serial_full_frame_received({"raw_hex": frames[1]})
+        reopened._start_serial_product_condition.assert_not_called()
+        reopened.on_serial_full_frame_received({"raw_hex": "01 04 02 00 00 B9 30"})
+    reopened.on_serial_full_frame_received({"raw_hex": frames[1]})
+    reopened._start_serial_product_condition.assert_called_once_with(frames[1])
+
 
 
 def test_unsupported_serial_idle_wait_does_not_partially_restore(factory):
@@ -1047,6 +1056,7 @@ def test_unsupported_serial_idle_wait_does_not_partially_restore(factory):
     snapshot = original._product_progress_store.path.read_bytes()
     reopened = factory()
     serial_conditions(reopened)
+    reopened._serial_product_port_plan = None  # Exercise the legacy fallback explicitly.
     reopened._ask_product_test_resume.return_value = None
     assert not reopened._offer_product_test_resume()
     error = reopened._ask_product_test_resume.call_args.args[1]
@@ -1065,7 +1075,8 @@ def test_port_index_is_validated_from_configuration_without_serial_port_module(f
     original._save_product_test_progress_before_exit()
     reopened = factory()
     serial_conditions(reopened)
-    assert not hasattr(reopened, "_serial_product_port_plan")
+    reopened._serial_product_port_plan = None  # Exercise the legacy fallback explicitly.
+    assert not callable(reopened._serial_product_port_plan)
     assert reopened._offer_product_test_resume()
     assert reopened._serial_product_port_index == 1
     assert reopened._manual_product_condition_index == 1

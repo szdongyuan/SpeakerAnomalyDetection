@@ -154,6 +154,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
         if any(bool(getattr(self, name, False)) for name in (
                 "_recording_closed", "_closing", "_shutdown_started", "_close_in_progress",
                 "_test_metadata_validation_open", "_product_test_program_config_dialog_open",
+                "_serial_trigger_config_dialog_open",
                 "_serial_product_error_dialog_open", "_recording_cleanup_in_progress",
                 "_streaming_cleanup_in_progress")):
             return False

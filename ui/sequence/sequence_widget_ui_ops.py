@@ -521,7 +521,10 @@ class SequenceWidgetUiOpsMixin:
         if workflow_enabled:
             condition_configs = getattr(self, "product_test_condition_configs", [])
             trigger_mode = classify_project_trigger_mode(condition_configs)
-            can_start = is_manual_project_play_allowed(condition_configs)
+            can_start = is_manual_project_play_allowed(
+                condition_configs,
+                serial_enabled=(getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", True),
+            )
             if trigger_mode == PRODUCT_TRIGGER_MODE_MIXED:
                 tooltip = "所有工况状态码必须全部配置或全部留空"
             elif can_start:

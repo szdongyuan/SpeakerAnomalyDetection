@@ -1080,6 +1080,9 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         ):
             left_panel.clear_current_stage()
             return True
+        refresh_serial_port = getattr(self, "_refresh_serial_product_port_state", None)
+        if callable(refresh_serial_port) and refresh_serial_port():
+            return True
         left_panel.set_current_stage("等待下一档位", tone="pending")
         return True
 

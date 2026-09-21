@@ -50,7 +50,7 @@ class _ButtonSpy:
         self.tooltip = str(tooltip)
 
 
-class _PlaybackPermissionHost(SequenceWidgetUiOpsMixin):
+class _PlaybackPermissionHost(SequenceWidgetSerialTriggerOpsMixin, SequenceWidgetUiOpsMixin):
     def __init__(self, condition_configs, serial_enabled=False, player_btn=None):
         self.toolsbar = SimpleNamespace(
             player_btn=player_btn or _ButtonSpy(),
@@ -102,7 +102,7 @@ def test_manual_playback_permission_matrix(conditions, expected):
     [
         (EMPTY_CONDITIONS, False, True, "开始录制"),
         (EMPTY_CONDITIONS, True, True, "开始录制"),
-        (COMPLETE_CONDITIONS, False, False, "只能由状态码触发测试"),
+        (COMPLETE_CONDITIONS, False, True, "开始录制"),
         (COMPLETE_CONDITIONS, True, False, "只能由状态码触发测试"),
         (MIXED_CONDITIONS, False, False, "必须全部配置或全部留空"),
         (MIXED_CONDITIONS, True, False, "必须全部配置或全部留空"),
@@ -122,7 +122,7 @@ def test_play_button_matches_permission_matrix(
     assert tooltip_text in host.player_btn.tooltip
 
 
-def test_actual_qt_button_ignores_serial_toggle_for_complete_config():
+def test_actual_qt_button_follows_serial_toggle_for_complete_config():
     player_btn = QPushButton()
     host = _PlaybackPermissionHost(
         COMPLETE_CONDITIONS,
@@ -135,7 +135,7 @@ def test_actual_qt_button_ignores_serial_toggle_for_complete_config():
 
     host._serial_trigger_config = {"enabled": False}
     host.update_player_btn_is_paused()
-    assert player_btn.isEnabled() is False
+    assert player_btn.isEnabled() is True
 
 
 def test_actual_qt_button_allows_empty_codes_when_serial_is_enabled():
@@ -205,7 +205,7 @@ def test_mark_reset_does_not_bypass_playback_permission():
     assert host.data_struct.wav_calibration_warning_shown is False
 
 
-def test_disabling_serial_trigger_does_not_enable_complete_config(monkeypatch):
+def test_disabling_serial_trigger_enables_complete_config(monkeypatch):
     class _Dialog:
         def __init__(self, *_args, **_kwargs):
             return None
@@ -244,7 +244,7 @@ def test_disabling_serial_trigger_does_not_enable_complete_config(monkeypatch):
 
     assert host._serial_trigger_config["enabled"] is False
     assert host.hw_manager.stop_calls == 1
-    assert host.player_btn.disabled is True
+    assert host.player_btn.disabled is False
 
 
 def test_serial_config_save_failure_preserves_permission_and_runtime(monkeypatch):

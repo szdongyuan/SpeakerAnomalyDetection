@@ -1,5 +1,6 @@
 from base.analysis_segments import segment_condition_fields
 from base.analysis_config_validation import validate_sequence_config
+from base.hardware_trigger.serial_polling import parse_polling_settings
 
 import json
 import os
@@ -57,9 +58,9 @@ class LoadUiConfig(object):
     @staticmethod
     def get_default_serial_discrete_input_config():
         return {
-            "_comment_global": "串口离散输入触发配置",
             "enabled": False,
             "device_model": "JY-DAM0404D",
+            "port_switch_idle_code": "",
             "serial_settings": {
                 "port": "COM3",
                 "baudrate": 9600,
@@ -69,70 +70,33 @@ class LoadUiConfig(object):
                 "timeout": 0.1,
             },
             "polling_settings": {
+                "enabled": False,
                 "interval_ms": 50,
                 "query_command_hex": "FE 02 00 00 00 04 6D C6",
-            },
-            "trigger_settings": {
-                "delay_seconds": 0.5,
-                "direction_cycle_policy": {
-                    "test_mode": "forward_then_reverse",
-                },
-            },
-            "decoder": {
-                "_comment": "mode 可以是 'full_frame' 或 'state_byte'",
-                "mode": "full_frame",
-                "state_byte_index": 3,
-            },
-            "state_maps": {
-                "full_frame": {
-                    "FE 02 01 01 50 5C": {
-                        "action": "start_record",
-                        "direction": "forward",
-                        "description": "只按下绿色按钮 (正转)",
-                    },
-                    "FE 02 01 03 D1 9D": {
-                        "action": "start_record",
-                        "direction": "reverse",
-                        "description": "绿色和红色按钮都按下 (反转)",
-                    },
-                    "FE 02 01 00 90 5C": {
-                        "action": "idle",
-                        "description": "全部松开 (空闲)",
-                    },
-                    "FE 02 01 02 91 9C": {
-                        "action": "ignore",
-                        "description": "只按下红色按钮 (忽略)",
-                    },
-                },
-                "state_byte": {
-                    "01": {
-                        "action": "start_record",
-                        "direction": "forward",
-                        "description": "只按下绿色按钮 (正转)",
-                    },
-                    "03": {
-                        "action": "start_record",
-                        "direction": "reverse",
-                        "description": "绿色和红色按钮都按下 (反转)",
-                    },
-                    "00": {
-                        "action": "idle",
-                        "description": "全部松开 (空闲)",
-                    },
-                    "02": {
-                        "action": "ignore",
-                        "description": "只按下红色按钮 (忽略)",
-                    },
-                },
             },
         }
 
     @staticmethod
     def normalize_serial_discrete_input_config(config_data):
-        return LoadUiConfig._merge_dict_with_defaults(
+        def without_comments(value):
+            if isinstance(value, dict):
+                return {
+                    key: without_comments(item)
+                    for key, item in value.items()
+                    if not key.startswith("_comment")
+                }
+            if isinstance(value, list):
+                return [without_comments(item) for item in value]
+            return value
+
+        config = LoadUiConfig._merge_dict_with_defaults(
             LoadUiConfig.get_default_serial_discrete_input_config(),
             config_data if isinstance(config_data, dict) else {},
         )
+        # Product tests use complete frames and UI gear order, not legacy direction rules.
+        for key in ("state_maps", "trigger_settings", "decoder"):
+            config.pop(key, None)
+        return without_comments(config)
 
     @staticmethod
     def load_sequence_config_from_json(json_file_path):
@@ -563,6 +527,8 @@ class LoadUiConfig(object):
                 base_config,
                 config_data if isinstance(config_data, dict) else {},
             )
+            merged_config = LoadUiConfig.normalize_serial_discrete_input_config(merged_config)
+            parse_polling_settings(merged_config["polling_settings"])
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(merged_config, f, indent=2, ensure_ascii=False)
             return True

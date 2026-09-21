@@ -240,7 +240,7 @@ def test_project_validation_reports_project_group_and_condition_errors(
     assert any(expected_message in error for error in errors)
 
 
-def test_status_codes_are_global_and_must_be_all_empty_or_all_present(tmp_path):
+def test_status_codes_must_be_all_empty_or_present_and_port_boundary_valid(tmp_path):
     project = make_project(tmp_path)
     conditions = flatten_test_conditions(project)
     assert classify_project_trigger_mode(conditions) == "manual"
@@ -265,7 +265,7 @@ def test_status_codes_are_global_and_must_be_all_empty_or_all_present(tmp_path):
         {"active_file": None, "configs": []},
         None,
     )
-    assert any("状态码重复" in error for error in duplicate_errors)
+    assert any("末档" in error and "首档" in error for error in duplicate_errors)
 
 
 def test_registry_keeps_missing_file_record_until_explicit_delete(tmp_path):

@@ -1,4 +1,5 @@
 import time
+from threading import Event
 
 try:
     import serial
@@ -8,6 +9,7 @@ except Exception:  # pragma: no cover - import failure is surfaced via status si
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from base.hardware_trigger.serial_full_frame_matcher import SerialFullFrameMatcher
+from base.hardware_trigger.serial_polling import parse_polling_settings
 from base.log_manager import LogManager
 
 # 串口触发调试打印开关: 默认关闭, 避免轮询日志(如"轮询已发送，但当前未收到设备响应")
@@ -18,16 +20,17 @@ SERIAL_TRIGGER_DEBUG = False
 class SerialDiscreteInputWorker(QThread):
     sig_state_changed = pyqtSignal(object)
     sig_status = pyqtSignal(object)
+    POLLING_RESPONSE_TIMEOUT_SECONDS = 3.0
 
     def __init__(self, config, full_frame_candidates=None):
         super().__init__()
         self.config = config or {}
         self.logger = LogManager.set_log_handler("core")
         self._is_running = False
+        self._stop_event = Event()
         self.last_state = None
         self.serial_port = None
         self.last_raw_hex = None
-        self._last_no_response_log_time = 0.0
         self._product_full_frame_mode = full_frame_candidates is not None
         self._full_frame_matcher = (
             SerialFullFrameMatcher(full_frame_candidates or ())
@@ -56,6 +59,7 @@ class SerialDiscreteInputWorker(QThread):
 
     def stop(self):
         self._is_running = False
+        self._stop_event.set()
         try:
             if self.serial_port and self.serial_port.is_open:
                 self.serial_port.close()
@@ -72,6 +76,8 @@ class SerialDiscreteInputWorker(QThread):
         return None
 
     def run(self):
+        if self._stop_event.is_set():
+            return
         self._is_running = True
         serial_settings = self.config.get("serial_settings", {})
         polling_settings = self.config.get("polling_settings", {})
@@ -84,7 +90,6 @@ class SerialDiscreteInputWorker(QThread):
         stopbits = serial_settings.get("stopbits", 1)
         timeout = serial_settings.get("timeout", 0.1)
 
-        interval_ms = polling_settings.get("interval_ms", 50)
         query_command_hex = polling_settings.get("query_command_hex", "")
         decoder_mode = "full_frame" if self._product_full_frame_mode else decoder.get("mode", "full_frame")
         state_byte_index = int(decoder.get("state_byte_index", 3) or 3)
@@ -100,17 +105,13 @@ class SerialDiscreteInputWorker(QThread):
             self._emit_status(running=False, connected=False, message=msg, error=msg, mode=decoder_mode)
             return
 
-        if self._product_full_frame_mode:
-            query_bytes = b""
-        else:
-            try:
-                query_bytes = bytes.fromhex(str(query_command_hex or "").strip())
-            except ValueError as e:
-                msg = f"query_command_hex 配置非法: {e}"
-                self.logger.error(msg)
-                self._debug_print(msg)
-                self._emit_status(running=False, connected=False, message=msg, error=msg, mode=decoder_mode)
-                return
+        try:
+            query_bytes, interval_seconds = parse_polling_settings(polling_settings)
+        except ValueError as error:
+            msg = str(error)
+            self.logger.error(msg)
+            self._emit_status(running=False, connected=False, message=msg, error=msg, mode=decoder_mode)
+            return
 
         try:
             self.serial_port = serial.Serial(
@@ -136,35 +137,34 @@ class SerialDiscreteInputWorker(QThread):
             self._emit_status(running=False, connected=False, message=msg, error=str(e), mode=decoder_mode)
             return
 
-        while self._is_running:
+        last_received_at = time.monotonic()
+        response_timed_out = False
+        while self._is_running and not self._stop_event.is_set():
             try:
-                if not self._product_full_frame_mode and query_bytes:
+                if query_bytes:
                     self.serial_port.write(query_bytes)
-                time.sleep(interval_ms / 1000.0)
+                if self._stop_event.wait(interval_seconds):
+                    break
 
                 waiting = getattr(self.serial_port, "in_waiting", 0)
-                if waiting <= 0:
-                    now = time.monotonic()
-                    if (now - self._last_no_response_log_time) >= 1.0:
-                        self._last_no_response_log_time = now
-                        self._debug_print("轮询已发送，但当前未收到设备响应")
-                        if self.last_raw_hex is not None:
-                            self._emit_status(
-                                running=True,
-                                connected=True,
-                                has_response=False,
-                                message="串口已打开，但设备无响应",
-                                raw_hex="",
-                                value="",
-                                mode=decoder_mode,
-                            )
-                            self.last_raw_hex = None
-                    continue
-
-                received_bytes = self.serial_port.read(waiting)
+                received_bytes = self.serial_port.read(waiting) if waiting > 0 else b""
+                now = time.monotonic()
                 if not received_bytes:
+                    # Passive fixtures may legitimately remain silent between reports.
+                    if (query_bytes and not response_timed_out
+                            and now - last_received_at >= self.POLLING_RESPONSE_TIMEOUT_SECONDS):
+                        self._emit_status(
+                            running=True,
+                            connected=True,
+                            has_response=False,
+                            message="串口已打开，但设备连续 3 秒无响应",
+                            mode=decoder_mode,
+                        )
+                        response_timed_out = True
                     continue
 
+                last_received_at = now
+                response_timed_out = False
                 raw_hex = " ".join(f"{b:02X}" for b in received_bytes)
                 if self._product_full_frame_mode:
                     self.logger.info(
@@ -174,7 +174,7 @@ class SerialDiscreteInputWorker(QThread):
                         running=True,
                         connected=True,
                         has_response=True,
-                        message="收到串口主动上报数据",
+                        message="收到串口数据",
                         raw_hex=raw_hex,
                         value="",
                         mode="full_frame",
@@ -235,7 +235,8 @@ class SerialDiscreteInputWorker(QThread):
                     error=str(e),
                     mode=decoder_mode,
                 )
-                time.sleep(1)
+                if self._stop_event.wait(1):
+                    break
 
         try:
             if self.serial_port and self.serial_port.is_open:
