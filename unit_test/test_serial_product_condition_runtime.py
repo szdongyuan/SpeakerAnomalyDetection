@@ -152,6 +152,8 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
         self._serial_product_waiting_for_close = False
         self._serial_product_pending_close_frame = ""
         self.product_test_close_trigger_state = ""
+        # Gears are ordered in both modes; this fixture also exercises idle frames.
+        self._serial_trigger_config = {"port_switch_idle_code": FRAME_IDLE}
         self._serial_product_error_dialog_open = False
         self._product_test_program_config_dialog_open = False
         self._queued_directional_trigger = ""
@@ -203,6 +205,8 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
     def _generate_recording_token(self):
         self._token_seq += 1
         return f"round-{self._token_seq}"
+
+    _generate_product_condition_group_id = _generate_recording_token
 
     def clear_all_direction_waveforms(self):
         self.cleared_waveforms += 1
@@ -282,24 +286,26 @@ def _payload(frame):
     return {"raw_hex": frame, "product_full_frame": True}
 
 
-def test_serial_frames_follow_fixture_order_within_one_round():
+def test_serial_frames_follow_configured_order_within_one_round():
     host = _SerialProductHost()
 
     host.on_serial_full_frame_received(_payload(FRAME_7000))
+    assert host.started == []
+    host.on_serial_full_frame_received(_payload(FRAME_6000))
     first_group_id = host._manual_product_condition_group_id
     assert first_group_id == "round-1"
-    assert host.started == [FRAME_7000]
-    assert host.loaded_queues == ["queue_7000"]
+    assert host.started == [FRAME_6000]
+    assert host.loaded_queues == ["queue_6000"]
     host.complete_current("OK")
 
-    host.on_serial_full_frame_received(_payload(FRAME_6000))
+    host.on_serial_full_frame_received(_payload(FRAME_7000))
     assert host._manual_product_condition_group_id == first_group_id
-    assert host.started == [FRAME_7000, FRAME_6000]
+    assert host.started == [FRAME_6000, FRAME_7000]
     host.complete_current("NG")
 
     host.on_serial_full_frame_received(_payload(FRAME_8000))
     assert host._manual_product_condition_group_id == first_group_id
-    assert host.started == [FRAME_7000, FRAME_6000, FRAME_8000]
+    assert host.started == [FRAME_6000, FRAME_7000, FRAME_8000]
     host.complete_current("OK")
 
     assert host._manual_product_condition_index == 0
@@ -396,7 +402,7 @@ def test_explicit_close_finishes_round_and_allows_same_condition_in_new_round():
     host = _SerialProductHost()
     host.product_test_close_trigger_state = FRAME_CLOSE
 
-    for frame in (FRAME_8000, FRAME_6000, FRAME_7000):
+    for frame in (FRAME_6000, FRAME_7000, FRAME_8000):
         host.on_serial_full_frame_received(_payload(frame))
         host.complete_current("OK")
 
@@ -409,9 +415,9 @@ def test_explicit_close_finishes_round_and_allows_same_condition_in_new_round():
     assert host._displayed_manual_product_condition_group_id == "round-1"
     assert host.left_panel.stages[-1] == ("本轮测试已关闭", "ok")
 
-    host.on_serial_full_frame_received(_payload(FRAME_7000))
+    host.on_serial_full_frame_received(_payload(FRAME_6000))
     assert host._manual_product_condition_group_id == "round-2"
-    assert host.started[-1] == FRAME_7000
+    assert host.started[-1] == FRAME_6000
 
 
 def test_idle_close_frame_between_conditions_is_ignored_and_round_continues(monkeypatch):
@@ -500,21 +506,23 @@ def test_close_frame_without_active_round_is_idempotently_ignored():
     ) == 2
 
 
-def test_any_frame_from_current_product_can_start_a_new_round():
+def test_only_first_gear_from_current_product_can_start_a_new_round():
     host = _SerialProductHost()
 
     host.on_serial_full_frame_received(_payload(FRAME_7000))
+    assert host.started == []
+    host.on_serial_full_frame_received(_payload(FRAME_6000))
 
-    assert host.started == [FRAME_7000]
+    assert host.started == [FRAME_6000]
     assert host._manual_product_condition_group_id == "round-1"
-    assert host._active_product_condition_key == FRAME_7000
-    assert host.left_panel.condition_results[-1] == (FRAME_7000, "采集中", "running")
+    assert host._active_product_condition_key == FRAME_6000
+    assert host.left_panel.condition_results[-1] == (FRAME_6000, "采集中", "running")
     assert host.reset_count == 0
 
 
 def test_different_configured_frame_after_round_completion_starts_a_new_group():
     host = _SerialProductHost()
-    for frame in (FRAME_7000, FRAME_6000, FRAME_8000):
+    for frame in (FRAME_6000, FRAME_7000, FRAME_8000):
         host.on_serial_full_frame_received(_payload(frame))
         host.complete_current("OK")
 
@@ -528,7 +536,7 @@ def test_different_configured_frame_after_round_completion_starts_a_new_group():
 
 def test_repeated_last_frame_does_not_start_a_new_group_or_clear_waveforms():
     host = _SerialProductHost()
-    for frame in (FRAME_7000, FRAME_6000, FRAME_8000):
+    for frame in (FRAME_6000, FRAME_7000, FRAME_8000):
         host.on_serial_full_frame_received(_payload(frame))
         host.complete_current("OK")
 
@@ -539,7 +547,7 @@ def test_repeated_last_frame_does_not_start_a_new_group_or_clear_waveforms():
 
     assert host._manual_product_condition_group_id == ""
     assert host.cleared_waveforms == 1
-    assert host.started == [FRAME_7000, FRAME_6000, FRAME_8000]
+    assert host.started == [FRAME_6000, FRAME_7000, FRAME_8000]
 
 
 def test_periodic_8000_after_two_condition_round_keeps_6000_round_state():
@@ -572,9 +580,10 @@ def test_periodic_8000_after_two_condition_round_keeps_6000_round_state():
     assert host.cleared_waveforms == 1
 
 
-def test_unconfigured_transport_state_releases_last_frame_for_a_new_round():
+def test_only_complete_idle_frame_releases_last_frame_for_a_new_round():
     host = _SerialProductHost()
-    for frame in (FRAME_7000, FRAME_6000, FRAME_8000):
+    host.product_test_condition_configs = [host.product_test_condition_configs[2]]
+    for frame in (FRAME_8000,):
         host.on_serial_full_frame_received(_payload(frame))
         host.complete_current("OK")
 
@@ -589,6 +598,10 @@ def test_unconfigured_transport_state_releases_last_frame_for_a_new_round():
     )
     host.on_serial_full_frame_received(_payload(FRAME_8000))
 
+    assert host._manual_product_condition_group_id == ""
+    assert host.cleared_waveforms == 1
+    host.on_serial_full_frame_received(_payload(FRAME_IDLE))
+    host.on_serial_full_frame_received(_payload(FRAME_8000))
     assert host._manual_product_condition_group_id == "round-2"
     assert host.started[-1] == FRAME_8000
     assert host.cleared_waveforms == 2
@@ -665,7 +678,7 @@ def test_other_condition_frame_ignored_during_recording_can_trigger_after_comple
         for level, message in host.default_logger.messages
     )
     assert any(
-        level == "info" and "serial_product_other_condition_ignored" in message
+        level == "info" and "serial_product_frame_ignored_out_of_order" in message
         for level, message in host.default_logger.messages
     )
 
@@ -817,7 +830,7 @@ def test_connection_failure_aborts_an_active_round(monkeypatch):
         lambda *_args: None,
     )
     host = _SerialProductHost()
-    host.on_serial_full_frame_received(_payload(FRAME_7000))
+    host.on_serial_full_frame_received(_payload(FRAME_6000))
 
     host.on_serial_trigger_status_changed(
         {
@@ -854,6 +867,7 @@ def test_close_frame_is_included_in_match_candidates_and_cannot_duplicate_condit
         FRAME_6000,
         FRAME_7000,
         FRAME_8000,
+        FRAME_IDLE,
         FRAME_CLOSE,
     )
 
@@ -864,6 +878,8 @@ def test_close_frame_is_included_in_match_candidates_and_cannot_duplicate_condit
         assert "报文重复" in str(error)
     else:
         raise AssertionError("close frame must not duplicate a condition frame")
+
+
 
 
 def test_error_dialog_suppresses_reentrant_frames_and_duplicate_warning(monkeypatch):
@@ -903,19 +919,15 @@ def test_manual_play_starts_for_empty_status_codes_even_when_serial_is_on():
     assert host.started == [""]
 
 
-def test_manual_play_is_ignored_for_complete_status_codes_when_serial_is_off():
+def test_manual_play_starts_for_complete_status_codes_when_serial_is_off():
     on_clicked_player_btn = _load_analysis_method("on_clicked_player_btn")
     host = _SerialProductHost()
     host._serial_trigger_config = {"enabled": False}
 
     on_clicked_player_btn(host)
 
-    assert host.loaded_queues == []
-    assert host.started == []
-    assert host.default_logger.messages[-1] == (
-        "info",
-        "manual_product_play_ignored_trigger_mode mode=serial",
-    )
+    assert host.loaded_queues == ["queue_6000"]
+    assert host.started == [FRAME_6000]
 
 
 def test_manual_play_is_ignored_for_complete_status_codes_when_serial_is_on():

@@ -135,6 +135,10 @@ class SequenceWidgetAnalysisOpsMixin(
         return datetime.now().strftime("%H%M%S%f")
 
     @staticmethod
+    def _generate_product_condition_group_id() -> str:
+        return datetime.now().strftime("%Y%m%d-%H%M%S%f")
+
+    @staticmethod
     def _safe_record_name_suffix(value: str) -> str:
         text = str(value or "").strip()
         safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in text).strip("_")
@@ -281,6 +285,10 @@ class SequenceWidgetAnalysisOpsMixin(
         )
         if callable(unlock_product_round_barcode):
             unlock_product_round_barcode(clear=True)
+        reset_serial_ports = getattr(self, "_reset_serial_product_port_state", None)
+        if callable(reset_serial_ports):
+            reset_serial_ports()
+        self._serial_product_latched_frame = ""
         self._manual_product_condition_index = 0
         self._manual_product_condition_group_id = ""
         self._displayed_manual_product_condition_group_id = ""
@@ -1075,7 +1083,15 @@ class SequenceWidgetAnalysisOpsMixin(
             return None
         group_id = str(getattr(self, "_manual_product_condition_group_id", "") or "").strip()
         if not group_id:
-            group_id = self._generate_recording_token()
+            capture_progress_config = getattr(self, "_capture_product_progress_config", None)
+            if callable(capture_progress_config):
+                try:
+                    capture_progress_config()
+                except (OSError, ValueError) as error:
+                    QMessageBox.warning(self, "测试配置读取失败", str(error))
+                    self._end_test_round_metadata()
+                    return None
+            group_id = self._generate_product_condition_group_id()
             self._manual_product_condition_group_id = group_id
             self._condition_record_cache = {}
             activate_round = getattr(self, "_activate_reset_round", None)
@@ -1225,7 +1241,7 @@ class SequenceWidgetAnalysisOpsMixin(
         if self._is_manual_product_condition_cycle_active():
             cycle_token = str(getattr(self, "_manual_product_condition_group_id", "") or "")
             if not cycle_token:
-                cycle_token = self._generate_recording_token()
+                cycle_token = self._generate_product_condition_group_id()
                 self._manual_product_condition_group_id = cycle_token
             lock_product_round_barcode = getattr(
                 self,
@@ -1262,6 +1278,11 @@ class SequenceWidgetAnalysisOpsMixin(
 
 
     def on_clicked_player_btn(self, label="not_labeled"):
+        if getattr(self, "_product_progress_choice_pending", False):
+            if (getattr(self, "_product_progress_prompt_ready", False)
+                    and self._offer_product_test_resume()):
+                self.init_serial_trigger_runtime()
+            return
         if bool(getattr(self, "_serial_product_waiting_for_close", False)):
             self.default_logger.info(
                 "manual_product_play_ignored_waiting_for_close"
@@ -1269,7 +1290,10 @@ class SequenceWidgetAnalysisOpsMixin(
             return
         condition_configs = getattr(self, "product_test_condition_configs", [])
         trigger_mode = classify_project_trigger_mode(condition_configs)
-        if not is_manual_project_play_allowed(condition_configs):
+        if not is_manual_project_play_allowed(
+            condition_configs,
+            serial_enabled=(getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", True),
+        ):
             self.default_logger.info(
                 f"manual_product_play_ignored_trigger_mode mode={trigger_mode}"
             )

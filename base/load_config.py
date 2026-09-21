@@ -60,6 +60,7 @@ class LoadUiConfig(object):
             "_comment_global": "串口离散输入触发配置",
             "enabled": False,
             "device_model": "JY-DAM0404D",
+            "port_switch_idle_code": "",
             "serial_settings": {
                 "port": "COM3",
                 "baudrate": 9600,

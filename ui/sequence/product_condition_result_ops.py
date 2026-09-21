@@ -79,6 +79,20 @@ class SequenceWidgetProductConditionResultOpsMixin:
                 continue
             records[condition_key] = record
 
+        import_records = getattr(self, "_condition_record_cache", {}) or {}
+        for condition_key, record in import_records.items():
+            if not isinstance(record, dict):
+                continue
+            if str(record.get("source_type") or "").strip() not in {"imported", "restored"}:
+                continue
+            if str(record.get("group_id") or "").strip() != group_id:
+                continue
+            key = str(
+                record.get("condition_key") or condition_key or ""
+            ).strip()
+            if key:
+                records.setdefault(key, record)
+
         for condition_key, record in records.items():
             label = self._product_condition_record_label(record)
             if label:

@@ -121,6 +121,8 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
         self._token_seq += 1
         return f"token_{self._token_seq}"
 
+    _generate_product_condition_group_id = _generate_recording_token
+
     def clear_all_direction_waveforms(self):
         self.cleared_waveforms += 1
 
@@ -204,7 +206,7 @@ class TestManualProductConditionCycle(unittest.TestCase):
             ["uuid_6000", "uuid_7000", "uuid_8000"],
         )
 
-    def test_play_button_does_not_start_complete_status_code_config(self):
+    def test_play_button_starts_complete_status_code_config_when_serial_is_off(self):
         widget = _DummyManualCycleWidget()
         widget.default_logger = logging.getLogger(__name__)
         for index, condition in enumerate(widget.product_test_condition_configs, 1):
@@ -213,9 +215,9 @@ class TestManualProductConditionCycle(unittest.TestCase):
 
         widget.on_clicked_player_btn()
 
-        self.assertEqual(widget.loaded_queues, [])
-        self.assertEqual(widget.started, [])
-        self.assertEqual(widget._manual_product_condition_group_id, "")
+        self.assertEqual(widget.loaded_queues, ["queue_6000"])
+        self.assertEqual(widget.started, [("not_labeled", "q6000", "_6000")])
+        self.assertTrue(widget._manual_product_condition_group_id)
 
     def test_mark_mode_allows_next_play_with_unlabeled_history(self):
         widget = _DummyManualCycleWidget()
