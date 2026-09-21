@@ -527,7 +527,7 @@ class DiscoveryService:
             child.join(self.retire_timeout)
             if child.is_alive() and resources.log_drain is not None:
                 resources.log_drain.begin("discovery retirement")
-                self._report_log_drain(resources, resources.log_drain.wait())
+                self._report_log_drain(resources, resources.log_drain.wait(is_alive=child.is_alive))
             for operation in ("terminate", "kill"):
                 if not child.is_alive():
                     break
@@ -564,7 +564,8 @@ class DiscoveryService:
         if resources.log_drain_reported:
             return
         resources.log_drain_reported = True
-        if result.status in ("timeout", "drained-with-errors"):
+        if (result.status in ("timeout", "drained-with-errors")
+                or (result.status == "already-dead" and result.detail is not None)):
             pending = "unknown" if result.stats is None else result.stats["pending"]
             self._logger.error(
                 "Discovery log drain pid=%s reason=%s status=%s pending=%s stats=%s detail=%s",

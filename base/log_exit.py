@@ -119,7 +119,8 @@ class ProcessLogDrain:
     Supervisor serializes calls and supplies ``already_dead`` only after its
     existing death confirmation. close() releases parent references after death
     or failed startup; a delayed child retains its own endpoint. No OS handles
-    need a blocking handshake to close. wait() is only for background owners.
+    need a blocking handshake to close. wait() is only for background owners
+    and can observe current liveness through their optional is_alive callback.
     """
 
     def __init__(self, endpoint, clock=time.monotonic):
@@ -161,16 +162,18 @@ class ProcessLogDrain:
             if started is not None:
                 self._deadline = started if self._deadline is None else min(self._deadline, started)
         if already_dead:
-            self._result = DrainResult("already-dead")
+            self._result = DrainResult(
+                "already-dead", detail=("log drain unconfirmed; child exited; pending unknown"
+                                        if self._deadline is not None else None))
         elif self._deadline is not None and self._clock() >= self._deadline:
             self._result = DrainResult("timeout", detail="log drain unconfirmed; pending unknown")
         return self._result
 
-    def wait(self, *, already_dead=False):
+    def wait(self, *, already_dead=False, is_alive=None):
         if self._deadline is None and self._result is None and not already_dead:
             raise RuntimeError("begin log drain before waiting")
         while True:
-            result = self.poll(already_dead=already_dead)
+            result = self.poll(already_dead=already_dead or (is_alive is not None and not is_alive()))
             if result is not None:
                 return result
             time.sleep(min(_POLL_INTERVAL, max(0, self._deadline - self._clock())))

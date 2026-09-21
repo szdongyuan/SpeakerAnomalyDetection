@@ -415,7 +415,7 @@ def test_live_card_real_files_and_settings_screenshot(ui_qapp, tmp_path, monkeyp
         placeholder.close()
 
 
-@pytest.mark.parametrize("status", ["no-runtime", "timeout", "drained-with-errors"])
+@pytest.mark.parametrize("status", ["no-runtime", "timeout", "drained-with-errors", "already-dead", "exit-after-ack"])
 @pytest.mark.parametrize("start_failure", [False, True])
 def test_probe_log_drain_background_and_start_failure(ui_qapp, tmp_path, monkeypatch, start_failure, status):
     import threading
@@ -429,12 +429,18 @@ def test_probe_log_drain_background_and_start_failure(ui_qapp, tmp_path, monkeyp
         def begin(self, reason):
             self.reason = reason
             calls.append("begin")
-        def wait(self):
+        def wait(self, *, is_alive=None):
+            assert is_alive == processes[0].is_alive
+            assert is_alive()
             assert threading.current_thread().name == "VideoDeviceProbe"
             entered.set()
             assert release.wait(3)
             calls.append("ack")
-            return DrainResult(status)
+            if status in ("already-dead", "exit-after-ack"):
+                processes[0].alive = False
+                assert not is_alive()
+            return DrainResult("no-runtime" if status == "exit-after-ack" else status,
+                               detail="log drain unconfirmed" if status == "already-dead" else None)
         def poll(self, **kwargs):
             return DrainResult("already-dead")
         def close(self):
@@ -484,12 +490,16 @@ def test_probe_log_drain_background_and_start_failure(ui_qapp, tmp_path, monkeyp
         if start_failure:
             assert "probe start denied" in results[0][1]
             assert calls == ["drain-close"]
+        elif status in ("already-dead", "exit-after-ack"):
+            assert calls == ["begin", "ack", "process-close", "drain-close"]
         else:
             assert calls == ["begin", "ack", "terminate", "process-close", "drain-close"]
-        if not start_failure and status != "no-runtime":
+        if not start_failure and status not in ("no-runtime", "exit-after-ack"):
             diagnostic_logger.error.assert_called_once()
             assert status in diagnostic_logger.error.call_args.args
             assert "unknown" in diagnostic_logger.error.call_args.args
+            if status == "already-dead":
+                assert "unconfirmed" in diagnostic_logger.error.call_args.args[-1]
         else:
             diagnostic_logger.error.assert_not_called()
         assert processes[0].kwargs["target"] is run_with_log_drain
@@ -551,7 +561,7 @@ def test_probe_retains_unconfirmed_child_and_reaps_before_next_launch(ui_qapp, t
         def begin(self, reason):
             self.reason = reason
             calls.append("begin")
-        def wait(self):
+        def wait(self, *, is_alive):
             return DrainResult("no-runtime")
         def poll(self, **kwargs):
             return DrainResult("no-runtime")
@@ -642,7 +652,7 @@ def test_probe_teardown_reuses_logger_when_parent_logging_is_closing(ui_qapp, tm
                 manager.seal_for_forced_exit()
             else:
                 assert manager.shutdown_all(1)
-        def wait(self):
+        def wait(self, *, is_alive):
             return DrainResult("timeout")
         def close(self):
             calls.append("drain-close")

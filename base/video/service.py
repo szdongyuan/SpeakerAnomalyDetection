@@ -218,9 +218,10 @@ class VideoService:
             if process is not None and process.pid is not None:
                 if process.is_alive():
                     log_drain.begin("video supervisor retirement")
-                    self._report_log_drain(process.pid, log_drain, log_drain.wait())
-                    self.forced_termination = True
-                    process.terminate()
+                    self._report_log_drain(process.pid, log_drain, log_drain.wait(is_alive=process.is_alive))
+                    if process.is_alive():
+                        self.forced_termination = True
+                        process.terminate()
                     process.join(timeout=1)
                     if process.is_alive():
                         process.kill()
@@ -246,7 +247,8 @@ class VideoService:
 
     @staticmethod
     def _report_log_drain(pid, drain, result):
-        if result.status in ("timeout", "drained-with-errors"):
+        if (result.status in ("timeout", "drained-with-errors")
+                or (result.status == "already-dead" and result.detail is not None)):
             logger.error(
                 "Video log drain pid=%s reason=%s status=%s pending=%s stats=%s detail=%s",
                 pid, drain.reason or "self-exit", result.status,

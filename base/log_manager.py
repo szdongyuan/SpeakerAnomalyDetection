@@ -13,7 +13,7 @@ from concurrent_log_handler import ConcurrentRotatingFileHandler
 
 from consts.running_consts import (
     LOG_DIR, LOG_MAPPING, DEFAULT_LOG, LOG_QUEUE_CAPACITY, LOG_BATCH_SIZE,
-    LOG_SHUTDOWN_TIMEOUT,
+    LOG_SHUTDOWN_TIMEOUT, LOG_DROP_REPORT_INTERVAL,
 )
 
 
@@ -154,6 +154,16 @@ class _QueuedRecord:
     record: logging.LogRecord
 
 
+@dataclass
+class _DropReportState:
+    route: _LogRoute
+    full: int = 0
+    closed: int = 0
+    reported_full: int = 0
+    reported_closed: int = 0
+    next_report_at: float = 0.0
+
+
 class _LogDispatcher:
     """Process-local FIFO; only its consumer ever constructs or uses sinks."""
 
@@ -162,6 +172,8 @@ class _LogDispatcher:
         self._queue = queue.Queue(maxsize=LOG_QUEUE_CAPACITY)
         self._routes = {}
         self._sinks = {}
+        self._drop_reports = {}
+        self._reports_finalized = False
         self._accepted = self._written = self._completed = self._taken = 0
         self._dropped_full = self._dropped_closed = self._write_errors = 0
         self._snapshot_errors = 0
@@ -185,18 +197,33 @@ class _LogDispatcher:
             if self._closing:
                 raise RuntimeError("Project logging consumer shut down during route registration")
             self._routes[name] = route
+            self._drop_reports.setdefault(destination, _DropReportState(route))
         return route
+
+    def _count_drop(self, route, *, full):
+        # Called under the condition. Retain only counters and a route, never
+        # the rejected record, its arguments, or a producer-created diagnostic.
+        if not self._reports_finalized:
+            state = self._drop_reports[route.destination]
+            state.route = route
+            if full:
+                state.full += 1
+            else:
+                state.closed += 1
+            self._condition.notify_all()
 
     def admit(self, route, record):
         with self._condition:
             if self._closing or not route.active:
                 self._dropped_closed += 1
+                self._count_drop(route, full=False)
                 return
             entry = _QueuedRecord(self._accepted + 1, route, record)
             try:
                 self._queue.put_nowait(entry)
             except queue.Full:
                 self._dropped_full += 1
+                self._count_drop(route, full=True)
                 return
             self._accepted = route.last_sequence = entry.sequence
             self._condition.notify_all()
@@ -265,6 +292,22 @@ class _LogDispatcher:
                         last_error=self._last_error,
                         consumer_alive=self._thread.is_alive())
 
+    def _write_destination(self, destination, entries):
+        # Only the consumer crosses this external construction/write boundary.
+        # Both business records and diagnostics get the same failure handling;
+        # their accounting and retry policies remain separate at the caller.
+        try:
+            sink = self._sinks.get(destination)
+            if sink is None:
+                filename, max_bytes, backups = destination
+                sink = _BatchFileHandler(filename=filename, maxBytes=max_bytes,
+                                         backupCount=backups)
+                self._sinks[destination] = sink
+            return sink.write_batch(entries)
+        except Exception as error:
+            return _BatchWriteResult((False,) * len(entries),
+                                     f"{type(error).__name__}: {error}"[:512])
+
     def _write_batch(self, batch):
         groups = {}
         for entry in batch:
@@ -273,19 +316,7 @@ class _LogDispatcher:
         written = errors = 0
         last_error = None
         for destination, entries in groups.items():
-            try:
-                sink = self._sinks.get(destination)
-                if sink is None:
-                    filename, max_bytes, backups = destination
-                    sink = _BatchFileHandler(filename=filename, maxBytes=max_bytes,
-                                             backupCount=backups)
-                    self._sinks[destination] = sink
-                result = sink.write_batch(entries)
-            except Exception as error:
-                # External handler construction/write can fail with library or
-                # OS exceptions. Complete these records without retrying bytes.
-                result = _BatchWriteResult((False,) * len(entries),
-                                          f"{type(error).__name__}: {error}"[:512])
+            result = self._write_destination(destination, entries)
             written += result.written
             errors += result.write_errors
             if result.last_error is not None:
@@ -300,9 +331,47 @@ class _LogDispatcher:
                 target for target in tuple(self._barriers) if target <= self._completed)
             self._condition.notify_all()
 
+    def _snapshot_drop_reports(self, *, final=False):
+        # Condition held: capture finite totals, so later drops cannot be
+        # consumed by an in-flight write or keep the shutdown loop alive.
+        now = time.monotonic()
+        reports = []
+        delay = None
+        for destination, state in self._drop_reports.items():
+            if state.full == state.reported_full and state.closed == state.reported_closed:
+                continue
+            remaining = state.next_report_at - now
+            if final or remaining <= 0:
+                reports.append((destination, state.route.formatter, state.full, state.closed,
+                                state.full - state.reported_full,
+                                state.closed - state.reported_closed))
+            else:
+                delay = remaining if delay is None else min(delay, remaining)
+        return reports, delay
+
+    def _write_drop_reports(self, reports):
+        for destination, formatter, full, closed, delta_full, delta_closed in reports:
+            record = logging.LogRecord(
+                "project-log-consumer", logging.WARNING, __file__, 0,
+                "Logging dropped records: pid=%d; queue_full delta=%d cumulative=%d; "
+                "closed delta=%d cumulative=%d",
+                (os.getpid(), delta_full, full, delta_closed, closed), None)
+            result = self._write_destination(destination, [(record, formatter)])
+            with self._condition:
+                state = self._drop_reports[destination]
+                if result.written == 1:
+                    state.reported_full = full
+                    state.reported_closed = closed
+                if result.last_error is not None:
+                    self._last_error = result.last_error
+                state.next_report_at = time.monotonic() + LOG_DROP_REPORT_INTERVAL
+                self._condition.notify_all()
+
     def _consume(self):
         batch = []
         while True:
+            reports = []
+            final = False
             with self._condition:
                 while True:
                     boundary = min(self._barriers, default=0)
@@ -311,18 +380,27 @@ class _LogDispatcher:
                                   or (boundary and batch[-1].sequence >= boundary)
                                   or (self._closing and self._queue.empty())):
                         break
+                    if not self._closing:
+                        reports, report_delay = self._snapshot_drop_reports()
+                        if reports:
+                            break
                     if not self._queue.empty():
                         batch.append(self._queue.get_nowait())
                         self._taken += 1
                         self._condition.notify_all()
                     elif self._closing:
+                        reports, _ = self._snapshot_drop_reports(final=True)
+                        self._reports_finalized = final = True
                         break
                     else:
-                        self._condition.wait()
-                if not batch:
-                    break
-            self._write_batch(batch)
-            batch = []
+                        self._condition.wait(report_delay)
+            if reports:
+                self._write_drop_reports(reports)
+            elif batch:
+                self._write_batch(batch)
+                batch = []
+            if final:
+                break
         for sink in self._sinks.values():
             try:
                 sink.close_owned()

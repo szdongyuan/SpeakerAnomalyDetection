@@ -564,3 +564,73 @@ def test_self_exit_selected_before_target_return_keeps_its_cycle(monkeypatch):
     assert not errors
     assert exit_codes == [24]
     wait_cycle(cycles[0])
+
+
+@pytest.mark.parametrize("ack", [False, True])
+def test_wait_observes_child_death_before_deadline(monkeypatch, ack):
+    from base import log_exit
+    now = [100.0]
+    observations = []
+    drain = log_exit.ProcessLogDrain.create(multiprocessing.get_context("spawn"), clock=lambda: now[0])
+    endpoint = drain.child_endpoint
+
+    def advance(delay):
+        now[0] += delay
+
+    def is_alive():
+        observations.append(now[0])
+        alive = now[0] < 100.02
+        if not alive and ack:
+            log_exit._write(endpoint.result, endpoint.token, status="no-runtime")
+        return alive
+
+    monkeypatch.setattr(log_exit.time, "sleep", advance)
+    try:
+        drain.begin("retirement")
+        result = drain.wait(is_alive=is_alive)
+        assert result.status == ("no-runtime" if ack else "already-dead")
+        assert 100.02 <= now[0] < 100.03
+        assert len(observations) > 1
+        if not ack:
+            assert "unconfirmed" in result.detail and "pending unknown" in result.detail
+    finally:
+        drain.close()
+
+
+def test_wait_liveness_keeps_earliest_deadline_across_repeated_begin(monkeypatch):
+    from base import log_exit
+    now = [100.0]
+    drain = log_exit.ProcessLogDrain.create(multiprocessing.get_context("spawn"), clock=lambda: now[0])
+    endpoint = drain.child_endpoint
+    log_exit._write(endpoint.started, endpoint.token, deadline=100.03)
+
+    def advance(delay):
+        now[0] += delay
+        drain.begin("repeat", timeout=2)
+
+    monkeypatch.setattr(log_exit.time, "sleep", advance)
+    try:
+        drain.begin("first", timeout=2)
+        assert drain.wait(is_alive=lambda: True).status == "timeout"
+        assert now[0] == 100.03
+        assert drain.reason == "first"
+    finally:
+        drain.close()
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_dead_child_diagnostic_requires_observed_drain(started):
+    from base import log_exit
+    drain = log_exit.ProcessLogDrain.create(multiprocessing.get_context("spawn"))
+    if started:
+        endpoint = drain.child_endpoint
+        log_exit._write(endpoint.started, endpoint.token, deadline=time.monotonic() + 1)
+    try:
+        result = drain.poll(already_dead=True)
+        assert result.status == "already-dead"
+        if started:
+            assert "unconfirmed" in result.detail
+        else:
+            assert result.detail is None
+    finally:
+        drain.close()
