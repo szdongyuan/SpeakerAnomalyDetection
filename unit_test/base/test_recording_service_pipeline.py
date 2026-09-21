@@ -180,6 +180,76 @@ def ve_probe(monkeypatch, tmp_path):
                            clock=clock, failures=failures)
 
 
+@pytest.mark.parametrize("acknowledged", [False, True])
+def test_retirement_drains_before_terminate_without_reopening_admission(
+        monkeypatch, tmp_path, acknowledged):
+    import multiprocessing
+    from base.log_exit import ProcessLogDrain, _write
+
+    probe = ve_probe(monkeypatch, tmp_path)
+    drain = ProcessLogDrain.create(multiprocessing.get_context("spawn"), clock=probe.clock)
+    probe.worker.log_drain = drain
+    calls = []
+    probe.worker.process.terminate = lambda: calls.append("terminate")
+    probe.worker.process.kill = lambda: calls.append("kill")
+    probe.service._retire_generation(probe.worker, "native", "blocked capture")
+    assert probe.session.failure.stage == "native"
+    assert not probe.service.can_start_recording
+    assert calls == []
+    assert probe.worker.kill_deadline is None
+    probe.clock.advance(1)
+    probe.service._retire_generation(probe.worker)
+    probe.service._tick()
+    assert calls == []
+    if acknowledged:
+        endpoint = drain.child_endpoint
+        _write(endpoint.result, endpoint.token, status="no-runtime", stats=None, detail=None)
+    else:
+        probe.clock.advance(1)
+    probe.service._tick()
+    assert calls == ["terminate"]
+    probe.service._retire_generation(probe.worker)
+    probe.clock.advance(probe.service._terminate_timeout)
+    probe.service._tick()
+    probe.service._tick()
+    assert calls == ["terminate", "kill"]
+    assert not probe.service.can_start_recording
+    drain.close()
+
+
+@pytest.mark.parametrize("self_exit", [False, True])
+def test_recording_drain_timeout_reports_once_with_unknown_pending(
+        monkeypatch, tmp_path, caplog, self_exit):
+    import multiprocessing
+    from base.log_exit import ProcessLogDrain, _write
+
+    probe = ve_probe(monkeypatch, tmp_path)
+    drain = ProcessLogDrain.create(multiprocessing.get_context("spawn"), clock=probe.clock)
+    probe.worker.log_drain = drain
+    if self_exit:
+        endpoint = drain.child_endpoint
+        _write(endpoint.result, endpoint.token, status="timeout", stats=None,
+               detail="self exit log drain unconfirmed")
+        probe.worker.process.is_alive = lambda: False
+        probe.worker.process.join = lambda **kwargs: None
+        probe.worker.process.close = lambda: None
+        probe.worker.control = probe.worker.preview = SimpleNamespace(close=lambda: None)
+        probe.service._dead(probe.worker)
+        assert drain.child_endpoint is None
+    else:
+        probe.service._retire_generation(probe.worker, "native", "blocked")
+        probe.clock.advance(2)
+        probe.service._tick()
+        probe.service._tick()
+        probe.service._retire_generation(probe.worker)
+    messages = [r.getMessage() for r in caplog.records if "Recording log drain" in r.msg]
+    assert len(messages) == 1
+    assert "generation=1 pid=123" in messages[0]
+    assert "status=timeout pending=unknown" in messages[0]
+    assert ("reason=self-exit" if self_exit else "reason=native: blocked") in messages[0]
+    drain.close()
+
+
 def slot_payload(probe, **changes):
     values = dict(request_id=probe.session.request.request_id, generation=1,
                   target_reached_at=100.1, raw_frames=probe.session.request.target_samples,

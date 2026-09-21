@@ -2,11 +2,11 @@
 
 import multiprocessing
 import logging
-import os
 import queue
 import threading
 import time
 
+from base.log_exit import exit_with_log_drain
 from base.video.models import CommandKind, Event, EventKind
 from base.video.recording import (
     RecordingRootLease, RecordingSession, VideoDiagnostics, FrameEncoder,
@@ -665,7 +665,7 @@ def usb_video_worker(channel, mailbox, generation, config):
             finally:
                 if runtime.writer.is_alive() or runtime.encoder_thread.is_alive():
                     # A stuck native writer must die before the root lease is released.
-                    os._exit(24)
+                    exit_with_log_drain(24)
     except Exception as exc:
         logger.exception("Video process failed")
         sequence = runtime.sequence if runtime is not None else 0

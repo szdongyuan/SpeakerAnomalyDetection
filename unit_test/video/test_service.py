@@ -232,3 +232,186 @@ def test_drain_deadlines_use_media_progress_not_heartbeats(shutdown, mode):
     finally:
         service.shutdown()
         assert service.wait_closed(5)
+
+
+@pytest.mark.parametrize("status", ["no-runtime", "timeout", "drained-with-errors", "unconfirmed-death"])
+def test_supervisor_log_drain_precedes_terminate_and_kill(monkeypatch, caplog, status):
+    import threading
+    from types import SimpleNamespace
+    import base.video.service as module
+    from base.log_exit import DrainResult, run_with_log_drain
+    entered, release = threading.Event(), threading.Event()
+    calls, processes = [], []
+    endpoint = object()
+    class Drain:
+        child_endpoint = endpoint
+        reason = None
+        def begin(self, reason):
+            self.reason = reason
+            calls.append("begin")
+        def wait(self):
+            assert threading.current_thread().name == "VideoSupervisor"
+            entered.set()
+            assert release.wait(3)
+            calls.append("ack")
+            return DrainResult("no-runtime" if status == "unconfirmed-death" else status)
+        def poll(self, **kwargs):
+            return DrainResult("no-runtime" if status == "unconfirmed-death" else status)
+        def close(self):
+            calls.append("drain-close")
+    class Process:
+        pid = None
+        alive = True
+        exitcode = None
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            processes.append(self)
+        def start(self):
+            self.pid = 123
+        def is_alive(self):
+            return self.alive
+        def terminate(self):
+            calls.append("terminate")
+        def kill(self):
+            calls.append("kill")
+            self.alive = status == "unconfirmed-death"
+        def join(self, timeout):
+            pass
+        def close(self):
+            calls.append("process-close")
+    channel = SimpleNamespace(close=lambda: None, poll=lambda: False)
+    context = SimpleNamespace(Process=Process, Pipe=lambda **kwargs: (channel, channel))
+    monkeypatch.setattr(module, "ProcessLogDrain", SimpleNamespace(create=lambda _: Drain()), raising=False)
+    monkeypatch.setattr(module.multiprocessing, "get_context", lambda _: context)
+    monkeypatch.setattr(module, "PreviewMailbox", lambda _: object())
+    service = VideoService(worker_target=close_without_exiting_worker, worker_options="custom", heartbeat_timeout=-1)
+    service.start()
+    try:
+        assert entered.wait(1), "supervisor terminated without requesting log drain"
+        assert calls == ["begin"]
+        started = time.monotonic()
+        service.shutdown()
+        assert time.monotonic() - started < .2
+        assert not service.is_closed
+    finally:
+        release.set()
+        assert service.wait_closed(4)
+    if status == "unconfirmed-death":
+        assert calls == ["begin", "ack", "terminate", "kill"]
+        assert service._unreaped[0] is processes[0]
+        processes[0].alive = False
+        assert service.wait_closed(0)
+        assert service._unreaped is None
+    assert calls == ["begin", "ack", "terminate", "kill", "process-close", "drain-close"]
+    assert processes[0].kwargs["target"] is run_with_log_drain
+    target, args, bound_endpoint = processes[0].kwargs["args"]
+    assert target is close_without_exiting_worker
+    assert args[2:] == (1, "custom") and bound_endpoint is endpoint
+    if status in ("timeout", "drained-with-errors"):
+        assert status in caplog.text and "pending=unknown" in caplog.text
+
+
+def logged_blocked_video_worker(channel, mailbox, generation, options):
+    import threading
+    from pathlib import Path
+    from unit_test.base.log_manager_process_fakes import configure
+    from base import log_manager
+    directory, blocked_sink = options
+    manager = configure(directory)
+    entered = threading.Event()
+    if blocked_sink:
+        def blocked_write(sink, message):
+            assert sink.is_locked
+            entered.set()
+            threading.Event().wait()
+        log_manager._BatchFileHandler.do_write = blocked_write
+    logger = manager.set_log_handler("core")
+    if blocked_sink:
+        logger.error("parent-blocked-sink")
+        assert entered.wait(3)
+    else:
+        for index in range(3):
+            logger.info("parent-video-tail=%d", index)
+    channel.send(Event(EventKind.READY, generation, 1, time.monotonic()))
+    threading.Event().wait()
+    Path(directory, "returned").touch()
+
+
+@pytest.mark.parametrize("blocked_sink", [False, True])
+def test_real_video_parent_log_drain_flushes_or_times_out_off_gui(tmp_path, monkeypatch, caplog, blocked_sink):
+    from types import SimpleNamespace
+    from base.log_exit import ProcessLogDrain
+    import base.video.service as module
+    drains = []
+    def create(context):
+        drain = ProcessLogDrain.create(context)
+        drains.append(drain)
+        return drain
+    monkeypatch.setattr(module, "ProcessLogDrain", SimpleNamespace(create=create))
+    service = VideoService(worker_target=logged_blocked_video_worker,
+                           worker_options=(str(tmp_path), blocked_sink), shutdown_timeout=.1)
+    try:
+        service.start()
+        wait_until(lambda: service.status.connection == "ready")
+        started = time.monotonic()
+        service.shutdown()
+        assert time.monotonic() - started < .2
+        assert service.wait_closed(4)
+        assert time.monotonic() - started < 3.5
+        assert service.forced_termination
+        result = drains[0].poll()
+        assert result.status == ("timeout" if blocked_sink else "drained")
+        assert drains[0].child_endpoint is None
+        assert not (tmp_path / "returned").exists()
+        assert not any(child.pid == service.process_id for child in multiprocessing.active_children())
+        if blocked_sink:
+            assert "status=timeout" in caplog.text
+        else:
+            assert result.stats["pending"] == 0
+            text = (tmp_path / "main.log").read_text(encoding="utf-8")
+            assert all(f"parent-video-tail={index}" in text for index in range(3))
+    finally:
+        service.shutdown()
+        assert service.wait_closed(6)
+
+
+@pytest.mark.parametrize("start_failure", [False, True])
+def test_video_log_drain_cleans_start_failure_and_reports_self_exit(monkeypatch, caplog, start_failure):
+    from types import SimpleNamespace
+    from base.log_exit import ProcessLogDrain, DrainResult
+    import base.video.service as module
+    context = multiprocessing.get_context("spawn")
+    drain = ProcessLogDrain.create(context)
+    drain._result = DrainResult("timeout", detail="self-exit test")
+    closed = []
+    class Process:
+        pid = None
+        exitcode = 24
+        def __init__(self, **kwargs):
+            pass
+        def start(self):
+            if start_failure:
+                raise OSError("video start denied")
+            self.pid = 123
+        def is_alive(self):
+            return False
+        def join(self, timeout):
+            pass
+        def close(self):
+            closed.append(True)
+    channel = SimpleNamespace(close=lambda: None, poll=lambda: False)
+    context = SimpleNamespace(Process=Process, Pipe=lambda **kwargs: (channel, channel))
+    monkeypatch.setattr(module, "ProcessLogDrain", SimpleNamespace(create=lambda _: drain))
+    monkeypatch.setattr(module.multiprocessing, "get_context", lambda _: context)
+    monkeypatch.setattr(module, "PreviewMailbox", lambda _: object())
+    service = VideoService(worker_target=close_without_exiting_worker, worker_options=None)
+    service.start()
+    assert service.wait_closed(3)
+    assert drain.child_endpoint is None
+    assert service.status.connection == "unavailable"
+    if start_failure:
+        assert "video start denied" in service.status.detail and not closed
+    else:
+        assert closed
+        assert "reason=self-exit" in caplog.text and "status=timeout" in caplog.text
+        assert "pending=unknown" in caplog.text

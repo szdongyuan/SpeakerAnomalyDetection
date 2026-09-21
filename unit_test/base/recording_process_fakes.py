@@ -597,6 +597,41 @@ def process_dependencies(**options):
     return dependencies
 
 
+def logged_recording_worker(control, preview, generation, factory, options, *args):
+    from unit_test.base.log_manager_process_fakes import configure
+    from base.recording_worker import recording_worker
+
+    logger = configure(options["trace_dir"]).set_log_handler("core")
+    for index in range(3):
+        logger.info("recording-tail=%d", index)
+    recording_worker(control, preview, generation, factory, options, *args)
+
+
+def blocked_recording_dependencies(**options):
+    threading.Event().wait()
+
+
+def logged_blocked_recording_dependencies(**options):
+    from unit_test.base.log_manager_process_fakes import configure
+
+    manager = configure(options["trace_dir"])
+    manager.shutdown_all()
+    logger = manager.set_log_handler("core")
+    for index in range(3):
+        logger.info("recording-blocked-tail=%d", index)
+    Path(options["trace_dir"], "factory-blocked").touch()
+    threading.Event().wait()
+
+
+def logged_recording_orphan(control, preview, generation, factory, options, *args):
+    import multiprocessing
+    from types import SimpleNamespace
+
+    multiprocessing.parent_process = lambda: SimpleNamespace(is_alive=lambda: False)
+    logged_recording_worker(control, preview, generation,
+        "unit_test.base.recording_process_fakes:blocked_recording_dependencies", options, *args)
+
+
 def persistent_ve_worker_dependencies(**options):
     """Spawn-safe persistent-controller SDK, writer and finalizer gates."""
     from unit_test.base.ve3668n_fakes import CaptureSDK

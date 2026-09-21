@@ -390,6 +390,18 @@ class LogManager(object):
     _exit_hooks_registered = False
     _process_finalizer = None
     _interpreter_exiting = False
+    _forced_exit = False
+
+    @classmethod
+    def seal_for_forced_exit(cls):
+        """Atomically include initialization in flight and forbid reacquisition.
+
+        Only the forced-exit coordinator calls this. Ordinary shutdown retains
+        its existing explicit reacquisition behavior.
+        """
+        with cls._initialization_lock:
+            cls._forced_exit = True
+            return cls._runtime
 
     @classmethod
     def _shutdown_at_exit(cls):
@@ -425,6 +437,8 @@ class LogManager(object):
     @classmethod
     def set_log_handler(cls, thread_holder):
         with cls._initialization_lock:
+            if cls._forced_exit:
+                raise RuntimeError("Project logging is sealed for forced process exit")
             logger = logging.getLogger(thread_holder)
             runtime = cls._runtime
             if runtime is not None and runtime._closing:

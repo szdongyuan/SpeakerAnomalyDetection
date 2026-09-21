@@ -8,6 +8,7 @@ import time
 from dataclasses import replace
 from uuid import uuid4
 
+from base.log_exit import ProcessLogDrain, run_with_log_drain
 from base.video.preview import PreviewMailbox
 from base.video.models import Command, CommandKind, Event, EventKind, VideoState
 
@@ -34,6 +35,7 @@ class VideoService:
         self._started = False
         self._mailbox = None
         self._thread = None
+        self._unreaped = None
         self._heartbeat_timeout = heartbeat_timeout
         self._command_timeout = command_timeout
         self._shutdown_timeout = shutdown_timeout
@@ -86,7 +88,17 @@ class VideoService:
 
     def wait_closed(self, timeout=8):
         """For tests/non-GUI teardown only."""
-        return self._closed.wait(timeout)
+        closed = self._closed.wait(timeout)
+        if closed:
+            with self._lock:
+                if self._unreaped is not None:
+                    process, drain = self._unreaped
+                    if not process.is_alive():
+                        process.join(timeout=0)
+                        process.close()
+                        drain.close()
+                        self._unreaped = None
+        return closed
 
     def latest_preview(self, after_sequence=0):
         mailbox = self._mailbox
@@ -109,15 +121,18 @@ class VideoService:
             self._state.fail(detail, time.monotonic())
 
     def _run(self):
-        process = channel = child_channel = None
+        process = channel = child_channel = log_drain = None
         received_closed = False
         try:
             context = multiprocessing.get_context("spawn")
             self._mailbox = PreviewMailbox(context)
             channel, child_channel = context.Pipe(duplex=True)
+            log_drain = ProcessLogDrain.create(context)
             process = context.Process(
-                target=self._worker_target, name="VideoWorker",
-                args=(child_channel, self._mailbox, self._state.generation, self._worker_options),
+                target=run_with_log_drain, name="VideoWorker",
+                args=(self._worker_target,
+                      (child_channel, self._mailbox, self._state.generation, self._worker_options),
+                      log_drain.child_endpoint),
             )
             process.start()
             self.process_id = process.pid
@@ -202,6 +217,8 @@ class VideoService:
         finally:
             if process is not None and process.pid is not None:
                 if process.is_alive():
+                    log_drain.begin("video supervisor retirement")
+                    self._report_log_drain(process.pid, log_drain, log_drain.wait())
                     self.forced_termination = True
                     process.terminate()
                     process.join(timeout=1)
@@ -209,12 +226,29 @@ class VideoService:
                         process.kill()
                         process.join(timeout=1)
                 else:
+                    self._report_log_drain(process.pid, log_drain, log_drain.poll(already_dead=True))
                     process.join(timeout=1)
                 if not process.is_alive():
                     process.close()
+                    log_drain.close()
+                else:
+                    # Keep both owners until a later non-GUI wait confirms death.
+                    self._unreaped = (process, log_drain)
+                    logger.error("Video process death unconfirmed pid=%s", process.pid)
+            elif log_drain is not None:
+                log_drain.close()
             if channel is not None:
                 channel.close()
             if child_channel is not None:
                 child_channel.close()
             self._mailbox = None
             self._closed.set()
+
+    @staticmethod
+    def _report_log_drain(pid, drain, result):
+        if result.status in ("timeout", "drained-with-errors"):
+            logger.error(
+                "Video log drain pid=%s reason=%s status=%s pending=%s stats=%s detail=%s",
+                pid, drain.reason or "self-exit", result.status,
+                "unknown" if result.stats is None else result.stats["pending"],
+                result.stats, result.detail)

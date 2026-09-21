@@ -171,6 +171,23 @@ def _receive_until(control, predicate, *, timeout=10):
     raise AssertionError(f"worker event did not arrive; received {[item.kind for item in events]}")
 
 
+def test_already_dead_parent_drains_tail_while_worker_factory_is_blocked(tmp_path):
+    from unit_test.base.recording_process_fakes import logged_recording_orphan
+
+    process, control, preview, trace_dir = _spawn_worker(
+        tmp_path, target=logged_recording_orphan, worker_cancel_timeout=.1)
+    try:
+        process.join(5)
+        assert not process.is_alive()
+        assert process.exitcode == 1
+        log = trace_dir / "main.log"
+        contents = log.read_text() if log.exists() else ""
+        for index in range(3):
+            assert f"recording-tail={index}" in contents
+    finally:
+        _stop_worker(process, control, preview)
+
+
 def _stop_worker(process, control, preview):
     if process.is_alive():
         try:
@@ -501,8 +518,11 @@ def test_spawn_control_eof_performs_bounded_controller_cleanup(tmp_path):
 
 def test_spawn_control_eof_forces_exit_when_capture_finalizer_misses_deadline(
         tmp_path):
+    from unit_test.base.recording_process_fakes import logged_recording_worker
+
     process, control, preview, trace_dir = _spawn_worker(
-        tmp_path, worker_cancel_timeout=.2, pause_finalizers=("eof-finalizer",))
+        tmp_path, target=logged_recording_worker,
+        worker_cancel_timeout=.2, pause_finalizers=("eof-finalizer",))
     release = trace_dir / "release-finalizer-eof-finalizer"
     try:
         _receive_until(control, lambda event: event.kind == "ready")
@@ -519,6 +539,10 @@ def test_spawn_control_eof_forces_exit_when_capture_finalizer_misses_deadline(
 
         assert not process.is_alive(), "capture finalizer cleanup must remain bounded"
         assert process.exitcode == 1
+        log = trace_dir / "main.log"
+        contents = log.read_text() if log.exists() else ""
+        for index in range(3):
+            assert f"recording-tail={index}" in contents
         operations = [__import__("json").loads(line)["operation"]
                       for line in (trace_dir / "native.jsonl").read_text().splitlines()]
         assert operations.count("stop_task") == 1
@@ -940,7 +964,7 @@ def test_parent_watch_never_inspects_pipeline_during_active_to_finalizer_transit
     monkeypatch.setattr(module, "WorkerCapturePipeline", TransitionPipeline)
     monkeypatch.setattr(module, "RecordingCapture", FinishedCapture)
     monkeypatch.setattr(module.multiprocessing, "parent_process", lambda: DeadParent())
-    monkeypatch.setattr(module.os, "_exit", lambda _code: forced_exit.set())
+    monkeypatch.setattr(module, "exit_with_log_drain", lambda _code: forced_exit.set())
     worker = threading.Thread(
         target=module.recording_worker,
         args=(Connection(), Connection(), 1, None, {}, 1.0, .05), daemon=True)

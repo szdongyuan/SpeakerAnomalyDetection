@@ -21,6 +21,13 @@ def simulated_probe_worker(channel):
 
 
 @pytest.fixture(autouse=True)
+def isolate_video_project_logging(tmp_path, monkeypatch):
+    from unit_test.logging_test_support import isolated_project_logger
+    with isolated_project_logger(tmp_path, monkeypatch):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def isolate_camera_probe(monkeypatch):
     monkeypatch.setattr(video_controller_module, "probe_worker", simulated_probe_worker)
 
@@ -406,3 +413,271 @@ def test_live_card_real_files_and_settings_screenshot(ui_qapp, tmp_path, monkeyp
         spin(ui_qapp, lambda: controller.is_shutdown_complete)
         controller._timer.stop()
         placeholder.close()
+
+
+@pytest.mark.parametrize("status", ["no-runtime", "timeout", "drained-with-errors"])
+@pytest.mark.parametrize("start_failure", [False, True])
+def test_probe_log_drain_background_and_start_failure(ui_qapp, tmp_path, monkeypatch, start_failure, status):
+    import threading
+    from base.log_exit import DrainResult, run_with_log_drain
+    entered, release = threading.Event(), threading.Event()
+    calls, processes = [], []
+    endpoint = object()
+    class Drain:
+        child_endpoint = endpoint
+        reason = None
+        def begin(self, reason):
+            self.reason = reason
+            calls.append("begin")
+        def wait(self):
+            assert threading.current_thread().name == "VideoDeviceProbe"
+            entered.set()
+            assert release.wait(3)
+            calls.append("ack")
+            return DrainResult(status)
+        def poll(self, **kwargs):
+            return DrainResult("already-dead")
+        def close(self):
+            calls.append("drain-close")
+    class Process:
+        pid = None
+        alive = True
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            processes.append(self)
+        def start(self):
+            if start_failure:
+                raise OSError("probe start denied")
+            self.pid = 123
+        def is_alive(self):
+            return self.alive
+        def terminate(self):
+            calls.append("terminate")
+            self.alive = False
+        def join(self, timeout):
+            pass
+        def close(self):
+            calls.append("process-close")
+    channel = SimpleNamespace(close=lambda: None, poll=lambda _: False)
+    context = SimpleNamespace(Process=Process, Pipe=lambda **kwargs: (channel, channel))
+    monkeypatch.setattr(video_controller_module, "ProcessLogDrain", SimpleNamespace(create=lambda _: Drain()), raising=False)
+    monkeypatch.setattr(video_controller_module.multiprocessing, "get_context", lambda _: context)
+    diagnostic_logger = Mock()
+    monkeypatch.setattr(video_controller_module.LogManager, "set_log_handler", lambda _: diagnostic_logger)
+    controller = VideoController(config_path=tmp_path / "settings.json", start_automatically=False)
+    results = []
+    controller.devices_ready.connect(lambda devices, error: results.append((devices, error)))
+    try:
+        started = time.monotonic()
+        controller.probe_devices()
+        assert time.monotonic() - started < .2
+        if not start_failure:
+            assert entered.wait(1), "probe terminated without requesting log drain"
+            assert calls == ["begin"]
+        started = time.monotonic()
+        controller.shutdown()
+        assert time.monotonic() - started < .2
+        release.set()
+        spin(ui_qapp, lambda: controller.is_shutdown_complete and bool(results))
+        assert len(results) == 1
+        assert "drain-close" in calls
+        if start_failure:
+            assert "probe start denied" in results[0][1]
+            assert calls == ["drain-close"]
+        else:
+            assert calls == ["begin", "ack", "terminate", "process-close", "drain-close"]
+        if not start_failure and status != "no-runtime":
+            diagnostic_logger.error.assert_called_once()
+            assert status in diagnostic_logger.error.call_args.args
+            assert "unknown" in diagnostic_logger.error.call_args.args
+        else:
+            diagnostic_logger.error.assert_not_called()
+        assert processes[0].kwargs["target"] is run_with_log_drain
+        assert processes[0].kwargs["args"] == (simulated_probe_worker, (channel,), endpoint)
+    finally:
+        release.set()
+        controller.shutdown()
+        spin(ui_qapp, lambda: controller.is_shutdown_complete)
+        controller._timer.stop()
+
+
+def no_runtime_blocked_probe(channel):
+    import threading
+    from base.log_manager import LogManager
+    assert LogManager._runtime is None
+    channel.send(((), "test probe result"))
+    threading.Event().wait()
+
+
+def test_real_probe_no_runtime_drain_creates_no_logs(ui_qapp, tmp_path, monkeypatch):
+    import multiprocessing
+    from base.log_exit import ProcessLogDrain
+    drains = []
+    def create(context):
+        drain = ProcessLogDrain.create(context)
+        drains.append(drain)
+        return drain
+    monkeypatch.setattr(video_controller_module, "ProcessLogDrain", SimpleNamespace(create=create))
+    monkeypatch.setattr(video_controller_module, "probe_worker", no_runtime_blocked_probe)
+    monkeypatch.chdir(tmp_path)
+    children_before = {child.pid for child in multiprocessing.active_children()}
+    controller = VideoController(config_path=tmp_path / "settings.json", start_automatically=False)
+    results = []
+    controller.devices_ready.connect(lambda devices, error: results.append((devices, error)))
+    # Controller owns the parent logger; the child must add no logging paths.
+    paths_before_probe = set(tmp_path.rglob("*"))
+    try:
+        controller.probe_devices()
+        controller.shutdown()
+        spin(ui_qapp, lambda: controller.is_shutdown_complete and bool(results))
+        assert results == [((), "test probe result")]
+        assert drains[0].poll().status == "no-runtime"
+        assert drains[0].child_endpoint is None
+        assert set(tmp_path.rglob("*")) == paths_before_probe
+        assert not any(path.is_file() for path in tmp_path.rglob("*"))
+        assert {child.pid for child in multiprocessing.active_children()} <= children_before
+    finally:
+        controller.shutdown()
+        spin(ui_qapp, lambda: controller.is_shutdown_complete)
+        controller._timer.stop()
+
+
+def test_probe_retains_unconfirmed_child_and_reaps_before_next_launch(ui_qapp, tmp_path, monkeypatch):
+    from base.log_exit import DrainResult
+    calls, processes, drains = [], [], []
+    class Drain:
+        child_endpoint = object()
+        reason = None
+        def begin(self, reason):
+            self.reason = reason
+            calls.append("begin")
+        def wait(self):
+            return DrainResult("no-runtime")
+        def poll(self, **kwargs):
+            return DrainResult("no-runtime")
+        def close(self):
+            calls.append("drain-close")
+    class Process:
+        pid = 123
+        alive = True
+        def __init__(self, **kwargs):
+            processes.append(self)
+        def start(self):
+            pass
+        def is_alive(self):
+            return self.alive
+        def terminate(self):
+            calls.append("terminate")
+        def join(self, timeout):
+            pass
+        def close(self):
+            calls.append("process-close")
+    def create(context):
+        drain = Drain()
+        drains.append(drain)
+        return drain
+    channel = SimpleNamespace(close=lambda: None, poll=lambda _: False)
+    context = SimpleNamespace(Process=Process, Pipe=lambda **kwargs: (channel, channel))
+    monkeypatch.setattr(video_controller_module, "ProcessLogDrain", SimpleNamespace(create=create))
+    monkeypatch.setattr(video_controller_module.multiprocessing, "get_context", lambda _: context)
+    controller = VideoController(config_path=tmp_path / "settings.json", start_automatically=False)
+    results = []
+    controller.devices_ready.connect(lambda devices, error: results.append((devices, error)))
+    try:
+        controller.probe_devices()
+        spin(ui_qapp, lambda: len(results) == 1 and not controller._probe_running)
+        assert controller._unreaped_probe == (processes[0], drains[0])
+        controller.probe_devices()
+        spin(ui_qapp, lambda: len(results) == 2 and not controller._probe_running)
+        assert len(processes) == 1 and calls == ["begin", "terminate"]
+        assert results[1][1]
+        processes[0].alive = False
+        controller.probe_devices()
+        spin(ui_qapp, lambda: len(results) == 3 and not controller._probe_running)
+        assert len(processes) == 2
+        assert calls == ["begin", "terminate", "process-close", "drain-close", "begin", "terminate"]
+        processes[1].alive = False
+        controller._reap_probe()
+        assert controller._unreaped_probe is None
+    finally:
+        controller.shutdown()
+        controller._timer.stop()
+
+
+@pytest.mark.parametrize("parent_state", ["closing", "sealed", "stopped"])
+def test_probe_teardown_reuses_logger_when_parent_logging_is_closing(ui_qapp, tmp_path, monkeypatch, parent_state):
+    import threading
+    from base import log_manager
+    from base.log_exit import DrainResult
+    manager = log_manager.LogManager
+    logger = manager.set_log_handler("core")
+    runtime = manager._runtime
+    entered, release = threading.Event(), threading.Event()
+    calls, acquisitions, results = [], [], []
+    original_acquire = manager.set_log_handler
+    def acquire(name):
+        acquisitions.append(name)
+        return original_acquire(name)
+    monkeypatch.setattr(manager, "set_log_handler", acquire)
+    # Ensure fixture cleanup restores sealing even if the RED assertion raises.
+    monkeypatch.setattr(manager, "_forced_exit", False)
+    if parent_state == "closing":
+        original_write = log_manager._BatchFileHandler.do_write
+        def gated_write(sink, message):
+            assert sink.is_locked
+            entered.set()
+            assert release.wait(3)
+            return original_write(sink, message)
+        monkeypatch.setattr(log_manager._BatchFileHandler, "do_write", gated_write)
+    class Drain:
+        child_endpoint = object()
+        reason = None
+        def begin(self, reason):
+            self.reason = reason
+            if parent_state == "closing":
+                logger.error("hold-parent-log-consumer")
+                assert entered.wait(2)
+                assert not manager.shutdown_all(0)
+            elif parent_state == "sealed":
+                manager.seal_for_forced_exit()
+            else:
+                assert manager.shutdown_all(1)
+        def wait(self):
+            return DrainResult("timeout")
+        def close(self):
+            calls.append("drain-close")
+    class Process:
+        pid = 123
+        alive = True
+        def __init__(self, **kwargs):
+            pass
+        def start(self):
+            pass
+        def is_alive(self):
+            return self.alive
+        def terminate(self):
+            calls.append("terminate")
+            self.alive = False
+        def join(self, timeout):
+            pass
+        def close(self):
+            calls.append("process-close")
+    channel = SimpleNamespace(close=lambda: calls.append("channel-close"), poll=lambda _: False)
+    context = SimpleNamespace(Process=Process, Pipe=lambda **kwargs: (channel, channel))
+    monkeypatch.setattr(video_controller_module, "ProcessLogDrain", SimpleNamespace(create=lambda _: Drain()))
+    monkeypatch.setattr(video_controller_module.multiprocessing, "get_context", lambda _: context)
+    controller = VideoController(config_path=tmp_path / "settings.json", start_automatically=False)
+    controller.devices_ready.connect(lambda devices, error: results.append((devices, error)))
+    acquired_before_exit = list(acquisitions)
+    try:
+        controller._probe_running = True
+        controller._probe()
+        assert acquisitions == acquired_before_exit
+        assert manager._runtime is runtime
+        assert calls == ["channel-close", "terminate", "process-close", "drain-close", "channel-close", "channel-close"]
+        assert len(results) == 1 and not controller._probe_running
+    finally:
+        release.set()
+        assert manager.shutdown_all(2)
+        controller.shutdown()
+        controller._timer.stop()

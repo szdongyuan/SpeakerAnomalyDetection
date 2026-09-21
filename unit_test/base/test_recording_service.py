@@ -35,6 +35,91 @@ def request(tmp_path, **changes):
     return RecordingRequest(**values)
 
 
+def test_blocked_worker_factory_drains_tail_before_service_terminate(tmp_path, monkeypatch):
+    service = RecordingService(
+        backend_factory="unit_test.base.recording_process_fakes:logged_blocked_recording_dependencies",
+        backend_options={"trace_dir": str(tmp_path)}, shutdown_timeout=.1,
+        terminate_timeout=.2)
+    terminated = []
+    try:
+        session = service.start(request(tmp_path))
+        eventually(lambda: (tmp_path / "factory-blocked").exists())
+        worker = service._worker
+        process = worker.process
+        real_terminate = process.terminate
+
+        def terminate():
+            assert process.is_alive()
+            assert worker.log_drain.poll().status == "drained"
+            terminated.append((tmp_path / "main.log").read_text())
+            real_terminate()
+
+        monkeypatch.setattr(process, "terminate", terminate)
+        began = time.monotonic()
+        service.shutdown()
+        assert time.monotonic() - began < .2
+        assert service.closed.wait(5)
+        assert session.released.is_set()
+        assert len(terminated) == 1
+        for index in range(3):
+            assert f"recording-blocked-tail={index}" in terminated[0]
+        assert worker.log_drain.child_endpoint is None
+        assert process._closed
+    finally:
+        service.shutdown()
+        assert service.closed.wait(5)
+
+
+@pytest.mark.parametrize("after_start", [False, True])
+def test_delayed_recording_start_keeps_drain_owned_until_launch_and_death(
+        tmp_path, monkeypatch, after_start):
+    from multiprocessing.process import BaseProcess
+    from base import recording_service as module
+
+    gate, release = threading.Event(), threading.Event()
+    drains, processes = [], []
+    real_start, real_create = BaseProcess.start, module.ProcessLogDrain.create
+
+    def create(*args, **kwargs):
+        drain = real_create(*args, **kwargs)
+        drains.append(drain)
+        return drain
+
+    def start(process):
+        processes.append(process)
+        if after_start:
+            real_start(process)
+        gate.set()
+        assert release.wait(5)
+        if not after_start:
+            real_start(process)
+
+    monkeypatch.setattr(module.ProcessLogDrain, "create", create)
+    monkeypatch.setattr(BaseProcess, "start", start)
+    service = RecordingService(
+        backend_factory="unit_test.base.recording_process_fakes:logged_blocked_recording_dependencies",
+        backend_options={"trace_dir": str(tmp_path)}, shutdown_timeout=.1)
+    try:
+        session = service.start(request(tmp_path))
+        assert gate.wait(3)
+        began = time.monotonic()
+        service.shutdown()
+        assert time.monotonic() - began < .2
+        assert drains[0].child_endpoint is not None
+        assert not processes[0]._closed
+        assert not service.closed.is_set()
+        assert not session.released.is_set()
+        release.set()
+        assert service.closed.wait(5)
+        assert session.released.is_set()
+        assert drains[0].child_endpoint is None
+        assert processes[0]._closed
+    finally:
+        release.set()
+        service.shutdown()
+        assert service.closed.wait(5)
+
+
 def eventually(predicate, timeout=10):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -1313,6 +1398,15 @@ def test_setup_allocation_failure_rolls_back_and_allows_retry(
     original_pipe, original_process = context.Pipe, context.Process
     original_mkdtemp = module.tempfile.mkdtemp
     endpoints, processes, temporary_dirs = [], [], []
+    drains = []
+    original_drain = module.ProcessLogDrain.create
+
+    def create_drain(*args, **kwargs):
+        drain = original_drain(*args, **kwargs)
+        drains.append(drain)
+        return drain
+
+    monkeypatch.setattr(module.ProcessLogDrain, "create", create_drain)
     pipe_calls = 0
     message = f"injected setup failure: {failure_at}"
     def allocate_pipe(*args, **kwargs):
@@ -1355,6 +1449,7 @@ def test_setup_allocation_failure_rolls_back_and_allows_retry(
         assert not service.busy and service.worker_pid is None
         assert not service.is_path_leased(session.request.path)
         assert len(endpoints) == expected_endpoints and all(endpoint.closed for endpoint in endpoints)
+        assert all(drain.child_endpoint is None for drain in drains)
         for process in processes:
             with pytest.raises(ValueError, match="closed"):
                 process.is_alive()
@@ -1475,7 +1570,11 @@ def test_thread_start_ownership_failure_releases_lease_and_reclaims_worker(
                 raise RuntimeError(message)
             original_start(thread)
         monkeypatch.setattr(threading.Thread, "start", fail_ipc_start)
-    service = services(reader_factory=reader_factory, cancel_timeout=.2, terminate_timeout=.2)
+    # IPC startup failure can retire a child before it has imported its target.
+    # Give that case's session release deadline the new two-second log grace;
+    # keep the reader cases and all failure/ownership assertions unchanged.
+    cancel_timeout = 2.2 if failure_at.startswith("ipc_") else .2
+    service = services(reader_factory=reader_factory, cancel_timeout=cancel_timeout, terminate_timeout=.2)
     events = Events()
     session = service.start(request(tmp_path, purpose="calibration", channels=(0,)), events.callbacks)
     failure = events.failed.get(timeout=10)

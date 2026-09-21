@@ -10,6 +10,8 @@ from PyQt5.QtCore import QObject, QTimer, QUrl, pyqtSignal
 from PyQt5.QtGui import QDesktopServices, QImage
 from PyQt5.QtWidgets import QMessageBox
 
+from base.log_manager import LogManager
+from base.log_exit import ProcessLogDrain, run_with_log_drain
 from base.video.config import VideoConfig, load_config, migrate_config, save_config
 from base.video.runtime import usb_video_worker
 from base.video.service import VideoService
@@ -84,6 +86,8 @@ class VideoController(VideoServiceBridge):
         self._shutdown_requested = False
         self._pending_config = None
         self._probe_running = False
+        self._unreaped_probe = None
+        self._logger = LogManager.set_log_handler("core")
         self._saving = False
         self.dialog = None
         self.panel = None
@@ -153,13 +157,31 @@ class VideoController(VideoServiceBridge):
             self.dialog.refresh_button.setEnabled(False)
         threading.Thread(target=self._probe, name="VideoDeviceProbe", daemon=True).start()
 
+    def _reap_probe(self):
+        if self._unreaped_probe is None:
+            return True
+        process, drain = self._unreaped_probe
+        if process.is_alive():
+            return False
+        process.join(0)
+        process.close()
+        drain.close()
+        self._unreaped_probe = None
+        return True
+
     def _probe(self):
-        process = parent = child = None
+        process = parent = child = log_drain = None
         result = ((), "摄像头枚举超时")
         try:
+            if not self._reap_probe():
+                result = ((), "上次摄像头探测进程尚未退出")
+                return
             context = multiprocessing.get_context("spawn")
             parent, child = context.Pipe(duplex=False)
-            process = context.Process(target=probe_worker, args=(child,), name="VideoDeviceProbe")
+            log_drain = ProcessLogDrain.create(context)
+            process = context.Process(
+                target=run_with_log_drain,
+                args=(probe_worker, (child,), log_drain.child_endpoint), name="VideoDeviceProbe")
             process.start()
             child.close()
             if parent.poll(8):
@@ -170,15 +192,33 @@ class VideoController(VideoServiceBridge):
             if process is not None and process.pid is not None:
                 process.join(.5)
                 if process.is_alive():
+                    log_drain.begin("camera probe retirement")
+                    self._report_probe_log_drain(process.pid, log_drain, log_drain.wait())
                     process.terminate()
                     process.join(1)
+                else:
+                    self._report_probe_log_drain(process.pid, log_drain, log_drain.poll(already_dead=True))
                 if not process.is_alive():
                     process.close()
+                    log_drain.close()
+                else:
+                    self._unreaped_probe = (process, log_drain)
+                    result = ((), "摄像头探测进程尚未退出")
+            elif log_drain is not None:
+                log_drain.close()
             if parent is not None:
                 parent.close()
             if child is not None:
                 child.close()
             self.devices_ready.emit(*result)
+
+    def _report_probe_log_drain(self, pid, drain, result):
+        if result.status in ("timeout", "drained-with-errors"):
+            self._logger.error(
+                "Camera probe log drain pid=%s reason=%s status=%s pending=%s stats=%s detail=%s",
+                pid, drain.reason or "self-exit", result.status,
+                "unknown" if result.stats is None else result.stats["pending"],
+                result.stats, result.detail)
 
     def _devices_ready(self, devices, error):
         self._probe_running = False

@@ -792,19 +792,53 @@ def test_production_failure_is_not_completed_and_next_session_works(tmp_path, mo
 
 
 def permanently_blocked_video_worker(channel, mailbox, generation, config):
-    """Exercise the real child teardown, using no device or production logging."""
+    """Exercise native teardown with real logging isolated to the test root."""
     import os
     import base.video.runtime as runtime_module
     from base.video.recording import RecordingRootLease
+    from unit_test.base.log_manager_process_fakes import configure
+    from base import log_manager
+
+    manager = configure(Path(config.recording_root) / "logs")
+    tail_logger = manager.set_log_handler("core")
+    # Isolate exactly three ordinary accepted records at the forced-exit edge.
+    runtime_module.logger.disabled = True
+    sink_entered = threading.Event()
+    if config.device_name == "blocked-log-sink":
+        def blocked_write(sink, message):
+            assert sink.is_locked
+            sink_entered.set()
+            threading.Event().wait()
+        log_manager._BatchFileHandler.do_write = blocked_write
+
+    writer_entered = threading.Event()
 
     class BlockedSession(RecordingSession):
         def write(self, frame, stamp):
+            writer_entered.set()
             threading.Event().wait()  # Only this disposable test child is blocked.
 
     class BlockedRuntime(VideoRuntime):
         def __init__(self, *args):
             super().__init__(*args, capture_factory=SyntheticCapture, session_factory=BlockedSession)
             self.no_progress_timeout = .3
+
+        def _check_progress(self, now):
+            if writer_entered.is_set():
+                super()._check_progress(now)
+
+        def run(self):
+            try:
+                super().run()
+            finally:
+                if config.device_name == "blocked-log-sink":
+                    tail_logger.error("native-stall-blocked-output")
+                    assert sink_entered.wait(3)
+                else:
+                    for index in range(3):
+                        tail_logger.info("native-stall-tail=%d", index)
+                    assert manager.get_async_stats()["pending"] == 3
+                Path(config.recording_root, "exit-start").write_text(str(time.monotonic()))
 
     real_exit = os._exit
 
@@ -817,17 +851,16 @@ def permanently_blocked_video_worker(channel, mailbox, generation, config):
 
     runtime_module.VideoRuntime = BlockedRuntime
     os._exit = exit_with_lease_check
-    sys.modules["base.log_manager"] = SimpleNamespace(
-        LogManager=SimpleNamespace(set_log_handler=lambda _: None),
-    )
     usb_video_worker(channel, mailbox, generation, config)
 
 
-def test_stuck_file_owner_exits_before_releasing_directory_lease(tmp_path):
+@pytest.mark.parametrize("blocked_sink", [False, True])
+def test_stuck_file_owner_exits_before_releasing_directory_lease(tmp_path, caplog, blocked_sink):
     from base.video.recording import RecordingRootLease
 
     service = VideoService(
-        worker_target=permanently_blocked_video_worker, worker_options=config_for(tmp_path),
+        worker_target=permanently_blocked_video_worker,
+        worker_options=config_for(tmp_path, device_name="blocked-log-sink" if blocked_sink else "tail"),
         heartbeat_timeout=8, command_timeout=10, shutdown_timeout=10, drain_timeout=5,
     )
     try:
@@ -838,6 +871,13 @@ def test_stuck_file_owner_exits_before_releasing_directory_lease(tmp_path):
         assert service.status.recording == "failed"
         assert "exitcode=24" in service.status.connection_detail
         assert not service.forced_termination  # Child self-terminates while still holding its lease.
+        elapsed = time.monotonic() - float((tmp_path / "exit-start").read_text())
+        assert elapsed < 3.5  # One two-second grace, plus process scheduling/reaping.
+        if blocked_sink:
+            assert "status=timeout" in caplog.text and "reason=self-exit" in caplog.text
+        else:
+            text = (tmp_path / "logs/main.log").read_text(encoding="utf-8")
+            assert all(f"native-stall-tail={index}" in text for index in range(3))
         assert list(tmp_path.rglob("*.recording.mp4"))
         assert not [p for p in tmp_path.rglob("*.mp4") if ".recording." not in p.name]
         with RecordingRootLease(tmp_path):

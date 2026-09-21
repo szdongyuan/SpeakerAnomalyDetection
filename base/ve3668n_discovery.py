@@ -5,7 +5,6 @@ import importlib
 import json
 import math
 import multiprocessing
-import os
 import queue
 import re
 import threading
@@ -13,6 +12,7 @@ import time
 
 from base import vkinging_sdk
 from base.log_manager import LogManager
+from base.log_exit import ProcessLogDrain, run_with_log_drain, exit_with_log_drain
 from base.ve3668n_input import (
     create_input_config, normalize_machine_id, normalize_model,
     validate_device_snapshot, validate_physical_channels,
@@ -228,7 +228,7 @@ def _discovery_worker(connection, factory_name, options_json, limit):
                 # Read-only discovery owns no acquisition tasks. A native probe,
                 # constructor, or close can be stuck: do not call SDK cleanup on
                 # this watcher thread. OS exit releases the helper's handles.
-                os._exit(1)
+                exit_with_log_drain(1)
 
     watcher = threading.Thread(target=parent_watch, name="ve-discovery-parent-watch", daemon=True)
     watcher.start()
@@ -283,6 +283,8 @@ class _ProbeResources:
     launcher: threading.Thread | None = None
     receiver: threading.Thread | None = None
     launch_failure: DiscoveryResult | None = None
+    log_drain: object = None
+    log_drain_reported: bool = False
 
     def launch(self):
         try:
@@ -297,7 +299,7 @@ class _ProbeResources:
     @property
     def released(self):
         return all(handle is None for handle in (
-            self.receive, self.send, self.child, self.launcher, self.receiver))
+            self.receive, self.send, self.child, self.launcher, self.receiver, self.log_drain))
 
 
 class DiscoveryService:
@@ -449,9 +451,12 @@ class DiscoveryService:
         result = DiscoveryResult(diagnostics=("discovery cancelled",))
         try:
             resources.receive, resources.send = self._context.Pipe(duplex=False)
+            resources.log_drain = ProcessLogDrain.create(self._context)
             resources.child = self._context.Process(
-                target=_discovery_worker,
-                args=(resources.send, self._factory, self._options, self.max_result_bytes),
+                target=run_with_log_drain,
+                args=(_discovery_worker,
+                      (resources.send, self._factory, self._options, self.max_result_bytes),
+                      resources.log_drain.child_endpoint),
                 name="ve-discovery-helper", daemon=True)
             if cancelled.is_set():
                 raise RuntimeError("discovery cancelled")
@@ -520,6 +525,9 @@ class DiscoveryService:
         cleanup = []
         if child is not None and child.pid is not None:
             child.join(self.retire_timeout)
+            if child.is_alive() and resources.log_drain is not None:
+                resources.log_drain.begin("discovery retirement")
+                self._report_log_drain(resources, resources.log_drain.wait())
             for operation in ("terminate", "kill"):
                 if not child.is_alive():
                     break
@@ -543,11 +551,32 @@ class DiscoveryService:
             if receiver.is_alive():
                 cleanup.append("result receiver not stopped; service quarantined until reaped")
         if child is not None and (child.pid is None or not child.is_alive()):
+            self._close_log_drain(resources)
             child.close()
             resources.child = None
+        elif child is None:
+            self._close_log_drain(resources)
         if receiver is not None and not receiver.is_alive():
             resources.receiver = None
         return cleanup
+
+    def _report_log_drain(self, resources, result):
+        if resources.log_drain_reported:
+            return
+        resources.log_drain_reported = True
+        if result.status in ("timeout", "drained-with-errors"):
+            pending = "unknown" if result.stats is None else result.stats["pending"]
+            self._logger.error(
+                "Discovery log drain pid=%s reason=%s status=%s pending=%s stats=%s detail=%s",
+                None if resources.child is None else resources.child.pid,
+                resources.log_drain.reason or "self-exit", result.status,
+                pending, result.stats, result.detail)
+
+    def _close_log_drain(self, resources):
+        if resources.log_drain is not None:
+            self._report_log_drain(resources, resources.log_drain.poll(already_dead=True))
+            resources.log_drain.close()
+            resources.log_drain = None
 
     def _reap_unconfirmed(self):
         if self._unreaped is None:
@@ -573,6 +602,7 @@ class DiscoveryService:
                     self._logger.error("Discovery helper kill retry failed", exc_info=True)
                 child.join(self.retire_timeout)
             if not child.is_alive():
+                self._close_log_drain(resources)
                 child.close()
                 resources.child = None
         if receiver is not None:
