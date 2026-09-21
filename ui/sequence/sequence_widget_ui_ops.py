@@ -501,6 +501,11 @@ class SequenceWidgetUiOpsMixin:
         ).strip()
 
     def update_player_btn_is_paused(self):
+        if getattr(self, "_product_progress_choice_pending", False):
+            ready = getattr(self, "_product_progress_prompt_ready", False)
+            self.player_btn.setEnabled(ready)
+            self.player_btn.setToolTip("选择继续上次测试或从头开始")
+            return
         end_metadata = getattr(self, "_end_test_round_metadata", None)
         if (
             callable(end_metadata)

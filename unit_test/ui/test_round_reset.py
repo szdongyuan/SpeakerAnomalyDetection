@@ -132,7 +132,7 @@ def test_reset_cleans_only_empty_recording_artifact_directories(host, round_arti
     assert not host._round_reset_group_id
 
 
-def test_reset_retries_failed_directory_cleanup(host, round_artifacts, monkeypatch):
+def test_reset_finishes_despite_failed_directory_cleanup(host, round_artifacts, monkeypatch):
     info, wav, paths = round_artifacts
     blocked = paths[0].parent
     original = Path.rmdir
@@ -145,25 +145,23 @@ def test_reset_retries_failed_directory_cleanup(host, round_artifacts, monkeypat
     monkeypatch.setattr(Path, "rmdir", deny_directory)
     host._confirm_round_reset = Mock(return_value=True)
     host._on_reset_current_round()
-    assert host._round_reset_delete_failed
     assert blocked.is_dir() and not paths[0].exists()
-    assert not host.player_btn.isEnabled()
-    monkeypatch.setattr(Path, "rmdir", original)
-    host._on_reset_current_round()
-    assert not blocked.exists()
     assert not host._round_reset_delete_failed
     assert not host._round_reset_group_id
+    assert "directory is locked" in reset_ops.QMessageBox.warning.call_args.args[2]
+    assert start_round(host)
 
 
-def test_reset_accepts_already_removed_artifact_directory(host, round_artifacts):
+def test_missing_artifact_does_not_stop_other_deletions_or_reset(host, round_artifacts):
     info, wav, paths = round_artifacts
     paths[0].unlink()
     paths[0].parent.rmdir()
     host._confirm_round_reset = Mock(return_value=True)
     host._on_reset_current_round()
-    assert all(not path.exists() for path in paths)
-    assert not paths[1].parent.exists()
+    assert not wav.exists() and all(not path.exists() for path in paths[1:])
+    assert not host._round_reset_group_id
     assert not host._round_reset_delete_failed
+    assert "原路径不存在，可能仍有残留文件" in reset_ops.QMessageBox.warning.call_args.args[2]
 
 
 def test_keep_reset_preserves_artifact_directories(host, round_artifacts):
@@ -172,6 +170,39 @@ def test_keep_reset_preserves_artifact_directories(host, round_artifacts):
     host._on_reset_current_round()
     assert wav.exists() and all(path.exists() for path in paths)
     assert not host._round_reset_group_id
+
+
+def test_recording_cleanup_derives_directories_without_registered_metadata(host, round_artifacts):
+    info, wav, paths = round_artifacts
+    original = host._round_record_for_info(info)
+    # Construct a fresh record from the file ledger alone, as after resuming.
+    record = RoundDataRecord(str(wav), set(original.files), raw_csv_files={str(paths[2])})
+    assert record.delete_generated_data() == []
+    assert not paths[0].parent.exists()
+    assert not paths[1].parent.exists()
+    assert wav.parent.is_dir() and paths[2].parent.is_dir()
+
+
+@pytest.mark.parametrize("relative_path,is_raw", [
+    ("audio/raw_csv/clip.csv", True),
+    ("csv/clip/raw.csv", True),
+    ("csv/other-recording/result.csv", False),
+    ("images/clip/result.csv", False),
+    ("csv/clip/plot.png", False),
+])
+def test_file_deletion_does_not_authorize_shared_or_unrelated_directory_cleanup(
+    tmp_path, relative_path, is_raw,
+):
+    output = tmp_path / relative_path
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"output")
+    record = RoundDataRecord(
+        str(tmp_path / "audio/wav/clip.wav"), {str(output)},
+        raw_csv_files={str(output)} if is_raw else set(),
+    )
+    assert record.delete_generated_data() == []
+    assert not output.exists()
+    assert output.parent.is_dir()
 
 
 def test_keep_reset_unlocks_and_preserves_metadata_files_and_other_history(host, tmp_path):
@@ -202,9 +233,9 @@ def test_deletion_uses_full_round_ledger_not_recent_twenty_records(host, tmp_pat
         host.recent_test_sessions.append(str(index))
     report = tmp_path / "report.pdf"
     report.write_bytes(b"report")
-    source = tmp_path / "existing.wav"
+    source = tmp_path / "import.wav"
     source.write_bytes(b"source")
-    host._register_round_recording({"file_path": str(source)})
+    host._register_round_recording({"file_path": str(source), "source_type": "imported"})
     host._register_round_file(infos[0], str(report))
     for name in ("raw.csv", "analysis.csv", "plot.png"):
         path = tmp_path / name
@@ -240,7 +271,7 @@ def test_cancel_and_busy_leave_state_unchanged(host, tmp_path):
     host._confirm_round_reset.assert_not_called()
 
 
-def test_delete_failure_keeps_remaining_files_for_retry(host, tmp_path, monkeypatch):
+def test_delete_failure_keeps_remaining_files_but_resets_progress(host, tmp_path, monkeypatch):
     group = start_round(host)
     info = add_record(host, tmp_path / "audio.wav")
     raw = tmp_path / "raw.csv"
@@ -256,14 +287,12 @@ def test_delete_failure_keeps_remaining_files_for_retry(host, tmp_path, monkeypa
     monkeypatch.setattr(Path, "unlink", fail_audio)
     host._confirm_round_reset = Mock(return_value=True)
     host._on_reset_current_round()
-    assert host._round_reset_delete_failed
-    assert host._round_reset_group_id == group
-    assert host._round_record_for_info(info).files == {info["file_path"]}
-    assert host._prepare_next_manual_product_condition_recording() is None
-    monkeypatch.setattr(Path, "unlink", unlink)
-    host._on_reset_current_round()
     assert not host._round_reset_delete_failed
     assert not host._round_reset_group_id
+    assert Path(info["file_path"]).exists()
+    assert not raw.exists()
+    assert "file is in use" in reset_ops.QMessageBox.warning.call_args.args[2]
+    assert start_round(host) != group
 
 
 def test_moved_audio_and_late_analysis_are_bound_to_original_round(host, tmp_path):
@@ -283,7 +312,7 @@ def test_moved_audio_and_late_analysis_are_bound_to_original_round(host, tmp_pat
     assert old_plot.exists()
 
 
-def test_delete_database_row_only_after_files_succeed(tmp_path, monkeypatch):
+def test_delete_matching_database_row_even_when_file_deletion_fails(tmp_path, monkeypatch):
     db = tmp_path / "audio.db"
     wav = tmp_path / "audio.wav"
     wav.write_bytes(b"audio")
@@ -295,7 +324,9 @@ def test_delete_database_row_only_after_files_succeed(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "unlink", Mock(side_effect=PermissionError("locked")))
     assert record.delete_generated_data()
     with sqlite3.connect(db) as connection:
-        assert connection.execute("SELECT count(*) FROM audio_data_table").fetchone()[0] == 2
+        assert connection.execute("SELECT audio_data_id FROM audio_data_table").fetchall() == [("other",)]
+    assert wav.exists()
+    assert record.audio_data_id == ""
     monkeypatch.setattr(Path, "unlink", original)
     assert record.delete_generated_data() == []
     with sqlite3.connect(db) as connection:
@@ -305,9 +336,9 @@ def test_delete_database_row_only_after_files_succeed(tmp_path, monkeypatch):
 
 def test_database_failure_keeps_id_for_retry(tmp_path):
     db = tmp_path / "missing.db"
-    record = RoundDataRecord("audio.wav", database_id="ours", database_path=str(db))
+    record = RoundDataRecord("audio.wav", audio_data_id="ours", database_path=str(db))
     assert record.delete_generated_data()
-    assert record.database_id == "ours"
+    assert record.audio_data_id == "ours"
     assert not db.exists()
 
 
@@ -328,14 +359,14 @@ def test_database_save_registers_exact_id_for_deletion(host, tmp_path):
     assert code == error_code.OK, message
     host._register_round_database_record(info)
     record = host._round_record_for_info(info)
-    assert record.database_id == info["audio_data_id"]
+    assert record.audio_data_id == info["audio_data_id"]
     assert record.database_path == str(db)
     assert record.delete_generated_data() == []
     with sqlite3.connect(db) as connection:
         assert connection.execute("SELECT count(*) FROM audio_data_table").fetchone()[0] == 0
 
 
-def test_database_relocated_record_is_not_deleted(tmp_path):
+def test_database_relocated_record_is_preserved_but_registered_file_is_deleted(tmp_path):
     db = tmp_path / "audio.db"
     wav = tmp_path / "old.wav"
     wav.write_bytes(b"audio")
@@ -344,7 +375,60 @@ def test_database_relocated_record_is_not_deleted(tmp_path):
         connection.execute("INSERT INTO audio_data_table VALUES ('id', 'new.wav')")
     record = RoundDataRecord(str(wav), {str(wav)}, "id", str(db), str(wav))
     assert record.delete_generated_data()
-    assert wav.exists()
+    assert not wav.exists()
+    with sqlite3.connect(db) as connection:
+        assert connection.execute("SELECT * FROM audio_data_table").fetchall() == [("id", "new.wav")]
+
+
+@pytest.mark.parametrize("database_state", ["mismatch", "missing_database", "missing_row"])
+def test_database_cleanup_problem_does_not_block_files_other_records_or_reset(
+    host, tmp_path, monkeypatch, database_state,
+):
+    group = start_round(host)
+    info = add_record(host, tmp_path / "audio.wav")
+    other = add_record(host, tmp_path / "other.wav")
+    record = host._round_record_for_info(info)
+    db = tmp_path / "audio.db"
+    record.audio_data_id = "ours"
+    record.database_path = str(db)
+    record.database_audio_path = "audio.wav"
+    if database_state != "missing_database":
+        with sqlite3.connect(db) as connection:
+            connection.execute("CREATE TABLE audio_data_table (audio_data_id TEXT PRIMARY KEY, file_path TEXT)")
+            connection.execute("INSERT INTO audio_data_table VALUES ('unrelated', 'unrelated.wav')")
+            if database_state == "mismatch":
+                connection.execute("INSERT INTO audio_data_table VALUES ('ours', 'changed.wav')")
+    host.recent_test_session_by_id = {"session": {"recorded_signal_info": info}}
+    host.recent_test_sessions = ["session"]
+
+    def inspect_warning(_parent, _title, message):
+        assert not host._round_reset_group_id
+        assert not host._manual_product_condition_group_id
+        assert "测试进度已重置" in message
+        assert "ours" in message
+
+    warning = Mock(side_effect=inspect_warning)
+    monkeypatch.setattr(reset_ops.QMessageBox, "warning", warning)
+    host._confirm_round_reset = Mock(return_value=True)
+    host._on_reset_current_round()
+    assert not Path(info["file_path"]).exists()
+    assert not Path(other["file_path"]).exists()
+    assert host.recent_test_sessions == []
+    assert not host._round_reset_group_id
+    if database_state == "missing_row":
+        warning.assert_not_called()
+    else:
+        warning.assert_called_once()
+    if database_state == "missing_database":
+        assert not db.exists()
+    else:
+        with sqlite3.connect(db) as connection:
+            rows = connection.execute("SELECT audio_data_id, file_path FROM audio_data_table ORDER BY audio_data_id").fetchall()
+        expected = [("unrelated", "unrelated.wav")]
+        if database_state == "mismatch":
+            expected.insert(0, ("ours", "changed.wav"))
+        assert rows == expected
+    assert start_round(host) != group
 
 
 def test_reset_dialog_freezes_target_and_defaults_to_keep(host, monkeypatch):
@@ -365,9 +449,9 @@ def test_reset_dialog_freezes_target_and_defaults_to_keep(host, monkeypatch):
         assert not results[-1]
         assert details.text() == "未勾选时保留已保存的数据和报告。"
         checkbox.setChecked(True)
-        assert "对应数据库记录同步删除" in details.text()
+        assert details.text() == "无待删除文件。"
         checkbox.setChecked(False)
-        assert "同步删除" not in details.text()
+        assert details.text() == "未勾选时保留已保存的数据和报告。"
         checkbox.setChecked(True)
         confirm = dialog.findChild(QPushButton, "roundResetConfirmButton")
         assert confirm.text() == "删除数据并重置"
@@ -398,25 +482,148 @@ def test_deletion_summary_distinguishes_raw_and_analysis_csv(host, tmp_path):
     assert host._round_deletion_summary(group) == "无待删除文件。"
 
 
-def test_retry_dialog_includes_remaining_file_details(host, tmp_path, monkeypatch):
+def test_delete_dialog_shows_only_file_summary(host, tmp_path, monkeypatch):
     from PyQt5.QtWidgets import QCheckBox, QLabel, QPushButton
 
     group = start_round(host)
     add_record(host, tmp_path / "audio.wav")
-    host._round_reset_delete_failed = True
 
     def inspect_dialog(dialog):
         checkbox = dialog.findChild(QCheckBox)
         details = dialog.findChild(QLabel, "roundResetDataSummary")
-        assert checkbox.isChecked()
-        assert not checkbox.isEnabled()
-        assert "本次重试剩余文件和记录" in details.text()
-        assert "将删除：原始音频 1 个。" in details.text()
+        assert not checkbox.isChecked()
+        checkbox.setChecked(True)
+        assert checkbox.isEnabled()
+        assert details.text() == "将删除：原始音频 1 个。"
         dialog.findChild(QPushButton, "roundResetCancelButton").click()
         return dialog.result()
 
     monkeypatch.setattr(reset_ops.ConfigDialogBase, "exec", inspect_dialog)
     assert host._confirm_round_reset(group) is None
+
+
+def test_reset_dialog_grows_when_checked_summary_wraps(host, tmp_path, monkeypatch):
+    from PyQt5.QtGui import QFont, QFontDatabase
+    from PyQt5.QtWidgets import QCheckBox, QLabel
+
+    font_file = Path("C:/Windows/Fonts/simsun.ttc")
+    font_id = QFontDatabase.addApplicationFont(str(font_file)) if font_file.exists() else -1
+    group = start_round(host)
+    info = add_record(host, tmp_path / "audio.wav")
+    host._register_round_file(info, str(tmp_path / "raw.csv"), is_raw_csv=True)
+    for index in range(10):
+        host._register_round_file(info, str(tmp_path / f"plot{index}.png"))
+    for index in range(3):
+        host._register_round_file(info, str(tmp_path / f"result{index}.csv"))
+
+    def inspect_dialog(dialog):
+        dialog.setFont(QFont("SimSun", 10))
+        dialog.show()
+        QApplication.processEvents()
+        checkbox = dialog.findChild(QCheckBox)
+        details = dialog.findChild(QLabel, "roundResetDataSummary")
+        initial_height = dialog.height()
+        for checked in (True, False, True):
+            checkbox.setChecked(checked)
+            QApplication.processEvents()
+            for label in dialog.findChildren(QLabel):
+                required = label.heightForWidth(label.width()) if label.wordWrap() else label.sizeHint().height()
+                assert label.height() >= required, (label.text(), label.height(), required)
+            if checked:
+                assert details.heightForWidth(details.width()) > details.fontMetrics().height()
+                assert dialog.height() > initial_height
+        assert dialog.grab().save(str(tmp_path / "reset-wrapped-summary.png"))
+        dialog.reject()
+        return dialog.result()
+
+    monkeypatch.setattr(reset_ops.ConfigDialogBase, "exec", inspect_dialog)
+    try:
+        assert host._confirm_round_reset(group) is None
+    finally:
+        if font_id >= 0:
+            QFontDatabase.removeApplicationFont(font_id)
+
+
+@pytest.mark.parametrize("change", ["rename", "move", "delete"])
+def test_missing_audio_skips_original_path_deletes_other_data_and_resets(
+    host, tmp_path, change,
+):
+    start_round(host)
+    # Missing audio must not block other files or matching database rows.
+    first = add_record(host, tmp_path / "first.wav")
+    info = add_record(host, tmp_path / "audio.wav")
+    wav = Path(info["file_path"])
+    csv = tmp_path / "result.csv"
+    csv.write_text("data", encoding="utf-8")
+    host._register_round_file(info, str(csv))
+    record = host._round_record_for_info(info)
+    db = tmp_path / "audio.db"
+    with sqlite3.connect(db) as connection:
+        connection.execute("CREATE TABLE audio_data_table (audio_data_id TEXT, file_path TEXT)")
+        connection.execute("INSERT INTO audio_data_table VALUES (?, ?)", ("id", str(wav)))
+    record.audio_data_id, record.database_path, record.database_audio_path = "id", str(db), str(wav)
+    changed_path = tmp_path / "renamed.wav"
+    if change == "move":
+        directory = tmp_path / "moved"
+        directory.mkdir()
+        changed_path = directory / wav.name
+    if change == "delete":
+        wav.unlink()
+    else:
+        wav.rename(changed_path)
+    host._confirm_round_reset = Mock(return_value=True)
+    host._on_reset_current_round()
+    assert not host._round_reset_group_id
+    assert not host._round_reset_delete_failed
+    assert not host.toolsbar.reset_round_button.isEnabled()
+    assert not Path(first["file_path"]).exists() and not csv.exists()
+    with sqlite3.connect(db) as connection:
+        assert connection.execute("SELECT audio_data_id FROM audio_data_table").fetchall() == []
+    message = reset_ops.QMessageBox.warning.call_args.args[2]
+    assert "测试进度已重置" in message
+    assert "原路径不存在，可能仍有残留文件" in message
+    assert not host.toolsbar.sample_number_lineedit.isReadOnly()
+    if change != "delete":
+        assert changed_path.exists()
+
+
+def test_file_disappearing_during_deletion_is_reported_and_progress_resets(host, tmp_path, monkeypatch):
+    start_round(host)
+    info = add_record(host, tmp_path / "audio.wav")
+    wav = Path(info["file_path"])
+    original_unlink = Path.unlink
+
+    def disappear_before_delete(path, **kwargs):
+        if path == wav:
+            original_unlink(path)
+        return original_unlink(path, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", disappear_before_delete)
+    host._confirm_round_reset = Mock(return_value=True)
+    host._on_reset_current_round()
+    assert "原路径不存在，可能仍有残留文件" in reset_ops.QMessageBox.warning.call_args.args[2]
+    assert not host._round_reset_group_id
+    assert not host._round_reset_delete_failed
+
+
+def test_delete_dialog_can_switch_back_to_keep_only(host, tmp_path, monkeypatch):
+    from PyQt5.QtWidgets import QCheckBox, QPushButton
+
+    group = start_round(host)
+    add_record(host, tmp_path / "audio.wav")
+
+    def keep_only(dialog):
+        checkbox = dialog.findChild(QCheckBox)
+        assert checkbox.isEnabled()
+        checkbox.setChecked(True)
+        checkbox.setChecked(False)
+        confirm = dialog.findChild(QPushButton, "roundResetConfirmButton")
+        assert confirm.text() == "重置"
+        confirm.click()
+        return dialog.result()
+
+    monkeypatch.setattr(reset_ops.ConfigDialogBase, "exec", keep_only)
+    assert host._confirm_round_reset(group) is False
 
 
 def test_reset_does_not_emit_a_new_barcode_scan(host):
@@ -433,6 +640,8 @@ def test_reset_does_not_emit_a_new_barcode_scan(host):
     text_changed.assert_not_called()
     assert host.lineedit_s_or_n.text() == "sn-1"
     assert not host._barcode_debounce_timer.isActive()
+
+
 
 
 def test_reset_unlocks_real_configuration_control(host):

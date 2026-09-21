@@ -149,6 +149,8 @@ class SequenceWidgetRecordingProcessOpsMixin:
 
     def _can_prepare_recording_workflow(self):
         """Check ownership before selecting a target condition's queue."""
+        if getattr(self, "_product_progress_choice_pending", False):
+            return False
         if any(bool(getattr(self, name, False)) for name in (
                 "_recording_closed", "_closing", "_shutdown_started", "_close_in_progress",
                 "_test_metadata_validation_open", "_product_test_program_config_dialog_open",

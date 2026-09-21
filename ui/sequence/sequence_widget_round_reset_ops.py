@@ -7,11 +7,6 @@ import uuid
 from PyQt5.QtCore import QSignalBlocker, QTimer
 from PyQt5.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout
 
-from base.analysis_artifact_paths import (
-    build_wav_csv_directory,
-    build_wav_image_directory,
-    storage_context_from_metadata,
-)
 from base.test_round_data import RoundDataRecord
 from base.recording_management import RecordingManager
 from ui.config_dialog_base import ConfigDialogBase
@@ -44,8 +39,8 @@ class SequenceWidgetRoundResetOpsMixin:
         if not group_id or group_id != self._round_reset_group_id:
             return
         path = os.path.abspath(info["file_path"])
-        # Previously existing paths are never owned here.
-        if os.path.lexists(path):
+        # Imported source WAVs and previously existing paths are never owned here.
+        if info.get("source_type") == "imported" or os.path.lexists(path):
             return
         key = uuid.uuid4().hex
         info["round_data_group_id"] = group_id
@@ -60,7 +55,7 @@ class SequenceWidgetRoundResetOpsMixin:
     def _register_round_database_record(self, info):
         record = self._round_record_for_info(info)
         if record is not None and info.get("audio_data_id"):
-            record.database_id = info["audio_data_id"]
+            record.audio_data_id = info["audio_data_id"]
             record.database_path = info["audio_database_path"]
             record.database_audio_path = info["audio_database_file_path"]
 
@@ -73,16 +68,6 @@ class SequenceWidgetRoundResetOpsMixin:
             return
         filename = os.path.abspath(path)
         record.files.add(filename)
-        storage_metadata = info.get("analysis_storage")
-        if storage_metadata:
-            context = storage_context_from_metadata(storage_metadata)
-            wav_stem = Path(record.audio_path).stem
-            directory = Path(filename).parent
-            if directory in (
-                build_wav_image_directory(context, wav_stem),
-                build_wav_csv_directory(context, wav_stem),
-            ):
-                record.artifact_directories.add(str(directory))
         if is_raw_csv:
             record.raw_csv_files.add(filename)
 
@@ -207,23 +192,15 @@ class SequenceWidgetRoundResetOpsMixin:
 
         def update_delete_details(checked):
             confirm.setText("删除数据并重置" if checked else "重置")
-            lines = []
-            if checked:
-                if self._round_reset_delete_failed:
-                    lines.append("上次删除未完成，本次重试剩余文件和记录。")
-                lines.extend([
-                    self._round_deletion_summary(group_id),
-                    "对应数据库记录同步删除，报告保留。",
-                ])
-            else:
-                lines.append("未勾选时保留已保存的数据和报告。")
-            details.setText("\n".join(lines))
+            details.setText(
+                self._round_deletion_summary(group_id)
+                if checked else "未勾选时保留已保存的数据和报告。"
+            )
+            # Wrapped summaries need more height after the checkbox changes.
+            dialog.adjustSize()
 
         delete_box.toggled.connect(update_delete_details)
         update_delete_details(False)
-        if self._round_reset_delete_failed:
-            delete_box.setChecked(True)
-            delete_box.setEnabled(False)
         install_dialog_enter_policy(dialog, confirm)
         if dialog.exec() != dialog.Accepted:
             return None
@@ -244,30 +221,23 @@ class SequenceWidgetRoundResetOpsMixin:
             delete_data = self._confirm_round_reset(group_id)
             if delete_data is None:
                 return
-            if delete_data:
-                errors = self._delete_round_generated_data(group_id)
-                if errors:
-                    self._round_reset_delete_failed = True
-                    self._lock_analysis_round_config()
-                    self.data_btn.setEnabled(False)
-                    self.replayer_btn.setEnabled(False)
-                    QMessageBox.warning(
-                        self, "删除未完成",
-                        "本轮尚未重置，已删除部分不会恢复。请处理失败项后再次点击重置。\n"
-                        + "\n".join(errors),
-                    )
-                    return
+            errors = self._delete_round_generated_data(group_id) if delete_data else []
             self._reset_round_presentation()
             self._round_data_records.pop(group_id, None)
             self._round_reset_group_id = ""
             self._round_analysis_records.clear()
             self._round_reset_delete_failed = False
+            if errors:
+                QMessageBox.warning(
+                    self, "测试进度已重置，数据清理有未完成项",
+                    "测试进度已重置。以下项目未能确认清理完成，可能仍有历史数据残留。\n"
+                    "改名或移动后的文件不会自动查找和删除，请按需检查。\n\n"
+                    + "\n".join(errors),
+                )
         finally:
             self._record_workflow_busy = False
             self._round_reset_in_progress = False
             self.update_player_btn_is_paused()
-            if self._round_reset_delete_failed:
-                self.player_btn.setEnabled(False)
             self._refresh_round_reset_button()
 
     def _delete_round_generated_data(self, group_id):
@@ -275,11 +245,12 @@ class SequenceWidgetRoundResetOpsMixin:
         records = self._round_data_records.get(group_id, {})
         for key, record in list(records.items()):
             failures = record.delete_generated_data()
+            if record.audio_path not in record.files:
+                self._remove_deleted_round_history(group_id, key)
             if failures:
                 errors.extend(failures)
                 continue
             del records[key]
-            self._remove_deleted_round_history(group_id, key)
         return errors
 
     def _remove_deleted_round_history(self, group_id, key):

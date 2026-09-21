@@ -742,7 +742,9 @@ class MainWindow(QMainWindow):
             self.video_controller.start_preview()
             self._expand_sequence_workspace()
             self.sequence_window.show()
-            if hasattr(self.sequence_window, "init_serial_trigger_runtime"):
+            offer_resume = getattr(self.sequence_window, "_offer_product_test_resume", None)
+            resume_ready = offer_resume() if callable(offer_resume) else True
+            if resume_ready and hasattr(self.sequence_window, "init_serial_trigger_runtime"):
                 self.sequence_window.init_serial_trigger_runtime()
             self.update_statusbar()
         self.on_access_lvl_changed()
@@ -937,6 +939,10 @@ class MainWindow(QMainWindow):
                 video.closed.connect(self.close)
                 video.shutdown()
             return
+        save_progress = getattr(sequence, "_save_product_test_progress_before_exit", None)
+        if callable(save_progress) and not getattr(self, "_product_progress_saved", False):
+            self._product_progress_saved = True
+            save_progress()
         bridge = getattr(self, "recording_bridge", None)
         if (bridge is not None and not bridge.service.closed.is_set()
                 and not getattr(self, "_recording_shutdown_reported", False)):

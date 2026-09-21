@@ -65,6 +65,7 @@ class _MetadataHost(
         self.channel_workspace = None
         self._load_sequence_config_for_product_condition = Mock(return_value=(True, ""))
         self._generate_recording_token = Mock(side_effect=["round-1", "round-2"])
+        self._generate_product_condition_group_id = self._generate_recording_token
         self.clear_all_direction_waveforms = Mock()
         self._clear_plot_area = Mock()
         self.update_player_btn_is_paused = Mock()
