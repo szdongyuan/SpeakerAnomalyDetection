@@ -1247,7 +1247,7 @@ class RecordingService:
                     and previous.frames < session.request.target_samples
                     and session._target_reached_at is None):
                 session._target_reached_at = progress.last_frame_at
-                session._slot_release_deadline = progress.last_frame_at + .5
+                session._slot_release_deadline = progress.last_frame_at + 1.0
         elif event.kind == "capture_slot_released":
             slot = event.payload
             counts = slot.lifecycle_counts
@@ -1289,7 +1289,7 @@ class RecordingService:
                         if len(self._sessions) >= self._pipeline_capacity else None)
             if late:
                 self._retire_generation(worker, "capture_release_timeout",
-                                        "capture slot release exceeded target + 0.5 seconds", session)
+                                        "capture slot release exceeded target + 1.0 seconds", session)
         elif event.kind == "preview":
             snapshot = event.payload
             if snapshot.sequence == session._preview_pending:
@@ -1740,7 +1740,7 @@ class RecordingService:
         if (session is not None and session._slot_release_deadline is not None
                 and now >= session._slot_release_deadline and not session._terminal):
             self._retire_generation(worker, "capture_release_timeout",
-                                    "capture slot release exceeded target + 0.5 seconds", session)
+                                    "capture slot release exceeded target + 1.0 seconds", session)
         pending = self._pending_ve_release
         if pending is not None and pending.deadline is not None and now >= pending.deadline:
             preparing = pending.preparing

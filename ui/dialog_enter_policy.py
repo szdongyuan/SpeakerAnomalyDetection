@@ -26,6 +26,9 @@ class _HeldEnterGuard(QObject):
         QApplication.instance().removeEventFilter(self)
 
     def eventFilter(self, obj, event):
+        dialog = getattr(self, "_dialog", None)
+        if dialog is None:
+            return False
         if event.type() not in (QEvent.KeyPress, QEvent.KeyRelease):
             return False
         if event.key() not in (Qt.Key_Return, Qt.Key_Enter):
@@ -39,12 +42,12 @@ class _HeldEnterGuard(QObject):
         ):
             return False
         owner = obj.window()
-        if owner is self._dialog:
+        if owner is dialog:
             # The policy already blocks button repeats in this window. Native
             # editors must still receive repeats (for example, newlines).
             return False
         while owner is not None:
-            if owner is self._dialog:
+            if owner is dialog:
                 return True
             owner = owner.parentWidget()
         return False
@@ -151,9 +154,12 @@ class DialogEnterPolicy(QObject):
             signal.connect(slot)
 
     def eventFilter(self, obj, event):
+        dialog = getattr(self, "_dialog", None)
+        if dialog is None:
+            return False
         if not isinstance(obj, QWidget):
             return False
-        if obj.window() is not self._dialog:
+        if obj.window() is not dialog:
             # Observe owned temporary windows only for invalidation; their
             # keyboard handling and default buttons remain independent.
             if event.type() == QEvent.Show and (obj.isModal() or obj.windowType() == Qt.Popup):
@@ -178,7 +184,7 @@ class DialogEnterPolicy(QObject):
             if self._tracked_input is not None and obj in self._tracked_input:
                 self._reset_input()
         elif event.type() == QEvent.Hide:
-            if obj is self._dialog or (self._tracked_input is not None and obj in self._tracked_input):
+            if obj is dialog or (self._tracked_input is not None and obj in self._tracked_input):
                 self._reset_input()
         if event.type() not in (QEvent.KeyPress, QEvent.KeyRelease):
             return False
@@ -192,7 +198,7 @@ class DialogEnterPolicy(QObject):
             return False
         modal = QApplication.activeModalWidget()
         if (
-            (modal is not None and modal is not self._dialog)
+            (modal is not None and modal is not dialog)
             or QApplication.activePopupWidget() is not None
         ):
             self._reset_input()
@@ -208,7 +214,7 @@ class DialogEnterPolicy(QObject):
                 self._held_enter.arm()
                 return False
             return True
-        receiver = self._dialog.focusWidget() if obj is self._dialog else obj
+        receiver = dialog.focusWidget() if obj is dialog else obj
         # A spin box's inner line edit points its focus proxy back to the
         # outer control. Preserve native delivery to either actual input;
         # only resolve proxy containers that do not handle editing themselves.
@@ -237,7 +243,7 @@ class DialogEnterPolicy(QObject):
                 single_line is not None
                 and epoch == self._input_epoch
                 and not sip.isdeleted(single_line[1])
-                and self._single_line_input(self._dialog.focusWidget()) == single_line
+                and self._single_line_input(dialog.focusWidget()) == single_line
                 and single_line[1].hasAcceptableInput()
                 and self._preedit_widget is None
                 and not event.isAutoRepeat()
