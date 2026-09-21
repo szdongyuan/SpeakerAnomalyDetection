@@ -14,6 +14,7 @@ LOG_DIR = DEFAULT_DIR + "log/"
 LOG_QUEUE_CAPACITY = 4096
 LOG_BATCH_SIZE = 5
 LOG_SHUTDOWN_TIMEOUT = 2.0
+LOG_DROP_REPORT_INTERVAL = 1.0
 
 DEFAULT_LOG_FORMATTER = "[%(asctime)s][%(name)s] - [%(levelname)s] - [%(message)s] [%(filename)s:%(lineno)d]"
 

@@ -193,8 +193,9 @@ class VideoController(VideoServiceBridge):
                 process.join(.5)
                 if process.is_alive():
                     log_drain.begin("camera probe retirement")
-                    self._report_probe_log_drain(process.pid, log_drain, log_drain.wait())
-                    process.terminate()
+                    self._report_probe_log_drain(process.pid, log_drain, log_drain.wait(is_alive=process.is_alive))
+                    if process.is_alive():
+                        process.terminate()
                     process.join(1)
                 else:
                     self._report_probe_log_drain(process.pid, log_drain, log_drain.poll(already_dead=True))
@@ -213,7 +214,8 @@ class VideoController(VideoServiceBridge):
             self.devices_ready.emit(*result)
 
     def _report_probe_log_drain(self, pid, drain, result):
-        if result.status in ("timeout", "drained-with-errors"):
+        if (result.status in ("timeout", "drained-with-errors")
+                or (result.status == "already-dead" and result.detail is not None)):
             self._logger.error(
                 "Camera probe log drain pid=%s reason=%s status=%s pending=%s stats=%s detail=%s",
                 pid, drain.reason or "self-exit", result.status,

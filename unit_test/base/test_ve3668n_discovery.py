@@ -1104,3 +1104,32 @@ def test_service_thread_start_failure_still_closes_child_and_ipc(tmp_path, monke
                     child.kill()
                 child.join(2)
                 child.close()
+
+
+@pytest.mark.parametrize("during_wait", [False, True])
+def test_retirement_observes_death_and_reports_only_requested_drain(monkeypatch, caplog, during_wait):
+    import logging
+    from base import log_exit
+    now = [100.0]
+    drain = log_exit.ProcessLogDrain.create(multiprocessing.get_context("spawn"), clock=lambda: now[0])
+    calls = []
+    child = SimpleNamespace(pid=123, exitcode=0,
+                            is_alive=lambda: during_wait and now[0] < 100.02,
+                            join=lambda timeout: None,
+                            terminate=lambda: calls.append("terminate"),
+                            kill=lambda: calls.append("kill"),
+                            close=lambda: calls.append("close"))
+    resources = discovery._ProbeResources(child=child, log_drain=drain)
+    service = discovery.DiscoveryService.__new__(discovery.DiscoveryService)
+    service.retire_timeout = .01
+    service._logger = logging.getLogger("discovery-death-test")
+    monkeypatch.setattr(log_exit.time, "sleep", lambda delay: now.__setitem__(0, now[0] + delay))
+    assert service._retire(resources) == []
+    assert calls == ["close"]
+    assert resources.released
+    if during_wait:
+        assert now[0] < 100.03
+        assert "already-dead" in caplog.text and "unconfirmed" in caplog.text
+        assert "pending=unknown" in caplog.text
+    else:
+        assert not caplog.records

@@ -222,8 +222,10 @@ def test_recording_drain_timeout_reports_once_with_unknown_pending(
         monkeypatch, tmp_path, caplog, self_exit):
     import multiprocessing
     from base.log_exit import ProcessLogDrain, _write
+    from base.recording_timing_logger import RecordingTimingLogger
 
     probe = ve_probe(monkeypatch, tmp_path)
+    probe.service._timing_logger = RecordingTimingLogger()
     drain = ProcessLogDrain.create(multiprocessing.get_context("spawn"), clock=probe.clock)
     probe.worker.log_drain = drain
     if self_exit:
@@ -242,6 +244,9 @@ def test_recording_drain_timeout_reports_once_with_unknown_pending(
         probe.service._tick()
         probe.service._tick()
         probe.service._retire_generation(probe.worker)
+    probe.service._timing_logger.close()
+    probe.service._timing_logger.thread.join(3)
+    assert not probe.service._timing_logger.thread.is_alive()
     messages = [r.getMessage() for r in caplog.records if "Recording log drain" in r.msg]
     assert len(messages) == 1
     assert "generation=1 pid=123" in messages[0]

@@ -1590,3 +1590,35 @@ def test_thread_start_ownership_failure_releases_lease_and_reclaims_worker(
     assert events.failed.empty() and events.results.empty() and events.accepted.empty()
     assert service.diagnostics == [message]
     assert all(thread.ident is not None for thread in service.threads)
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_dead_recording_drain_reports_only_observed_drain(caplog, started):
+    import logging
+    from base.log_exit import ProcessLogDrain
+    from base.recording_timing_logger import RecordingTimingLogger
+    drain = ProcessLogDrain.create(mp.get_context("spawn"))
+    service = RecordingService.__new__(RecordingService)
+    service._logger = logging.getLogger("recording-death-test")
+    service._timing_logger = RecordingTimingLogger()
+    worker = SimpleNamespace(log_drain=drain, log_drain_reported=False,
+                             generation=3, process=SimpleNamespace(pid=123))
+    try:
+        if started:
+            drain.begin("recording retirement")
+        result = drain.poll(already_dead=True)
+        service._report_log_drain(worker, result)
+        service._report_log_drain(worker, result)
+        service._timing_logger.close()
+        if started:
+            service._timing_logger.thread.join(3)
+            assert not service._timing_logger.thread.is_alive()
+            assert len(caplog.records) == 1
+            assert "already-dead" in caplog.text and "unconfirmed" in caplog.text
+            assert "pending=unknown" in caplog.text
+        else:
+            assert not caplog.records
+            assert service._timing_logger.thread is None
+    finally:
+        service._timing_logger.close()
+        drain.close()

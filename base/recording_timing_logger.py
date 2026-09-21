@@ -17,12 +17,18 @@ class RecordingTimingLogger:
         self.last_error = None
 
     def info(self, logger, message, *args):
-        if not logger.isEnabledFor(logging.INFO):
+        return self.log(logger, logging.INFO, message, *args, stacklevel=3)
+
+    def error(self, logger, message, *args):
+        return self.log(logger, logging.ERROR, message, *args, stacklevel=3)
+
+    def log(self, logger, level, message, *args, stacklevel=2):
+        if not logger.isEnabledFor(level):
             return False
         # Construct on the producer so wall time, thread and caller stay intact.
         # Neither findCaller nor makeRecord acquires a handler/file lock.
-        filename, line, function, stack = logger.findCaller(stacklevel=2)
-        record = logger.makeRecord(logger.name, logging.INFO, filename, line,
+        filename, line, function, stack = logger.findCaller(stacklevel=stacklevel)
+        record = logger.makeRecord(logger.name, level, filename, line,
                                    message, args, None, function, sinfo=stack)
         with self._lock:
             if self._closed:

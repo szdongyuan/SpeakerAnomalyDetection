@@ -127,6 +127,44 @@ def test_disabled_info_does_not_start_consumer():
     assert writer.thread is None and writer.dropped == 0
 
 
+def test_error_uses_existing_consumer_and_preserves_source_behind_blocked_handler():
+    entered, release = threading.Event(), threading.Event()
+    records = []
+
+    class Handler(logging.Handler):
+        def emit(self, record):
+            if record.msg == "first":
+                entered.set()
+                assert release.wait(5)
+            records.append(record)
+
+    logger = logging.Logger("drain-diagnostic", logging.INFO)
+    logger.addHandler(Handler())
+    writer = RecordingTimingLogger()
+    try:
+        assert writer.info(logger, "first")
+        assert entered.wait(2)
+        consumer = writer.thread
+        before = time.time()
+        line = inspect.currentframe().f_lineno + 1
+        assert writer.error(logger, "status=%s", "already-dead")
+        after = time.time()
+        writer.close()
+        assert writer.thread is consumer and consumer.is_alive()
+        assert records == []
+    finally:
+        release.set()
+        writer.close()
+        writer.thread.join(3)
+    assert not consumer.is_alive()
+    record = records[1]
+    assert record.levelno == logging.ERROR
+    assert record.pathname == __file__ and record.lineno == line
+    assert record.thread == threading.get_ident()
+    assert before <= record.created <= after
+    assert record.getMessage() == "status=already-dead"
+
+
 def test_starter_that_launches_then_raises_retains_and_drains_owned_consumer():
     records, threads = [], []
 

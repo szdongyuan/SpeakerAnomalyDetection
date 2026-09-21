@@ -234,7 +234,7 @@ def test_drain_deadlines_use_media_progress_not_heartbeats(shutdown, mode):
         assert service.wait_closed(5)
 
 
-@pytest.mark.parametrize("status", ["no-runtime", "timeout", "drained-with-errors", "unconfirmed-death"])
+@pytest.mark.parametrize("status", ["no-runtime", "timeout", "drained-with-errors", "unconfirmed-death", "already-dead", "exit-after-ack"])
 def test_supervisor_log_drain_precedes_terminate_and_kill(monkeypatch, caplog, status):
     import threading
     from types import SimpleNamespace
@@ -249,12 +249,18 @@ def test_supervisor_log_drain_precedes_terminate_and_kill(monkeypatch, caplog, s
         def begin(self, reason):
             self.reason = reason
             calls.append("begin")
-        def wait(self):
+        def wait(self, *, is_alive=None):
+            assert is_alive == processes[0].is_alive
+            assert is_alive()
             assert threading.current_thread().name == "VideoSupervisor"
             entered.set()
             assert release.wait(3)
             calls.append("ack")
-            return DrainResult("no-runtime" if status == "unconfirmed-death" else status)
+            if status in ("already-dead", "exit-after-ack"):
+                processes[0].alive = False
+                assert not is_alive()
+            result_status = "no-runtime" if status in ("unconfirmed-death", "exit-after-ack") else status
+            return DrainResult(result_status, detail="log drain unconfirmed" if status == "already-dead" else None)
         def poll(self, **kwargs):
             return DrainResult("no-runtime" if status == "unconfirmed-death" else status)
         def close(self):
@@ -302,13 +308,19 @@ def test_supervisor_log_drain_precedes_terminate_and_kill(monkeypatch, caplog, s
         processes[0].alive = False
         assert service.wait_closed(0)
         assert service._unreaped is None
-    assert calls == ["begin", "ack", "terminate", "kill", "process-close", "drain-close"]
+    if status in ("already-dead", "exit-after-ack"):
+        assert calls == ["begin", "ack", "process-close", "drain-close"]
+        assert not service.forced_termination
+    else:
+        assert calls == ["begin", "ack", "terminate", "kill", "process-close", "drain-close"]
     assert processes[0].kwargs["target"] is run_with_log_drain
     target, args, bound_endpoint = processes[0].kwargs["args"]
     assert target is close_without_exiting_worker
     assert args[2:] == (1, "custom") and bound_endpoint is endpoint
-    if status in ("timeout", "drained-with-errors"):
+    if status in ("timeout", "drained-with-errors", "already-dead"):
         assert status in caplog.text and "pending=unknown" in caplog.text
+        if status == "already-dead":
+            assert "unconfirmed" in caplog.text
 
 
 def logged_blocked_video_worker(channel, mailbox, generation, options):

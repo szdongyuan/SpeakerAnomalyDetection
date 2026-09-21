@@ -1605,9 +1605,10 @@ class RecordingService:
         if worker.log_drain_reported:
             return
         worker.log_drain_reported = True
-        if result.status in ("timeout", "drained-with-errors"):
+        if (result.status in ("timeout", "drained-with-errors")
+                or (result.status == "already-dead" and result.detail is not None)):
             pending = "unknown" if result.stats is None else result.stats["pending"]
-            self._logger.error(
+            self._timing_logger.error(self._logger,
                 "Recording log drain generation=%s pid=%s reason=%s status=%s pending=%s stats=%s detail=%s",
                 worker.generation, worker.process.pid, worker.log_drain.reason or "self-exit",
                 result.status, pending, result.stats, result.detail)
