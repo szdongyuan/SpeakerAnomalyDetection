@@ -7,6 +7,7 @@ import os
 
 from base.analysis_segments import segment_condition_fields, normalize_segmented_analysis, segment_count
 from base.hardware_trigger.serial_full_frame_matcher import normalize_hex_frame
+from base.hardware_trigger.serial_product_port_plan import build_serial_product_port_plan
 from base.load_config import LoadUiConfig
 from base.analysis_config_validation import validate_analysis_config
 from base.recording_preview_config import resolve_recording_preview_time_mode
@@ -119,10 +120,10 @@ def classify_project_trigger_mode(conditions_or_project):
     return PRODUCT_TRIGGER_MODE_MIXED
 
 
-def is_manual_project_play_allowed(conditions_or_project):
-    return (
-        classify_project_trigger_mode(conditions_or_project)
-        == PRODUCT_TRIGGER_MODE_MANUAL
+def is_manual_project_play_allowed(conditions_or_project, *, serial_enabled=True):
+    trigger_mode = classify_project_trigger_mode(conditions_or_project)
+    return trigger_mode == PRODUCT_TRIGGER_MODE_MANUAL or (
+        trigger_mode == PRODUCT_TRIGGER_MODE_SERIAL and not serial_enabled
     )
 
 
@@ -158,7 +159,7 @@ class ProductTestProjectValidator(object):
         return errors
 
     @staticmethod
-    def validate_for_save(project_data, registry, current_file):
+    def validate_for_save(project_data, registry, current_file, *, port_switch_idle_code=""):
         if not isinstance(project_data, dict):
             return ["产品测试配置必须是 JSON 对象"]
 
@@ -193,9 +194,9 @@ class ProductTestProjectValidator(object):
             errors.append("至少需要配置一个端口")
 
         group_names = set()
-        trigger_states = set()
         all_conditions = []
         for group_index, group in enumerate(groups, 1):
+            trigger_states = set()
             if not isinstance(group, dict):
                 errors.append(f"第 {group_index} 个端口格式错误")
                 continue
@@ -294,6 +295,17 @@ class ProductTestProjectValidator(object):
             == PRODUCT_TRIGGER_MODE_MIXED
         ):
             errors.append("所有工况状态码必须全部配置或全部留空")
+
+        if (
+            not errors and all_conditions
+            and classify_project_trigger_mode(all_conditions) != PRODUCT_TRIGGER_MODE_MANUAL
+        ):
+            try:
+                build_serial_product_port_plan(
+                    flatten_test_conditions(project_data), port_switch_idle_code
+                )
+            except ValueError as error:
+                errors.append(str(error))
 
         for item in (registry or {}).get(REGISTRY_CONFIGS_KEY, []):
             if not isinstance(item, dict):
@@ -629,10 +641,16 @@ class ProductTestProjectConfigManager(object):
         current_file,
         queue_catalog=None,
     ):
+        _serial_error, serial_config = LoadUiConfig.load_serial_discrete_input_config()
+        idle_code = (
+            serial_config.get("port_switch_idle_code", "")
+            if isinstance(serial_config, dict) else ""
+        )
         errors = ProductTestProjectValidator.validate_for_save(
             project_data,
             registry,
             current_file,
+            port_switch_idle_code=idle_code,
         )
         if errors:
             return errors

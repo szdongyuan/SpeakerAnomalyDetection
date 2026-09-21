@@ -278,6 +278,10 @@ class SequenceWidgetAnalysisOpsMixin(
         )
 
     def _reset_manual_product_condition_cycle(self, clear_waveforms=False) -> None:
+        reset_serial_ports = getattr(self, "_reset_serial_product_port_state", None)
+        if callable(reset_serial_ports):
+            reset_serial_ports()
+        self._serial_product_latched_frame = ""
         unlock_product_round_barcode = getattr(
             self,
             "_unlock_sn_for_product_round",
@@ -1286,7 +1290,10 @@ class SequenceWidgetAnalysisOpsMixin(
             return
         condition_configs = getattr(self, "product_test_condition_configs", [])
         trigger_mode = classify_project_trigger_mode(condition_configs)
-        if not is_manual_project_play_allowed(condition_configs):
+        if not is_manual_project_play_allowed(
+            condition_configs,
+            serial_enabled=(getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", True),
+        ):
             self.default_logger.info(
                 f"manual_product_play_ignored_trigger_mode mode={trigger_mode}"
             )

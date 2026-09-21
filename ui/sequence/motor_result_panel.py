@@ -42,6 +42,8 @@ class MotorResultPanel(QWidget):
         "分析排队": "分析中",
         "分段分析": "分析中",
         "本轮录音完成，等待分析": "分析中",
+        "当前端口录音完成，等待分析": "分析中",
+        "当前端口分析结束，等待切换空闲码": "等待下一档位",
         "正转录音完成，等待分析": "分析中",
         "反转录音完成，等待分析": "分析中",
         "待判定": "等待下一档位",
@@ -440,6 +442,8 @@ class MotorResultPanel(QWidget):
             display_text = "分析中"
         elif raw_stage.endswith(" 分析失败"):
             display_text = "测试异常"
+        elif raw_stage.startswith("等待") and raw_stage.endswith("档位状态码"):
+            display_text = "等待下一档位"
         else:
             display_text = self.PUBLIC_STAGE_ALIASES.get(raw_stage, "测试异常")
         self.stage_text = display_text

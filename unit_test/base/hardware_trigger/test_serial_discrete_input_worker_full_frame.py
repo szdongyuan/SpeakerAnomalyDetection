@@ -164,10 +164,10 @@ def test_unconfigured_active_report_is_logged_without_stdout_or_business_event(
     assert not any("serial_product_frame_matched" in message for message in worker.logger.infos)
 
 
-def test_legacy_polling_mode_still_writes_the_configured_query(monkeypatch):
+def test_legacy_polling_mode_writes_query_when_explicitly_enabled(monkeypatch):
     config = {
         "serial_settings": {"port": "FAKE", "timeout": 0.01},
-        "polling_settings": {"interval_ms": 1, "query_command_hex": "01 02"},
+        "polling_settings": {"enabled": True, "interval_ms": 1, "query_command_hex": "01 02"},
         "decoder": {"mode": "full_frame"},
     }
     worker = SerialDiscreteInputWorker(config)
@@ -186,12 +186,15 @@ def test_legacy_polling_mode_still_writes_the_configured_query(monkeypatch):
 def test_hardware_manager_forwards_product_full_frame_without_direction_mapping():
     manager = UnifiedHardwareManager()
     manager.serial_config = {"enabled": True}
+    worker = SerialDiscreteInputWorker(manager.serial_config, [FRAME])
+    manager.serial_worker = worker
+    worker.sig_state_changed.connect(manager._on_serial_state_changed)
     full_frames = []
     directions = []
     manager.sig_serial_full_frame.connect(full_frames.append)
     manager.sig_directional_trigger.connect(directions.append)
 
-    manager._on_serial_state_changed(
+    worker.sig_state_changed.emit(
         {
             "mode": "full_frame",
             "value": FRAME,
@@ -230,4 +233,4 @@ def test_passive_connection_test_treats_an_open_port_as_connected(monkeypatch):
 
     assert result["ok"] is True
     assert result["raw_hex"] == ""
-    assert "未收到主动上报报文" in result["message"]
+    assert result["message"] == "串口测试通过，暂未收到数据。"

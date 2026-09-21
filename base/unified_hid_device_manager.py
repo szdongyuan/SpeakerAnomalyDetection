@@ -1,11 +1,12 @@
 import keyboard
 import pywinusb.hid as hid
-from PyQt5.QtCore import QObject, pyqtSignal, QTimer
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QTimer
 import json
 import os
 import time
 
 from base.load_config import LoadUiConfig
+from base.hardware_trigger.serial_polling import parse_polling_settings
 from base.log_manager import LogManager
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR
@@ -179,6 +180,7 @@ class UnifiedHardwareManager(QObject):
         self._barcode_dedup_window_sec = 0.5  # 500ms 去重窗口
 
         self.serial_worker = None
+        self._serial_reconfiguring = False
         self.serial_config = {}
         self.serial_full_frame_candidates = None
         self.serial_trigger_armed = True
@@ -351,6 +353,7 @@ class UnifiedHardwareManager(QObject):
     def _emit_serial_status(self, **kwargs):
         status = dict(self.serial_listener_status or {})
         status.update(kwargs)
+        status["reconfiguring"] = self._serial_reconfiguring
         self.serial_listener_status = status
         self.sig_serial_trigger_status.emit(status)
 
@@ -623,40 +626,50 @@ class UnifiedHardwareManager(QObject):
                 return {"ok": False, "message": msg}
             next_config = LoadUiConfig.normalize_serial_discrete_input_config(loaded)
 
+        try:
+            parse_polling_settings(next_config.get("polling_settings", {}))
+        except ValueError as error:
+            return {"ok": False, "message": str(error)}
+
         worker_running = bool(self.serial_worker is not None and self.serial_worker.isRunning())
         if worker_running:
             # Lazy import: importing the dialog at module load would pull
             # the entire UI graph into a base-layer module. The dialog is
             # cheap to load, has no Qt window construction at import time,
-            # and is the single source of truth for "what does the user
-            # actually edit", so we read its EDITABLE_PATHS contract here.
+            # and lists the UI fields. JSON-only polling settings also
+            # require a restart because the worker snapshots them in run().
             from ui.serial_discrete_input_config_dialog import SerialDiscreteInputConfigDialog
 
             diffs = _diff_config_paths(
                 next_config,
                 self.serial_config or {},
-                SerialDiscreteInputConfigDialog.EDITABLE_PATHS,
+                SerialDiscreteInputConfigDialog.EDITABLE_PATHS + (
+                    "serial_settings.bytesize",
+                    "serial_settings.parity",
+                    "serial_settings.stopbits",
+                    "serial_settings.timeout",
+                    "polling_settings.query_command_hex",
+                ),
             )
             candidates_changed = normalized_candidates != self.serial_full_frame_candidates
             if not diffs and not candidates_changed:
                 # No worker restart needed, but still refresh the cached
-                # config so any non-dialog-editable fields edited via
-                # other paths (e.g. state_maps changed on disk and
-                # reloaded) take effect on subsequent serial events.
+                # config for fields consumed outside the serial worker.
                 self.serial_config = next_config
-                self._debug_print("start 请求被忽略: 监听已在运行且对话框可编辑字段未变化")
+                self._debug_print("start 请求被忽略: 监听已在运行且串口通信配置未变化")
                 self._emit_serial_status(message="串口离散输入监听已在运行")
                 return {"ok": True, "message": "already running"}
 
             self._debug_print(
-                f"检测到串口离散输入对话框可编辑字段变化: {diffs}, 重启监听"
+                f"检测到串口通信配置变化: {diffs}, 重启监听"
             )
-            self.stop_serial_discrete_input_listener()
+            self.stop_serial_discrete_input_listener(for_reconfiguration=True)
 
         self.serial_config = next_config
         self.serial_full_frame_candidates = normalized_candidates
 
         if not self.serial_config.get("enabled", False):
+            self._serial_reconfiguring = False
             self.serial_trigger_armed = True
             self.serial_last_trigger_direction = ""
             self._debug_print("start 请求结束: 配置存在但 enabled=False")
@@ -695,15 +708,19 @@ class UnifiedHardwareManager(QObject):
             connected=False,
             has_response=False,
             message="正在启动串口离散输入监听",
+            error="",
             device_model=str(self.serial_config.get("device_model", "") or ""),
         )
         return {"ok": True, "message": "starting"}
 
-    def stop_serial_discrete_input_listener(self):
-        if self.serial_worker is not None:
+    def stop_serial_discrete_input_listener(self, *, for_reconfiguration=False):
+        self._serial_reconfiguring = for_reconfiguration
+        worker = self.serial_worker
+        # Retire the sender before stop(): its final signals may still be queued.
+        self.serial_worker = None
+        if worker is not None:
             self._debug_print("停止监听")
-            self.serial_worker.stop()
-            self.serial_worker = None
+            worker.stop()
         self.serial_trigger_armed = True
         self.serial_last_trigger_direction = ""
         self._emit_serial_status(
@@ -722,6 +739,10 @@ class UnifiedHardwareManager(QObject):
         cfg = LoadUiConfig.normalize_serial_discrete_input_config(config_data or self.serial_config or {})
         serial_settings = cfg.get("serial_settings", {}) or {}
         polling_settings = cfg.get("polling_settings", {}) or {}
+        try:
+            query_bytes, _interval_seconds = parse_polling_settings(polling_settings)
+        except ValueError as error:
+            return {"ok": False, "message": str(error), "raw_hex": ""}
         port = serial_settings.get("port", "COM3")
         self._debug_print(
             "测试连接: "
@@ -733,6 +754,7 @@ class UnifiedHardwareManager(QObject):
         except Exception as e:
             return {"ok": False, "message": "pyserial 未安装", "raw_hex": "", "error": str(e)}
 
+        ser = None
         try:
             ser = serial.Serial(
                 port=port,
@@ -746,27 +768,20 @@ class UnifiedHardwareManager(QObject):
                 ser.reset_input_buffer()
             except Exception:
                 pass
-            query_bytes = bytes.fromhex(
-                str(polling_settings.get("query_command_hex", "")).strip()
-            )
             passive_mode = not query_bytes
             if query_bytes:
                 ser.write(query_bytes)
-                time.sleep(float(polling_settings.get("interval_ms", 50)) / 1000.0)
-                received = ser.read(getattr(ser, "in_waiting", 0))
-            else:
-                received = b""
-                deadline = time.monotonic() + max(
-                    1.0,
-                    float(serial_settings.get("timeout", 0.1) or 0.1),
-                )
-                while time.monotonic() < deadline and not received:
-                    waiting = getattr(ser, "in_waiting", 0)
-                    if waiting > 0:
-                        received = ser.read(waiting)
-                        break
-                    time.sleep(0.02)
-            ser.close()
+            received = b""
+            deadline = time.monotonic() + max(
+                1.0,
+                float(serial_settings.get("timeout", 0.1) or 0.1),
+            )
+            while time.monotonic() < deadline and not received:
+                waiting = getattr(ser, "in_waiting", 0)
+                if waiting > 0:
+                    received = ser.read(waiting)
+                    break
+                time.sleep(0.02)
             raw_hex = " ".join(f"{b:02X}" for b in received) if received else ""
             if raw_hex:
                 self._debug_print(f"测试连接收到响应: raw_hex={raw_hex}")
@@ -775,7 +790,7 @@ class UnifiedHardwareManager(QObject):
                 self._debug_print("串口已打开，但等待期间未收到主动上报报文")
                 return {
                     "ok": True,
-                    "message": "串口已打开，但等待期间未收到主动上报报文",
+                    "message": "串口测试通过，暂未收到数据。",
                     "raw_hex": "",
                 }
             self._debug_print("测试连接成功，但未收到设备响应")
@@ -788,6 +803,9 @@ class UnifiedHardwareManager(QObject):
                 return {"ok": False, "message": msg, "raw_hex": "", "error": err_text}
             self._debug_print(f"测试连接失败: {e}")
             return {"ok": False, "message": f"测试连接失败: {e}", "raw_hex": "", "error": str(e)}
+        finally:
+            if ser is not None:
+                ser.close()
 
     def start(self):
         """
@@ -823,17 +841,28 @@ class UnifiedHardwareManager(QObject):
         self.logger.info(f"光电开关触发 (热键: {self.hotkey_string})")
         self.sig_trigger.emit()
 
+    @pyqtSlot(object)
     def _on_serial_worker_status(self, payload):
+        sender = self.sender()
+        if sender is None or sender is not self.serial_worker:
+            return
         if not isinstance(payload, dict):
             return
+        if payload.get("connected", False) and not payload.get("error"):
+            # Failed reconfiguration keeps the round paused until a connection succeeds.
+            self._serial_reconfiguring = False
         self._emit_serial_status(
             enabled=bool(self.serial_config.get("enabled", False)),
             device_model=str(self.serial_config.get("device_model", "") or ""),
             **payload,
         )
 
+    @pyqtSlot(object)
     def _on_serial_state_changed(self, payload):
         """串口离散输入状态变化回调"""
+        sender = self.sender()
+        if sender is None or sender is not self.serial_worker:
+            return
         if not isinstance(payload, dict):
             return
 

@@ -7,11 +7,19 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
 )
 
+from base.hardware_trigger.serial_polling import (
+    DEFAULT_POLLING_INTERVAL_MS,
+    MAX_POLLING_INTERVAL_MS,
+    MIN_POLLING_INTERVAL_MS,
+    parse_polling_settings,
+)
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
 from ui.dialog_enter_policy import install_dialog_enter_policy
@@ -46,6 +54,8 @@ class SerialDiscreteInputConfigDialog(ConfigDialogBase):
         "device_model",
         "serial_settings.port",
         "serial_settings.baudrate",
+        "polling_settings.enabled",
+        "polling_settings.interval_ms",
     )
 
     def __init__(self, config: dict, runtime_status: dict = None, test_connection_callback=None, parent=None):
@@ -58,6 +68,8 @@ class SerialDiscreteInputConfigDialog(ConfigDialogBase):
         self.enabled_checkbox = QCheckBox("启用串口离散输入触发")
         self.port_combobox = QComboBox()
         self.baudrate_combobox = QComboBox()
+        self.communication_mode_combobox = QComboBox()
+        self.polling_interval_spinbox = QSpinBox()
         self.device_model_lineedit = QLineEdit()
         self.runtime_status_label = QLabel("当前状态：未连接")
         self.test_btn = QPushButton(" 测试连接 ")
@@ -75,28 +87,69 @@ class SerialDiscreteInputConfigDialog(ConfigDialogBase):
         self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
         self.setWindowFlag(Qt.WindowCloseButtonHint, True)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setMinimumSize(420, 360)
-        self.resize(520, 420)
+        self.setMinimumSize(420, 580)
+        self.resize(520, 600)
 
         self.port_combobox.setEditable(True)
         self.baudrate_combobox.setEditable(True)
         self.baudrate_combobox.addItems(self.COMMON_BAUDRATES)
+        self.communication_mode_combobox.addItem("主动上报（软件仅接收）", False)
+        self.communication_mode_combobox.addItem("轮询（软件发送查询）", True)
+        self.communication_mode_combobox.setToolTip("轮询使用串口 JSON 中配置的查询码。")
+        self.polling_interval_spinbox.setRange(MIN_POLLING_INTERVAL_MS, MAX_POLLING_INTERVAL_MS)
+        self.polling_interval_spinbox.setValue(DEFAULT_POLLING_INTERVAL_MS)
+        self.polling_interval_spinbox.setObjectName("serialPollingInterval")
 
         layout = QVBoxLayout()
         layout.addWidget(self.enabled_checkbox)
         layout.addWidget(self._create_groupbox("串口号", self.port_combobox))
         layout.addWidget(self._create_groupbox("波特率", self.baudrate_combobox))
         layout.addWidget(self._create_groupbox("设备型号", self.device_model_lineedit))
+        layout.addWidget(self._create_groupbox("通信方式", self.communication_mode_combobox))
+        layout.addWidget(self._create_groupbox("轮询间隔（毫秒）", self.polling_interval_spinbox))
         layout.addStretch()
         layout.addLayout(self._create_btn_layout())
         self.setLayout(layout)
 
-        self.apply_config_dialog_theme()
+        self.apply_config_dialog_theme("""
+            QSpinBox#serialPollingInterval:disabled {
+                background-color: #EDF1F5;
+                color: #8793A3;
+                border-color: #D7DFEA;
+            }
+        """)
+        popup_style = """
+            QListView {
+                background-color: #FFFFFF;
+                color: #243247;
+                selection-background-color: #E5EEFF;
+                selection-color: #174EA6;
+                border: 1px solid #B9CBE5;
+                outline: 0;
+            }
+            QListView::item {
+                background-color: #FFFFFF;
+                color: #243247;
+            }
+            QListView::item:selected {
+                background-color: #E5EEFF;
+                color: #174EA6;
+            }
+        """
+        for combo in (
+            self.port_combobox, self.baudrate_combobox, self.communication_mode_combobox,
+        ):
+            combo.setView(QListView(combo))
+            combo.view().setStyleSheet(popup_style)
 
     def _set_member_connect(self):
         self.cancel_btn.clicked.connect(self.close)
         self.ok_btn.clicked.connect(self._on_ok_btn_clicked)
         self.test_btn.clicked.connect(self._on_test_btn_clicked)
+        self.communication_mode_combobox.currentIndexChanged.connect(self._update_polling_controls)
+
+    def _update_polling_controls(self):
+        self.polling_interval_spinbox.setEnabled(bool(self.communication_mode_combobox.currentData()))
 
     @staticmethod
     def _create_groupbox(title, widget):
@@ -125,11 +178,13 @@ class SerialDiscreteInputConfigDialog(ConfigDialogBase):
         return f"{device} - {description}"
 
     def _get_selected_port_value(self):
+        current_text = str(self.port_combobox.currentText() or "").strip()
         current_data = self.port_combobox.currentData()
-        if current_data:
+        # Editing a combo's text does not clear the previously selected item's data.
+        selected_label = self.port_combobox.itemText(self.port_combobox.currentIndex())
+        if current_data and current_text == selected_label:
             return str(current_data).strip()
 
-        current_text = str(self.port_combobox.currentText() or "").strip()
         if current_text == self.NO_PORTS_TEXT:
             return ""
         if " - " in current_text:
@@ -159,22 +214,30 @@ class SerialDiscreteInputConfigDialog(ConfigDialogBase):
         enabled = bool(self.config.get("enabled", False))
         serial_settings = self.config.get("serial_settings", {}) or {}
 
-        # 先刷新当前可用串口，再决定默认选中项
         self._load_port_options()
 
-        saved_port = str(serial_settings.get("port", "COM3") or "COM3")
-        if getattr(self, "_available_ports", []):
-            selected_port = saved_port if saved_port in self._available_ports else self._available_ports[0]
-            selected_index = self.port_combobox.findData(selected_port)
-            if selected_index >= 0:
-                self.port_combobox.setCurrentIndex(selected_index)
-            else:
-                self.port_combobox.setEditText(selected_port)
+        saved_port = str(serial_settings.get("port", "COM3") or "").strip()
+        selected_index = self.port_combobox.findData(saved_port)
+        if saved_port and selected_index >= 0:
+            self.port_combobox.setCurrentIndex(selected_index)
         else:
-            self.port_combobox.setCurrentIndex(0)
+            # Enumeration is only a list of choices, never a replacement for saved settings.
+            self.port_combobox.setCurrentIndex(-1)
+            self.port_combobox.setEditText(saved_port)
 
         self.enabled_checkbox.setChecked(enabled)
-        self.baudrate_combobox.setCurrentText(str(serial_settings.get("baudrate", 9600) or 9600))
+        polling_settings = self.config.get("polling_settings", {}) or {}
+        self.communication_mode_combobox.setCurrentIndex(
+            1 if polling_settings.get("enabled", False) else 0
+        )
+        interval_ms = polling_settings.get("interval_ms", DEFAULT_POLLING_INTERVAL_MS)
+        self.polling_interval_spinbox.setValue(
+            interval_ms if type(interval_ms) is int else DEFAULT_POLLING_INTERVAL_MS
+        )
+        self._update_polling_controls()
+        baudrate = str(serial_settings.get("baudrate", 9600) or 9600)
+        self.baudrate_combobox.setCurrentIndex(self.baudrate_combobox.findText(baudrate))
+        self.baudrate_combobox.setEditText(baudrate)
         self.device_model_lineedit.setText(str(self.config.get("device_model", "JY-DAM0404D") or "JY-DAM0404D"))
         self.update_runtime_status(self.runtime_status)
 
@@ -220,6 +283,11 @@ class SerialDiscreteInputConfigDialog(ConfigDialogBase):
         serial_settings["port"] = port
         serial_settings["baudrate"] = int(baudrate_text)
         config["serial_settings"] = serial_settings
+        polling_settings = dict(config.get("polling_settings", {}) or {})
+        polling_settings["enabled"] = self.communication_mode_combobox.currentData()
+        polling_settings["interval_ms"] = self.polling_interval_spinbox.value()
+        parse_polling_settings(polling_settings)
+        config["polling_settings"] = polling_settings
         return config
 
     def _on_ok_btn_clicked(self):
@@ -270,8 +338,9 @@ class SerialDiscreteInputConfigDialog(ConfigDialogBase):
         if raw_hex:
             text = f"{text}\n\n最近接收码: {raw_hex}"
 
-        # Only treat as successful when serial is reachable and response code is received.
-        if connected and has_response:
+        # A passive fixture need not send a frame during the connection test.
+        passive_mode = not bool(self.communication_mode_combobox.currentData())
+        if connected and (has_response or passive_mode):
             QMessageBox.information(self, "测试连接", text)
             return
         QMessageBox.warning(self, "测试连接", text)
