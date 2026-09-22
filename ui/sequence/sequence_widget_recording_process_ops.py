@@ -204,6 +204,8 @@ class SequenceWidgetRecordingProcessOpsMixin:
         request_id = context.request.request_id
         if contexts.get(request_id) is not context:
             return False
+        from ui.sequence.sequence_widget_streaming_ops import _finish_waveform_diagnostics
+        _finish_waveform_diagnostics(context)
         contexts.pop(request_id)
         if getattr(self, "_active_recording_process_id", None) == request_id:
             self._active_recording_process_id = None

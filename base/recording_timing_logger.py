@@ -3,6 +3,8 @@ import logging
 import queue
 import threading
 
+from base.log_manager import LogManager
+
 
 class RecordingTimingLogger:
     def __init__(self, *, start_thread=None):
@@ -16,20 +18,28 @@ class RecordingTimingLogger:
         self.errors = 0
         self.last_error = None
 
-    def info(self, logger, message, *args):
-        return self.log(logger, logging.INFO, message, *args, stacklevel=3)
+    def info(self, logger, message, *args, critical=False):
+        return self.log(logger, logging.INFO, message, *args,
+                        critical=critical, stacklevel=3)
 
     def error(self, logger, message, *args):
         return self.log(logger, logging.ERROR, message, *args, stacklevel=3)
 
-    def log(self, logger, level, message, *args, stacklevel=2):
-        if not logger.isEnabledFor(level):
+    def log(self, logger, level, message, *args, critical=False, stacklevel=2):
+        try:
+            if not logger.isEnabledFor(level):
+                return False
+            # Construct on the producer so wall time, thread and caller stay intact.
+            # Neither findCaller nor makeRecord acquires a handler/file lock.
+            filename, line, function, stack = logger.findCaller(stacklevel=stacklevel)
+            record = logger.makeRecord(logger.name, level, filename, line,
+                                       message, args, None, function, sinfo=stack)
+        except Exception as exc:
+            # Optional logger overrides/record factories are external callbacks.
+            # A failed record is never queued; retain bounded failure evidence.
+            with self._lock:
+                self._remember_error(exc)
             return False
-        # Construct on the producer so wall time, thread and caller stay intact.
-        # Neither findCaller nor makeRecord acquires a handler/file lock.
-        filename, line, function, stack = logger.findCaller(stacklevel=stacklevel)
-        record = logger.makeRecord(logger.name, level, filename, line,
-                                   message, args, None, function, sinfo=stack)
         with self._lock:
             if self._closed:
                 self.dropped += 1
@@ -51,7 +61,7 @@ class RecordingTimingLogger:
                         self.dropped += 1
                         return False
             try:
-                self._queue.put_nowait((logger, record))
+                self._queue.put_nowait((logger, record, critical))
             except queue.Full:
                 self.dropped += 1
                 return False
@@ -66,7 +76,11 @@ class RecordingTimingLogger:
 
     def _remember_error(self, exc):
         self.errors += 1
-        self.last_error = f"{type(exc).__name__}: {exc}"[:512]
+        # Read stored arguments without invoking arbitrary exception formatting.
+        # In particular a broken __str__ must not kill the delivery consumer.
+        arguments = BaseException.args.__get__(exc)
+        detail = arguments[0] if arguments and type(arguments[0]) is str else "<unavailable>"
+        self.last_error = f"{type(exc).__name__}: {detail[:384]}"[:512]
 
     def _run(self):
         while True:
@@ -74,11 +88,15 @@ class RecordingTimingLogger:
             self._wake.clear()
             while True:
                 try:
-                    logger, record = self._queue.get_nowait()
+                    logger, record, critical = self._queue.get_nowait()
                 except queue.Empty:
                     break
                 try:
                     logger.handle(record)
+                    if critical:
+                        # Capture only after the record reaches the project
+                        # dispatcher; flushing on the producer misses this item.
+                        LogManager.request_flush()
                 except Exception as exc:
                     # External logger/filter/handler implementations can raise
                     # arbitrary exceptions. Drop only this optional diagnostic,

@@ -10,7 +10,7 @@ terminal result. It is not permission to reuse, move or delete that path.
 Failure/cancellation may also precede release. Always use that exact session's
 released continuation, never a mutable current-recording path, for file actions.
 """
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 import math
 import multiprocessing
@@ -21,10 +21,12 @@ import shutil
 import tempfile
 import threading
 import time
+from time import perf_counter_ns, monotonic as diagnostic_monotonic
 
 from base.log_manager import LogManager
 from base.log_exit import ProcessLogDrain, run_with_log_drain
 from base.recording_timing_logger import RecordingTimingLogger
+from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_process_protocol import (
     CaptureSlotReleased, FrozenConfig, RecordingCancelled, RecordingEvent,
     RecordingFailure, RecordingProgress, RecordingRequest, RecordingResult,
@@ -38,6 +40,53 @@ from base.recording_worker import recording_worker
 from base.ve3668n_capture_timing import VeCaptureDeadline
 from base.ve3668n_input import ve_acquisition_signature
 from consts.ve3668n_consts import VE_BACKEND
+
+
+# Fixed categories: unknown/malformed wire kinds never create dictionary keys.
+_DISPATCH_KINDS = (
+    "start", "cancel", "accept", "reject", "preview_ack", "prewarm_ve",
+    "release_ve", "release_callback", "shutdown", "read", "broken",
+    "ready", "started", "finalizing", "preview", "progress", "completed",
+    "failed", "cancelled", "capture_slot_released", "ve_released",
+    "ve_release_failed", "worker_fatal", VE_PREWARM_STARTED,
+    VE_PREWARM_PROGRESS, VE_PREWARM_DETACHING, VE_PREWARM_TERMINAL, "unknown")
+
+
+class _TimedInboxItem(tuple):
+    """The old tuple API plus bounded, item-owned observation timestamps."""
+    def __new__(cls, item):
+        value = super().__new__(cls, item)
+        value.enqueue_started_ns = perf_counter_ns()
+        value.enqueue_monotonic = diagnostic_monotonic()
+        value.enqueued_ns = value.enqueue_ended_ns = None
+        value.critical = None
+        value.evidence = None
+        return value
+
+
+class _TimedInbox(queue.Queue):
+    def __init__(self, maxsize, observed):
+        super().__init__(maxsize)
+        self._observed = observed
+
+    def put(self, item, block=True, timeout=None):
+        if not isinstance(item, _TimedInboxItem):
+            item = _TimedInboxItem(item)
+        try:
+            return super().put(item, block, timeout)
+        finally:
+            item.enqueue_ended_ns = perf_counter_ns()
+            if item.evidence is not None:
+                item.evidence["enqueue_ended_ns"] = item.enqueue_ended_ns
+            self._observed(item)
+
+    def _put(self, item):
+        # Under Queue's own mutex, before publication/notify. A consumer need
+        # not wait for producer return to get a valid queue-residence interval.
+        item.enqueued_ns = perf_counter_ns()
+        if item.evidence is not None:
+            item.evidence["enqueued_ns"] = item.enqueued_ns
+        super()._put(item)
 
 
 @dataclass(frozen=True)
@@ -76,6 +125,7 @@ class RecordingSession:
         self._capture_requested_at = None
         self._capture_deadline = None
         self._slot_release_deadline = None
+        self._critical_observations = {}
         self._finalizing_notified = False
         self._completion_observed_at = None
         self._target_reached_at = None
@@ -133,6 +183,7 @@ class _Worker:
         self.kill_reported = False
         self.log_drain = log_drain
         self.log_drain_reported = False
+        self.retire_stage = self.retire_request = None
 
 
 @dataclass
@@ -219,7 +270,7 @@ class RecordingService:
             raise ValueError("prewarm retry delay must be positive and finite")
         self._retry_delay = float(retry_delay)
         self._lock = threading.RLock()
-        self._inbox = queue.Queue(maxsize=64)
+        self._inbox = _TimedInbox(maxsize=64, observed=self._inbox_put_observed)
         self._capture_session = None
         self._sessions = {}
         self._pipeline_capacity = pipeline_capacity
@@ -243,6 +294,13 @@ class RecordingService:
         self.threads = []
         self._logger = LogManager.set_log_handler("core")
         self._timing_logger = RecordingTimingLogger(start_thread=self._start_thread)
+        self._recording_diagnostics = RecordingDiagnostics(
+            self._logger, timing_logger=self._timing_logger, category_limit=64,
+            categories=tuple("dispatch_" + kind for kind in _DISPATCH_KINDS)
+            + tuple("callback_" + kind for kind in RecordingCallbacks.__dataclass_fields__)
+            + ("callback_release", "callback_shutdown", "callback_prewarm",
+               "cleanup_unlink", "cleanup_tempdir", "cleanup_custom",
+               "inbox_wait", "inbox_put", "tick", "schedule_gap"))
         self._supervisor = threading.Thread(target=self._run, name="recording-supervisor", daemon=True)
         self._start_thread(self._supervisor)
 
@@ -535,7 +593,9 @@ class RecordingService:
                 self._terminal_ve_prewarm_ids.add(pending.base_request.warmup_id)
         if callback is not None:
             try:
-                callback(completion)
+                with self._measured("callback_prewarm", request=pending.base_request.warmup_id,
+                                    generation=pending.generation):
+                    callback(completion)
             except Exception:
                 self._logger.exception("VE prewarm callback failed")
 
@@ -658,6 +718,86 @@ class RecordingService:
         self.diagnostics.append(message)
         self._logger.error(message)
 
+    def _diagnostic(self, stage, session=None, *, worker=None, **fields):
+        diag = self._recording_diagnostics
+        diag.logger = self._logger
+        request = fields.pop("request", None)
+        generation = fields.pop("generation", getattr(worker, "generation", None))
+        diag.milestone(stage,
+                       request=session.request.request_id if session is not None else request,
+                       generation=session.generation if session is not None else generation,
+                       **fields)
+
+    @contextmanager
+    def _measured(self, stage, session=None, *, request=None, generation=None, lifecycle=False):
+        diag = self._recording_diagnostics
+        diag.logger = self._logger
+        request = session.request.request_id if session is not None else request
+        generation = session.generation if session is not None else generation
+        capture = self._capture_session
+        active_request = capture.request.request_id if capture is not None else None
+        token = diag.begin(stage, request=request, generation=generation, active_request=active_request)
+        if lifecycle:
+            self._diagnostic(stage + "_begin", request=request, generation=generation, active_request=active_request)
+        success = False
+        try:
+            yield
+            success = True
+        finally:
+            elapsed = diag.end(token, emit_slow=True, recent=True)
+            if lifecycle:
+                self._diagnostic(stage + "_end", request=request, active_request=active_request,
+                                 generation=generation, elapsed_ns=elapsed, success=success)
+
+    def _inbox_put_observed(self, item):
+        request = generation = None
+        if len(item) > 1 and isinstance(item[1], RecordingSession):
+            request, generation = item[1].request.request_id, item[1].generation
+        elif item[0] == "event" and isinstance(item[2], RecordingEvent):
+            request = getattr(item[2], "request_id", None)
+            generation = getattr(item[1], "generation", None)
+        # Public producers can hold _lock; only numeric accumulation here.
+        # Capturing at producer return also covers a consumer winning the race.
+        self._recording_diagnostics.observe(
+            "inbox_put", item.enqueue_ended_ns - item.enqueue_started_ns,
+            started_ns=item.enqueue_started_ns, monotonic=item.enqueue_monotonic,
+            request=request, generation=generation)
+
+    def _release_timeout_evidence(self, session, decision_now):
+        fields = dict(t0=session._target_reached_at, deadline=session._slot_release_deadline,
+                      decision_now=decision_now, queue_depth=self._inbox.qsize(),
+                      active_sessions=len(self._sessions))
+        # At most two entries, never payloads. Keep the original decision clock.
+        for kind, shared_evidence in session._critical_observations.copy().items():
+            evidence = shared_evidence.copy()
+            prefix = "progress" if kind == "progress" else "slot"
+            fields.update((prefix + "_" + key, value) for key, value in evidence.items())
+        self._recording_diagnostics.logger = self._logger
+        self._recording_diagnostics.summary(
+            "parent_release_timeout", request=session.request.request_id,
+            generation=session.generation, max_chars=32768, **fields)
+
+    def _critical_event(self, event):
+        # Classification is observational only; _event retains every protocol
+        # validation. Malformed unpickled dataclasses can be missing fields.
+        if not isinstance(event, RecordingEvent):
+            return None, None
+        request_id = getattr(event, "request_id", None)
+        session = self._sessions.get(request_id) if type(request_id) is str else None
+        kind = getattr(event, "kind", None)
+        if type(kind) is not str:
+            return None, session
+        if kind == "capture_slot_released":
+            return kind, session
+        payload = getattr(event, "payload", None)
+        if (kind == "progress" and session is not None
+                and session.request.device.get("backend") == VE_BACKEND
+                and isinstance(payload, RecordingProgress)
+                and type(getattr(payload, "frames", None)) is int
+                and payload.frames == session.request.target_samples):
+            return kind, session
+        return None, session
+
     def _notify_finalizing(self, session):
         # A fast child can finish between worker polls, without a finalizing
         # event. The validated terminal is the once-only fallback boundary.
@@ -675,6 +815,10 @@ class RecordingService:
         callback = getattr(session.callbacks, kind)
         if callback is None:
             return
+        with self._measured("callback_" + kind, session, lifecycle=kind == "released"):
+            self._notify_callback(session, kind, payload, callback)
+
+    def _notify_callback(self, session, kind, payload, callback):
         try:
             if kind in ("started", "finalizing", "released"):
                 callback(session)
@@ -738,7 +882,24 @@ class RecordingService:
             while not worker.stop.is_set():
                 if connection.poll(.05):
                     event = connection.recv()
-                    self._inbox.put(("event", worker, event))
+                    received_ns = perf_counter_ns()
+                    received_at = diagnostic_monotonic()
+                    critical, session = self._critical_event(event)
+                    item = _TimedInboxItem(("event", worker, event))
+                    if critical is not None:
+                        item.critical = critical
+                        item.evidence = dict(received_ns=received_ns, received_at=received_at,
+                                             enqueue_started_ns=item.enqueue_started_ns)
+                        if session is not None:
+                            session._critical_observations[critical] = item.evidence
+                        self._diagnostic("parent_enqueue_begin", session, worker=worker,
+                                         kind=critical, received_ns=received_ns, received_at=received_at,
+                                         enqueue_started_ns=item.enqueue_started_ns)
+                    self._inbox.put(item)
+                    if critical is not None:
+                        self._diagnostic("parent_enqueue_end", session, worker=worker,
+                                         kind=critical, enqueued_ns=item.enqueued_ns,
+                                         enqueue_ended_ns=item.enqueue_ended_ns)
         except (EOFError, OSError) as exc:
             if not worker.stop.is_set():
                 self._inbox.put(("broken", worker, str(exc)))
@@ -825,7 +986,8 @@ class RecordingService:
         if callback is None:
             return
         try:
-            callback(status, tuple(diagnostics))
+            with self._measured("callback_release"):
+                callback(status, tuple(diagnostics))
         except Exception:
             self._logger.exception("VE release callback failed")
 
@@ -913,6 +1075,21 @@ class RecordingService:
             session._child_released = False
 
     def _event(self, worker, event):
+        # Preserve the original stale-worker short circuit before inspecting
+        # either its fields or the untrusted event for diagnostic purposes.
+        if worker is not self._worker or worker.retiring:
+            return
+        critical, session = self._critical_event(event)
+        was_retiring = worker.retiring
+        try:
+            self._event_body(worker, event)
+        finally:
+            if (critical == "capture_slot_released" and not was_retiring
+                    and worker.retiring and worker.retire_stage == "protocol"):
+                self._diagnostic("parent_slot_outcome", session, worker=worker,
+                                 request=getattr(event, "request_id", None), outcome="invalid")
+
+    def _event_body(self, worker, event):
         if worker is not self._worker or worker.retiring:
             return
         if not isinstance(event, RecordingEvent):
@@ -1255,6 +1432,8 @@ class RecordingService:
                     and session._target_reached_at is None):
                 session._target_reached_at = progress.last_frame_at
                 session._slot_release_deadline = progress.last_frame_at + 1.0
+                self._diagnostic("parent_release_deadline", session,
+                                 t0=progress.last_frame_at, deadline=session._slot_release_deadline)
         elif event.kind == "capture_slot_released":
             slot = event.payload
             counts = slot.lifecycle_counts
@@ -1276,6 +1455,7 @@ class RecordingService:
                 self._retire_generation(worker, "protocol", "invalid or out-of-order capture slot release", session)
                 return
             late = False
+            original_deadline = session._slot_release_deadline
             with self._lock:
                 # Admission cannot observe this tentative transition while the
                 # lock is held. The timestamp after it is the authoritative t1.
@@ -1294,7 +1474,11 @@ class RecordingService:
                     session._admission_reason = (
                         "CAPACITY_BACKPRESSURE"
                         if len(self._sessions) >= self._pipeline_capacity else None)
+            self._diagnostic("parent_slot_outcome", session,
+                             outcome="late" if late else "confirmed", admitted_at=admitted_at,
+                             t0=session._target_reached_at, deadline=original_deadline)
             if late:
+                self._release_timeout_evidence(session, admitted_at)
                 self._retire_generation(worker, "capture_release_timeout",
                                         "capture slot release exceeded target + 1.0 seconds", session)
         elif event.kind == "preview":
@@ -1518,11 +1702,14 @@ class RecordingService:
                 if self._leases.get(self._path_key(path)) is not session:
                     raise OSError(f"cleanup path no longer owned by this session: {path}")
                 if os.path.exists(path):
-                    os.unlink(path)
+                    with self._measured("cleanup_unlink", session, lifecycle=True):
+                        os.unlink(path)
             if session._temporary_dir is not None:
-                shutil.rmtree(session._temporary_dir)
+                with self._measured("cleanup_tempdir", session, lifecycle=True):
+                    shutil.rmtree(session._temporary_dir)
             elif session.state == "failed" and session._sent and os.path.exists(session.request.path):
-                os.unlink(session.request.path)
+                with self._measured("cleanup_unlink", session, lifecycle=True):
+                    os.unlink(session.request.path)
         except OSError as exc:
             session._cleanup_failed = True
             session.release_error = str(exc)
@@ -1541,7 +1728,8 @@ class RecordingService:
                     break
             try:
                 for path, cleanup in actions:
-                    cleanup(path)
+                    with self._measured("cleanup_custom", session, lifecycle=True):
+                        cleanup(path)
             except Exception as exc:
                 # User-supplied file/database cleanup is a real external boundary.
                 # Retain this lease on any failure, diagnose, never permit reuse.
@@ -1557,10 +1745,22 @@ class RecordingService:
         if not session._cleanup_failed:
             session.released.set()
             self._notify(session, "released")
+        self._recording_diagnostics.logger = self._logger
+        self._recording_diagnostics.summary(
+            "parent_session_summary", request=session.request.request_id,
+            generation=session.generation, compact=True, max_chars=4096,
+            status=session.state, cleanup_failed=session._cleanup_failed,
+            scope="service_cumulative")
 
     def _retire_generation(self, worker, stage="worker",
                            message="recording worker retired", cause_session=None,
                            cause_failure=None, pending_diagnostics=None):
+        if not worker.retiring:
+            worker.retire_stage = stage
+            worker.retire_request = (cause_session.request.request_id
+                                     if isinstance(cause_session, RecordingSession) else None)
+            self._diagnostic("worker_retire_requested", worker=worker,
+                             request=worker.retire_request, cause=stage, worker_pid=worker.process.pid)
         pending_prewarm = self._pending_ve_prewarm
         if (pending_prewarm is not None
                 and pending_prewarm.generation == worker.generation
@@ -1598,6 +1798,9 @@ class RecordingService:
             self._fail(session, failure_stage, failure_message,
                        cause_failure if session is cause_session else None)
         if worker.log_drain is not None:
+            self._diagnostic("worker_log_drain_begin", worker=worker,
+                             request=worker.retire_request, cause=worker.retire_stage,
+                             worker_pid=worker.process.pid)
             worker.log_drain.begin(f"{stage}: {message}")
         self._advance_retirement(worker)
 
@@ -1605,6 +1808,10 @@ class RecordingService:
         if worker.log_drain_reported:
             return
         worker.log_drain_reported = True
+        self._diagnostic("worker_log_drain_state", worker=worker,
+                         request=worker.retire_request, cause=worker.retire_stage,
+                         worker_pid=worker.process.pid, status=result.status,
+                         pending=None if result.stats is None else result.stats.get("pending"))
         if (result.status in ("timeout", "drained-with-errors")
                 or (result.status == "already-dead" and result.detail is not None)):
             pending = "unknown" if result.stats is None else result.stats["pending"]
@@ -1622,6 +1829,9 @@ class RecordingService:
                 return
             self._report_log_drain(worker, result)
         worker.kill_deadline = self._clock() + self._terminate_timeout
+        self._diagnostic("terminate_requested", worker=worker,
+                         request=worker.retire_request, cause=worker.retire_stage,
+                         worker_pid=worker.process.pid)
         worker.process.terminate()
 
     def _retire(self, worker):
@@ -1663,6 +1873,10 @@ class RecordingService:
             thread.join(.2)
         worker.control.close()
         worker.preview.close()
+        self._diagnostic("worker_exit_observed", worker=worker,
+                         request=worker.retire_request, cause=worker.retire_stage,
+                         worker_pid=worker.process.pid,
+                         exitcode=getattr(worker.process, "exitcode", None))
         worker.process.close()
         if worker.log_drain is not None:
             worker.log_drain.close()
@@ -1691,6 +1905,10 @@ class RecordingService:
                     pending_prewarm, success=False, ownership_safe=True)
 
     def _tick(self):
+        with self._measured("tick"):
+            self._tick_body()
+
+    def _tick_body(self):
         retained = []
         for thread in self.threads:
             if thread is self._supervisor or thread.is_alive():
@@ -1708,6 +1926,9 @@ class RecordingService:
                 self._advance_retirement(worker)
                 if (worker.kill_deadline is not None
                         and now >= worker.kill_deadline and not worker.kill_reported):
+                    self._diagnostic("kill_requested", worker=worker,
+                                     request=worker.retire_request, cause=worker.retire_stage,
+                                     worker_pid=worker.process.pid)
                     worker.process.kill()
                     worker.kill_reported = True
                     self._diagnose("Worker exit not yet confirmed; restart remains disabled")
@@ -1775,6 +1996,7 @@ class RecordingService:
                     self._command("cancel", session)
         if (session is not None and session._slot_release_deadline is not None
                 and now >= session._slot_release_deadline and not session._terminal):
+            self._release_timeout_evidence(session, now)
             self._retire_generation(worker, "capture_release_timeout",
                                     "capture slot release exceeded target + 1.0 seconds", session)
         pending = self._pending_ve_release
@@ -1828,11 +2050,51 @@ class RecordingService:
 
     def _invoke_shutdown(self, callback):
         try:
-            callback()
+            with self._measured("callback_shutdown"):
+                callback()
         except Exception:
             self._logger.exception("Recording shutdown callback failed")
 
     def _dispatch(self, item):
+        kind = item[0]
+        request = generation = None
+        session = item[1] if len(item) > 1 and isinstance(item[1], RecordingSession) else None
+        critical = None
+        if kind == "event":
+            event = item[2]
+            kind = getattr(event, "kind", "unknown") if isinstance(event, RecordingEvent) else "unknown"
+            request = getattr(event, "request_id", None) if isinstance(event, RecordingEvent) else None
+            generation = getattr(item[1], "generation", None)
+            critical, session = self._critical_event(event)
+        if type(kind) is not str or kind not in _DISPATCH_KINDS:
+            kind = "unknown"
+        if session is not None:
+            request, generation = session.request.request_id, session.generation
+        started = perf_counter_ns()
+        diag = self._recording_diagnostics
+        diag.logger = self._logger
+        evidence = getattr(item, "evidence", None)
+        if isinstance(item, _TimedInboxItem) and item.enqueued_ns is not None:
+            diag.observe("inbox_wait", started - item.enqueued_ns, started_ns=item.enqueued_ns,
+                         request=request, generation=generation, emit_slow=True)
+        if critical is not None:
+            if evidence is not None:
+                evidence["dispatch_started_ns"] = started
+            self._diagnostic("parent_dispatch_begin", session, worker=item[1], kind=critical,
+                             dispatch_started_ns=started,
+                             enqueued_ns=getattr(item, "enqueued_ns", None))
+        try:
+            with self._measured("dispatch_" + kind, session, request=request, generation=generation):
+                self._dispatch_body(item)
+        finally:
+            if critical is not None:
+                ended = perf_counter_ns()
+                if evidence is not None:
+                    evidence["dispatch_ended_ns"] = ended
+                self._diagnostic("parent_dispatch_end", session, worker=item[1], kind=critical,
+                                 dispatch_ended_ns=ended)
+
+    def _dispatch_body(self, item):
         kind = item[0]
         if kind == "start":
             self._begin(item[1])
@@ -1912,12 +2174,30 @@ class RecordingService:
             self._command("shutdown")
 
     def _run(self):
+        last_task_end = None
         while True:
+            before_wait = perf_counter_ns()
+            if last_task_end is not None:
+                self._recording_diagnostics.observe(
+                    "schedule_gap", before_wait - last_task_end,
+                    started_ns=last_task_end, emit_slow=True)
             try:
                 item = self._inbox.get(timeout=.02)
             except queue.Empty:
                 item = None
+            after_wait = perf_counter_ns()
+            if item is None:
+                # The ordinary 20ms idle allowance is not supervisor work.
+                # Any excess is scheduling/wait evidence, without attributing
+                # its cause (OS scheduling, interpreter, or queue contention).
+                self._recording_diagnostics.observe(
+                    "schedule_gap", max(0, after_wait - before_wait - 20_000_000),
+                    started_ns=before_wait + 20_000_000, emit_slow=True)
             try:
+                dispatch_ready = perf_counter_ns()
+                self._recording_diagnostics.observe(
+                    "schedule_gap", dispatch_ready - after_wait,
+                    started_ns=after_wait, emit_slow=True)
                 if item is not None:
                     self._dispatch(item)
                 self._tick()
@@ -1926,6 +2206,7 @@ class RecordingService:
                 # filesystem setup and custom reader construction. Fail once and
                 # retire the worker; keep observing leases rather than abandon them.
                 self._handle_supervisor_exception(exc)
+            last_task_end = perf_counter_ns()
             if self._closing and self._worker is None and not self._leases:
                 self._timing_logger.close()
                 # Publish complete resource closure before callbacks observe it.

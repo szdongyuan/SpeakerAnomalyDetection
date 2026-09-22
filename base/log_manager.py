@@ -241,6 +241,13 @@ class _LogDispatcher:
             self._snapshot_errors += 1
             self._last_error = diagnostic
 
+    def request_flush(self):
+        """Capture an accepted boundary; the existing consumer owns all I/O."""
+        with self._condition:
+            target = self._accepted
+            self._request_barrier(target)
+            return target
+
     def flush(self, timeout):
         with self._condition:
             target = self._accepted
@@ -549,6 +556,16 @@ class LogManager(object):
             logger.setLevel(logging.INFO)
             logger.addHandler(handler)
             return logger
+
+    @classmethod
+    def request_flush(cls):
+        """Request a partial batch without waiting or initializing a runtime.
+
+        The returned watermark is an admission boundary, not a write guarantee.
+        This remains safe after sealing and while the consumer is shutting down.
+        """
+        runtime = cls._runtime
+        return 0 if runtime is None else runtime.request_flush()
 
     @classmethod
     def flush(cls, timeout=LOG_SHUTDOWN_TIMEOUT):

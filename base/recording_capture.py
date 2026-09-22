@@ -79,10 +79,17 @@ class RecordingCapture:
                  ve_stream_factory=None,
                  writer_factory=StreamingWavWriter,
                  metadata_appender=append_owned_recording_calibration_metadata_result,
-                 blocksize=2048, queue_seconds=2.0):
+                 blocksize=2048, queue_seconds=2.0, diagnostics=None):
         self.request = request
         self._backend = backend
         self._is_ve = request.device.get("backend") == VE_BACKEND
+        self._diagnostics = diagnostics if self._is_ve else None
+        self._consume_lane = (self._diagnostics.new_lane(request=request.request_id)
+                              if self._diagnostics is not None else None)
+        self._diagnostic_blocks = 0
+        self._tail_started_ns = None
+        # Request-local tail only; the shared helper's maxima span a generation.
+        self._tail_stats = {}
         self._ve_stream_factory = ve_stream_factory
         self._native_stream = None
         self._writer_factory = writer_factory
@@ -201,33 +208,81 @@ class RecordingCapture:
 
     def snapshot(self, *, generation, sequence):
         """Copy only the selected bounded envelope; skip a busy consumer."""
-        if (not self._preview_enabled or self._waveforms is None
-                or not self._waveform_lock.acquire(blocking=False)):
+        if not self._preview_enabled or self._waveforms is None:
             return None
+        with self._diagnostic_phase("snapshot"):
+            return self._snapshot(generation=generation, sequence=sequence)
+
+    def _snapshot(self, *, generation, sequence):
+        with self._diagnostic_phase("waveform_lock_wait", emit_slow=False):
+            acquired = self._waveform_lock.acquire(blocking=False)
+        if not acquired:
+            return None
+        preview_error = None
         try:
-            snapshots = tuple(self._waveforms.snapshots().values())
-            return RecordingPreview(
-                self.request.request_id,
-                generation,
-                sequence,
-                snapshots[0].sample_stop,
-                self.request.channels,
-                snapshots,
-                self.request.preview_time_mode,
-            )
+            with self._diagnostic_phase("waveform_lock_hold", emit_slow=False):
+                snapshots = tuple(self._waveforms.snapshots().values())
+                return RecordingPreview(
+                    self.request.request_id, generation, sequence,
+                    snapshots[0].sample_stop, self.request.channels,
+                    snapshots, self.request.preview_time_mode)
         except Exception as exc:
             # Presentation boundary: reducer/snapshot faults disable preview only.
-            self._disable_preview(exc)
+            preview_error = exc
             return None
         finally:
             self._waveform_lock.release()
+            if preview_error is not None:
+                self._disable_preview(preview_error)
+
+    @contextmanager
+    def _diagnostic_phase(self, stage, *, emit_slow=True):
+        diagnostic = self._diagnostics
+        if diagnostic is None:
+            yield
+            return
+        token = diagnostic.begin(stage, request=self.request.request_id)
+        try:
+            yield
+        finally:
+            diagnostic.end(token, emit_slow=emit_slow)
+
+    def _diagnostic_milestone(self, stage, **fields):
+        if self._diagnostics is None:
+            return
+        progress = self.progress_snapshot()
+        self._diagnostics.milestone(
+            stage, request=self.request.request_id,
+            target_samples=self.request.target_samples, raw_frames=self.raw_frames,
+            consumed_frames=self.consumed_frames, written_frames=self.written_frames,
+            queued_frames=self.queued_frames, adapter_released=self._adapter_released,
+            writer_released=self._writer_released,
+            target_reached_at=(progress.last_frame_at if progress is not None
+                               and progress.frames == self.request.target_samples else None),
+            **fields)
+
+    def _diagnostic_tail_summary(self):
+        if self._diagnostics is None:
+            return
+        fields = {}
+        for stage, values in self._tail_stats.items():
+            for name, value in zip(("count", "total_ns", "max_ns", "max_start_ns", "max_end_ns"), values):
+                fields[f"{stage}_{name}"] = value
+        self._diagnostics.milestone(
+            "capture_tail", request=self.request.request_id,
+            scope="request_tail", tail_started_ns=self._tail_started_ns, **fields)
+        self._diagnostics.summary("capture_summary", request=self.request.request_id,
+                                  scope="generation_cumulative", capture_detail_stride=32,
+                                  capture_max_scope="sampled_plus_all_slow",
+                                  tail_started_ns=self._tail_started_ns)
 
     def _disable_preview(self, exc):
         if self._preview_enabled:
             self._preview_enabled = False
             self._waveforms = None
             self._warnings.append(f"preview disabled: {exc}")
-            self._logger.exception("Preview failed for %s", self.request.request_id)
+            self._logger.exception("Preview failed for %s", self.request.request_id,
+                                   exc_info=(type(exc), exc, exc.__traceback__))
 
     def _fail(self, stage, message):
         with self._queue_lock:
@@ -331,28 +386,92 @@ class RecordingCapture:
             return block
 
     def _consume(self, block):
+        lane = self._consume_lane
+        if lane is None:
+            self._consume_block(block)
+            return
+        self._diagnostic_blocks += 1
+        measured = self._tail_started_ns is not None or self._diagnostic_blocks % 32 == 1
+        phase = lane.enter("consume")
+        intervals = []
+        try:
+            self._consume_block(block, lane, phase, intervals)
+        finally:
+            ended = lane.perf_ns()
+            lane.active = None
+            # A slow sub-operation necessarily makes the complete consume slow.
+            # Aggregate after all business locks, retaining every slow interval.
+            if measured or ended - phase[1] >= 100_000_000:
+                intervals.append((phase, ended))
+                for current, end in intervals:
+                    elapsed = lane.finish(current, ended_ns=end)
+                    self._record_tail(current[0], current[1], elapsed)
+
+    def _record_tail(self, stage, started, elapsed):
+        if self._tail_started_ns is None or started < self._tail_started_ns:
+            return
+        stats = self._tail_stats.setdefault(stage, [0, 0, 0, 0, 0])
+        stats[0] += 1
+        stats[1] += elapsed
+        if elapsed > stats[2]:
+            stats[2:] = [elapsed, started, started + elapsed]
+
+    def _consume_block(self, block, lane=None, consume_phase=None, intervals=None):
         self._stage = "write"
         skip = min(len(block), max(0, self._effective_trim - self.consumed_frames))
         self.consumed_frames += len(block)
         retained = block[skip:]
         if len(retained):
-            self._writer.write_chunk(retained)
+            if lane is None:
+                self._writer.write_chunk(retained)
+            else:
+                # Publish an immutable current phase; count complete blocks
+                # once in _consume, not a dictionary counter per sub-stage.
+                lane.active = phase = ("write", lane.perf_ns())
+                try:
+                    self._writer.write_chunk(retained)
+                finally:
+                    intervals.append((phase, lane.perf_ns()))
+                    lane.active = consume_phase
             self.written_frames += len(retained)
             self._final_frames = self.written_frames
             self._sample_digest.update(retained.astype("<f4", copy=False).tobytes(order="C"))
         if self._preview_enabled and self._waveforms is not None:
-            with self._waveform_lock:
+            preview_error = None
+            if lane is not None:
+                lane.active = waiting = ("waveform_lock_wait", lane.perf_ns())
+            self._waveform_lock.acquire()
+            if lane is not None:
+                lane.active = holding = ("waveform_lock_hold", lane.perf_ns())
+            try:
                 try:
                     self._waveforms.append(block)
                 except Exception as exc:
                     # A display reducer is not an audio-integrity dependency.
-                    self._disable_preview(exc)
+                    preview_error = exc
+            finally:
+                self._waveform_lock.release()
+                if lane is not None:
+                    intervals.append((holding, lane.perf_ns()))
+                    intervals.append((waiting, holding[1]))
+                    lane.active = consume_phase
+            if preview_error is not None:
+                self._disable_preview(preview_error)
 
     def _close_stream(self):
         stream = self._stream
         if stream is None or self._stream_close_attempted:
             return
         self._stream_close_attempted = True
+        self._diagnostic_milestone("close_stream_begin")
+        try:
+            with self._diagnostic_phase("close_stream"):
+                self._close_stream_once(stream)
+        finally:
+            self._diagnostic_milestone("close_stream_end", status=(
+                "success" if self._stream is None else "error"))
+
+    def _close_stream_once(self, stream):
         released = True
         operations = [stream.stop]
         if not self._is_ve:
@@ -393,8 +512,16 @@ class RecordingCapture:
         self._writer_close_attempted = True
         if isinstance(writer, StreamingWavWriter):
             writer.defer_finalization_log()
+        finalized = False
         try:
-            writer.finalize()
+            self._diagnostic_milestone("close_wav_begin")
+            with self._diagnostic_phase("close_wav"):
+                writer.finalize()
+            finalized = True
+            self._writer_released = True
+            self._writer = None
+            if isinstance(writer, StreamingWavWriter):
+                self._writer_finalization_log = writer
         except Exception as exc:
             # Writer boundary: normalize a failed close once; handle release is
             # unknown and the worker owner must retire the process before reuse.
@@ -403,10 +530,9 @@ class RecordingCapture:
             self._logger.exception("WAV close failed for %s", self.request.request_id)
             self._fail("close_wav", str(exc))
             return
-        self._writer_released = True
-        self._writer = None
-        if isinstance(writer, StreamingWavWriter):
-            self._writer_finalization_log = writer
+        finally:
+            self._diagnostic_milestone("close_wav_end", status=(
+                "success" if finalized else "error"), finalize_returned=finalized)
 
     def _emit_writer_finalization_log(self):
         writer = self._writer_finalization_log
@@ -437,6 +563,7 @@ class RecordingCapture:
             writer_released=True,
         )
         self.capture_slot_released.set()
+        self._diagnostic_milestone("capture_slot_published")
 
     def _discard_failed_blocks(self):
         with self._queue_lock:
@@ -456,12 +583,20 @@ class RecordingCapture:
                         break
                     self._consume(block)
             self._stage = "finalizing"
+            self._tail_started_ns = time.perf_counter_ns()
+            self._diagnostic_milestone("finalizing")
             self._close_stream()
-            while self._writer is not None:
-                block = self._pop_block()
-                if block is None:
-                    break
-                self._consume(block)
+            self._diagnostic_milestone("final_drain_begin")
+            try:
+                with self._diagnostic_phase("final_drain"):
+                    while self._writer is not None:
+                        block = self._pop_block()
+                        if block is None:
+                            break
+                        self._consume(block)
+            finally:
+                self._diagnostic_milestone("final_drain_end", status=(
+                    "success" if sys.exception() is None else "error"))
             self._close_writer()
             file_closed_at = time.monotonic()
             self._publish_capture_slot()
@@ -503,6 +638,9 @@ class RecordingCapture:
                                                   self.raw_frames, self._final_frames,
                                                   cleanup_paths=tuple(sorted(self._owned_temporary_paths)))
             self.done.set()
+            if self._consume_lane is not None:
+                self._consume_lane.close()
+            self._diagnostic_tail_summary()
 
     def _finish_audio(self):
         req = self.request
