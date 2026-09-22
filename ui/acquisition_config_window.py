@@ -116,7 +116,7 @@ class RecordConfigWindow(BaseConfigWindow):
         self.time_input = QDoubleSpinBox()
         total_time = float(self.input_data.get("total_time", 4.0))
         self.time_input.setDecimals(config_number_decimals(total_time, 1))
-        self.time_input.setRange(min(0.1, total_time), max(600, total_time))
+        self.time_input.setRange(min(0.1, total_time), max(1200, total_time))
         self.time_input.setValue(total_time)
         self.time_input.setSingleStep(0.1)
         self.time_input.setSuffix(" 秒")
