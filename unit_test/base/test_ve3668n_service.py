@@ -691,7 +691,10 @@ def test_prewarm_real_spawn_post_start_thread_failure_is_bounded(
     worker = service._worker
     assert worker is not None and worker.process.pid is not None
     assert worker.retiring and worker.process.is_alive()
-    eventually(lambda: not worker.process.is_alive(), timeout=5)
+    # The supervisor is disabled above; drive its existing nonblocking drain
+    # handoff so retirement can reach terminate after begin/poll completes.
+    eventually(lambda: (service._advance_retirement(worker)
+                        or not worker.process.is_alive()), timeout=5)
     service._tick()
     monkeypatch.setattr(
         service, "_spawn",

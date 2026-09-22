@@ -29,6 +29,50 @@ def test_partial_batch_explicit_flush(isolated_async_logger):
     assert stats["pending"] == 0
 
 
+def test_request_flush_partial_batch_and_blocked_sink(isolated_async_logger, monkeypatch):
+    request_flush = LogManager.request_flush
+    logger, path = isolated_async_logger
+    entered, release, returned = threading.Event(), threading.Event(), threading.Event()
+    original = log_manager._BatchFileHandler.write_batch
+
+    def blocked(sink, entries):
+        entered.set()
+        assert release.wait(5)
+        return original(sink, entries)
+
+    monkeypatch.setattr(log_manager._BatchFileHandler, "write_batch", blocked)
+    logger.info("critical-boundary")
+    results = []
+
+    def request():
+        results.append(request_flush())
+        returned.set()
+
+    producer = threading.Thread(target=request)
+    producer.start()
+    try:
+        assert entered.wait(2)
+        assert returned.wait(0.5), "request waited for the sink"
+        assert results == [1]
+        assert LogManager.get_async_stats()["written"] == 0
+        logger.info("later-ordinary")
+    finally:
+        release.set()
+        producer.join(2)
+    wait_written(LogManager._runtime, 1)
+    wait_taken(LogManager._runtime, 2)
+    assert LogManager.get_async_stats()["pending"] == 1
+    assert "critical-boundary" in path.read_text()
+    assert "later-ordinary" not in path.read_text()
+
+
+def test_request_flush_without_runtime_and_after_seal_has_no_initialization(monkeypatch):
+    monkeypatch.setattr(LogManager, "_runtime", None)
+    monkeypatch.setattr(LogManager, "_forced_exit", True)
+    assert LogManager.request_flush() == 0
+    assert LogManager._runtime is None
+
+
 def wait_taken(runtime, count):
     with runtime._condition:
         assert runtime._condition.wait_for(lambda: runtime._taken >= count, timeout=2)

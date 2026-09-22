@@ -10,6 +10,7 @@ from contextlib import ExitStack
 from base.log_manager import LogManager
 from base.log_exit import exit_with_log_drain
 from base.recording_capture import RecordingCapture, sounddevice_backend
+from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_process_protocol import (
     CaptureSlotReleased,
     RecordingEvent,
@@ -34,7 +35,7 @@ from consts.ve3668n_consts import VE_BACKEND
 
 
 def _send_loop(connection, outgoing, broken, latest=None, wake=None, urgent=None,
-               ordered=None):
+               ordered=None, diagnostics=None):
     try:
         while True:
             source = outgoing
@@ -62,7 +63,29 @@ def _send_loop(connection, outgoing, broken, latest=None, wake=None, urgent=None
             try:
                 if event is None:
                     return
-                connection.send(event)
+                token = 0
+                if diagnostics is not None:
+                    # Final progress uses the existing reliable control lane;
+                    # periodic progress uses latest. No payload/identity cache.
+                    final = event.kind == "capture_slot_released" or (
+                        event.kind == "progress" and latest is not None and source is outgoing)
+                    stage = "preview_send" if event.kind == "preview" else "control_send"
+                    token = diagnostics.begin(stage, request=event.request_id)
+                    if final:
+                        diagnostics.milestone("control_send_begin", request=event.request_id,
+                                              kind=event.kind, queue_depth=source.qsize())
+                sent = False
+                try:
+                    connection.send(event)
+                    sent = True
+                finally:
+                    if diagnostics is not None:
+                        elapsed = diagnostics.end(token, emit_slow=True)
+                        if final:
+                            diagnostics.milestone(
+                                "control_send_end", request=event.request_id,
+                                kind=event.kind, status="success" if sent else "error",
+                                elapsed_ns=elapsed)
             finally:
                 source.task_done()
     except (EOFError, OSError):
@@ -70,7 +93,8 @@ def _send_loop(connection, outgoing, broken, latest=None, wake=None, urgent=None
     except Exception:
         # Pipe serialization and connection.send are an external runtime
         # boundary. Any unexpected failure makes further ownership uncertain.
-        LogManager.set_log_handler("core").exception("Recording sender failed")
+        logger = diagnostics.logger if diagnostics is not None else LogManager.set_log_handler("core")
+        logger.exception("Recording sender failed")
         broken.set()
 
 
@@ -119,12 +143,16 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
     controller_close_failed = False
     audio_backend = None
     audio_cleanup_failed = False
+    diagnostics = RecordingDiagnostics(logger, generation=generation, categories=(
+        "consume", "write", "waveform_lock_wait", "waveform_lock_hold", "snapshot",
+        "close_stream", "close_wav", "final_drain", "control_send", "preview_send"))
 
     def parent_watch():
         while not finished.wait(.05):
             if parent is not None and not parent.is_alive():
                 broken.set()
                 if not finished.wait(cancel_timeout):
+                    diagnostics.close(timeout=0)
                     exit_with_log_drain(1)
                 return
 
@@ -133,19 +161,32 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
     for connection, outgoing, name in ((control, control_out, "control"),
                                         (preview, preview_out, "preview")):
         extra = ((progress_out, control_wake, fatal_out, ordered_control_out)
-                 if name == "control" else ())
-        sender = threading.Thread(target=_send_loop, args=(connection, outgoing, broken, *extra),
+                 if name == "control" else (None, None, None, None))
+        sender = threading.Thread(target=_send_loop,
+                                  args=(connection, outgoing, broken, *extra, diagnostics),
                                   name=f"recording-{name}-sender", daemon=True)
         sender.start()
         senders.append(sender)
 
     def emit(kind, request_id="", payload=None):
+        final = kind in ("progress", "capture_slot_released")
+        if final:
+            diagnostics.milestone("control_enqueue_begin", request=request_id, kind=kind,
+                                  queue_depth=control_out.qsize())
+        accepted = False
         try:
             control_out.put_nowait(RecordingEvent(generation, request_id, kind, payload))
+            accepted = True
         except queue.Full as exc:
             emit_worker_fatal("worker/control_queue", exc)
             broken.set()
             return False
+        finally:
+            if final:
+                diagnostics.milestone("control_enqueue_end", request=request_id, kind=kind,
+                                      accepted=accepted, queue_depth=control_out.qsize(),
+                                      target_reached_at=(payload.last_frame_at if kind == "progress"
+                                                         else payload.target_reached_at))
         control_wake.set()
         return True
 
@@ -319,6 +360,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                             emit_terminal(state)
                     break
                 if now >= stopping:
+                    diagnostics.close(timeout=0)
                     exit_with_log_drain(1)
 
             if not broken.is_set() and control.poll(.01):
@@ -347,6 +389,9 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                         continue
                     last_terminal_prewarm = None
                     capture_dependencies = dict(dependencies)
+                    if command.payload.device.get("backend") == VE_BACKEND:
+                        diagnostics.start_sampler()
+                        capture_dependencies["diagnostics"] = diagnostics
                     initialization_failure = None
                     if (command.payload.device.get("backend") != VE_BACKEND
                             and capture_dependencies.get("backend") is None):
@@ -382,6 +427,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                     state.next_progress_at = now
                     capture.start()
                 elif command.kind == VE_PREWARM_COMMAND:
+                    diagnostics.start_sampler()
                     if command.request_id in prewarm_ids:
                         protocol_fatal(
                             VE_PREWARM_COMMAND,
@@ -654,6 +700,9 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         control_wake.set()
         for sender in senders:
             sender.join(.2)
+        # Keep evidence enabled through cancellation and actual handle cleanup;
+        # stop without joining or extending the existing log-drain deadlines.
+        diagnostics.close(timeout=0)
         finished.set()
         if controller_close_failed or capture_cleanup_failed or audio_cleanup_failed:
             exit_with_log_drain(1)

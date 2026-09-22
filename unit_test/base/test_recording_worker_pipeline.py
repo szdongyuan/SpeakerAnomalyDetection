@@ -16,6 +16,162 @@ def capture(request_id):
     return SimpleNamespace(request=SimpleNamespace(request_id=request_id))
 
 
+def test_sender_without_diagnostics_preserves_existing_payload_passthrough():
+    outgoing, broken, sent = queue.Queue(), threading.Event(), []
+    payload = object()
+    outgoing.put(payload)
+    outgoing.put(None)
+    _send_loop(SimpleNamespace(send=sent.append), outgoing, broken)
+    assert sent == [payload]
+    assert not broken.is_set()
+
+
+@pytest.mark.parametrize("send_error", [False, True])
+def test_sender_diagnostics_record_actual_final_send_before_unblock(monkeypatch, send_error):
+    from base.recording_diagnostics import RecordingDiagnostics
+    from base.recording_process_protocol import RecordingProgress
+    from unit_test.base.test_recording_capture_diagnostics import diagnostics, events
+
+    unused, records = diagnostics(monkeypatch)
+    diag = RecordingDiagnostics(unused.logger, categories=("control_send", "preview_send"), generation=7)
+    entered, release = threading.Event(), threading.Event()
+    broken, wake = threading.Event(), threading.Event()
+    outgoing, latest = queue.Queue(), queue.Queue(maxsize=1)
+    event = RecordingEvent(7, "req", "progress", RecordingProgress("req", 7, 10, 1.0))
+    outgoing.put(event)
+    outgoing.put(None)
+
+    class Connection:
+        def send(self, actual):
+            assert actual is event
+            entered.set()
+            assert release.wait(3)
+            if send_error:
+                raise OSError("blocked send failed")
+
+    sender = threading.Thread(target=_send_loop, args=(Connection(), outgoing, broken, latest, wake),
+                              kwargs={"diagnostics": diag})
+    sender.start()
+    try:
+        assert entered.wait(1)
+        begin, = events(records, "control_send_begin")
+        assert begin["kind"] == "progress"
+        assert not events(records, "control_send_end")
+        time.sleep(.11)
+        diag.sample_once()
+        active, = events(records, "control_send")
+        assert active["status"] == "in_progress"
+        assert active["elapsed_ns"] >= 100_000_000
+    finally:
+        release.set()
+        sender.join(2)
+    end, = events(records, "control_send_end")
+    assert end["status"] == ("error" if send_error else "success")
+    assert broken.is_set() is send_error
+    assert diag.snapshot()["categories"]["control_send"]["count"] == 1
+
+
+def test_sender_ordinary_progress_diagnostics_are_numeric_only(monkeypatch):
+    from base.recording_diagnostics import RecordingDiagnostics
+    from base.recording_process_protocol import RecordingProgress
+    from unit_test.base.test_recording_capture_diagnostics import diagnostics
+
+    unused, records = diagnostics(monkeypatch)
+    diag = RecordingDiagnostics(unused.logger, categories=("control_send",), generation=7)
+    outgoing, latest = queue.Queue(), queue.Queue()
+    latest.put(RecordingEvent(7, "req", "progress", RecordingProgress("req", 7, 1, 1.0)))
+    latest.put(None)
+    sent = []
+    _send_loop(SimpleNamespace(send=sent.append), outgoing, threading.Event(), latest,
+               threading.Event(), diagnostics=diag)
+    assert len(sent) == 1 and records == []
+    assert diag.snapshot()["categories"]["control_send"]["count"] == 1
+
+
+def test_worker_reuses_sampler_and_records_enqueue_payload_and_cleanup(tmp_path, monkeypatch):
+    from base import recording_worker as module
+    from base.recording_process_protocol import RecordingCancelled
+    from base.ve3668n_capture_timing import VeCaptureProgress
+    from unit_test.base.test_recording_capture_diagnostics import diagnostics, events
+
+    diag, records = diagnostics(monkeypatch)
+    monkeypatch.setattr(module, "RecordingDiagnostics", lambda *args, **kwargs: diag)
+    monkeypatch.setattr(module.multiprocessing, "parent_process", lambda: None)
+    commands, sent, helpers, samplers = queue.Queue(), [], [], []
+    first = capture_request(tmp_path / "A.wav", request_id="A")
+    second = capture_request(tmp_path / "B.wav", request_id="B")
+
+    class Capture:
+        def __init__(self, request, **kwargs):
+            self.request = request
+            self.diag = kwargs["diagnostics"]
+            helpers.append(self.diag)
+            samplers.append(self.diag.sampler_thread)
+            self.started, self.done, self.capture_slot_released = (
+                threading.Event(), threading.Event(), threading.Event())
+            self.started_at = time.monotonic()
+            self.raw_frames = request.target_samples
+            self.capture_slot = SimpleNamespace(target_reached_at=self.started_at,
+                raw_frames=self.raw_frames, adapter_released=True, writer_released=True)
+            self.outcome = RecordingCancelled(request.request_id, request.path, self.raw_frames, 0)
+
+        def start(self):
+            self.started.set()
+            self.capture_slot_released.set()
+            if self.request.request_id == "A":
+                self.done.set()
+
+        def progress_snapshot(self):
+            return VeCaptureProgress(self.started_at, self.raw_frames, self.started_at)
+
+        def cancel(self):
+            self.done.set()
+
+        def join(self, timeout=0):
+            if self.request.request_id == "B" and timeout > 0:
+                self.diag.milestone("cleanup_probe", request="B")
+            return self.done.is_set()
+
+    class Connection:
+        def poll(self, timeout):
+            time.sleep(.001)
+            return not commands.empty()
+
+        def recv(self):
+            return commands.get_nowait()
+
+        def send(self, event):
+            sent.append(event)
+            if event.kind == "cancelled" and event.request_id == "A":
+                commands.put(RecordingEvent(1, "A", "result_ack", "accepted"))
+                commands.put(RecordingEvent(1, "B", "start", second))
+            elif event.kind == "capture_slot_released" and event.request_id == "B":
+                # EOF enters finally with live finalizer B; cleanup must still log.
+                commands.put("eof")
+
+        def close(self):
+            pass
+
+    class Control(Connection):
+        def recv(self):
+            event = super().recv()
+            if event == "eof":
+                raise EOFError
+            return event
+
+    monkeypatch.setattr(module, "RecordingCapture", Capture)
+    commands.put(RecordingEvent(1, "A", "start", first))
+    module.recording_worker(Control(), Connection(), 1, None, {}, .5)
+    assert helpers == [diag, diag]
+    assert samplers[0] is samplers[1]
+    samplers[0].join(.3)
+    assert not samplers[0].is_alive()
+    assert events(records, "cleanup_probe")
+    enqueued = events(records, "control_enqueue_end")
+    assert len(enqueued) == 4 and all(item["accepted"] for item in enqueued)
+    assert all(item["target_reached_at"] is not None for item in enqueued)
+
+
 def test_capacity_two_moves_released_capture_to_request_keyed_finalizer():
     from base.recording_worker_pipeline import WorkerCapturePipeline
 

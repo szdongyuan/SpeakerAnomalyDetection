@@ -1596,12 +1596,16 @@ def test_thread_start_ownership_failure_releases_lease_and_reclaims_worker(
 def test_dead_recording_drain_reports_only_observed_drain(caplog, started):
     import logging
     from base.log_exit import ProcessLogDrain
+    from base.recording_diagnostics import RecordingDiagnostics
     from base.recording_timing_logger import RecordingTimingLogger
     drain = ProcessLogDrain.create(mp.get_context("spawn"))
     service = RecordingService.__new__(RecordingService)
     service._logger = logging.getLogger("recording-death-test")
     service._timing_logger = RecordingTimingLogger()
+    service._recording_diagnostics = RecordingDiagnostics(
+        service._logger, categories=(), timing_logger=service._timing_logger)
     worker = SimpleNamespace(log_drain=drain, log_drain_reported=False,
+                             retire_request=None, retire_stage=None,
                              generation=3, process=SimpleNamespace(pid=123))
     try:
         if started:

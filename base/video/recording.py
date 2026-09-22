@@ -31,6 +31,8 @@ class VideoDiagnostics:
         self._arrivals = deque(maxlen=120)
         self._slow = False
         self._last_slow = None
+        self._recent_slow = deque(maxlen=16)
+        self._recent_slow_truncated = 0
         self._next_report = 0.0
         self._overflow = None
         self.session_id = ""
@@ -50,13 +52,21 @@ class VideoDiagnostics:
                     self.progress += 1
                     self.progress_at = time.monotonic()
         finally:
-            elapsed = time.perf_counter() - started
+            ended = time.perf_counter()
+            elapsed = ended - started
             with self._lock:
-                count, total, maximum = self._stats.get(name, (0, 0.0, 0.0))
-                self._stats[name] = (count + 1, total + elapsed, max(maximum, elapsed))
+                count, total, maximum, peak_start, peak_end = self._stats.get(name, (0, 0.0, 0.0, 0, 0))
+                if not count or elapsed > maximum:
+                    maximum, peak_start, peak_end = elapsed, round(started * 1e9), round(ended * 1e9)
+                self._stats[name] = (count + 1, total + elapsed, maximum, peak_start, peak_end)
                 self._slow |= elapsed >= 0.2
                 if elapsed >= 0.2:
-                    self._last_slow = {"stage": name, "elapsed_ms": round(elapsed * 1000, 2)}
+                    self._last_slow = {"stage": name, "elapsed_ms": round(elapsed * 1000, 2),
+                                       "start_ns": round(started * 1e9), "end_ns": round(ended * 1e9)}
+                    if name in {"disk_sync", "file_write", "file_close", "mux_close"}:
+                        if len(self._recent_slow) == self._recent_slow.maxlen:
+                            self._recent_slow_truncated += 1
+                        self._recent_slow.append(self._last_slow)
                 self._active = previous
 
     def begin(self, session_id):
@@ -66,6 +76,9 @@ class VideoDiagnostics:
             self._arrivals.clear()
             self._slow = False
             self._last_slow = None
+            self._recent_slow.clear()
+            self._recent_slow_truncated = 0
+            self._active = ("idle", time.perf_counter())
 
     def arrival(self):
         with self._lock:
@@ -81,14 +94,22 @@ class VideoDiagnostics:
             "reason": reason, "session": self.session_id, "captured_at": utc_now(),
             "queue_items": queue_items, "frame_capacity": capacity,
             "active_stage": stage,
+            "active_start_ns": round(started * 1e9) if stage != "idle" else None,
+            "captured_perf_ns": round(now * 1e9),
+            "interval_clock": "perf_counter",
             "active_ms": round((now - started) * 1000, 2) if stage != "idle" else 0,
             "arrivals_last_second": sum(now - stamp <= 1 for stamp in self._arrivals),
             "arrival_sample_limit": self._arrivals.maxlen,
-            "last_slow": self._last_slow,
+            "last_slow": dict(self._last_slow) if self._last_slow else None,
+            "recent_slow_scope": "last_16_slow_io_intervals",
+            "recent_slow": [dict(interval) for interval in self._recent_slow],
+            "recent_slow_truncated": self._recent_slow_truncated,
+            "stages_scope": "cumulative",
             "stages": {
                 name: {"count": n, "mean_ms": round(total / n * 1000, 2),
-                       "max_ms": round(maximum * 1000, 2)}
-                for name, (n, total, maximum) in self._stats.items()
+                       "max_ms": round(maximum * 1000, 2),
+                       "max_start_ns": peak_start, "max_end_ns": peak_end}
+                for name, (n, total, maximum, peak_start, peak_end) in self._stats.items()
             },
         }
 

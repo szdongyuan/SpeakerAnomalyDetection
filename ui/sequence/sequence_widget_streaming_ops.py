@@ -1,9 +1,13 @@
 from collections.abc import Mapping
+from functools import wraps
 import json
+import logging
 import os
 import threading
+from time import perf_counter_ns
 from datetime import datetime
 
+from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_result_reader import RecordingAudio
 from base.recording_waveform_preparation import prepare_waveform_display_data
 
@@ -54,6 +58,62 @@ from ui.vkinging_presentation import ve_failure_text
 
 class FinalWaveformWorkspaceContractError(ValueError):
     """The final workspace no longer represents the immutable run mapping."""
+
+
+class _WaveformDiagnosticLogger(logging.LoggerAdapter):
+    def process(self, message, kwargs):
+        prefix, separator, payload = message.partition(" details=")
+        return f"{prefix} waveform_generation={self.extra['waveform_generation']}{separator}{payload}", kwargs
+
+
+def _waveform_diagnostics(host):
+    """Use the exact active process context; legacy plots have unknown request."""
+    contexts = getattr(host, "_recording_process_contexts", None)
+    active = getattr(host, "_active_recording_process_id", None)
+    context = contexts.get(active) if isinstance(contexts, dict) else None
+    session = getattr(context, "session", None)
+    waveform_generation = getattr(host, "_streaming_waveform_generation", 0)
+    if context is not None and session is not None:
+        owner = context
+        request = context.request.request_id
+        generation = session.generation
+    else:
+        owner, request, generation = host, None, None
+    diagnostic = getattr(owner, "waveform_diagnostics", None)
+    if diagnostic is None or (owner is host and
+            getattr(host, "_waveform_diagnostic_generation", None) != waveform_generation):
+        if owner is host:
+            _finish_waveform_diagnostics(host)
+        diagnostic = RecordingDiagnostics(
+            _WaveformDiagnosticLogger(
+                getattr(host, "default_logger", None) or logging.getLogger(__name__),
+                {"waveform_generation": waveform_generation}),
+            categories=("gui_projection", "gui_callback_wait"),
+            request=request, generation=generation, perf_ns=perf_counter_ns)
+        owner.waveform_diagnostics = diagnostic
+        owner.waveform_diagnostics_finished = False
+        if owner is host:
+            host._waveform_diagnostic_generation = waveform_generation
+    return diagnostic
+
+
+def _finish_waveform_diagnostics(context):
+    diagnostic = getattr(context, "waveform_diagnostics", None)
+    if diagnostic is not None and not getattr(context, "waveform_diagnostics_finished", False):
+        context.waveform_diagnostics_finished = True
+        diagnostic.summary("gui_waveform_summary", compact=True, max_chars=2800)
+
+
+def _measure_waveform_projection(project):
+    @wraps(project)
+    def measured(host, *args, **kwargs):
+        diagnostic = _waveform_diagnostics(host)
+        token = diagnostic.begin("gui_projection")
+        try:
+            return project(host, *args, **kwargs)
+        finally:
+            diagnostic.end(token, emit_slow=True)
+    return measured
 
 
 def _log_streaming_boundary(host, level, message):
@@ -1600,6 +1660,7 @@ class SequenceWidgetStreamingOpsMixin:
     def _begin_streaming_waveform_session(
         self, sample_rate, startup_trim_samples, direction=None, channels=None
     ):
+        _finish_waveform_diagnostics(self)
         self._streaming_waveform_generation += 1
         run_channels = channels
         if run_channels is None:
@@ -1633,6 +1694,7 @@ class SequenceWidgetStreamingOpsMixin:
         self._streaming_invalid_terminal_handled = False
 
     def _end_streaming_waveform_session(self):
+        _finish_waveform_diagnostics(self)
         self._streaming_waveform_generation = (
             getattr(self, "_streaming_waveform_generation", 0) + 1
         )
@@ -1662,10 +1724,18 @@ class SequenceWidgetStreamingOpsMixin:
             return
         generation = self._streaming_waveform_generation
         self._streaming_waveform_refresh_scheduled = True
-        self._schedule_streaming_waveform_callback(
-            lambda: self._flush_streaming_waveform_refresh(generation)
-        )
+        diagnostic = _waveform_diagnostics(self)
+        started = perf_counter_ns()
 
+        def refresh():
+            # Capture ownership when scheduled, before a new request can start.
+            diagnostic.observe("gui_callback_wait", perf_counter_ns() - started,
+                               started_ns=started, emit_slow=True)
+            self._flush_streaming_waveform_refresh(generation)
+
+        self._schedule_streaming_waveform_callback(refresh)
+
+    @_measure_waveform_projection
     def _project_live_waveforms_to_workspace(self, channels, waveforms, time_mode):
         """Atomically replace every ordered channel plot with one live snapshot."""
         validated_time_mode = validate_recording_preview_time_mode(time_mode)

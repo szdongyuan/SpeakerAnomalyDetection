@@ -73,8 +73,8 @@ def test_diagnostics_nested_metrics_preserve_exceptions_and_rate_limit(monkeypat
                 raise OSError("write failed")
         report = diagnostics.take_report(1, 60)
         assert report["active_stage"] == "frame_total"
-        assert report["stages"]["encode"] == {"count": 1, "mean_ms": 10, "max_ms": 10}
-        assert report["stages"]["mux_write"] == {"count": 1, "mean_ms": 300, "max_ms": 300}
+        assert report["stages"]["encode"] == {"count": 1, "mean_ms": 10, "max_ms": 10, "max_start_ns": 100_000_000_000, "max_end_ns": 100_010_000_000}
+        assert report["stages"]["mux_write"] == {"count": 1, "mean_ms": 300, "max_ms": 300, "max_start_ns": 100_010_000_000, "max_end_ns": 100_310_000_000}
     assert diagnostics.take_report(48, 60) is None
     clock[0] += 29.99
     assert diagnostics.take_report(48, 60) is None
@@ -619,3 +619,71 @@ def test_fragmented_file_readable_after_abrupt_child_exit_without_footer(tmp_pat
             child.terminate()
             child.join(3)
         child.close()
+
+
+def test_diagnostics_actual_intervals_distinguish_peak_from_recent_tail(monkeypatch):
+    clock = [10.0]
+    monkeypatch.setattr("base.video.recording.time.perf_counter", lambda: clock[0])
+    diagnostics = VideoDiagnostics()
+    diagnostics.begin("intervals")
+    with diagnostics.stage("disk_sync"):
+        clock[0] = 12.0
+    for index in range(20):
+        clock[0] = 100.0 + index
+        with diagnostics.stage("disk_sync"):
+            clock[0] += .25
+    diagnostics.overflow(60, 60)
+    report = diagnostics.take_report(0, 60)
+    assert report["stages_scope"] == "cumulative"
+    peak = report["stages"]["disk_sync"]
+    assert peak["max_start_ns"] == 10_000_000_000
+    assert peak["max_end_ns"] == 12_000_000_000
+    assert report["last_slow"] == {"stage": "disk_sync", "elapsed_ms": 250,
+                                  "start_ns": 119_000_000_000, "end_ns": 119_250_000_000}
+    assert report["recent_slow_scope"] == "last_16_slow_io_intervals"
+    assert len(report["recent_slow"]) == 16
+    assert report["recent_slow_truncated"] == 5
+    assert report["recent_slow"][0]["start_ns"] == 104_000_000_000
+    diagnostics.begin("next")
+    diagnostics.overflow(0, 60)
+    fresh = diagnostics.take_report(0, 60)
+    assert fresh["stages"] == {} and fresh["recent_slow"] == []
+    assert fresh["recent_slow_truncated"] == 0 and fresh["last_slow"] is None
+    assert len(report["recent_slow"]) == 16
+
+
+def test_diagnostics_old_overflow_keeps_active_interval_and_slow_history(monkeypatch):
+    clock = [30.0]
+    monkeypatch.setattr("base.video.recording.time.perf_counter", lambda: clock[0])
+    diagnostics = VideoDiagnostics()
+    diagnostics.begin("old")
+    with diagnostics.stage("file_write"):
+        clock[0] += .3
+    with diagnostics.stage("mux_close"):
+        clock[0] += .4
+        diagnostics.overflow(60, 60)
+    diagnostics.begin("new")
+    with diagnostics.stage("disk_sync"):
+        clock[0] += .5
+    report = diagnostics.take_report(0, 60)
+    assert report["session"] == "old"
+    assert report["active_start_ns"] == 30_300_000_000
+    assert report["captured_perf_ns"] == 30_700_000_000
+    assert len(report["recent_slow"]) == 1
+    assert report["recent_slow"][0]["stage"] == "file_write"
+
+
+def test_diagnostics_new_session_preserves_existing_throttle(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr("base.video.recording.time.perf_counter", lambda: clock[0])
+    diagnostics = VideoDiagnostics()
+    diagnostics.begin("old")
+    with diagnostics.stage("file_write"):
+        clock[0] += .3
+    assert diagnostics.take_report(0, 60) is not None
+    diagnostics.begin("new")
+    with diagnostics.stage("file_write"):
+        clock[0] += .3
+    assert diagnostics.take_report(0, 60) is None
+    clock[0] += 30
+    assert diagnostics.take_report(0, 60)["session"] == "new"
