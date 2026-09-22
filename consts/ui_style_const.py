@@ -189,8 +189,8 @@ qdialog_style = _style("""
 
 analysis_report_dialog_style = _style("""
             QDialog#analysisReportExportDialog QWidget {
-                font-family: $UI_FONT_FAMILY;
-                font-size: 16px;
+                font-family: $MAIN_UI_SMALL_FONT_FAMILY;
+                font-size: 14px;
                 font-weight: normal;
             }
             QDialog#analysisReportExportDialog,
@@ -217,7 +217,7 @@ analysis_report_dialog_style = _style("""
             }
             QDialog#analysisReportExportDialog QGroupBox#reportScopeGroup,
             QDialog#analysisReportExportDialog QGroupBox#reportContentGroup {
-                font-size: 18px;
+                font-size: 17px;
                 font-weight: bold;
                 margin-top: 0;
                 padding: 42px 18px 18px 18px;
@@ -237,6 +237,37 @@ analysis_report_dialog_style = _style("""
             QLabel#reportAnalysisItemEmptyLabel {
                 color: $COLOR_DISABLED_TEXT;
             }
+            QLabel#reportDatabaseWarning {
+                color: $COLOR_NG;
+            }
+            QDialog#analysisReportExportDialog QLabel#reportContentHint {
+                font-size: 12px;
+                color: $COLOR_TEXT_MUTED;
+            }
+            QDialog#analysisReportExportDialog QCheckBox,
+            QDialog#analysisReportExportDialog QRadioButton {
+                spacing: 8px;
+            }
+            QDialog#analysisReportExportDialog QRadioButton:disabled {
+                color: $COLOR_DISABLED_TEXT;
+            }
+            QComboBox#reportModelCombo::drop-down {
+                border: none;
+                width: 28px;
+            }
+            QComboBox#reportModelCombo::down-arrow {
+                image: url($COMBO_DOWN_ARROW_ICON);
+                width: 12px;
+                height: 12px;
+            }
+            QToolButton#reportSampleSelector::menu-indicator {
+                image: url($COMBO_DOWN_ARROW_ICON);
+                width: 12px;
+                height: 12px;
+                subcontrol-origin: border;
+                subcontrol-position: center right;
+                right: 9px;
+            }
             QDialog#analysisReportExportDialog QLineEdit,
             QDialog#analysisReportExportDialog QComboBox,
             QDialog#analysisReportExportDialog QToolButton,
@@ -244,7 +275,8 @@ analysis_report_dialog_style = _style("""
                 min-height: 26px;
             }
             QLabel,
-            QCheckBox {
+            QCheckBox,
+            QRadioButton {
                 color: $COLOR_TEXT;
                 background-color: transparent;
             }
@@ -332,6 +364,93 @@ analysis_report_dialog_style = _style("""
                 border-bottom: 1px solid $COLOR_BORDER;
                 background-color: $COLOR_TOOLBAR_BG;
                 color: $COLOR_TEXT;
+            }
+""")
+
+analysis_report_wav_filter_style = analysis_report_dialog_style + _style("""
+            QDialog#analysisReportWavFilterDialog {
+                background-color: $COLOR_CARD_BG;
+            }
+            QDialog#analysisReportWavFilterDialog QWidget {
+                font-family: $MAIN_UI_SMALL_FONT_FAMILY;
+                font-size: 14px;
+                font-weight: normal;
+            }
+            QDialog#analysisReportWavFilterDialog QLabel#reportWavFilterTitle {
+                font-size: 21px;
+                font-weight: bold;
+            }
+            QDialog#analysisReportWavFilterDialog QLabel#reportWavFilterHint {
+                font-size: 12px;
+                color: $COLOR_TEXT_MUTED;
+            }
+            QWidget#reportWavFilterFooter {
+                background-color: $COLOR_PAGE_BG;
+                border-top: 1px solid $COLOR_BORDER;
+            }
+            QDialog#analysisReportWavFilterDialog QPushButton {
+                min-height: 24px;
+                padding: 6px 18px;
+                border-radius: 6px;
+                border-color: $COLOR_BORDER;
+                background-color: $COLOR_CARD_BG;
+            }
+            QDialog#analysisReportWavFilterDialog QPushButton:hover,
+            QDialog#analysisReportWavFilterDialog QPushButton:focus {
+                border-color: $COLOR_PRIMARY;
+                background-color: $COLOR_CONTROL_HOVER;
+            }
+            QDialog#analysisReportWavFilterDialog QPushButton#reportWavFilterSelect {
+                min-height: 26px;
+                padding: 7px 30px 7px 12px;
+                text-align: left;
+            }
+            QPushButton#reportWavFilterSelect::menu-indicator {
+                image: url($COMBO_DOWN_ARROW_ICON);
+                subcontrol-origin: padding;
+                subcontrol-position: right center;
+                right: 12px;
+                width: 12px;
+                height: 12px;
+            }
+            QDialog#analysisReportWavFilterDialog QPushButton#reportWavFilterResetButton {
+                padding-left: 0;
+                padding-right: 0;
+                border: none;
+                color: $COLOR_PRIMARY;
+                background-color: transparent;
+            }
+            QDialog#analysisReportWavFilterDialog QPushButton#reportWavFilterResetButton:focus,
+            QDialog#analysisReportWavFilterDialog QPushButton#reportWavFilterResetButton:hover {
+                background-color: $COLOR_CONTROL_HOVER;
+            }
+            QDialog#analysisReportWavFilterDialog QPushButton#reportWavFilterApplyButton {
+                background-color: $COLOR_PRIMARY;
+                border-color: $COLOR_PRIMARY;
+                color: white;
+            }
+            QDialog#analysisReportWavFilterDialog QPushButton#reportWavFilterApplyButton:hover,
+            QDialog#analysisReportWavFilterDialog QPushButton#reportWavFilterApplyButton:focus {
+                background-color: $COLOR_PRIMARY_HOVER;
+            }
+            QCheckBox#reportWavResultOption {
+                padding: 9px 12px;
+                spacing: 8px;
+                border: 1px solid $COLOR_BORDER;
+                border-radius: 6px;
+                background-color: $COLOR_CARD_BG;
+            }
+            QCheckBox#reportWavResultOption:checked {
+                background-color: $COLOR_CONTROL_HOVER;
+                border-color: $COLOR_BORDER_STRONG;
+            }
+            QCheckBox#reportWavResultOption:hover,
+            QCheckBox#reportWavResultOption:focus {
+                border-color: $COLOR_PRIMARY;
+            }
+            QDialog#analysisReportWavFilterDialog QListWidget::item {
+                min-height: 30px;
+                padding: 0;
             }
 """)
 

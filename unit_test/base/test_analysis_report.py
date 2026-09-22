@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 import os
 from pathlib import Path
+import re
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -13,6 +14,7 @@ from PyQt5.QtGui import QColor, QImage
 from PyQt5.QtWidgets import QApplication
 
 from base.analysis_report import (
+    _build_analysis_report_pages,
     build_analysis_report_html,
     export_analysis_report_pdf,
     prepare_analysis_report_runtime,
@@ -85,6 +87,37 @@ def _candidate(tmp_path):
     )
 
 
+def test_pdf_summary_and_rows_merge_missing_results_and_keep_reasons(tmp_path):
+    template = _candidate(tmp_path)
+    candidates = [
+        replace(template, wav_path=str(tmp_path / f"record-{index}.wav"), sample=f"S{index}", label=label,
+                database_status=status, issues=issues)
+        for index, (label, status, issues) in enumerate((
+            ("OK", "matched", ()),
+            ("NG", "matched", ()),
+            ("", "matched", ()),
+            ("", "not_found", ("数据库中未找到该 WAV 的判定记录",)),
+            ("", "unavailable", ("数据库文件不存在",)),
+        ))
+    ]
+    report_html, warnings = build_analysis_report_html(
+        candidates, [AnalysisItemIdentity("custom_spl", "SPL")],
+        report_content="values_only", generated_at=datetime(2026, 9, 21),
+    )
+    assert "OK 1　NG 1　无判定结果 3" in report_html
+    assert report_html.count(">无判定结果</td>") == 3
+    assert "未产生判定" not in report_html
+    assert "不可读取 3" not in report_html
+    assert "当前没有可用的 OK / NG 判定" not in report_html
+    assert "涉及 2 条录音" in report_html
+    assert "<th>导出提示</th>" not in report_html
+    assert report_html.count(">完整</td>") == 3
+    assert "缺少判定记录" in report_html
+    assert "数据库文件不存在" in report_html
+    for reason in ("未找到该 WAV", "数据库文件不存在"):
+        assert any(reason in warning for warning in warnings)
+
+
 def test_html_uses_exact_selected_item_and_channel_label_headings(tmp_path):
     QApplication.instance() or QApplication([])
     candidate = _candidate(tmp_path)
@@ -97,6 +130,11 @@ def test_html_uses_exact_selected_item_and_channel_label_headings(tmp_path):
     )
 
     assert "custom_spl（SPL）" in report_html
+    summary = report_html.split('</table>', 1)[0]
+    assert "分析项（1项）" in summary
+    assert "已选分析项" not in summary and "具体分析项" not in summary
+    assert "custom_spl（SPL）" not in summary
+    assert "custom_spl" in summary
     assert "custom_fft" not in report_html
     assert "CH1（前）" in report_html
     assert "CH2（后）" in report_html
@@ -110,6 +148,21 @@ def test_html_uses_exact_selected_item_and_channel_label_headings(tmp_path):
     assert "限值 " not in report_html
     assert "<th>型号</th>" in report_html
     assert warnings == ()
+
+
+def test_summary_combines_item_count_and_names_without_duplicate_types(tmp_path):
+    from base.analysis_report import _build_summary_html
+
+    summary = _build_summary_html(
+        [_candidate(tmp_path)],
+        [AnalysisItemIdentity("声压级_(SPL)_1", "SPL"),
+         AnalysisItemIdentity("频段能量_(FBA)_1", "FBA"),
+         AnalysisItemIdentity("自定义<测量>", "SPL")],
+        "values_and_charts", datetime(2026, 9, 21), 0,
+    )
+    assert "分析项（3项）" in summary
+    assert "声压级_(SPL)_1、频段能量_(FBA)_1、自定义&lt;测量&gt;（SPL）" in summary
+    assert "已选分析项" not in summary and "具体分析项" not in summary
 
 
 @pytest.mark.parametrize("limits,expected", [
@@ -235,6 +288,31 @@ def test_small_data_sections_share_pages_without_splitting_their_tables(
     assert report_html.count("<div class='page-break'></div>") == 0
 
 
+def _assert_data_pages_fit_and_fill_available_space(layout, expected_rows):
+    # Check physical capacity instead of a font-dependent fixed page count.
+    table_pattern = re.compile(
+        r"(<div class='section'><h3>.*?</h3><table class='data-table'.*?<tbody>)"
+        r"(.*?)(</tbody></table></div>)", re.S,
+    )
+    tables_by_page = [list(table_pattern.finditer(page)) for page in layout.pages]
+    assert sum(table[2].count("<tr>") for tables in tables_by_page for table in tables) == expected_rows
+    with layout:
+        for page in layout.pages:
+            assert page and layout.fits(page)
+        for index, tables in enumerate(tables_by_page[1:], start=1):
+            if not tables:
+                continue
+            first = tables[0]
+            row = re.search(r"<tr>.*?</tr>", first[2], re.S)[0]
+            previous = layout.pages[index - 1]
+            if " - 续页 " in first[1]:
+                last = tables_by_page[index - 1][-1]
+                expanded = previous[:last.start(3)] + row + previous[last.start(3):]
+            else:
+                expanded = previous + first[1] + row + first[3]
+            assert not layout.fits(expanded), "The next row could still fit on the preceding page"
+
+
 def test_data_table_uses_remaining_page_capacity_before_continuing(
     tmp_path,
 ):
@@ -256,17 +334,17 @@ def test_data_table_uses_remaining_page_capacity_before_continuing(
         for row in range(40)
     )
 
-    report_html, _warnings = build_analysis_report_html(
+    layout, warnings = _build_analysis_report_pages(
         candidates,
         [AnalysisItemIdentity("custom_spl", "SPL")],
         report_content="values_only",
         generated_at=datetime(2026, 9, 2, 9, 0, 0),
     )
 
-    assert report_html.count("<table class='data-table'") == 3
-    assert report_html.count("<div class='page-break'></div>") == 1
-    assert "P2" in report_html
-    assert "续页 2" in report_html
+    assert not warnings
+    _assert_data_pages_fit_and_fill_available_space(layout, len(candidates))
+    assert "端口：P1" in layout.pages[0] and "端口：P2" in layout.pages[0]
+    assert "续页 2" in layout.to_html()
 
 
 def test_data_section_uses_actual_space_instead_of_estimated_capacity(
@@ -289,17 +367,18 @@ def test_data_section_uses_actual_space_instead_of_estimated_capacity(
         )
     )
 
-    report_html, _warnings = build_analysis_report_html(
+    layout, warnings = _build_analysis_report_pages(
         candidates,
         [AnalysisItemIdentity("custom_spl", "SPL")],
         report_content="values_only",
         generated_at=datetime(2026, 9, 2, 9, 0, 0),
     )
 
-    assert report_html.count("<table class='data-table'") == 2
-    pages = report_html.split("<div class='page-break'></div>")
-    assert "P1" in pages[0] and "P2" in pages[0]
-    assert pages[0].count("<table class='data-table'") == 2
+    assert not warnings
+    _assert_data_pages_fit_and_fill_available_space(layout, len(candidates))
+    trailing_page = next(page for page in layout.pages if "端口：P2" in page)
+    assert "端口：P1" in trailing_page
+    assert trailing_page.index("端口：P1") < trailing_page.index("端口：P2")
 
 
 def test_round_column_never_embeds_recording_timestamps(tmp_path):
@@ -375,7 +454,7 @@ def test_missing_selected_item_is_reported_as_incomplete(tmp_path):
         generated_at=datetime(2026, 9, 2, 9, 0, 0),
     )
 
-    assert "结果不完整" in report_html
+    assert "缺少分析结果" in report_html
     assert any("未找到该分析项" in warning for warning in warnings)
 
 

@@ -12,7 +12,6 @@ from base.analysis_report_source import ProjectReportIndex
 from base.analysis_segments import AnalysisSegment
 from base.audio_record_filter import parse_audio_filter_metadata
 from consts import error_code
-from ui.ai_select_audio_data import SelectAudioDataView
 from ui.analysis_multichannel_result_window import AnalysisMultichannelResultWindow
 from ui.analysis_report_export_dialog import AnalysisReportExportDialog
 from ui.analysis_report_wav_dialog import AnalysisReportWavDialog, CandidateTableModel
@@ -100,7 +99,6 @@ def test_report_auxiliary_enter_reaches_existing_export(dialogs, report_io, tmp_
     ("samples", "请至少选择一个样本编号。"),
     ("wav", "请至少勾选一个 WAV。"),
     ("items", "请至少勾选一个具体分析项。"),
-    ("values", "当前所选分析项没有可导出的标量数值，请勾选“包含分析图”或选择其他分析项。"),
 ])
 def test_report_keyboard_keeps_validation(dialogs, report_io, tmp_path, enter, ui_qapp, case, expected):
     dialog = dialogs(AnalysisReportExportDialog(auto_scan=False))
@@ -112,8 +110,6 @@ def test_report_keyboard_keeps_validation(dialogs, report_io, tmp_path, enter, u
             dialog.sample_selector.set_selected_values(())
         elif case == "wav":
             dialog.candidate_model.set_checked_paths(())
-        elif case == "values":
-            dialog.analysis_item_panel.set_checked(FFT_IDENTITY, True)
     recorded = clicks(dialog)
     press(dialog.browse_button, enter, ui_qapp)
     assert recorded == [dialog.export_button]
@@ -121,6 +117,18 @@ def test_report_keyboard_keeps_validation(dialogs, report_io, tmp_path, enter, u
     report_io.save.assert_not_called()
     report_io.thread.assert_not_called()
     report_io.browse.assert_not_called()
+
+
+def test_report_chart_only_enter_uses_chart_mode(dialogs, report_io, tmp_path, enter, ui_qapp):
+    dialog = dialogs(AnalysisReportExportDialog(auto_scan=False))
+    dialog.load_index(_index(tmp_path))
+    dialog.analysis_item_panel.set_checked(FFT_IDENTITY, True)
+    assert dialog._report_content() == "values_and_charts"
+    assert not dialog.values_only_radio.isEnabled()
+    press(dialog.values_and_charts_radio, enter, ui_qapp)
+    assert report_io.save.call_count == 1
+    assert not report_io.warnings
+    report_io.thread.assert_not_called()
 
 
 @pytest.mark.parametrize("editor", ["project_path_edit", "model_combo"])
@@ -234,12 +242,11 @@ def test_archive_management_enter_never_clicks_buttons(dialogs, audio_services, 
     assert actions == ["on_clicked_order_btn"]
 
 
-@pytest.mark.parametrize("kind", ["base", "ai"])
-def test_audio_base_and_ai_selection_keep_native_enter(dialogs, audio_services, monkeypatch, enter, ui_qapp, kind):
+def test_audio_base_keeps_native_enter(dialogs, audio_services, monkeypatch, enter, ui_qapp):
     actions = []
     monkeypatch.setattr(AudioDataManageDialog, "on_click_filter_btn", lambda self: actions.append("filter"))
     archive = dialogs(ArchiveAudioDataDialog(Mock()))
-    dialog = dialogs(AudioDataManageDialog(Mock()) if kind == "base" else SelectAudioDataView(Mock(), {}))
+    dialog = dialogs(AudioDataManageDialog(Mock()))
     assert not hasattr(dialog, "_enter_policy")
     button = dialog.top_layout.itemAt(dialog.top_layout.count() - 1).widget()
     press(button, enter, ui_qapp)

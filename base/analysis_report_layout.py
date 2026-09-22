@@ -139,7 +139,13 @@ def _fix_table_columns(body):
         weights = []
         for cell in cells:
             text = unescape(cell)
-            if text.startswith("CH") or text == "说明":
+            if text == "缺失内容":
+                weights.append(5.5)
+            elif text == "录音时间":
+                weights.append(2.4)
+            elif text == "端口 / 档位":
+                weights.append(1.7)
+            elif text.startswith("CH") or text == "说明":
                 weights.append(1.5 if text.startswith("CH") else 8.0)
             elif text in {"样本", "序号"}:
                 weights.append(0.8)
