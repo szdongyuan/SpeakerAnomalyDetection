@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QAbstractItemView, QStyle, QStyleOptionViewItem, QWidget
 
@@ -133,7 +133,7 @@ def test_candidate_filter_proxy_combines_multi_values_and_tracks_active_filters(
     )
     proxy.set_filter_values(
         CandidateTableModel.RESULT_COLUMN,
-        ("NG", "未产生判定"),
+        ("NG", "无判定结果"),
     )
 
     assert proxy.rowCount() == 2
@@ -149,7 +149,7 @@ def test_candidate_filter_proxy_combines_multi_values_and_tracks_active_filters(
     assert proxy.active_filters() == {
         CandidateTableModel.PORT_COLUMN: frozenset(("P1", "P2")),
         CandidateTableModel.RESULT_COLUMN: frozenset(
-            ("NG", "未产生判定")
+            ("NG", "无判定结果")
         ),
     }
 
@@ -261,6 +261,31 @@ def test_dialog_filter_preserves_hidden_selection_and_selects_visible_rows(
     ]
 
 
+def test_filter_button_opens_menu_and_keeps_multiple_changes(ui_qapp):
+    selector = FilterMultiSelect(all_text="全部样本")
+    selector.set_values(("S1", "S2", "S3"))
+    selector.show()
+    ui_qapp.processEvents()
+    observed = []
+
+    def change_options():
+        observed.append(selector.menu().isVisible())
+        selector.option_list.setCurrentRow(0)
+        QTest.keyClick(selector.option_list, Qt.Key_Space)
+        selector.option_list.setCurrentRow(1)
+        QTest.keyClick(selector.option_list, Qt.Key_Space)
+        observed.append(selector.menu().isVisible())
+        selector.menu().hide()
+
+    QTimer.singleShot(50, change_options)
+    QTest.mouseClick(selector, Qt.LeftButton)
+    QTest.qWait(80)
+    assert observed == [True, True]
+    assert selector.selected_values() == ("S3",)
+    assert selector.select_all_checkbox.checkState() == Qt.PartiallyChecked
+    selector.close()
+
+
 def test_filter_dialog_applies_combined_filters_and_restores_values(
     ui_qapp,
     tmp_path,
@@ -280,30 +305,6 @@ def test_filter_dialog_applies_combined_filters_and_restores_values(
     assert filter_dialog.windowTitle() == "WAV 筛选"
     assert filter_dialog.isModal()
     assert filter_dialog.windowFlags() & Qt.WindowType_Mask == Qt.Dialog
-    assert filter_dialog.size().width() == 500
-    assert filter_dialog.size().height() == 360
-    assert filter_dialog.minimumWidth() == 480
-    assert filter_dialog.minimumHeight() == 330
-    assert filter_dialog.maximumWidth() > filter_dialog.size().width()
-    assert filter_dialog.maximumHeight() > filter_dialog.size().height()
-    fields_layout = filter_dialog.layout().itemAt(0).layout()
-    for expected_row, (_label, column) in enumerate(filter_dialog.FILTER_FIELDS):
-        item_index = fields_layout.indexOf(
-            filter_dialog.selector_by_column[column]
-        )
-        row, layout_column, row_span, column_span = fields_layout.getItemPosition(
-            item_index
-        )
-        assert (row, layout_column, row_span, column_span) == (
-            expected_row,
-            1,
-            1,
-            1,
-        )
-        selector = filter_dialog.selector_by_column[column]
-        assert selector.minimumWidth() == 220
-        assert selector.maximumWidth() == 220
-        assert fields_layout.itemAt(item_index).alignment() & Qt.AlignLeft
     filter_dialog.reload()
     port_selector = filter_dialog.selector_by_column[
         CandidateTableModel.PORT_COLUMN
@@ -318,8 +319,8 @@ def test_filter_dialog_applies_combined_filters_and_restores_values(
     result_selector.set_selected_values(("NG",))
 
     assert port_selector.text() == "已选 2 / 3"
-    assert result_selector.text() == "已选 1 / 2"
-    assert condition_selector.text() == "ALL"
+    assert result_selector.selected_values() == ("NG",)
+    assert condition_selector.text() == "全部档位"
     assert condition_selector.isEnabled()
 
     assert dialog.filter_model.rowCount() == 4
@@ -336,6 +337,107 @@ def test_filter_dialog_applies_combined_filters_and_restores_values(
     assert dialog.filter_model.rowCount() == 2
     filter_dialog.cancel_button.click()
     assert dialog.filter_model.rowCount() == 2
+
+
+def test_filter_reset_is_pending_until_apply_and_cancel_restores_filters(
+    ui_qapp, tmp_path,
+):
+    dialog = AnalysisReportWavDialog(_model(tmp_path))
+    proxy = dialog.filter_model
+    proxy.set_filter_value(CandidateTableModel.PORT_COLUMN, "P1")
+    checked_paths = dialog.candidate_model.checked_paths()
+    filters = dialog.filter_dialog
+    filters.reload()
+    filters.reset_button.click()
+    assert proxy.rowCount() == 1
+    filters.cancel_button.click()
+    filters.reload()
+    assert filters.selector_by_column[
+        CandidateTableModel.PORT_COLUMN
+    ].selected_values() == ("P1",)
+
+    filters.reset_button.click()
+    filters.apply_button.click()
+    assert proxy.rowCount() == 2
+    assert not proxy.has_active_filters()
+    assert dialog.candidate_model.checked_paths() == checked_paths
+
+
+def test_result_options_merge_missing_results_and_allow_empty_selection(
+    ui_qapp, tmp_path,
+):
+    model = CandidateTableModel()
+    model.reset_index((
+        _candidate(tmp_path, "S1", "P1", 1),
+        _candidate(tmp_path, "S2", "P2", 2, label="NG"),
+        _candidate(tmp_path, "S3", "P3", 3, label=""),
+        _candidate(tmp_path, "S4", "P4", 4, label="", database_status="not_found"),
+    ))
+    dialog = AnalysisReportWavDialog(model)
+    filters = dialog.filter_dialog
+    filters.reload()
+    options = filters.result_options
+    assert options.selected_values() == ("OK", "NG", "无判定结果")
+    options.set_all_checked(False)
+    options.checkboxes["无判定结果"].click()
+    filters.apply_button.click()
+    assert dialog.filter_model.rowCount() == 2
+    assert {
+        dialog.filter_model.index(row, CandidateTableModel.SAMPLE_COLUMN).data()
+        for row in range(2)
+    } == {"S3", "S4"}
+    assert [model.candidate_at(row).database_status for row in (2, 3)] == [
+        "matched", "not_found",
+    ]
+    assert "没有有效的 OK / NG" in model.index(2, model.RESULT_COLUMN).data(Qt.ToolTipRole)
+    filters.reload()
+    assert options.selected_values() == ("无判定结果",)
+    options.set_all_checked(False)
+    filters.apply_button.click()
+    assert dialog.filter_model.rowCount() == 0
+    filters.reload()
+    assert options.selected_values() == ()
+
+    model.reset_index(())
+    filters.reload()
+    assert not options.checkboxes
+    assert not options.empty_label.isHidden()
+    filters.reset_button.click()
+    filters.apply_button.click()
+    assert dialog.filter_model.rowCount() == 0
+
+
+def test_filter_layout_fits_minimum_size_with_scoped_font(ui_qapp, tmp_path):
+    parent = QWidget()
+    parent.setStyleSheet(ui_style_const.main_window_base_style)
+    dialog = AnalysisReportWavDialog(_model(tmp_path), parent)
+    filters = dialog.filter_dialog
+    filters.reload()
+    filters.resize(filters.minimumSize())
+    filters.show()
+    ui_qapp.processEvents()
+    selectors = [filters.selector_by_column[column]
+                 for _label, column in filters.FILTER_FIELDS[:-1]]
+    assert selectors[0].y() == selectors[1].y()
+    assert selectors[2].y() == selectors[3].y()
+    assert selectors[0].x() == selectors[2].x()
+    assert abs(selectors[0].width() - selectors[1].width()) <= 1
+    for index, selector in enumerate(selectors):
+        row, column = (index // 2) * 3, index % 2
+        label = filters.fields_layout.itemAtPosition(row, column).widget()
+        assert label.geometry().bottom() < selector.geometry().top()
+        if index >= 2:
+            assert selectors[index - 2].geometry().bottom() < label.geometry().top()
+        assert selector.width() >= selector.minimumSizeHint().width()
+        assert selector.font().family() == "Microsoft YaHei UI"
+        assert selector.parentWidget().rect().contains(selector.geometry())
+    assert filters.result_options.y() > selectors[2].geometry().bottom()
+    assert filters.apply_button.parentWidget().rect().contains(
+        filters.apply_button.geometry()
+    )
+    assert dialog.styleSheet() == ui_style_const.analysis_report_dialog_style
+    assert parent.styleSheet() == ui_style_const.main_window_base_style
+    filters.close()
 
 
 def test_candidate_result_text_uses_semantic_colors(ui_qapp, tmp_path):

@@ -7,7 +7,7 @@ import re
 from typing import Iterable
 
 from PyQt5.QtCore import QThread, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QRegion
+from PyQt5.QtGui import QFont, QRegion
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -32,6 +33,7 @@ from PyQt5.QtWidgets import (
 )
 
 from base.analysis_report import (
+    CHART_ONLY_ANALYSIS_TYPES,
     export_analysis_report_pdf,
     prepare_analysis_report_runtime,
 )
@@ -234,7 +236,9 @@ class AnalysisItemCheckBoxGroup(QWidget):
         self._layout = QGridLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setHorizontalSpacing(18)
-        self._layout.setVerticalSpacing(6)
+        self._layout.setVerticalSpacing(12)
+        self._layout.setColumnStretch(0, 1)
+        self._layout.setColumnStretch(1, 1)
         self._empty_label = None
         self.set_options(())
 
@@ -253,9 +257,9 @@ class AnalysisItemCheckBoxGroup(QWidget):
         if not self._options:
             self._empty_label = QLabel("请先选择样本", self)
             self._empty_label.setObjectName("reportAnalysisItemEmptyLabel")
-            self._empty_label.setAlignment(Qt.AlignCenter)
-            self._empty_label.setMinimumHeight(72)
-            self._layout.addWidget(self._empty_label, 0, 0)
+            self._empty_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            self._empty_label.setMinimumHeight(24)
+            self._layout.addWidget(self._empty_label, 0, 0, 1, 2)
             return
 
         for index, option in enumerate(self._options):
@@ -266,7 +270,7 @@ class AnalysisItemCheckBoxGroup(QWidget):
             checkbox.setChecked(option.identity in previously_selected)
             checkbox.stateChanged.connect(self.selection_changed.emit)
             self._checkboxes[option.identity] = checkbox
-            self._layout.addWidget(checkbox, index // 3, index % 3)
+            self._layout.addWidget(checkbox, index // 2, index % 2)
 
     def selected_items(self):
         return [
@@ -380,9 +384,12 @@ class AnalysisReportExportDialog(QDialog):
         self.setObjectName("analysisReportExportDialog")
         self.setWindowTitle("报告导出")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        font = QFont(ui_style_const.MAIN_UI_SMALL_FONT_FAMILY_NAME)
+        font.setPixelSize(14)
+        self.setFont(font)
         self.setStyleSheet(ui_style_const.analysis_report_dialog_style)
-        self.resize(800, 500)
-        self.setMinimumSize(760, 500)
+        self.resize(800, 480)
+        self.setMinimumWidth(760)
 
         self.project_path_edit = QLineEdit(self)
         self.project_path_edit.setReadOnly(True)
@@ -445,27 +452,29 @@ class AnalysisReportExportDialog(QDialog):
         self.scope_group.setLayout(scope_layout)
 
         self.analysis_item_panel = AnalysisItemCheckBoxGroup(self)
+        self.analysis_item_panel.set_empty_text("请选择项目目录以加载分析项")
         self.analysis_item_panel.setSizePolicy(
             QSizePolicy.Expanding,
             QSizePolicy.Maximum,
         )
         self.analysis_item_label = QLabel("分析项：", self)
         self.analysis_item_label.setFixedWidth(scope_label_width)
-        self.include_charts_checkbox = QCheckBox("包含分析图", self)
-        self.include_charts_checkbox.setObjectName("reportIncludeCharts")
-        self.include_charts_checkbox.setChecked(False)
+        self.report_content_label = QLabel("报告内容：", self)
+        self.report_content_label.setFixedWidth(scope_label_width)
+        self.report_content_controls = self._build_report_content_controls()
+        # Reserve the row so selecting an item does not resize the dialog.
+        for widget in (self.report_content_label, self.report_content_controls):
+            policy = widget.sizePolicy()
+            policy.setRetainSizeWhenHidden(True)
+            widget.setSizePolicy(policy)
         content_layout = QGridLayout()
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setHorizontalSpacing(10)
-        content_layout.setVerticalSpacing(16)
+        content_layout.setVerticalSpacing(32)
         content_layout.addWidget(self.analysis_item_label, 0, 0, Qt.AlignTop)
         content_layout.addWidget(self.analysis_item_panel, 0, 1, Qt.AlignTop)
-        content_layout.addWidget(
-            self.include_charts_checkbox,
-            1,
-            1,
-            Qt.AlignTop,
-        )
+        content_layout.addWidget(self.report_content_label, 1, 0, Qt.AlignTop)
+        content_layout.addWidget(self.report_content_controls, 1, 1, Qt.AlignTop)
         content_layout.setColumnStretch(1, 1)
         content_layout.setRowStretch(2, 1)
         self.analysis_item_group = QGroupBox("导出内容", self)
@@ -490,6 +499,10 @@ class AnalysisReportExportDialog(QDialog):
         self.progress_bar.hide()
         self.status_label = QLabel(self)
         self.status_label.hide()
+        self.database_warning_label = QLabel(self)
+        self.database_warning_label.setObjectName("reportDatabaseWarning")
+        self.database_warning_label.setWordWrap(True)
+        self.database_warning_label.hide()
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 0, 0, 0)
         footer.addWidget(self.progress_bar)
@@ -503,6 +516,7 @@ class AnalysisReportExportDialog(QDialog):
         root.setSpacing(16)
         root.addWidget(self.scope_group)
         root.addWidget(self.analysis_item_group, 1)
+        root.addWidget(self.database_warning_label)
         root.addLayout(footer)
 
         self.browse_button.clicked.connect(self._choose_project)
@@ -511,10 +525,29 @@ class AnalysisReportExportDialog(QDialog):
         self.candidate_model.selection_changed.connect(self._candidate_selection_changed)
         self.analysis_item_panel.selection_changed.connect(self._analysis_items_changed)
         self.details_button.clicked.connect(self._open_wav_details)
-        self.include_charts_checkbox.stateChanged.connect(self._refresh_summary)
+        self.values_and_charts_radio.toggled.connect(self._refresh_summary)
         self.cancel_button.clicked.connect(self._cancel_or_close)
         self.export_button.clicked.connect(self._start_export)
         install_dialog_enter_policy(self, self.export_button)
+
+    def _build_report_content_controls(self):
+        controls = QWidget(self)
+        self.values_only_radio = QRadioButton("仅数值", controls)
+        self.values_and_charts_radio = QRadioButton("数值和分析图", controls)
+        self.values_only_radio.setChecked(True)
+        self.report_content_hint = QLabel(controls)
+        self.report_content_hint.setObjectName("reportContentHint")
+        self.report_content_hint.setWordWrap(True)
+        layout = QGridLayout(controls)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(18)
+        layout.setVerticalSpacing(8)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+        layout.addWidget(self.values_only_radio, 0, 0)
+        layout.addWidget(self.values_and_charts_radio, 0, 1)
+        layout.addWidget(self.report_content_hint, 1, 0, 1, 2)
+        return controls
 
     def _choose_project(self):
         initial = self.project_path_edit.text().strip() or os.getcwd()
@@ -564,6 +597,11 @@ class AnalysisReportExportDialog(QDialog):
         self._updating_scope = True
         try:
             self._index = index
+            self.database_warning_label.setText(
+                "判定数据读取失败，请检查数据库后重新加载。\n" + "\n".join(index.warnings)
+                if index.warnings else ""
+            )
+            self.database_warning_label.setVisible(bool(index.warnings))
             self.project_path_edit.setText(index.project_directory)
             models = sorted(
                 {candidate.model for candidate in index.candidates if candidate.model},
@@ -591,6 +629,8 @@ class AnalysisReportExportDialog(QDialog):
         self._updating_scope = True
         try:
             self._index = None
+            self.database_warning_label.clear()
+            self.database_warning_label.hide()
             self.model_combo.blockSignals(True)
             try:
                 self.model_combo.clear()
@@ -600,6 +640,7 @@ class AnalysisReportExportDialog(QDialog):
             self.sample_selector.set_values(())
             self.candidate_model.reset_index((), select_all=False)
             self.analysis_item_panel.set_options((), preserve=False)
+            self.analysis_item_panel.set_empty_text("请选择项目目录以加载分析项")
         finally:
             self._updating_scope = False
         self._refresh_summary()
@@ -686,24 +727,53 @@ class AnalysisReportExportDialog(QDialog):
         self._candidate_selection_changed()
 
     def _refresh_summary(self, *_args):
-        self._refresh_include_charts_control()
+        self._refresh_report_content_control()
         self._refresh_control_states()
 
-    def _refresh_include_charts_control(self):
-        self.analysis_item_label.setVisible(
-            self.analysis_item_panel.option_count() > 0
+    def _refresh_report_content_control(self):
+        options = self.analysis_item_panel.selected_options()
+        self.report_content_label.setVisible(bool(options))
+        self.report_content_controls.setVisible(bool(options))
+        has_values = any(option.has_scalar_values for option in options)
+        has_charts = any(option.has_charts for option in options)
+        chart_required_options = [
+            option for option in options
+            if option.identity.analysis_type in CHART_ONLY_ANALYSIS_TYPES
+            or (option.has_charts and not option.has_scalar_values)
+        ]
+        requires_charts = bool(chart_required_options)
+        # Keep the choice valid when the selected WAVs or analysis items change.
+        self.values_and_charts_radio.blockSignals(True)
+        if requires_charts:
+            self.values_and_charts_radio.setChecked(True)
+        elif not has_charts:
+            self.values_only_radio.setChecked(True)
+        self.values_and_charts_radio.blockSignals(False)
+        self.values_only_radio.setEnabled(has_values and not requires_charts and not self._busy)
+        self.values_and_charts_radio.setEnabled(
+            (has_charts or (requires_charts and has_values)) and not self._busy
         )
-        has_selected_charts = any(
-            option.has_charts
-            for option in self.analysis_item_panel.selected_options()
+
+        if requires_charts:
+            names = "、".join(option.display_name for option in chart_required_options)
+            values_tooltip = f"已选分析项（{names}）需要包含分析图；如需仅导出数值，请取消勾选这些项。"
+        elif options and not has_values:
+            values_tooltip = "当前所选结果没有可导出的数值。"
+        else:
+            values_tooltip = ""
+        self.values_only_radio.setToolTip(values_tooltip)
+        self.values_and_charts_radio.setToolTip(
+            "当前所选结果没有可导出的分析图。" if options and not has_charts else ""
         )
-        if not has_selected_charts and self.include_charts_checkbox.isChecked():
-            self.include_charts_checkbox.blockSignals(True)
-            try:
-                self.include_charts_checkbox.setChecked(False)
-            finally:
-                self.include_charts_checkbox.blockSignals(False)
-        self.include_charts_checkbox.setVisible(has_selected_charts)
+        hint = (
+            "所选分析项暂无可导出的数值或分析图，请选择其他分析项。"
+            if options and not has_values and not has_charts else ""
+        )
+        missing_charts = [option.display_name for option in chart_required_options if not option.has_charts]
+        if missing_charts and (has_values or has_charts):
+            hint = "以下分析项缺少分析图：" + "、".join(missing_charts) + "。请检查分析结果。"
+        self.report_content_hint.setText(hint)
+        self.report_content_hint.setVisible(bool(hint))
 
     def _refresh_control_states(self):
         has_index = self._index is not None
@@ -723,7 +793,6 @@ class AnalysisReportExportDialog(QDialog):
         )
         self.analysis_item_group.setEnabled(not self._busy and has_candidates)
         self.details_button.setEnabled(not self._busy and has_candidates)
-        self.include_charts_checkbox.setEnabled(not self._busy)
         self.export_button.setEnabled(not self._busy)
 
     def _selected_model(self):
@@ -732,7 +801,7 @@ class AnalysisReportExportDialog(QDialog):
     def _report_content(self):
         return (
             "values_and_charts"
-            if self.include_charts_checkbox.isChecked()
+            if self.values_and_charts_radio.isChecked()
             else "values_only"
         )
 
@@ -756,14 +825,14 @@ class AnalysisReportExportDialog(QDialog):
             return
 
         report_content = self._report_content()
-        if report_content == "values_only" and not any(
-            option.has_scalar_values
+        if not any(
+            option.has_scalar_values or option.has_charts
             for option in self.analysis_item_panel.selected_options()
         ):
             QMessageBox.warning(
                 self,
                 "报告导出",
-                "当前所选分析项没有可导出的标量数值，请勾选“包含分析图”或选择其他分析项。",
+                "当前所选分析项没有可导出的数值或分析图，请选择其他分析项。",
             )
             return
 

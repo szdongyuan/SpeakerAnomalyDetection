@@ -22,13 +22,13 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLayout,
     QListWidget,
     QListWidgetItem,
     QMenu,
     QPushButton,
     QSizePolicy,
     QTableView,
-    QToolButton,
     QVBoxLayout,
     QWidget,
     QWidgetAction,
@@ -56,13 +56,15 @@ class SelectAllCheckBox(QCheckBox):
         self.setCheckState(next_state)
 
 
-class FilterMultiSelect(QToolButton):
+class FilterMultiSelect(QPushButton):
     """Checkable filter values with a tri-state select-all row."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, all_text="ALL"):
         super().__init__(parent)
         self._updating = False
-        self.setPopupMode(QToolButton.InstantPopup)
+        self._all_text = all_text
+        self.setObjectName("reportWavFilterSelect")
+        self.setAutoDefault(False)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         menu = QMenu(self)
@@ -196,10 +198,11 @@ class FilterMultiSelect(QToolButton):
         elif selected == 0:
             text = "未选择"
         elif selected == total:
-            text = "ALL"
+            text = self._all_text
         else:
             text = f"已选 {selected} / {total}"
         self.setText(text)
+        self.setToolTip("、".join(self.selected_values()) or text)
         self.setEnabled(total > 0)
 
 
@@ -277,13 +280,15 @@ class CandidateTableModel(QAbstractTableModel):
         if (
             role == Qt.FontRole
             and column == self.RESULT_COLUMN
-            and candidate.result_text == "未产生判定"
+            and candidate.result_text == "无判定结果"
         ):
             font = QFont(QApplication.font())
             font.setPointSizeF(font.pointSizeF() - 1.0)
             return font
         if role == Qt.ToolTipRole:
             details = [Path(candidate.wav_path).name, candidate.wav_path]
+            if candidate.result_text == "无判定结果" and candidate.database_status == "matched":
+                details.append("已有记录，但没有有效的 OK / NG 判定")
             details.extend(candidate.issues)
             return "\n".join(dict.fromkeys(details))
         if role == Qt.TextAlignmentRole and column in {
@@ -477,6 +482,59 @@ class CandidateFilterProxyModel(QSortFilterProxyModel):
         return bool(self._filters)
 
 
+class ResultFilterOptions(QWidget):
+    """Expose the available result states without a popup menu."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.checkboxes = {}
+        self._layout = QGridLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(10)
+        self._layout.setColumnStretch(4, 1)
+        self.empty_label = QLabel("无可选项", self)
+        self.empty_label.setObjectName("reportWavFilterHint")
+        self._layout.addWidget(self.empty_label, 0, 0)
+
+    def set_values(self, values, *, selected_values=None):
+        for checkbox in self.checkboxes.values():
+            self._layout.removeWidget(checkbox)
+            checkbox.hide()
+            checkbox.deleteLater()
+        self.checkboxes.clear()
+        selected = set(values if selected_values is None else selected_values)
+        order = {value: index for index, value in enumerate(
+            ("OK", "NG", "无判定结果")
+        )}
+        values = sorted(set(values), key=lambda value: (
+            order.get(value, len(order)), _natural_key(value),
+        ))
+        self.empty_label.setVisible(not values)
+        for index, value in enumerate(values):
+            checkbox = QCheckBox(value, self)
+            checkbox.setObjectName("reportWavResultOption")
+            checkbox.setChecked(value in selected)
+            if value == "无判定结果":
+                checkbox.setToolTip("当前没有可用的 OK / NG 判定，具体原因见 WAV 明细提示")
+            self._layout.addWidget(checkbox, index // 4, index % 4)
+            self.checkboxes[value] = checkbox
+
+    def selected_values(self):
+        return tuple(
+            value for value, checkbox in self.checkboxes.items()
+            if checkbox.isChecked()
+        )
+
+    def set_selected_values(self, values):
+        selected = set(values)
+        for value, checkbox in self.checkboxes.items():
+            checkbox.setChecked(value in selected)
+
+    def set_all_checked(self, checked):
+        for checkbox in self.checkboxes.values():
+            checkbox.setChecked(checked)
+
+
 class CandidateFilterDialog(QDialog):
     """Collect WAV filters in a compact modal dialog."""
 
@@ -499,40 +557,95 @@ class CandidateFilterDialog(QDialog):
         self.setWindowTitle("WAV 筛选")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setModal(True)
-        self.setStyleSheet(ui_style_const.analysis_report_dialog_style)
-        self.resize(500, 360)
-        self.setMinimumSize(480, 330)
-
-        fields_layout = QGridLayout()
-        fields_layout.setHorizontalSpacing(12)
-        fields_layout.setVerticalSpacing(14)
-        for row, (label_text, column) in enumerate(self.FILTER_FIELDS):
-            label = QLabel(f"{label_text}：", self)
-            selector = FilterMultiSelect(self)
-            selector.setFixedWidth(220)
-            fields_layout.addWidget(label, row, 0)
-            fields_layout.addWidget(selector, row, 1, alignment=Qt.AlignLeft)
-            self.selector_by_column[column] = selector
-        fields_layout.setColumnStretch(1, 1)
-
-        self.cancel_button = QPushButton("取消", self)
-        self.apply_button = QPushButton("应用", self)
-        self.apply_button.setObjectName("reportWavFilterApplyButton")
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-        button_layout.addWidget(self.cancel_button)
-        button_layout.addWidget(self.apply_button)
+        self.setStyleSheet(ui_style_const.analysis_report_wav_filter_style)
+        font = QFont(ui_style_const.MAIN_UI_SMALL_FONT_FAMILY_NAME)
+        font.setPixelSize(14)
+        self.setFont(font)
+        self.resize(580, 440)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 18, 20, 16)
-        root.setSpacing(16)
-        root.addLayout(fields_layout)
-        root.addStretch(1)
-        root.addLayout(button_layout)
+        root.setSizeConstraint(QLayout.SetMinimumSize)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self._build_content(), 1)
+        root.addWidget(self._build_footer())
 
+        self.reset_button.clicked.connect(self._reset_filters)
         self.cancel_button.clicked.connect(self.reject)
         self.apply_button.clicked.connect(self._apply_filters)
         install_dialog_enter_policy(self, self.apply_button)
+
+    def _build_content(self):
+        content = QWidget(self)
+        content.setMinimumWidth(480)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(28, 24, 28, 24)
+        content_layout.setSpacing(0)
+        title = QLabel("筛选条件", content)
+        title.setObjectName("reportWavFilterTitle")
+        description = QLabel("组合条件缩小 WAV 范围，每项支持多选", content)
+        description.setObjectName("reportWavFilterHint")
+        content_layout.addWidget(title)
+        content_layout.addSpacing(6)
+        content_layout.addWidget(description)
+        content_layout.addSpacing(24)
+
+        self.fields_layout = self._build_fields(content)
+        content_layout.addLayout(self.fields_layout)
+        content_layout.addSpacing(24)
+        result_heading = QHBoxLayout()
+        result_heading.setSpacing(8)
+        result_heading.addWidget(QLabel("总体判定", content))
+        result_hint = QLabel("可多选", content)
+        result_hint.setObjectName("reportWavFilterHint")
+        result_heading.addWidget(result_hint)
+        result_heading.addStretch()
+        content_layout.addLayout(result_heading)
+        content_layout.addSpacing(10)
+        self.result_options = ResultFilterOptions(content)
+        self.result_options.setAccessibleName("总体判定")
+        self.selector_by_column[CandidateTableModel.RESULT_COLUMN] = self.result_options
+        content_layout.addWidget(self.result_options)
+        content_layout.addStretch(1)
+        return content
+
+    def _build_fields(self, content):
+        self.fields_layout = QGridLayout()
+        self.fields_layout.setHorizontalSpacing(22)
+        self.fields_layout.setVerticalSpacing(8)
+        all_labels = ("全部样本", "全部端口", "全部档位", "全部轮次")
+        for index, ((label_text, column), all_text) in enumerate(
+            zip(self.FILTER_FIELDS[:-1], all_labels)
+        ):
+            row, grid_column = (index // 2) * 3, index % 2
+            label = QLabel(label_text, content)
+            selector = FilterMultiSelect(content, all_text=all_text)
+            selector.setAccessibleName(label_text)
+            label.setBuddy(selector)
+            self.fields_layout.addWidget(label, row, grid_column)
+            self.fields_layout.addWidget(selector, row + 1, grid_column)
+            self.selector_by_column[column] = selector
+        self.fields_layout.setRowMinimumHeight(2, 6)
+        self.fields_layout.setColumnStretch(0, 1)
+        self.fields_layout.setColumnStretch(1, 1)
+        return self.fields_layout
+
+    def _build_footer(self):
+        footer = QWidget(self)
+        footer.setObjectName("reportWavFilterFooter")
+        self.reset_button = QPushButton("重置条件", footer)
+        self.reset_button.setObjectName("reportWavFilterResetButton")
+        self.cancel_button = QPushButton("取消", footer)
+        self.apply_button = QPushButton("应用筛选", footer)
+        self.apply_button.setObjectName("reportWavFilterApplyButton")
+        button_layout = QHBoxLayout(footer)
+        button_layout.setContentsMargins(28, 16, 28, 16)
+        button_layout.setSpacing(10)
+        button_layout.addWidget(self.reset_button)
+        button_layout.addStretch()
+        button_layout.addWidget(self.cancel_button)
+        button_layout.addWidget(self.apply_button)
+        return footer
 
     def reload(self):
         for _label, column in self.FILTER_FIELDS:
@@ -543,6 +656,10 @@ class CandidateFilterDialog(QDialog):
                 available,
                 selected_values=available if selected is None else selected,
             )
+
+    def _reset_filters(self):
+        for selector in self.selector_by_column.values():
+            selector.set_all_checked(True)
 
     def _apply_filters(self):
         self.filter_model.set_filters(

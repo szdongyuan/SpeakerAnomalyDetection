@@ -3,8 +3,11 @@ from datetime import datetime
 from pathlib import Path
 import sqlite3
 
+import pytest
+
 from base.analysis_report_source import (
     AnalysisItemIdentity,
+    ReportCandidate,
     catalog_analysis_items,
     default_report_path,
     filter_candidates,
@@ -222,7 +225,7 @@ def test_scan_project_keeps_unparseable_wav_visible_and_uses_saved_result_labels
 
     assert candidate.wav_path == str(wav_path.resolve())
     assert candidate.port == ""
-    assert candidate.result_text == "未产生判定"
+    assert candidate.result_text == "无判定结果"
     assert candidate.channel_labels == (("CH1", "前"), ("CH2", "后"))
     assert candidate.channel_mapping_source == "分析结果文件"
     assert any("文件名" in issue for issue in candidate.issues)
@@ -236,6 +239,40 @@ def test_scan_project_keeps_unparseable_wav_visible_and_uses_saved_result_labels
             "rounds": ["—"],
         },
     ) == [candidate]
+
+
+@pytest.mark.parametrize("label,status,expected", [
+    ("OK", "matched", "OK"),
+    (" ng ", "matched", "NG"),
+    ("", "matched", "无判定结果"),
+    ("not_labeled", "matched", "无判定结果"),
+    ("", "not_found", "无判定结果"),
+    ("", "unavailable", "无判定结果"),
+])
+def test_candidate_result_groups_missing_results_without_mutating_source(label, status, expected):
+    candidate = ReportCandidate("demo.wav", "项目", "型号", "样本",
+                                label=label, database_status=status)
+    assert candidate.result_text == expected
+    assert candidate.label == label
+    assert candidate.database_status == status
+    assert candidate.issues == ()
+    assert candidate.data_status == "完整"
+
+
+def test_scan_distinguishes_missing_record_from_database_failure(tmp_path):
+    project, _wav_path = _build_project(tmp_path)
+    database = tmp_path / "audio.db"
+    failed = scan_project(str(project), database_path=str(database))
+    assert failed.warnings == ("数据库文件不存在",)
+    assert failed.candidates[0].database_status == "unavailable"
+    assert failed.candidates[0].result_text == "无判定结果"
+
+    _create_database(database, tmp_path / "other.wav")
+    missing = scan_project(str(project), database_path=str(database))
+    assert not missing.warnings
+    assert missing.candidates[0].database_status == "not_found"
+    assert missing.candidates[0].result_text == "无判定结果"
+    assert "数据库中未找到该 WAV 的判定记录" in missing.candidates[0].issues
 
 
 def test_scan_project_database_access_does_not_modify_rows(tmp_path):

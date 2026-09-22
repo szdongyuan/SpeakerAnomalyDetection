@@ -1,11 +1,13 @@
 from datetime import datetime
+from dataclasses import replace
 from threading import Event
 from time import monotonic
 
 import pytest
-from PyQt5.QtCore import QObject, QPoint, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QObject, QPoint, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QHelpEvent
 from PyQt5.QtTest import QSignalSpy, QTest
-from PyQt5.QtWidgets import QLabel
+from PyQt5.QtWidgets import QLabel, QToolTip
 
 from base.analysis_report_source import (
     AnalysisItemIdentity,
@@ -23,6 +25,24 @@ from ui.analysis_report_wav_dialog import CandidateTableModel
 
 SPL_IDENTITY = AnalysisItemIdentity("低频SPL", "SPL")
 FFT_IDENTITY = AnalysisItemIdentity("全频FFT", "FFT")
+
+
+def test_database_warning_remains_separate_from_missing_results(ui_qapp, tmp_path):
+    dialog = AnalysisReportExportDialog(auto_scan=False)
+    index = _index(tmp_path)
+    dialog.load_index(replace(index, warnings=("数据库文件不存在",)))
+    assert not dialog.database_warning_label.isHidden()
+    assert "判定数据读取失败" in dialog.database_warning_label.text()
+    assert "数据库文件不存在" in dialog.database_warning_label.text()
+    dialog._set_busy(False)
+    assert not dialog.database_warning_label.isHidden()
+    dialog.load_index(index)
+    assert dialog.database_warning_label.isHidden()
+    assert not dialog.database_warning_label.text()
+    dialog.load_index(replace(index, warnings=("数据库文件不存在",)))
+    dialog._clear_loaded_index()
+    assert dialog.database_warning_label.isHidden()
+    dialog.close()
 
 
 @pytest.mark.parametrize("activity", ["scan", "export"])
@@ -249,8 +269,9 @@ def test_loaded_index_defaults_to_first_model_and_selects_all_samples(
     assert dialog.export_button.text() == "导出 PDF…"
     assert dialog.analysis_item_group.title() == "导出内容"
     assert not dialog.analysis_item_label.isHidden()
-    assert not dialog.include_charts_checkbox.isChecked()
-    assert dialog.include_charts_checkbox.isHidden()
+    assert dialog.values_only_radio.isChecked()
+    assert not dialog.values_only_radio.isEnabled()
+    assert not dialog.values_and_charts_radio.isEnabled()
     assert all(
         label.text() != "图表："
         for label in dialog.findChildren(QLabel)
@@ -291,7 +312,7 @@ def test_initial_layout_has_balanced_spacing_and_keeps_fields_near_labels(
     dialog.show()
     ui_qapp.processEvents()
 
-    assert 490 <= dialog.height() <= 510
+    assert 460 <= dialog.height() <= 490
     assert dialog.objectName() == "analysisReportExportDialog"
     assert dialog.styleSheet() == ui_style_const.analysis_report_dialog_style
     root_margins = dialog.layout().contentsMargins()
@@ -304,8 +325,8 @@ def test_initial_layout_has_balanced_spacing_and_keeps_fields_near_labels(
     assert dialog.layout().spacing() == 16
     assert dialog.status_label.isHidden()
     assert dialog.project_path_edit.placeholderText() == "请选择项目目录"
-    assert dialog.analysis_item_label.isHidden()
-    assert dialog.analysis_item_panel._empty_label.text() == "请先选择样本"
+    assert not dialog.analysis_item_label.isHidden()
+    assert dialog.analysis_item_panel._empty_label.text() == "请选择项目目录以加载分析项"
     field_left_edges = [
         widget.mapTo(dialog, QPoint(0, 0)).x()
         for widget in (
@@ -319,9 +340,11 @@ def test_initial_layout_has_balanced_spacing_and_keeps_fields_near_labels(
         dialog,
         QPoint(0, 0),
     ).x()
-    assert empty_state_left < field_left_edges[0]
-    assert dialog.analysis_item_panel.height() >= 72
-    assert dialog.analysis_item_panel._empty_label.alignment() == Qt.AlignCenter
+    assert abs(empty_state_left - field_left_edges[0]) <= 1
+    assert dialog.analysis_item_panel.height() >= 24
+    assert dialog.analysis_item_panel._empty_label.alignment() == (Qt.AlignLeft | Qt.AlignVCenter)
+    assert not dialog.report_content_controls.isVisible()
+    assert dialog.report_content_label.geometry().top() > dialog.analysis_item_panel.geometry().bottom()
     assert (
         dialog.analysis_item_panel.mapTo(dialog, QPoint(0, 0)).y()
         - dialog.analysis_item_group.y()
@@ -655,7 +678,56 @@ def test_confirmed_wav_adjustment_refreshes_available_analysis_items(
     assert dialog.analysis_item_panel.option_count() == 1
 
 
-def test_include_charts_is_shown_only_for_selected_items_with_charts(
+@pytest.mark.parametrize("minimum_size", [False, True])
+def test_report_content_appears_only_after_selection_without_resizing(ui_qapp, tmp_path, minimum_size):
+    dialog = AnalysisReportExportDialog(auto_scan=False)
+    dialog.show()
+    ui_qapp.processEvents()
+    if minimum_size:
+        dialog.resize(dialog.minimumSize())
+        ui_qapp.processEvents()
+    initial_size = dialog.size()
+    footer_position = dialog.export_button.mapTo(dialog, QPoint())
+
+    def assert_report_visible(visible):
+        ui_qapp.processEvents()
+        for widget in (
+            dialog.report_content_label,
+            dialog.values_only_radio,
+            dialog.values_and_charts_radio,
+        ):
+            assert widget.isVisible() == visible
+        assert not dialog.report_content_hint.isVisible()
+        assert dialog.size() == initial_size
+        assert dialog.export_button.mapTo(dialog, QPoint()) == footer_position
+
+    try:
+        assert_report_visible(False)
+        dialog.load_index(_index(tmp_path))
+        assert_report_visible(False)
+        dialog.analysis_item_panel.set_checked(SPL_IDENTITY, True)
+        assert_report_visible(True)
+        dialog.analysis_item_panel.set_checked(SPL_IDENTITY, False)
+        assert_report_visible(False)
+        dialog.analysis_item_panel.set_checked(FFT_IDENTITY, True)
+        assert_report_visible(True)
+        assert dialog.values_and_charts_radio.isChecked()
+        dialog.sample_selector.set_selected_values(())
+        assert_report_visible(False)
+        assert dialog.analysis_item_panel._empty_label.text() == "请先选择样本"
+        dialog.sample_selector.set_all_checked(True)
+        dialog.analysis_item_panel.set_checked(SPL_IDENTITY, True)
+        assert_report_visible(True)
+        dialog.candidate_model.set_checked_paths(())
+        assert_report_visible(False)
+        dialog._clear_loaded_index()
+        assert_report_visible(False)
+        assert dialog.analysis_item_panel._empty_label.text() == "请选择项目目录以加载分析项"
+    finally:
+        dialog.close()
+
+
+def test_report_content_modes_follow_available_results_and_stay_exclusive(
     ui_qapp,
     tmp_path,
 ):
@@ -665,20 +737,181 @@ def test_include_charts_is_shown_only_for_selected_items_with_charts(
     _select_samples(dialog, "S001", "S002")
 
     assert dialog._report_content() == "values_only"
-    assert dialog.include_charts_checkbox.isHidden()
+    assert not dialog.values_only_radio.isEnabled()
+    assert not dialog.values_and_charts_radio.isEnabled()
 
     assert dialog.analysis_item_panel.set_checked(SPL_IDENTITY, True)
-    assert dialog.include_charts_checkbox.isHidden()
+    assert dialog.values_only_radio.isEnabled()
+    assert not dialog.values_and_charts_radio.isEnabled()
 
     assert dialog.analysis_item_panel.set_checked(FFT_IDENTITY, True)
-    assert not dialog.include_charts_checkbox.isHidden()
-    dialog.include_charts_checkbox.setChecked(True)
+    assert not dialog.values_only_radio.isEnabled()
+    assert dialog.values_and_charts_radio.isEnabled()
+    assert "全频FFT" in dialog.values_only_radio.toolTip()
+    assert "取消勾选" in dialog.values_only_radio.toolTip()
+    assert dialog.report_content_hint.isHidden()
+    assert dialog._report_content() == "values_and_charts"
+    assert not dialog.values_only_radio.isChecked()
+    dialog.values_only_radio.click()
     assert dialog._report_content() == "values_and_charts"
 
     assert dialog.analysis_item_panel.set_checked(FFT_IDENTITY, False)
-    assert dialog.include_charts_checkbox.isHidden()
-    assert not dialog.include_charts_checkbox.isChecked()
+    assert not dialog.values_and_charts_radio.isEnabled()
+    assert not dialog.values_and_charts_radio.isChecked()
     assert dialog._report_content() == "values_only"
+
+    dialog.analysis_item_panel.set_checked(FFT_IDENTITY, True)
+    dialog.analysis_item_panel.set_checked(SPL_IDENTITY, False)
+    assert dialog._report_content() == "values_and_charts"
+    assert not dialog.values_only_radio.isEnabled()
+    assert "全频FFT" in dialog.values_only_radio.toolTip()
+    assert dialog.report_content_hint.isHidden()
+    assert not dialog.values_only_radio.isChecked()
+    dialog._set_busy(True)
+    assert not dialog.values_and_charts_radio.isEnabled()
+    dialog._set_busy(False)
+    assert dialog.values_and_charts_radio.isEnabled()
+    assert not dialog.values_only_radio.isEnabled()
+    dialog._clear_loaded_index()
+    assert dialog._report_content() == "values_only"
+    assert not dialog.values_and_charts_radio.isEnabled()
+    assert not dialog.values_only_radio.toolTip()
+    assert not dialog.values_and_charts_radio.toolTip()
+
+
+@pytest.mark.parametrize("analysis_type", ["FBA", "FFT", "Spec"])
+@pytest.mark.parametrize("has_chart_file", [True, False])
+def test_mixed_items_require_charts_until_chart_item_is_removed(
+    ui_qapp, tmp_path, analysis_type, has_chart_file,
+):
+    index = _index(tmp_path)
+    identity = AnalysisItemIdentity(f"测试{analysis_type}", analysis_type)
+    scalar_item = replace(
+        index.candidates[0].analysis_items[0],
+        image_files=((1, str(tmp_path / "spl.png")),),
+    )
+    chart_item = CandidateAnalysisItem(
+        identity,
+        image_files=((1, str(tmp_path / "chart.png")),) if has_chart_file else (),
+    )
+    candidate = replace(index.candidates[0], analysis_items=(scalar_item, chart_item))
+    dialog = AnalysisReportExportDialog(auto_scan=False)
+    dialog.load_index(replace(index, candidates=(candidate,)))
+    try:
+        dialog.analysis_item_panel.set_checked(SPL_IDENTITY, True)
+        assert dialog.values_only_radio.isEnabled()
+        assert dialog.values_and_charts_radio.isEnabled()
+        dialog.values_and_charts_radio.click()
+        assert dialog._report_content() == "values_and_charts"
+        dialog.values_only_radio.click()
+        assert dialog._report_content() == "values_only"
+
+        dialog.analysis_item_panel.set_checked(identity, True)
+        assert dialog._report_content() == "values_and_charts"
+        assert not dialog.values_only_radio.isEnabled()
+        assert identity.key in dialog.values_only_radio.toolTip()
+        dialog.values_only_radio.click()
+        assert dialog._report_content() == "values_and_charts"
+        assert dialog.report_content_hint.isHidden() == has_chart_file
+        if not has_chart_file:
+            assert identity.key in dialog.report_content_hint.text()
+            assert "缺少分析图" in dialog.report_content_hint.text()
+        dialog._set_busy(True)
+        dialog._set_busy(False)
+        assert not dialog.values_only_radio.isEnabled()
+
+        dialog.analysis_item_panel.set_checked(identity, False)
+        assert dialog.values_only_radio.isEnabled()
+        assert dialog.values_and_charts_radio.isEnabled()
+        dialog.values_only_radio.click()
+        assert dialog._report_content() == "values_only"
+        assert not dialog.values_only_radio.toolTip()
+        assert dialog.report_content_hint.isHidden()
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("identity,control,expected", [
+    (FFT_IDENTITY, "values_only_radio", "已选分析项（全频FFT）需要包含分析图；如需仅导出数值，请取消勾选这些项。"),
+    (SPL_IDENTITY, "values_and_charts_radio", "当前所选结果没有可导出的分析图。"),
+])
+def test_unavailable_report_mode_shows_tooltip(ui_qapp, tmp_path, identity, control, expected):
+    dialog = AnalysisReportExportDialog(auto_scan=False)
+    dialog.load_index(_index(tmp_path))
+    dialog.analysis_item_panel.set_checked(identity, True)
+    dialog.show()
+    dialog.activateWindow()
+    QTest.qWait(100)
+    ui_qapp.processEvents()
+    radio = getattr(dialog, control)
+    try:
+        assert not radio.isEnabled()
+        assert not dialog.report_content_hint.isVisible()
+        position = radio.rect().center()
+        ui_qapp.sendEvent(radio, QHelpEvent(QEvent.ToolTip, position, radio.mapToGlobal(position)))
+        QTest.qWait(250)
+        assert QToolTip.isVisible()
+        assert QToolTip.text() == expected
+    finally:
+        QToolTip.hideText()
+        dialog.close()
+
+
+@pytest.mark.parametrize("key,modifiers", [
+    (Qt.Key_Return, Qt.NoModifier),
+    (Qt.Key_Enter, Qt.KeypadModifier),
+])
+def test_chart_only_enter_opens_save_in_chart_mode(ui_qapp, tmp_path, monkeypatch, key, modifiers):
+    dialog = AnalysisReportExportDialog(auto_scan=False)
+    dialog.load_index(_index(tmp_path))
+    dialog.analysis_item_panel.set_checked(FFT_IDENTITY, True)
+    calls = []
+    monkeypatch.setattr(
+        "ui.analysis_report_export_dialog.QFileDialog.getSaveFileName",
+        lambda *args: (calls.append(dialog._report_content()) or "", ""),
+    )
+    monkeypatch.setattr(
+        "ui.analysis_report_export_dialog.QMessageBox.warning",
+        lambda *args: pytest.fail(args[-1]),
+    )
+    dialog.show()
+    ui_qapp.processEvents()
+    dialog.values_and_charts_radio.setFocus()
+    QTest.keyClick(dialog.values_and_charts_radio, key, modifiers)
+    assert calls == ["values_and_charts"]
+    assert dialog._export_thread is None
+    dialog.close()
+
+
+def test_multiple_analysis_rows_remain_readable_at_minimum_size(ui_qapp, tmp_path):
+    dialog = AnalysisReportExportDialog(auto_scan=False)
+    index = _index(tmp_path)
+    dialog.load_index(index)
+    dialog.show()
+    ui_qapp.processEvents()
+    items = tuple(
+        CandidateAnalysisItem(
+            AnalysisItemIdentity(f"声压级通道组{number}", "SPL"),
+            csv_files=(("总体声压级", str(tmp_path / f"{number}.csv")),),
+        )
+        for number in range(8)
+    )
+    dialog.load_index(replace(index, candidates=(replace(index.candidates[0], analysis_items=items),)))
+    dialog.analysis_item_panel.set_checked(items[0].identity, True)
+    ui_qapp.processEvents()
+    dialog.resize(dialog.minimumSize())
+    ui_qapp.processEvents()
+    checkboxes = list(dialog.analysis_item_panel._checkboxes.values())
+    for checkbox in checkboxes:
+        assert checkbox.height() >= checkbox.sizeHint().height()
+        assert checkbox.width() >= checkbox.sizeHint().width()
+    assert checkboxes[0].y() == checkboxes[1].y()
+    assert checkboxes[2].y() > checkboxes[0].geometry().bottom()
+    assert checkboxes[0].mapTo(dialog, QPoint()).x() == dialog.values_only_radio.mapTo(dialog, QPoint()).x()
+    assert checkboxes[1].mapTo(dialog, QPoint()).x() == dialog.values_and_charts_radio.mapTo(dialog, QPoint()).x()
+    assert dialog.project_path_edit.height() >= dialog.project_path_edit.minimumSizeHint().height()
+    assert dialog.export_button.geometry().bottom() < dialog.height()
+    dialog.close()
 
 
 def test_export_button_stays_actionable_and_validates_missing_project(
@@ -698,17 +931,24 @@ def test_export_button_stays_actionable_and_validates_missing_project(
     assert warnings == [("报告导出", "请先选择项目目录。")]
 
 
-def test_values_only_rejects_image_only_analysis_item(
+def test_export_rejects_analysis_item_without_scalar_values_or_images(
     ui_qapp,
     tmp_path,
     monkeypatch,
 ):
     dialog = AnalysisReportExportDialog(auto_scan=False)
-    dialog.load_index(_index(tmp_path))
+    index = _index(tmp_path)
+    candidate = replace(index.candidates[-1], analysis_items=(
+        CandidateAnalysisItem(FFT_IDENTITY, csv_files=(("FFT", str(tmp_path / "fft.csv")),)),
+    ))
+    dialog.load_index(replace(index, candidates=(candidate,)))
     _select_model(dialog, "M2")
     _select_samples(dialog, "S001")
     assert dialog.analysis_item_panel.set_checked(FFT_IDENTITY, True)
-    dialog.include_charts_checkbox.setChecked(False)
+    assert not dialog.values_only_radio.isEnabled()
+    assert not dialog.values_and_charts_radio.isEnabled()
+    assert not dialog.report_content_hint.isHidden()
+    assert "暂无可导出" in dialog.report_content_hint.text()
     warnings = []
 
     monkeypatch.setattr(
@@ -727,9 +967,12 @@ def test_values_only_rejects_image_only_analysis_item(
     assert warnings == [
         (
             "报告导出",
-            "当前所选分析项没有可导出的标量数值，请勾选“包含分析图”或选择其他分析项。",
+            "当前所选分析项没有可导出的数值或分析图，请选择其他分析项。",
         )
     ]
+    dialog.analysis_item_panel.set_checked(FFT_IDENTITY, False)
+    assert dialog.report_content_hint.isHidden()
+    assert not dialog.report_content_hint.text()
 
 
 def test_incomplete_items_go_directly_to_save_dialog_without_deselecting_wavs(
@@ -742,7 +985,7 @@ def test_incomplete_items_go_directly_to_save_dialog_without_deselecting_wavs(
     _select_model(dialog, "M1")
     _select_samples(dialog, "S001", "S002")
     assert dialog.analysis_item_panel.set_checked(FFT_IDENTITY, True)
-    dialog.include_charts_checkbox.setChecked(True)
+    assert dialog.values_and_charts_radio.isChecked()
     save_dialog_calls = []
 
     def save_dialog(*args, **kwargs):
@@ -766,17 +1009,21 @@ def test_incomplete_items_go_directly_to_save_dialog_without_deselecting_wavs(
     assert len(dialog.candidate_model.checked_candidates()) == 2
 
 
+@pytest.mark.parametrize("include_scalar_item", [False, True])
 def test_export_passes_exact_scope_to_export_thread(
     ui_qapp,
     tmp_path,
     monkeypatch,
+    include_scalar_item,
 ):
     dialog = AnalysisReportExportDialog(auto_scan=False)
     dialog.load_index(_index(tmp_path))
     _select_model(dialog, "M1")
     _select_samples(dialog, "S001", "S002")
+    if include_scalar_item:
+        dialog.analysis_item_panel.set_checked(SPL_IDENTITY, True)
     assert dialog.analysis_item_panel.set_checked(FFT_IDENTITY, True)
-    dialog.include_charts_checkbox.setChecked(True)
+    assert dialog.values_and_charts_radio.isChecked()
     captured = {}
 
     class FakeExportThread(QObject):
@@ -826,7 +1073,8 @@ def test_export_passes_exact_scope_to_export_thread(
         "S001",
         "S002",
     ]
-    assert captured["analysis_items"] == (FFT_IDENTITY,)
+    expected_items = (SPL_IDENTITY, FFT_IDENTITY) if include_scalar_item else (FFT_IDENTITY,)
+    assert set(captured["analysis_items"]) == set(expected_items)
     assert captured["report_content"] == "values_and_charts"
     assert not dialog.export_button.isEnabled()
     assert dialog.cancel_button.text() == "取消任务"

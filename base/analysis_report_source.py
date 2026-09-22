@@ -105,9 +105,7 @@ class ReportCandidate:
         normalized = str(self.label or "").strip().upper()
         if normalized in {"OK", "NG"}:
             return normalized
-        if self.database_status == "matched":
-            return "未产生判定"
-        return "—"
+        return "无判定结果"
 
     @property
     def data_status(self) -> str:

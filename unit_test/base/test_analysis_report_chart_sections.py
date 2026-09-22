@@ -41,7 +41,7 @@ def test_chart_analysis_has_no_result_summary_or_placeholder_table(tmp_path, kin
     assert "见图表" not in report
     assert "测试结果汇总" not in report
     assert "测试总体判定" not in report
-    assert "声学测试分析报告" in report and "具体分析项" in report
+    assert "声学测试分析报告" in report and "分析项（1项）" in report
     assert "PORT-A" in report and "R0002" in report
     assert ("data:image/png;base64," in report) == (mode == "values_and_charts")
     assert ("本次未包含分析图" in report) == (mode == "values_only")
@@ -77,7 +77,8 @@ def test_chart_warnings_survive_table_removal_and_are_optional(tmp_path, image_s
         )
         assert bool(warnings) == (mode == "values_and_charts")
         if warnings:
-            assert "图片完整性说明" in report
+            assert "<h2>缺失明细</h2>" in report
+            assert "涉及 1 条录音" in report
             assert any("CH1" in warning and identity.key in warning for warning in warnings)
         assert "<th>数据状态</th>" not in report
 
@@ -89,6 +90,6 @@ def test_missing_curve_data_is_still_reported_at_end(tmp_path):
         generated_at=datetime(2026, 9, 17),
     )
     assert any("未找到该分析项的曲线数据" in warning for warning in warnings)
-    assert "结果不完整" in report
-    assert report.index("数据完整性说明") > report.index("data:image/png;base64,")
+    assert "缺少曲线数据" in report
+    assert report.index("<h2>缺失明细</h2>") > report.index("data:image/png;base64,")
     assert "<div class='figure'>" in report

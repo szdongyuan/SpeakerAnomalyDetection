@@ -4,8 +4,36 @@ from datetime import datetime
 
 import pytest
 
-from base.analysis_report import build_analysis_report_html
+from base.analysis_report import build_analysis_report_html, _prepare_segment_records
 from base.analysis_report_source import AnalysisItemIdentity, CandidateAnalysisItem, ReportCandidate
+
+
+@pytest.mark.parametrize("saved_result,expected", [
+    ("OK", "OK"), ("NG", "NG"), ("", "无判定结果"),
+])
+def test_segment_result_keeps_saved_judgement_when_overall_result_is_missing(
+    tmp_path, saved_result, expected,
+):
+    path = tmp_path / "segment.csv"
+    path.write_text(
+        f"通道,总体声压级dB,result\n时间1min_CH1,30,{saved_result}\n",
+        encoding="utf-8-sig",
+    )
+    identity = AnalysisItemIdentity("SPL1", "SPL")
+    candidate = ReportCandidate(
+        str(tmp_path / "source.wav"), "项目", "产品", "样本",
+        analysis_items=(CandidateAnalysisItem(
+            identity, csv_files=(("总体声压级", str(path)),),
+        ),),
+    )
+    assert candidate.result_text == "无判定结果"
+    records = _prepare_segment_records(candidate, identity, "values_only")
+    assert records[0].segment_result == expected
+    report_html, _ = build_analysis_report_html(
+        [candidate], [identity], report_content="values_only",
+        generated_at=datetime(2026, 9, 21),
+    )
+    assert f">{expected}</td>" in report_html
 
 
 @pytest.mark.parametrize('labels,heading', [

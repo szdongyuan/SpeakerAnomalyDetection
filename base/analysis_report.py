@@ -32,7 +32,7 @@ from base.spl_csv_schema import resolve_overall_spl_csv_columns
 _QT_APP = None
 _REPORT_FONT_FAMILY = None
 _REPORT_CONTENT_MODES = frozenset({"values_and_charts", "values_only"})
-_CHART_ONLY_TYPES = frozenset({"Spec", "FFT", "FBA"})
+CHART_ONLY_ANALYSIS_TYPES = frozenset({"Spec", "FFT", "FBA"})
 _PDF_FOOTER_FONT_SIZE = 7
 _CHART_MAX_WIDTH = 600
 _CHART_MAX_HEIGHT = 340
@@ -85,6 +85,12 @@ class _PreparedRecord:
 
     def scalar_map(self):
         return dict(self.scalar_values)
+
+
+@dataclass(frozen=True)
+class _CompletenessRecord:
+    candidate: ReportCandidate
+    issues: tuple[str, ...]
 
 
 def prepare_analysis_report_runtime():
@@ -163,7 +169,7 @@ def export_analysis_report_pdf(
         return AnalysisReportExportResult(False, f"PDF 报告导出失败：{error}")
     message = f"PDF 报告导出成功：{target}"
     if warnings:
-        message += f"（{len(warnings)} 项导出提示，详见报告）"
+        message += "（存在数据缺失或读取异常，详见报告末尾缺失明细）"
     return AnalysisReportExportResult(True, message, target, warnings)
 
 
@@ -200,18 +206,19 @@ def _build_analysis_report_pages(
     data_warnings = _collect_warnings(prepared_by_item)
     chart_warnings = _collect_warnings(prepared_by_item, charts=True)
     warnings = data_warnings + chart_warnings
+    completeness = _collect_completeness(prepared_by_item)
     summary = _build_summary_html(
         candidates,
         selected_analysis_items,
         report_content,
         generated_at,
-        warnings,
+        len(completeness),
     )
     with layout:
-        chart_items = [item for item in prepared_by_item if item.analysis_type in _CHART_ONLY_TYPES]
+        chart_items = [item for item in prepared_by_item if item.analysis_type in CHART_ONLY_ANALYSIS_TYPES]
         scalar_records = {
             item: records for item, records in prepared_by_item.items()
-            if item.analysis_type not in _CHART_ONLY_TYPES
+            if item.analysis_type not in CHART_ONLY_ANALYSIS_TYPES
         }
         if chart_items:
             layout.append_block(summary)
@@ -228,19 +235,7 @@ def _build_analysis_report_pages(
                 layout, prepared_by_item, cancel_requested=cancel_requested,
                 start_new_page=bool(scalar_records),
             )
-        if not data_warnings:
-            layout.append_block(_build_completeness_html(data_warnings))
-        for title, section_warnings in (
-            ("数据完整性说明", data_warnings), ("图片完整性说明", chart_warnings),
-        ):
-            if not section_warnings:
-                continue
-            rows = [
-                f"<tr><td class='center'>{index}</td><td>{_html(warning)}</td></tr>"
-                for index, warning in enumerate(section_warnings, start=1)
-            ]
-            lead = "<p class='incomplete'>结果不完整：以下记录存在数据缺失。</p>" if title == "数据完整性说明" else ""
-            layout.append_table(title, "<th>序号</th><th>说明</th>", rows, lead=lead)
+        _append_completeness_table(layout, completeness)
         layout.finish()
     return layout, warnings
 
@@ -260,6 +255,7 @@ def _report_stylesheet():
   .meta td {{ width: 34%; }}
   .data-table {{ font-size: 8pt; }}
   .data-table th {{ font-size: 7pt; }}
+  .completeness-table {{ font-size: 8pt; }}
   .result-ok {{ color: #087f4f; font-weight: bold; }}
   .result-ng {{ color: #bd2635; font-weight: bold; }}
   .result-na {{ color: #5f6973; }}
@@ -337,7 +333,7 @@ def _prepare_segment_records(candidate, identity, report_content, *, cancel_requ
             missing = any(cell.value == "—" for cell in cells.values())
             judgement = (
                 "结果不完整" if missing else
-                "未产生判定" if not all(cell.judgement for cell in cells.values()) else
+                "无判定结果" if not all(cell.judgement for cell in cells.values()) else
                 "NG" if any(cell.judgement == "NG" for cell in cells.values()) else "OK"
             )
             records.append(replace(
@@ -390,13 +386,14 @@ def _build_summary_html(
     selected_items,
     report_content,
     generated_at,
-    warnings,
+    incomplete_record_count,
 ):
-    result_counts = {"OK": 0, "NG": 0, "未产生判定": 0, "—": 0}
+    result_counts = {"OK": 0, "NG": 0, "无判定结果": 0}
     for candidate in candidates:
         result_counts[candidate.result_text] = result_counts.get(candidate.result_text, 0) + 1
     item_text = "、".join(
-        f"{identity.key}（{identity.analysis_type}）"
+        identity.key if identity.analysis_type.casefold() in identity.key.casefold()
+        else f"{identity.key}（{identity.analysis_type}）"
         for identity in selected_items
     )
     models = "、".join(dict.fromkeys(candidate.model for candidate in candidates))
@@ -404,17 +401,21 @@ def _build_summary_html(
     conditions = "、".join(dict.fromkeys(candidate.condition or "—" for candidate in candidates))
     rounds = "、".join(dict.fromkeys(candidate.round_text for candidate in candidates))
     mode_text = "数值和图表" if report_content == "values_and_charts" else "仅数值"
+    completeness_text = (
+        f"涉及 {incomplete_record_count} 条录音<br><span class='note'>详见报告末尾缺失明细</span>"
+        if incomplete_record_count else "未发现缺失"
+    )
     project = candidates[0].project if candidates else "—"
     return f"""
 <h1>声学测试分析报告</h1>
 <table class="meta" width="100%">
   <tr><th>项目</th><td>{_html(project)}</td><th>导出时间</th><td>{_html(generated_at.strftime('%Y-%m-%d %H:%M:%S'))}</td></tr>
-  <tr><th>已选 WAV</th><td>{len(candidates)}</td><th>已选分析项</th><td>{len(selected_items)}</td></tr>
+  <tr><th>已选 WAV</th><td colspan="3">{len(candidates)}</td></tr>
   <tr><th>型号</th><td>{_html(models)}</td><th>端口</th><td>{_html(ports)}</td></tr>
   <tr><th>档位</th><td>{_html(conditions)}</td><th>轮次</th><td>{_html(rounds)}</td></tr>
-  <tr><th>报告内容</th><td>{_html(mode_text)}</td><th>导出提示</th><td>{len(warnings)}</td></tr>
-  <tr><th>结果统计</th><td colspan="3">OK {result_counts.get('OK', 0)}　NG {result_counts.get('NG', 0)}　未产生判定 {result_counts.get('未产生判定', 0)}　不可读取 {result_counts.get('—', 0)}</td></tr>
-  <tr><th>具体分析项</th><td colspan="3">{_html(item_text)}</td></tr>
+  <tr><th>报告内容</th><td>{_html(mode_text)}</td><th>数据缺失</th><td>{completeness_text}</td></tr>
+  <tr><th>结果统计</th><td colspan="3">OK {result_counts['OK']}　NG {result_counts['NG']}　无判定结果 {result_counts['无判定结果']}</td></tr>
+  <tr><th>分析项（{len(selected_items)}项）</th><td colspan="3">{_html(item_text)}</td></tr>
 </table>
 """
 
@@ -666,20 +667,82 @@ def _scaled_chart_size(image_bytes):
     )
 
 
-def _build_completeness_html(warnings):
-    blocks = ["<h2>数据完整性说明</h2>"]
-    if not warnings:
-        blocks.append("<p>本次数值及曲线数据未发现缺失。</p>")
-        return "".join(blocks)
-    rows = "".join(
-        f"<tr><td class='center'>{index}</td><td>{_html(warning)}</td></tr>"
-        for index, warning in enumerate(warnings, start=1)
+def _collect_completeness(prepared_by_item):
+    """Summarize structured issues once per WAV, preserving item/segment context."""
+    by_wav = {}
+    for identity, records in prepared_by_item.items():
+        for record in records:
+            key = os.path.normcase(os.path.abspath(record.candidate.wav_path))
+            by_wav.setdefault(key, []).append((identity, record))
+
+    labels = {
+        "数据库中未找到该 WAV 的判定记录": "缺少判定记录",
+        "未找到该分析项": "缺少分析结果",
+        "未找到该分析项的标量结果": "缺少数值结果",
+        "未找到该分析项的曲线数据": "缺少曲线数据",
+        "未找到该分析项的图片": "缺少分析图",
+    }
+    output = []
+    for entries in by_wav.values():
+        common = dict.fromkeys(issue for _, record in entries for issue in record.candidate.issues)
+        details = {}
+        for identity, record in entries:
+            for issue in (*record.issues, *record.chart_issues):
+                if issue in common:
+                    continue
+                # Other issues are WAV-wide and repeated by each persisted segment.
+                segment = record.segment_label if issue == "该段测量值缺失" else ""
+                key = (labels.get(issue, issue), segment)
+                details.setdefault(key, {})[identity] = None
+        if ("缺少分析结果", "") in details:
+            common.pop("未找到可导出的分析项产物", None)
+        issues = [labels.get(issue, issue) for issue in common]
+        for (reason, segment), identities in details.items():
+            context = f"（{segment}）" if segment else ""
+            item_names = [
+                identity.key if identity.analysis_type.casefold() in identity.key.casefold()
+                else f"{identity.key}（{identity.analysis_type}）"
+                for identity in identities
+            ]
+            issues.append(f"{reason}{context}：" + "、".join(item_names))
+        if issues:
+            output.append(_CompletenessRecord(entries[0][1].candidate, tuple(issues)))
+    return tuple(output)
+
+
+def _append_completeness_table(layout, records):
+    if not records:
+        layout.append_block("<h2>数据完整性说明</h2><p>本次导出未发现数据缺失。</p>")
+        return
+    layout.new_page()
+    by_model = {}
+    for number, record in enumerate(records, start=1):
+        by_model.setdefault(record.candidate.model, []).append((number, record))
+    lead = f"<h2>缺失明细</h2><p>本次导出有 {len(records)} 条录音存在结果缺失或读取异常，详见下表。</p>"
+    headers = (
+        "<th>序号</th><th>样本</th><th>端口 / 档位</th>"
+        "<th>轮次</th><th>录音时间</th><th>缺失内容</th>"
     )
-    blocks.append(
-        "<table width='100%'><thead><tr><th>序号</th><th>说明</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table>"
-    )
-    return "".join(blocks)
+    for model, model_records in by_model.items():
+        rows = []
+        for number, record in model_records:
+            candidate = record.candidate
+            recorded_at = candidate.recorded_at_text
+            if candidate.recorded_at is not None and candidate.recorded_at.microsecond:
+                recorded_at += f".{candidate.recorded_at.microsecond:06d}".rstrip("0")
+            rows.append(
+                f"<tr><td class='center'>{number}</td>"
+                f"<td class='center'>{_html(candidate.sample)}</td>"
+                f"<td class='center'>{_html(candidate.port or '—')} / {_html(candidate.condition or '—')}</td>"
+                f"<td class='center'>{_html(candidate.round_text)}</td>"
+                f"<td class='center'>{_html(recorded_at).replace(' ', '<br>')}</td>"
+                "<td>" + "<br>".join(_html(issue) for issue in record.issues) + "</td></tr>"
+            )
+        layout.append_table(
+            f"缺失明细｜型号：{model or '—'}", headers, rows,
+            lead=lead, table_class="completeness-table",
+        )
+        lead = ""
 
 
 def _collect_warnings(prepared_by_item, *, charts=False):
