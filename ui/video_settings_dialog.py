@@ -19,10 +19,14 @@ class VideoSettingsDialog(QDialog):
     probe_requested = pyqtSignal()
     configuration_requested = pyqtSignal(object)
 
-    def __init__(self, config, parent=None, *, read_only=False):
+    def __init__(self, config, parent=None, *, read_only=False, preview_only=False):
         super().__init__(parent)
         self.config = config
         self.read_only = read_only
+        self.preview_only = preview_only
+        self._saving = False
+        self._access = None
+        self._parameters_edited = False
         self.setWindowTitle("摄像头与录像设置")
         self.setMinimumWidth(560)
         self.setStyleSheet(
@@ -54,7 +58,7 @@ class VideoSettingsDialog(QDialog):
         form.setColumnStretch(1, 1)
         root.addLayout(form)
         self.enabled = QCheckBox("启用摄像头预览")
-        self.enabled.setToolTip("只开启预览；录像由主界面的开始/停止按钮控制。")
+        self.enabled.setToolTip("保存后生效，下次启动沿用；关闭预览不影响录像。")
         self.enabled.setChecked(config.enabled)
         form.addWidget(self.enabled, 0, 0, 1, 3)
         self.devices = QComboBox()
@@ -119,23 +123,51 @@ class VideoSettingsDialog(QDialog):
         self.read_only_label.setVisible(read_only)
         root.addWidget(self.read_only_label)
         self.buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Close)
+        self.buttons.setStyleSheet(f"QDialogButtonBox {{ button-layout: {QDialogButtonBox.GnomeLayout}; }}")
         self.buttons.button(QDialogButtonBox.Save).setText("保存设置")
         self.buttons.button(QDialogButtonBox.Close).setText("关闭")
         self.buttons.accepted.connect(self.submit)
         self.buttons.rejected.connect(self.close)
         root.addWidget(self.buttons)
-        if read_only:
-            for widget in (
-                self.enabled, self.devices, self.resolution, self.rate,
-                self.bitrate, self.folder, self.browse_button,
-            ):
-                widget.setEnabled(False)
-            self.buttons.button(QDialogButtonBox.Save).setEnabled(False)
+        self.set_access(read_only=read_only, preview_only=preview_only)
+        for widget in (self.devices, self.resolution, self.rate):
+            widget.activated.connect(self._mark_parameters_edited)
+        self.bitrate.valueChanged.connect(self._mark_parameters_edited)
+        self.folder.textChanged.connect(self._mark_parameters_edited)
+
+    def _mark_parameters_edited(self, *_args):
+        self._parameters_edited = True
+
+    def show_apply_status(self, message):
+        self.message.setToolTip(message)
+        self.message.setText(self.message.fontMetrics().elidedText(message, Qt.ElideRight, self.message.width()))
+
+    def set_access(self, *, read_only, preview_only=False, saving=False):
+        access = (read_only, preview_only, saving)
+        if access == self._access:
+            return
+        self._access = access
+        self.read_only, self.preview_only, self._saving = access
+        editable = not read_only and not saving
+        self.enabled.setEnabled(editable)
+        for widget in (self.devices, self.resolution, self.rate, self.bitrate,
+                       self.folder, self.browse_button, self.refresh_button):
+            widget.setEnabled(editable and not preview_only)
+        self.buttons.button(QDialogButtonBox.Save).setEnabled(editable)
+        self.read_only_label.setText(
+            "正在保存设置…" if saving else "当前为只读：操作员权限下不能修改设置。" if read_only
+            else "当前仅可修改预览开关，设备参数已锁定。"
+        )
+        self.read_only_label.setVisible(read_only or preview_only or saving)
+        if preview_only and not saving:
+            self.show_apply_status("")
         install_dialog_enter_policy(
-            self, self.buttons.button(QDialogButtonBox.Close if read_only else QDialogButtonBox.Save)
+            self, self.buttons.button(QDialogButtonBox.Save if editable else QDialogButtonBox.Close)
         )
 
     def set_devices(self, devices, error=""):
+        if self.preview_only:
+            return  # Late discovery must not replace the locked recording device.
         selected = self.devices.currentData() or self.config.device_id
         self.devices.clear()
         counts = Counter(device.name for device in devices)
@@ -159,7 +191,7 @@ class VideoSettingsDialog(QDialog):
         # Keep the same row even when blank; long errors remain available in the tooltip.
         self.message.setToolTip(message)
         self.message.setText(self.message.fontMetrics().elidedText(message, Qt.ElideRight, self.message.width()))
-        self.refresh_button.setEnabled(True)
+        self.refresh_button.setEnabled(not self.read_only and not self._saving)
 
     def choose_directory(self):
         path = QFileDialog.getExistingDirectory(self, "选择录像根目录（录像存入其下的video文件夹）", self.folder.text())
@@ -167,7 +199,13 @@ class VideoSettingsDialog(QDialog):
             self.folder.setText(path)
 
     def submit(self):
-        if self.read_only:
+        if self.read_only or self._saving:
+            return
+        if self.preview_only:
+            if self._parameters_edited:
+                QMessageBox.warning(self, "设备参数已锁定", "存在未保存的设备参数修改。请先停止录像，或关闭后重新打开设置以只修改预览。")
+                return
+            self.configuration_requested.emit(replace(self.config, enabled=self.enabled.isChecked()))
             return
         try:
             width, height = self.resolution.currentData()

@@ -22,12 +22,16 @@ class VideoService:
         heartbeat_timeout=3.0, command_timeout=5.0, shutdown_timeout=3.0,
         drain_timeout=None,
         initial_connection="connecting",
+        initial_preview_enabled=True,
     ):
         # No default fake backend: callers must explicitly select a worker.
         self._worker_target = worker_target
         self._worker_options = worker_options
         self._state = VideoState(generation)
-        self._state.status = replace(self._state.status, connection=initial_connection)
+        self._state.status = replace(self._state.status, connection=initial_connection,
+                                     preview_enabled=initial_preview_enabled)
+        self._preview_revision = 0
+        self._preview_command_id = ""
         self._lock = threading.Lock()
         self._commands = queue.Queue(maxsize=16)
         self._closed = threading.Event()
@@ -51,6 +55,34 @@ class VideoService:
     @property
     def is_closed(self):
         return self._closed.is_set()
+
+    @property
+    def is_started(self):
+        return self._started
+
+    @property
+    def is_closing(self):
+        return self._closing
+
+    @property
+    def preview_revision(self):
+        return self._preview_revision
+
+    def set_preview(self, enabled):
+        with self._lock:
+            if self._closing or not self._started:
+                return False
+            command = Command(
+                CommandKind.SET_PREVIEW, self._state.generation, uuid4().hex,
+                preview_enabled=enabled, preview_revision=self._preview_revision + 1,
+            )
+            try:
+                self._commands.put_nowait(command)
+            except queue.Full:
+                return False  # A display request must not fail an active recording.
+            self._preview_revision = command.preview_revision
+            self._preview_command_id = command.command_id
+            return True
 
     def start(self):
         with self._lock:
@@ -160,7 +192,12 @@ class VideoService:
                     if not isinstance(event, Event):
                         raise ValueError("unexpected video protocol message")
                     with self._lock:
-                        accepted = self._state.apply(event)
+                        if (event.kind == EventKind.PREVIEW_CHANGED
+                                and (event.command_id != self._preview_command_id
+                                     or event.preview_revision != self._preview_revision)):
+                            accepted = False
+                        else:
+                            accepted = self._state.apply(event)
                     if accepted:
                         last_event = now
                         if event.progress > progress_token:

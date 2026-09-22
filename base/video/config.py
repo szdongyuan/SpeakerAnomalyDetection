@@ -10,7 +10,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class VideoConfig:
     schema_version: int = 1
-    enabled: bool = False
+    enabled: bool = False  # Saved preview preference; recording may acquire the camera independently.
     device_id: str = ""
     device_name: str = ""
     width: int = 1280
@@ -54,9 +54,14 @@ class VideoConfig:
             raise ValueError("摄像头输入格式不受支持。")
         if self.recording_root and not Path(self.recording_root).is_absolute():
             raise ValueError("录像保存位置必须为完整路径，请点击“浏览…”选择文件夹。")
-        if self.enabled and not self.device_id.strip():
+        if self.enabled:
+            self.validate_capture()
+
+    def validate_capture(self):
+        """Validate an actual acquisition request, including recording without preview."""
+        if not self.device_id.strip():
             raise ValueError("请选择摄像头；如果列表为空，请连接USB摄像头后点击“刷新”。")
-        if self.enabled and not self.recording_root.strip():
+        if not self.recording_root.strip():
             raise ValueError("请选择录像保存文件夹。")
 
 

@@ -168,6 +168,8 @@ class VideoRuntime:
         self.diagnostics = VideoDiagnostics()
         self.encode_diagnostics = VideoDiagnostics()
         self.preview_due = 0.0
+        self.preview_enabled = config.enabled
+        self.preview_revision = 0
         self.capture = capture_factory(config, self.on_frame, self.on_connection)
         self.encoder_thread = threading.Thread(target=self._encode_loop, name="VideoEncoder", daemon=True)
         self.writer = threading.Thread(target=self._write_loop, name="VideoWriter", daemon=True)
@@ -199,7 +201,10 @@ class VideoRuntime:
 
         if not self.online:
             self.on_connection(True, "")
-        if stamp >= self.preview_due:
+        with self.gate:
+            show_preview = self.preview_enabled
+            preview_revision = self.preview_revision
+        if show_preview and stamp >= self.preview_due:
             rgb = frame.to_ndarray(format="rgb24")
             height, width = rgb.shape[:2]
             factor = min(self.mailbox.width / width, self.mailbox.height / height)
@@ -210,8 +215,10 @@ class VideoRuntime:
             y = (self.mailbox.height - resized.shape[0]) // 2
             x = (self.mailbox.width - resized.shape[1]) // 2
             preview[y:y + resized.shape[0], x:x + resized.shape[1]] = resized
-            self.mailbox.publish(preview.tobytes())
-            self.preview_due = stamp + 1 / 15
+            with self.gate:
+                if self.preview_enabled and self.preview_revision == preview_revision:
+                    self.mailbox.publish(preview.tobytes(), preview_revision)
+                    self.preview_due = stamp + 1 / 15
         with self.gate:
             if not self.accept_frames:
                 return
@@ -277,7 +284,19 @@ class VideoRuntime:
         if command.generation != self.generation:
             return
         with self.gate:
-            if command.kind == CommandKind.START:
+            if command.kind == CommandKind.SET_PREVIEW:
+                if self.stopping or command.preview_revision <= self.preview_revision:
+                    return
+                self.preview_enabled = command.preview_enabled
+                self.preview_revision = command.preview_revision
+                self.preview_due = 0.0
+                self.sequence += 1
+                self.channel.send(Event(
+                    EventKind.PREVIEW_CHANGED, self.generation, self.sequence, time.monotonic(),
+                    command_id=command.command_id, preview_enabled=self.preview_enabled,
+                    preview_revision=self.preview_revision,
+                ))
+            elif command.kind == CommandKind.START:
                 if self.session_id or not self.online or self.stopping:
                     return
                 self.session_id = command.session_id
@@ -647,9 +666,7 @@ class VideoRuntime:
 def usb_video_worker(channel, mailbox, generation, config):
     runtime = None
     try:
-        if not config.enabled:
-            channel.send(Event(EventKind.CLOSED, generation, 1, time.monotonic()))
-            return
+        config.validate_capture()
         from base.log_manager import LogManager
         LogManager.set_log_handler("core")
         with RecordingRootLease(config.recording_root):

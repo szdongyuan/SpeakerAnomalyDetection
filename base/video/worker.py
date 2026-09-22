@@ -16,6 +16,8 @@ class SimulationOptions:
     reconnect_after: float = 0.5
     crash_after: float | None = None
     stall_after: float | None = None
+    preview_enabled: bool = True
+    ready_delay: float = 0.0
 
 
 def simulated_video_worker(channel, mailbox, generation, options):
@@ -31,21 +33,28 @@ def simulated_video_worker(channel, mailbox, generation, options):
     frame_number = 0
     next_frame = 0.0
     next_heartbeat = 0.0
+    preview_enabled, preview_revision = options.preview_enabled, 0
+    ready_due = time.monotonic() + options.ready_delay
+    ready = False
 
-    def emit(kind, session="", command_id="", detail=""):
+    def emit(kind, session="", command_id="", detail="", **fields):
         nonlocal sequence
         sequence += 1
-        channel.send(Event(kind, generation, sequence, time.monotonic(), session, command_id, detail))
+        channel.send(Event(kind, generation, sequence, time.monotonic(), session, command_id, detail, **fields))
 
     try:
-        emit(EventKind.READY)
         while True:
             if channel.poll(0.01):
                 command = channel.recv()
                 if command.generation != generation:
                     continue
                 emit(EventKind.ACCEPTED, command_id=command.command_id)
-                if command.kind == CommandKind.START and not session_id:
+                if command.kind == CommandKind.SET_PREVIEW:
+                    if command.preview_revision > preview_revision:
+                        preview_enabled, preview_revision = command.preview_enabled, command.preview_revision
+                        emit(EventKind.PREVIEW_CHANGED, command_id=command.command_id,
+                             preview_enabled=preview_enabled, preview_revision=preview_revision)
+                elif command.kind == CommandKind.START and not session_id and ready:
                     session_id = command.session_id
                     start_command = command.command_id
                     start_due = time.monotonic() + options.start_delay
@@ -60,6 +69,9 @@ def simulated_video_worker(channel, mailbox, generation, options):
                     return
 
             now = time.monotonic()
+            if not ready and now >= ready_due:
+                ready = True
+                emit(EventKind.READY)
             if start_due is not None and now >= start_due:
                 start_due = None
                 if options.fail_start:
@@ -91,12 +103,12 @@ def simulated_video_worker(channel, mailbox, generation, options):
                 emit(EventKind.READY)
                 if session_id and started_at is not None and stop_due is None:
                     emit(EventKind.STARTED, session_id)
-            if now >= next_frame and recovery_due is None:
+            if ready and preview_enabled and now >= next_frame and recovery_due is None:
                 frame_number += 1
                 # Small RGB test pattern with a moving bar; constant memory footprint.
                 column = frame_number % mailbox.width
                 row = b"\x28\x40\x58" * column + b"\x48\xbc\xda" + b"\x28\x40\x58" * (mailbox.width - column - 1)
-                mailbox.publish(row * mailbox.height)
+                mailbox.publish(row * mailbox.height, preview_revision)
                 next_frame = now + 1 / 15
             if now >= next_heartbeat:
                 emit(EventKind.HEARTBEAT)
