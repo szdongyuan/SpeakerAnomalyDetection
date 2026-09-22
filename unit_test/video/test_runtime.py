@@ -135,7 +135,7 @@ def test_overflow_is_bounded_and_keeps_recording_with_log_only(tmp_path, caplog)
     class Mailbox:
         width, height = 320, 180
 
-        def publish(self, rgb):
+        def publish(self, rgb, revision=0):
             return True
 
     runtime = VideoRuntime(None, Mailbox(), 1, config_for(tmp_path), capture_factory=SyntheticCapture)
@@ -272,7 +272,7 @@ def test_slow_prepare_does_not_queue_frames_or_restart_after_cancel(tmp_path, ou
         width, height = 320, 180
         published = 0
 
-        def publish(self, rgb):
+        def publish(self, rgb, revision=0):
             self.published += 1
 
     mailbox = Mailbox()
@@ -323,12 +323,13 @@ def test_slow_prepare_does_not_queue_frames_or_restart_after_cancel(tmp_path, ou
         assert not runtime.writer.is_alive()
 
 
-def test_disabled_real_backend_never_creates_recording_root(tmp_path):
+def test_unconfigured_real_backend_never_creates_recording_root(tmp_path):
     root = tmp_path / "must-not-exist"
     service = VideoService(worker_target=usb_video_worker, worker_options=VideoConfig(recording_root=str(root)))
     service.start()
     assert service.wait_closed(8)
     assert service.status.connection == "closed"
+    assert "请选择摄像头" in service.status.connection_detail
     assert not root.exists()
 
 

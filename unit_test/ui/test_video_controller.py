@@ -274,6 +274,8 @@ def test_simplified_settings_layout_and_persistent_readonly_notice(ui_qapp, tmp_
         ui_qapp.processEvents()
         assert dialog.read_only_label.isVisible() == read_only
         assert dialog.buttons.button(QDialogButtonBox.Save).isEnabled() != read_only
+        assert (dialog.buttons.button(QDialogButtonBox.Close).geometry().right()
+                < dialog.buttons.button(QDialogButtonBox.Save).geometry().left())
         assert dialog.devices.font().pixelSize() == 13
         assert dialog.devices.height() >= 28
         assert dialog.folder.width() >= 250
@@ -398,7 +400,9 @@ def test_live_card_real_files_and_settings_screenshot(ui_qapp, tmp_path, monkeyp
         assert placeholder.grab().save(str(screenshot))
         print(f"\nLive card (test input, real recording): {screenshot}")
         controller.show_settings()
-        assert controller.dialog.read_only
+        assert controller.dialog.preview_only
+        assert controller.dialog.enabled.isEnabled()
+        assert not controller.dialog.devices.isEnabled()
         ui_qapp.processEvents()
         settings_screenshot = tmp_path / "video-settings.png"
         assert controller.dialog.grab().save(str(settings_screenshot))

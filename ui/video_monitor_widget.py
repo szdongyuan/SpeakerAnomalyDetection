@@ -89,7 +89,6 @@ class VideoMonitorWidget(QWidget):
         super().__init__(parent)
         self.bridge = bridge
         self._status = bridge.service.status
-        self.setMinimumWidth(400)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -114,8 +113,9 @@ class VideoMonitorWidget(QWidget):
         self.title_label.setStyleSheet(
             f"font-family:{ui_style_const.UI_FONT_FAMILY}; font-size:16px; font-weight:bold;"
         )
-        self.record_indicator = QLabel("●")
-        self.record_indicator.setStyleSheet("color:#63E6A2; background:transparent;")
+        self.record_indicator = QLabel()
+        self.record_indicator.setFixedSize(8, 8)
+        self.record_indicator.setStyleSheet("background:#63E6A2; border-radius:4px;")
         self.timer_label = QLabel()
         self.timer_label.setStyleSheet("color:#ffffff; font-family:Consolas; font-size:13px; font-weight:bold;")
         self.record_button = QPushButton("开始录像")
@@ -142,7 +142,7 @@ class VideoMonitorWidget(QWidget):
         self.more_button.setMenu(menu)
         header_layout.addWidget(self.title_label)
         header_layout.addStretch(1)
-        header_layout.addWidget(self.record_indicator)
+        header_layout.addWidget(self.record_indicator, 0, Qt.AlignVCenter)
         header_layout.addWidget(self.timer_label)
         header_layout.addWidget(self.record_button)
         header_layout.addWidget(self.more_button)
@@ -157,41 +157,68 @@ class VideoMonitorWidget(QWidget):
         root.addWidget(self.content, 1)
         bridge.status_changed.connect(self.update_status)
         bridge.preview_changed.connect(self.canvas.set_image)
+        bridge.controls_changed.connect(self._refresh_controls)
+        self._seconds = 0
         self.update_status(self._status, 0)
 
     def _toggle_recording(self):
-        if self.bridge.service.status.record_intent:
+        if self.bridge.record_start_pending or self.bridge.service.status.record_intent:
             self.bridge.stop_recording()
         else:
             self.bridge.start_recording()
         self.bridge.poll()
 
+    def _refresh_controls(self):
+        self.update_status(self.bridge.service.status, self._seconds)
+
     def update_status(self, status, seconds):
         self._status = status
+        self._seconds = seconds
         preparing = status.recording == "starting"
         active = status.recording in {"recording", "recovering"}
         stopping = status.recording == "stopping"
         self.record_button.setText(
-            "正在准备…" if preparing else "正在保存…" if stopping else "停止录像" if active else "开始录像"
+            "取消录像" if self.bridge.record_start_pending or preparing else
+            "正在保存…" if stopping else "停止录像" if active else "开始录像"
         )
-        self.record_button.setEnabled(not (preparing or stopping) and (active or status.connection == "ready"))
+        self.record_button.setEnabled(not stopping and (
+            self.bridge.record_start_pending or preparing or active or self.bridge.can_start_recording
+        ))
         self.timer_label.setVisible((active or stopping) and status.started_at is not None)
         self.record_indicator.setVisible(status.recording == "recording")
         self.timer_label.setText(format_elapsed(seconds))
         self.timer_label.setMinimumWidth(self.timer_label.fontMetrics().horizontalAdvance(self.timer_label.text()) + 4)
-        message = ""
-        if status.connection != "ready":
-            message = status.connection_detail or {
-                "connecting": "正在连接摄像头…", "reconnecting": "摄像头已断开，等待恢复…",
-                "unavailable": "摄像头不可用", "closed": "视频服务已关闭",
-            }.get(status.connection, "摄像头待配置")
         if status.recording == "failed":
-            recording_message = f"录像失败：{status.recording_detail}"
-            message = f"{recording_message}\n摄像头：{message}" if message else recording_message
+            message = "录像失败"
+        elif self.bridge.record_start_timed_out:
+            message = self.bridge.control_message
+        elif status.connection == "unavailable":
+            message = "摄像头不可用"
+        elif status.connection == "reconnecting":
+            message = "摄像头已断开，等待恢复…" if active else "未检测到摄像头，请连接设备。"
+        elif self.bridge.record_start_pending:
+            message = "正在连接摄像头…"
+        elif self.bridge.control_message:
+            message = "录像未开始，请重试"
+        elif not self.bridge.preview_requested:
+            message = "预览已关闭，正在录像" if active else "预览已关闭"
+        else:
+            message = {
+                "ready": "", "connecting": "正在连接摄像头…", "closed": "视频服务已关闭",
+            }.get(status.connection, "摄像头待配置")
         # Historical gaps stay in the session result/tooltip, not over a healthy preview.
         self.canvas.set_message(
-            message, clear_image=status.connection != "ready",
+            message, clear_image=status.connection != "ready" or not self.bridge.preview_requested,
             warning=status.connection in {"unavailable", "reconnecting"}
             or status.recording == "failed",
         )
-        self.record_button.setToolTip(message or status.detail)
+        details = []
+        if status.recording == "failed":
+            details.append(f"录像失败：{status.recording_detail}")
+        if status.connection != "ready" and status.connection_detail:
+            details.append(f"摄像头：{status.connection_detail}")
+        if self.bridge.control_message and not self.bridge.record_start_pending:
+            details.append(self.bridge.control_message)
+        tooltip = "\n".join(details) or status.detail or message
+        self.canvas.setToolTip(tooltip)
+        self.record_button.setToolTip(tooltip)

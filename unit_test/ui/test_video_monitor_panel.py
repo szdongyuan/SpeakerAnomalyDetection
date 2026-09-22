@@ -1,14 +1,16 @@
 from dataclasses import replace
 
 import pytest
-from PyQt5.QtCore import QPoint
+from PyQt5.QtCore import QPoint, Qt
 from PyQt5.QtGui import QColor, QImage
+from PyQt5.QtWidgets import QSplitter, QVBoxLayout, QWidget
 
 from consts import ui_style_const
 from base.video.models import Event, EventKind, VideoState, VideoStatus
 from ui.video_demo import configure_demo_font
 from ui.video_monitor_widget import VideoCanvas, VideoMonitorWidget, format_elapsed
 from ui.video_controller import VideoServiceBridge
+from ui.sequence.motor_video_monitor_panel import MotorVideoMonitorPanel
 
 
 class StubService:
@@ -25,6 +27,40 @@ class StubService:
 
     def stop_recording(self):
         self.calls.append("stop")
+
+
+def test_pending_recording_shows_one_status_and_keeps_device_details_in_tooltip(ui_qapp, tmp_path):
+    class PendingBridge(VideoServiceBridge):
+        @property
+        def record_start_pending(self):
+            return True
+
+        @property
+        def control_message(self):
+            return "正在连接摄像头…"
+
+    configure_demo_font(ui_qapp)
+    service = StubService()
+    service.status = VideoStatus(connection="reconnecting", connection_detail=
+                                "指定USB摄像头未找到或身份不唯一，请检查连接和设置")
+    bridge = PendingBridge(service)
+    bridge._timer.stop()
+    bridge.preview_requested = False
+    widget = VideoMonitorWidget(bridge)
+    try:
+        widget.resize(568, 350)
+        widget.show()
+        widget.update_status(service.status, 0)
+        ui_qapp.processEvents()
+        assert widget.record_button.text() == "取消录像"
+        assert widget.canvas.message == "未检测到摄像头，请连接设备。"
+        assert service.status.connection_detail in widget.canvas.toolTip()
+        assert "预览已关闭" not in widget.canvas.message
+        assert widget.grab().save(str(tmp_path / "camera-pending-compact.png"))
+        widget.update_status(replace(service.status, connection="connecting", connection_detail=""), 0)
+        assert widget.canvas.message == "正在连接摄像头…"
+    finally:
+        widget.close()
 
 
 def test_runtime_shedding_keeps_recording_ui_without_warning(ui_qapp, tmp_path):
@@ -85,8 +121,8 @@ def test_camera_failure_and_recovery_keep_recording_error_visible(ui_qapp, tmp_p
         widget.show()
         widget.update_status(state.status, 0)
         ui_qapp.processEvents()
-        assert "录像失败：MP4写入拒绝访问" in widget.canvas.message
-        assert "摄像头解码失败" in widget.canvas.message
+        assert widget.canvas.message == "录像失败"
+        assert "摄像头解码失败" in widget.canvas.toolTip()
         assert "录像失败：MP4写入拒绝访问" in widget.record_button.toolTip()
         assert "摄像头解码失败" in widget.record_button.toolTip()
         assert widget.grab().save(str(tmp_path / "separate-video-errors.png"))
@@ -140,7 +176,8 @@ def test_manual_stop_restores_preview_and_preserves_session_result(ui_qapp, tmp_
         print(f"\nStopped video preview: {screenshot}")
         state.apply(Event(EventKind.OFFLINE, 1, 6, 6, detail="摄像头连接已断开"))
         widget.update_status(state.status, 3)
-        assert widget.canvas.message == "摄像头连接已断开"
+        assert widget.canvas.message == "未检测到摄像头，请连接设备。"
+        assert "摄像头连接已断开" in widget.canvas.toolTip()
         assert widget.canvas.warning and widget.canvas.image.isNull()
         state.apply(Event(EventKind.READY, 1, 7, 7))
         widget.canvas.set_image(picture)
@@ -178,6 +215,58 @@ def test_preview_letterbox_uses_light_background(ui_qapp, tmp_path, size, margin
         canvas.close()
 
 
+@pytest.mark.parametrize("state", ["idle", "recording", "stopping"])
+def test_live_video_fits_sidebar_after_window_shrinks(ui_qapp, tmp_path, state):
+    configure_demo_font(ui_qapp)
+    service = StubService()
+    service.status = VideoStatus(connection="ready", recording=state,
+                                 record_intent=state == "recording",
+                                 started_at=None if state == "idle" else 1)
+    bridge = VideoServiceBridge(service)
+    bridge._timer.stop()
+    bridge.preview_requested = False
+    window = QWidget()
+    layout = QVBoxLayout(window)
+    layout.setContentsMargins(0, 0, 0, 0)
+    splitter = QSplitter(Qt.Horizontal)
+    sidebar = QSplitter(Qt.Vertical)
+    task = QWidget()
+    task.setMinimumWidth(340)
+    wrapper = MotorVideoMonitorPanel()
+    wrapper.setMinimumWidth(340)
+    sidebar.addWidget(task)
+    sidebar.addWidget(wrapper)
+    sidebar.setChildrenCollapsible(False)
+    workspace = QWidget()
+    workspace.setMinimumWidth(650)
+    splitter.addWidget(sidebar)
+    splitter.addWidget(workspace)
+    splitter.setChildrenCollapsible(False)
+    layout.addWidget(splitter)
+    panel = wrapper.bind_bridge(bridge)
+    panel.update_status(service.status, 31 * 24 * 3600)
+    try:
+        for width in (1600, 1024, 1600, 1024):
+            window.resize(width, 600)
+            window.show()
+            sidebar_width = 340 if width == 1024 else 480
+            splitter.setSizes([sidebar_width, width - sidebar_width - splitter.handleWidth()])
+            ui_qapp.processEvents()
+            assert panel.width() == wrapper.width()
+            controls = [panel.title_label, panel.record_indicator, panel.timer_label,
+                        panel.record_button, panel.more_button]
+            visible = [control for control in controls if control.isVisible()]
+            for control in visible:
+                assert control.geometry().right() < wrapper.width()
+                assert control.width() >= control.fontMetrics().horizontalAdvance(control.text())
+            for left, right in zip(visible, visible[1:]):
+                assert left.geometry().right() < right.geometry().left()
+        assert wrapper.width() == 340
+        assert wrapper.grab().save(str(tmp_path / f"narrow-video-{state}.png"))
+    finally:
+        window.close()
+
+
 def test_manual_buttons_and_compact_header(ui_qapp):
     configure_demo_font(ui_qapp)
     service = StubService()
@@ -196,7 +285,7 @@ def test_manual_buttons_and_compact_header(ui_qapp):
         ui_qapp.processEvents()
         assert widget.timer_label.text() == "100:00:01"
         assert widget.record_indicator.isVisible()
-        assert widget.record_indicator.palette().color(widget.record_indicator.foregroundRole()).name() == "#63e6a2"
+        assert widget.record_indicator.grab().toImage().pixelColor(4, 4).name() == "#63e6a2"
         assert widget.timer_label.palette().color(widget.timer_label.foregroundRole()).name() == "#ffffff"
         assert widget.record_button.text() == "停止录像"
         assert widget.record_button.parent() is widget.header
@@ -251,14 +340,15 @@ def test_preparing_button_keeps_preview_without_timer(ui_qapp, tmp_path, outcome
     try:
         widget.update_status(status, 99)
         ui_qapp.processEvents()
-        assert widget.record_button.text() == "正在准备…"
-        assert not widget.record_button.isEnabled()
+        assert widget.record_button.text() == "取消录像"
+        assert widget.record_button.isEnabled()
         assert not widget.timer_label.isVisible()
         assert not widget.record_indicator.isVisible()
         assert widget.canvas.image == picture
         assert not widget.canvas.message
+        bridge.service.status = status
         widget.record_button.click()
-        assert not bridge.service.calls
+        assert bridge.service.calls == ["stop"]
         screenshot = tmp_path / "video-preparing.png"
         assert widget.grab().save(str(screenshot))
         print(f"\nVideo preparing screenshot: {screenshot}")
@@ -272,7 +362,8 @@ def test_preparing_button_keeps_preview_without_timer(ui_qapp, tmp_path, outcome
         assert widget.timer_label.isVisible() == (outcome == "recording")
         assert widget.record_indicator.isVisible() == (outcome == "recording")
         if outcome == "failed":
-            assert "编码器初始化失败" in widget.canvas.message
+            assert widget.canvas.message == "录像失败"
+            assert "编码器初始化失败" in widget.canvas.toolTip()
     finally:
         widget.close()
 

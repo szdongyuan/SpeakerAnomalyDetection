@@ -9,6 +9,7 @@ class PreviewFrame:
     height: int
     sequence: int
     rgb: bytes
+    revision: int = 0
 
 
 class PreviewMailbox:
@@ -20,9 +21,10 @@ class PreviewMailbox:
         self.capacity = width * height * 3
         self._pixels = context.RawArray("B", self.capacity)
         self._sequence = context.RawValue("Q", 0)
+        self._revision = context.RawValue("Q", 0)
         self._lock = context.Lock()
 
-    def publish(self, rgb):
+    def publish(self, rgb, revision=0):
         if len(rgb) != self.capacity:
             raise ValueError("RGB frame size mismatch")
         if not self._lock.acquire(False):
@@ -30,6 +32,7 @@ class PreviewMailbox:
         try:
             memoryview(self._pixels).cast("B")[:] = rgb
             self._sequence.value += 1
+            self._revision.value = revision
             return True
         finally:
             self._lock.release()
@@ -41,6 +44,6 @@ class PreviewMailbox:
             sequence = self._sequence.value
             if not sequence or sequence <= after_sequence:
                 return None
-            return PreviewFrame(self.width, self.height, sequence, bytes(self._pixels))
+            return PreviewFrame(self.width, self.height, sequence, bytes(self._pixels), self._revision.value)
         finally:
             self._lock.release()
