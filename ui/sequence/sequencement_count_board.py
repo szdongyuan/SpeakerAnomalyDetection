@@ -276,7 +276,7 @@ class SequenceCountBoard(QWidget):
         self.set_mark_text()
         self._notify_mode_state_changed()
 
-    def set_test_available(self, available: bool, reason: str = ""):
+    def set_test_available(self, available: bool, reason: str = "", *, preserve_mode=False):
         """
         Control whether test mode can be entered.
         """
@@ -296,7 +296,7 @@ class SequenceCountBoard(QWidget):
             )
         except Exception:
             pass
-        if (not self._test_available) and self.mode == "test":
+        if (not self._test_available) and self.mode == "test" and not preserve_mode:
             self.on_mark_btn_clicked()
             return
         self._notify_mode_state_changed()

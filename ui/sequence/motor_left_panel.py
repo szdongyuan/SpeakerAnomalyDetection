@@ -16,14 +16,18 @@ class MotorDetectionLeftPanel(QWidget):
     dedicated sub-widgets so later business wiring can evolve independently.
     """
 
-    def __init__(self, summary_widget: QWidget, parent=None, condition_configs=None):
+    def __init__(
+        self, summary_widget: QWidget, parent=None, condition_configs=None, queue_catalog=None
+    ):
         super().__init__(parent)
         # Mode switch panel removed from UI (no "测试/标记" toggle buttons).
         self.mode_switch_panel = None
         self.count_board = summary_widget
         if self.count_board is not None:
             self.count_board.hide()
-        self.result_panel = MotorResultPanel(self, condition_configs=condition_configs)
+        self.result_panel = MotorResultPanel(
+            self, condition_configs=condition_configs, queue_catalog=queue_catalog
+        )
         self.result_panel.condition_selected.connect(self.condition_selected.emit)
         self.video_monitor_panel = MotorVideoMonitorPanel(self)
         self._init_ui()
@@ -131,8 +135,8 @@ class MotorDetectionLeftPanel(QWidget):
     def set_current_round(self, round_number):
         self.result_panel.set_current_round(round_number)
 
-    def set_condition_configs(self, condition_configs):
-        self.result_panel.set_condition_configs(condition_configs)
+    def set_condition_configs(self, condition_configs, *, queue_catalog=None):
+        self.result_panel.set_condition_configs(condition_configs, queue_catalog=queue_catalog)
 
     def refresh_condition_configs(self, condition_configs):
         return self.result_panel.refresh_condition_configs(condition_configs)

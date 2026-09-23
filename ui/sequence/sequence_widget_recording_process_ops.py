@@ -149,11 +149,20 @@ class SequenceWidgetRecordingProcessOpsMixin:
 
     def _can_prepare_recording_workflow(self):
         """Check ownership before selecting a target condition's queue."""
+        if getattr(self, "_product_config_refresh_state", "ready") != "ready":
+            return False
+        return SequenceWidgetRecordingProcessOpsMixin._recording_resources_available(self)
+
+    def _recording_resources_available(self):
+        """Shared product-test and calibration ownership checks."""
+        if getattr(self, "_product_config_refresh_state", "ready") in ("initializing", "applying"):
+            return False
         if getattr(self, "_product_progress_choice_pending", False):
             return False
         if any(bool(getattr(self, name, False)) for name in (
                 "_recording_closed", "_closing", "_shutdown_started", "_close_in_progress",
                 "_test_metadata_validation_open", "_product_test_program_config_dialog_open",
+                "_test_queue_config_dialog_open",
                 "_serial_trigger_config_dialog_open",
                 "_serial_product_error_dialog_open", "_recording_cleanup_in_progress",
                 "_streaming_cleanup_in_progress")):
@@ -186,7 +195,10 @@ class SequenceWidgetRecordingProcessOpsMixin:
         )
 
     def _can_start_calibration_workflow(self):
-        return self._can_start_recording_workflow()
+        return (
+            SequenceWidgetRecordingProcessOpsMixin._recording_resources_available(self)
+            and SequenceWidgetRecordingProcessOpsMixin._ve_prewarm_admission_available(self)
+        )
 
     def _recording_context_owns_active_workflow(self, context):
         if context is None:

@@ -501,6 +501,16 @@ class SequenceWidgetUiOpsMixin:
         ).strip()
 
     def update_player_btn_is_paused(self):
+        refresh_state = getattr(self, "_product_config_refresh_state", "ready")
+        if refresh_state != "ready":
+            self.player_btn.setEnabled(False)
+            self.player_btn.setToolTip({
+                "initializing": "正在加载产品配置",
+                "applying": "正在应用产品配置",
+                "empty": "请先选择有效的产品配置",
+                "failed": "产品配置应用失败，请修正配置或切换其他配置",
+            }[refresh_state])
+            return
         if getattr(self, "_product_progress_choice_pending", False):
             ready = getattr(self, "_product_progress_prompt_ready", False)
             self.player_btn.setEnabled(ready)

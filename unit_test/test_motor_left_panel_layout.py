@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QComboBox, QFrame, QLabel, QWidget
 
 from base.load_config import LoadUiConfig
@@ -51,6 +52,53 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
             ui_style_const.MAIN_UI_SMALL_FONT_FAMILY,
             live_label.styleSheet(),
         )
+
+    def test_batch_reset_refreshes_summaries_a_constant_number_of_times(self):
+        panel = MotorResultPanel(condition_configs=[
+            {"key": str(index), "group_name": f"端口{index // 20}",
+             "condition_name": f"档位{index % 20}"}
+            for index in range(200)
+        ], queue_catalog={})
+        panel.setAttribute(Qt.WA_DontShowOnScreen)
+        panel.resize(480, 800)
+        panel.set_channels([0, 3, 8])
+        panel.show()
+        self.app.processEvents()
+        panel.set_condition_result("0", "NG")
+        with patch.object(panel, "_refresh_row_styles", wraps=panel._refresh_row_styles) as styles, \
+                patch.object(panel, "_update_port_summary", wraps=panel._update_port_summary) as ports, \
+                patch.object(panel, "set_condition_result", wraps=panel.set_condition_result) as individual:
+            panel.reset()
+        self.assertLessEqual(styles.call_count, 3)
+        self.assertLessEqual(ports.call_count, 3)
+        individual.assert_not_called()
+        for row in panel.rows.values():
+            self.assertEqual(row["result"], "待检测")
+            self.assertEqual(row["channel_results"], [])
+            self.assertEqual(row["runtime_details"], {})
+            self.assertFalse(row["analysis_completed"])
+            self.assertEqual(row["channel_count"], 3)
+            self.assertEqual(row["completed_channels"], 0)
+        self.assertEqual(panel.selected_key, "0")
+        self.assertEqual(panel.viewed_key, "")
+        self.assertEqual(panel.final_value.text(), "待判定")
+        panel.close()
+        panel.deleteLater()
+
+    def test_200_rows_reuse_queue_analysis_summary(self):
+        conditions = [{"key": str(i), "condition_name": str(i), "test_queue": "same"}
+                      for i in range(200)]
+        catalog = {"same": {"analysis_list": {
+            "display_sequence": ["SPL"], "SPL": {"type": "SPL", "limit_checked": True},
+        }}}
+        with patch.object(LoadUiConfig, "load_data_from_json") as read, \
+                patch.object(MotorResultPanel, "_build_condition_analysis_details",
+                             wraps=MotorResultPanel._build_condition_analysis_details) as details:
+            panel = MotorResultPanel(condition_configs=conditions, queue_catalog=catalog)
+        read.assert_not_called()
+        details.assert_called_once()
+        self.assertEqual(len(panel.rows), 200)
+        panel.deleteLater()
 
     def test_result_panel_uses_condition_names(self):
         summary_widget = QWidget()

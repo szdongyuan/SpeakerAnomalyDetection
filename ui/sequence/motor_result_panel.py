@@ -69,7 +69,7 @@ class MotorResultPanel(QWidget):
         "反转检测中",
     }
 
-    def __init__(self, parent=None, condition_configs=None):
+    def __init__(self, parent=None, condition_configs=None, queue_catalog=None):
         super().__init__(parent)
         self.conditions = []
         self.rows = {}
@@ -86,7 +86,7 @@ class MotorResultPanel(QWidget):
         self._channel_table_signature = None
         self._detail_owner_key = ""
         self._init_ui()
-        self.set_condition_configs(condition_configs)
+        self.set_condition_configs(condition_configs, queue_catalog=queue_catalog)
 
     @property
     def condition_names(self):
@@ -259,8 +259,8 @@ class MotorResultPanel(QWidget):
         card.content_layout.addWidget(content, stretch=1)
         root.addWidget(card, stretch=1)
 
-    def set_condition_configs(self, condition_configs):
-        self.conditions = self._normalize_conditions(condition_configs)
+    def set_condition_configs(self, condition_configs, *, queue_catalog=None):
+        self.conditions = self._normalize_conditions(condition_configs, queue_catalog)
 
         # IMPORTANT: detail_frame may have been inserted into rows_layout.
         # Detach it before clearing rows_layout, otherwise _clear_layout will delete it
@@ -278,6 +278,7 @@ class MotorResultPanel(QWidget):
 
         self._clear_layout(self.rows_layout)
         self.rows = {}
+        self.selected_key = ""
         self.viewed_key = ""
         self._detail_owner_key = ""
         try:
@@ -815,16 +816,14 @@ class MotorResultPanel(QWidget):
             self.channel_detail_labels.append(row_labels)
 
     def _set_default_condition_results(self):
-        if not self.conditions:
-            self.set_final_result("待判定", "pending")
-            self._update_task_meta()
-            self._update_port_summary()
-            return
-        for item in self.conditions:
-            row = self.rows.get(item["key"])
-            if row is not None:
-                row["runtime_details"] = {}
-            self.set_condition_result(item["key"], "待检测", "pending")
+        # Reset row data first; repaint and aggregate only after every row is ready.
+        for key, row in self.rows.items():
+            row.update(
+                result="待检测", tone="pending", runtime_details={},
+                completed_channels=0, analysis_completed=False, channel_results=[],
+            )
+            self._update_row_button(key)
+        self._refresh_row_styles()
         self.set_final_result("待判定", "pending")
         if self.selected_key in self.rows:
             self._render_channel_results(self.selected_key)
@@ -859,10 +858,12 @@ class MotorResultPanel(QWidget):
         return key
 
     @classmethod
-    def _normalize_conditions(cls, condition_configs):
+    def _normalize_conditions(cls, condition_configs, queue_catalog=None):
         rows = []
         used_keys = set()
-        queue_catalog = cls._load_queue_catalog_safely()
+        if queue_catalog is None:
+            queue_catalog = cls._load_queue_catalog_safely()
+        analysis_by_queue = {}
         for index, item in enumerate(condition_configs or []):
             if not isinstance(item, dict):
                 continue
@@ -890,7 +891,15 @@ class MotorResultPanel(QWidget):
             if key in used_keys:
                 key = f"{base_key}#{index + 1}"
             used_keys.add(key)
-            analysis_details = cls._build_condition_analysis_details(item, queue_catalog)
+            queue_name = str(item.get("test_queue") or "").strip()
+            if isinstance(item.get("analysis_list"), dict):
+                analysis_details = cls._build_condition_analysis_details(item, queue_catalog)
+            else:
+                if queue_name not in analysis_by_queue:
+                    analysis_by_queue[queue_name] = cls._build_condition_analysis_details(
+                        item, queue_catalog
+                    )
+                analysis_details = analysis_by_queue[queue_name]
             rows.append(
                 {
                     "key": key,
@@ -938,6 +947,8 @@ class MotorResultPanel(QWidget):
 
         queue_catalog = queue_catalog or {}
         queue_info = queue_catalog.get(queue_name)
+        if isinstance(queue_info, dict) and "analysis_list" in queue_info:
+            return cls._analysis_details_from_analysis_list(queue_info["analysis_list"])
         queue_path = queue_info.get("path") if isinstance(queue_info, dict) else None
         if not queue_path:
             return []

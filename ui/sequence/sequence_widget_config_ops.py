@@ -1,12 +1,14 @@
 import json
 import os
 import time
+from copy import deepcopy
 
 from PyQt5.QtCore import QEvent, QSignalBlocker
 from PyQt5.QtWidgets import QApplication, QMessageBox, QLineEdit
 
 from base.load_config import LoadUiConfig
 from base.product_test_project_config import ProductTestProjectConfigManager
+from base.product_test_config_refresh import build_product_test_refresh_snapshot
 from consts import error_code
 from consts.product_test_project_consts import (
     EXPORT_RAW_AUDIO_CSV_KEY,
@@ -17,6 +19,141 @@ from consts.running_consts import DEFAULT_DIR
 
 
 class SequenceWidgetConfigOpsMixin:
+
+    def _prepare_initial_product_configuration(self):
+        """Prepare startup data before widgets exist; do not reset a restored round."""
+        manager = self._get_product_program_manager()
+        registry = self._get_product_program_registry()
+        try:
+            snapshot = build_product_test_refresh_snapshot(manager, registry.get("active_file"))
+        except Exception as error:
+            self._product_config_refresh_error = str(error)
+            self.default_logger.exception("Initial product configuration could not be prepared")
+            snapshot = build_product_test_refresh_snapshot(manager, None)
+        self._pending_initial_product_snapshot = snapshot
+        self._set_product_snapshot_data(snapshot)
+
+    def _finish_initial_product_configuration(self):
+        snapshot = self._pending_initial_product_snapshot
+        if self._product_config_refresh_error:
+            self._product_config_refresh_state = "failed"
+        else:
+            self._applied_product_snapshot = snapshot
+            self._product_config_refresh_state = "ready" if snapshot.active_file else "empty"
+        self._pending_initial_product_snapshot = None
+        self._refresh_test_mode_availability()
+        self.update_player_btn_is_paused()
+
+    def _set_product_snapshot_data(self, snapshot):
+        # Runtime consumers may mutate dictionaries; never give them snapshot-owned data.
+        self.product_test_condition_configs = deepcopy(snapshot.conditions)
+        self.product_test_project_context = deepcopy(snapshot.context)
+        self._product_queue_catalog = deepcopy(snapshot.queue_catalog)
+        self.product_test_close_trigger_state = ""
+        self.product_test_pdf_report_config = {"enabled": False, "save_dir": ""}
+        if snapshot.conditions:
+            queue = self._product_queue_catalog[snapshot.conditions[0]["test_queue"]]
+            self.using_config_path = queue["path"]
+            self.sequence_config = deepcopy(queue["data"])
+            self.analysis_config = self.sequence_config[0]["seq1"].get("analysis_list", {})
+        else:
+            self.sequence_config = []
+            self.analysis_config = {}
+
+    def _product_configuration_apply_failed(self, error):
+        self._product_config_refresh_state = "failed"
+        self._product_config_refresh_error = str(error)
+        self.default_logger.error("Product configuration apply failed: %s", error)
+        self._refresh_test_mode_availability()
+        self.update_player_btn_is_paused()
+        QMessageBox.warning(
+            self, "配置应用失败",
+            f"当前使用配置未能应用，新测试已暂停。\n{error}\n"
+            "可以修正并保存产品测试配置，或切换到其他有效配置。",
+        )
+
+    def _refresh_active_product_configuration(self):
+        """Compare before changing any runtime parameters, results or waveform state."""
+        manager = self._get_product_program_manager()
+        registry = manager.load_registry()
+        try:
+            snapshot = build_product_test_refresh_snapshot(manager, registry.get("active_file"))
+        except Exception as error:
+            self._product_configuration_apply_failed(error)
+            return False
+        return self._apply_product_test_snapshot(snapshot)
+
+    def _apply_product_test_snapshot(self, snapshot):
+        applied = self._applied_product_snapshot
+        if (self._product_config_refresh_state in ("ready", "empty")
+                and applied is not None and applied.signature == snapshot.signature):
+            return False
+        if self._product_configuration_refresh_busy():
+            QMessageBox.warning(
+                self, "配置尚未应用",
+                "当前轮次未结束或录音、分析尚未完成，已保留当前界面。\n"
+                "请结束本轮后重新保存或切换使用配置。",
+            )
+            return False
+
+        self._product_config_refresh_state = "applying"
+        self.update_player_btn_is_paused()
+        try:
+            self._reset_manual_product_condition_cycle(
+                clear_waveforms=True, refresh_display=False
+            )
+            self._clear_recent_session_history(reset_panel=False)
+            self._reset_product_pdf_report_tracking()
+            self._direction_waveform_cache = {}
+            self._condition_record_cache = {}
+            self.recorded_path = None
+            self.recorded_signal_info = {}
+            self.data_struct.store_wave_data = None
+            self.data_struct.store_wave_data_multi = None
+            self._clear_audio_source_analysis_state()
+            self.replayer_btn.setDisabled(True)
+            self.data_btn.setDisabled(True)
+
+            self._set_product_snapshot_data(snapshot)
+            self.count_board.analysis_config = self.analysis_config
+            self.init_data_struct_stimulus_config()
+            self.init_fft_and_stft_flag()
+            self.left_panel.set_condition_configs(
+                self.product_test_condition_configs, queue_catalog=self._product_queue_catalog
+            )
+            self.left_panel.set_current_stage("", tone="pending")
+            self.channel_workspace.set_conditions(
+                self.product_test_condition_configs, reset_context=True
+            )
+            self._refresh_waveform_condition_metadata()
+            self._apply_condition_mode_to_waveforms()
+            self._sync_waveform_condition_from_left(self.left_panel.selected_condition_key)
+            self.recent_session_panel.set_conditions(self.product_test_condition_configs)
+            if snapshot.active_file:
+                serial_result = self.refresh_serial_product_trigger_runtime()
+                if not serial_result["ok"]:
+                    raise RuntimeError(serial_result.get("message") or "串口运行配置应用失败")
+            else:
+                self.hw_manager.stop_serial_discrete_input_listener()
+        except Exception as error:
+            self._product_configuration_apply_failed(error)
+            return False
+
+        self._applied_product_snapshot = snapshot
+        self._product_config_refresh_error = ""
+        self._product_config_refresh_state = "ready" if snapshot.active_file else "empty"
+        self._refresh_test_mode_availability()
+        self.update_player_btn_is_paused()
+        return True
+
+    def _product_configuration_refresh_busy(self):
+        if any(bool(getattr(self, name, False)) for name in (
+            "_analysis_round_config_locked", "player_status_flag", "_record_workflow_busy",
+            "_recording_process_contexts",
+        )):
+            return True
+        pending_analysis = getattr(self, "_analysis_has_pending_tasks", None)
+        return bool(pending_analysis()) if callable(pending_analysis) else False
 
     def _current_ve_recording_device(self, device):
         """Resolve the loaded queue, reading the injected profile only for a missing rate."""
@@ -67,9 +204,8 @@ class SequenceWidgetConfigOpsMixin:
         return os.path.join(manager.program_dir, active_file)
 
     def load_active_product_test_condition_configs(self):
-        return LoadUiConfig.load_product_test_program_condition_configs(
-            self._get_active_product_program_path()
-        )
+        path = self._get_active_product_program_path()
+        return LoadUiConfig.load_product_test_program_condition_configs(path) if path else []
 
     def load_active_product_test_context(self):
         """Load the immutable project fields needed by result storage."""
@@ -94,6 +230,21 @@ class SequenceWidgetConfigOpsMixin:
         }
 
     def _active_product_program_test_mode_availability(self):
+        if hasattr(self, "_product_config_refresh_state"):
+            state = self._product_config_refresh_state
+            snapshot = (self._pending_initial_product_snapshot if state == "initializing"
+                        else self._applied_product_snapshot)
+            if state == "failed":
+                return False, self._product_config_refresh_error or "当前产品配置应用失败"
+            if state == "applying":
+                return False, "正在应用产品配置"
+            if snapshot is None or not snapshot.active_file:
+                return False, "当前未选择有效的产品配置，无法进入测试模式"
+            warnings = snapshot.validation.get("use_warnings", [])
+            if warnings:
+                return True, ("以下工况未配置自动判定规则，分析结果仍会保存，最终分类为 not_labeled：\n"
+                              + "\n".join(f"- {message}" for message in warnings))
+            return True, ""
         manager = self._get_product_program_manager()
         registry = manager.load_registry()
         active_file = str((registry or {}).get("active_file") or "").strip()
@@ -494,26 +645,17 @@ class SequenceWidgetConfigOpsMixin:
         self._get_product_program_registry()
         # Updating items will trigger currentTextChanged multiple times (clear/add/setIndex).
         # Block signals to avoid re-entrant loads and transient empty-text callbacks.
-        self.using_file_combobox.blockSignals(True)
+        was_blocked = self.using_file_combobox.blockSignals(True)
         try:
             self.using_file_combobox.clear()
             self.add_file_to_using_file_combobox()
         finally:
-            self.using_file_combobox.blockSignals(False)
+            self.using_file_combobox.blockSignals(was_blocked)
 
     def on_product_test_program_updated(self, *_):
-        """Reload product-test programs after the configuration dialog saves."""
-        try:
-            self.update_using_file_combobox()
-            self._sync_product_test_conditions(clear_recent_history=True)
-            refresh_serial_runtime = getattr(self, "refresh_serial_product_trigger_runtime", None)
-            if callable(refresh_serial_runtime):
-                refresh_serial_runtime()
-            self.update_player_btn_is_paused()
-        except Exception as error:
-            self.default_logger.warning(
-                f"Failed to refresh product test program after update: {error}"
-            )
+        """Saving another program changes only the selector unless a shared queue changed."""
+        self.update_using_file_combobox()
+        self._refresh_active_product_configuration()
 
     def add_file_to_using_file_combobox(self):
         """
@@ -521,7 +663,6 @@ class SequenceWidgetConfigOpsMixin:
         """
         registry = self._get_product_program_registry()
         active_file = str((registry or {}).get("active_file") or "")
-        selected_key = None
         visible_count = 0
         was_blocked = self.using_file_combobox.blockSignals(True)
         try:
@@ -534,17 +675,11 @@ class SequenceWidgetConfigOpsMixin:
                     continue
                 self.using_file_combobox.addItem(name, file_name)
                 visible_count += 1
-                if active_file and file_name == active_file:
-                    selected_key = name
-
-            if visible_count == 0:
+            if visible_count == 0 or not active_file:
                 self.using_file_combobox.addItem("无配置", None)
-                selected_key = "无配置"
-
-            if selected_key:
-                idx = self.using_file_combobox.findText(selected_key)
-                if idx >= 0:
-                    self.using_file_combobox.setCurrentIndex(idx)
+            idx = self.using_file_combobox.findData(active_file or None)
+            if idx >= 0:
+                self.using_file_combobox.setCurrentIndex(idx)
         finally:
             self.using_file_combobox.blockSignals(was_blocked)
 
@@ -567,6 +702,13 @@ class SequenceWidgetConfigOpsMixin:
             QMessageBox.warning(self, "警告", "正在录音，请稍后...")
             return
 
+        # Reject before changing the persisted selection or active runtime identity.
+        if (hasattr(self, "_product_config_refresh_state")
+                and self._product_configuration_refresh_busy()):
+            self.restore_previous_configuration()
+            QMessageBox.warning(self, "配置尚未应用", "请等待录音和分析完成后再切换配置。")
+            return
+
         product_file = None
         try:
             product_file = self.using_file_combobox.currentData()
@@ -574,24 +716,11 @@ class SequenceWidgetConfigOpsMixin:
             product_file = None
         if product_file:
             manager = self._get_product_program_manager()
-            load_code, program_data = manager.load_project(str(product_file))
-            if load_code != error_code.OK or not isinstance(program_data, dict):
+            try:
+                snapshot = build_product_test_refresh_snapshot(manager, str(product_file))
+            except Exception as error:
                 self.restore_previous_configuration()
-                QMessageBox.warning(
-                    self,
-                    "产品配置不可用",
-                    str(program_data or "产品配置文件无法读取"),
-                )
-                return
-            validation = manager.validate_project(program_data, str(product_file))
-            if not validation.get("is_usable", False):
-                self.restore_previous_configuration()
-                message = "\n".join(validation.get("use_errors", []))
-                QMessageBox.warning(
-                    self,
-                    "产品配置不可用",
-                    message or "产品配置校验失败",
-                )
+                QMessageBox.warning(self, "产品配置不可用", str(error))
                 return
             registry = manager.load_registry()
             registry["active_file"] = str(product_file)
@@ -605,34 +734,7 @@ class SequenceWidgetConfigOpsMixin:
                 return
             self.product_program_registry = registry
             self.active_product_program_file = str(product_file)
-            sync_product_conditions = getattr(self, "_sync_product_test_conditions", None)
-            if callable(sync_product_conditions):
-                sync_product_conditions(clear_recent_history=True)
-            refresh_serial_runtime = getattr(
-                self,
-                "refresh_serial_product_trigger_runtime",
-                None,
-            )
-            if callable(refresh_serial_runtime):
-                refresh_serial_runtime()
-            self.update_player_btn_is_paused()
-            reset_manual_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
-            if callable(reset_manual_cycle):
-                reset_manual_cycle(clear_waveforms=True)
-            self.replayer_btn.setDisabled(True)
-            self.data_btn.setDisabled(True)
-            self.data_struct.store_wave_data = None
-            self.data_struct.store_wave_data_multi = None
-            clear_wav_calibration_state = getattr(
-                self,
-                "_clear_audio_source_analysis_state",
-                None,
-            )
-            if callable(clear_wav_calibration_state):
-                clear_wav_calibration_state()
-            else:
-                from base.data_struct.data_deal_struct import DataDealStruct
-                DataDealStruct.clear_wav_calibration_context(self.data_struct)
+            self._apply_product_test_snapshot(snapshot)
             self.using_file_combobox.clearFocus()
             if self.lineedit_s_or_n.isEnabled():
                 try:
@@ -642,6 +744,10 @@ class SequenceWidgetConfigOpsMixin:
                     pass
             else:
                 self.setFocus()
+            return
+
+        if hasattr(self, "_product_config_refresh_state"):
+            self.restore_previous_configuration()
             return
 
         path = None
@@ -686,12 +792,18 @@ class SequenceWidgetConfigOpsMixin:
 
     def restore_previous_configuration(self):
         """恢复到之前的配置选项"""
-        active_file = getattr(self, "active_product_program_file", None) or getattr(self, "using_config_path", None)
+        if hasattr(self, "_product_config_refresh_state"):
+            active_file = self.active_product_program_file
+        else:
+            active_file = (
+                getattr(self, "active_product_program_file", None)
+                or getattr(self, "using_config_path", None)
+            )
         index = self.using_file_combobox.findData(active_file)
         if index >= 0:
-            self.using_file_combobox.blockSignals(True)
+            was_blocked = self.using_file_combobox.blockSignals(True)
             self.using_file_combobox.setCurrentIndex(index)
-            self.using_file_combobox.blockSignals(False)
+            self.using_file_combobox.blockSignals(was_blocked)
             self.default_logger.warning("已恢复到之前的配置选项")
 
     def get_sequence_config_from_json(self):
@@ -737,10 +849,6 @@ class SequenceWidgetConfigOpsMixin:
                     "如无可选项，请到【功能-测试队列】中保存或导入配置。",
                 )
                 self._missing_config_prompted = True
-        sync_product_conditions = getattr(self, "_sync_product_test_conditions", None)
-        if callable(sync_product_conditions):
-            sync_product_conditions()
-
     def _set_sequence_config_available_state(self, available: bool):
         """
         Enable/disable key actions based on whether a valid sequence config is loaded.

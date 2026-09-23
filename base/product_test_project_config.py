@@ -664,7 +664,7 @@ class ProductTestProjectConfigManager(object):
         )
         return errors
 
-    def load_queue_catalog(self):
+    def load_queue_catalog(self, queue_names=None):
         registry = LoadUiConfig._load_sequence_config_registry(
             self.queue_registry_path
         )
@@ -672,6 +672,8 @@ class ProductTestProjectConfigManager(object):
         registry_dir = os.path.dirname(self.queue_registry_path)
         for name, registered_path in registry.items():
             if name == "using_config_path" or not isinstance(registered_path, str):
+                continue
+            if queue_names is not None and name not in queue_names:
                 continue
             file_path = self._resolve_queue_path(registered_path, registry_dir)
             catalog[name] = self._load_queue_info(file_path)
@@ -759,6 +761,13 @@ class ProductTestProjectConfigManager(object):
 
     @staticmethod
     def _load_queue_info(file_path):
+        load_code, queue_data = LoadUiConfig.load_data_from_json(file_path)
+        return ProductTestProjectConfigManager._queue_info_from_data(
+            file_path, queue_data if load_code == error_code.OK else None
+        )
+
+    @staticmethod
+    def _queue_info_from_data(file_path, queue_data):
         info = {
             "path": file_path,
             "available": False,
@@ -769,8 +778,7 @@ class ProductTestProjectConfigManager(object):
             "can_auto_judge": False,
             "judgment_reason": "",
         }
-        load_code, queue_data = LoadUiConfig.load_data_from_json(file_path)
-        if load_code != error_code.OK or not isinstance(queue_data, list) or not queue_data:
+        if not isinstance(queue_data, list) or not queue_data:
             info["reason"] = "测试队列文件无法读取"
             return info
         first_sequence_group = queue_data[0]
@@ -787,6 +795,8 @@ class ProductTestProjectConfigManager(object):
         info["acquisition_mode"] = acquisition_mode
         acquisition_detail = acquisition.get("detail", {})
         analysis_list = sequence_data.get("analysis_list", {})
+        info["data"] = queue_data
+        info["analysis_list"] = analysis_list
         try:
             validate_analysis_config(analysis_list)
         except ValueError as exc:
