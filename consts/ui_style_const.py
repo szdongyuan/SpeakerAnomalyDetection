@@ -630,6 +630,11 @@ motor_port_combo_style = _style("""
                 border: none;
                 width: 24px;
             }
+            QComboBox::down-arrow {
+                image: url($COMBO_DOWN_ARROW_ICON);
+                width: 12px;
+                height: 12px;
+            }
             QComboBox QAbstractItemView {
                 background-color: #FFFFFF;
                 color: $COLOR_TEXT;

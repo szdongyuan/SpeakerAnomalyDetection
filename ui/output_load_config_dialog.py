@@ -96,6 +96,7 @@ class OutputLoadConfigDialog(ConfigDialogBase):
         layout.addWidget(self.error_label)
         layout.addStretch()
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.buttons.setStyleSheet(f"QDialogButtonBox {{ button-layout: {QDialogButtonBox.GnomeLayout}; }}")
         self.buttons.button(QDialogButtonBox.Ok).setText("确定")
         self.buttons.button(QDialogButtonBox.Cancel).setText("取消")
         self.buttons.accepted.connect(self.accept)
