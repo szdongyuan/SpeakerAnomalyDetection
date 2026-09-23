@@ -40,6 +40,7 @@ from ui.custom_ui_widget.widgets import (
     MessageBox,
 )
 from ui.load_stimulus_dialog import LoadStimulusDialog
+from ui.stimulus_voltage_preview import build_stimulus_voltage_preview
 from ui.adaptive_waveform import AdaptiveWaveformItem
 
 
@@ -1764,9 +1765,12 @@ class StimulusWindow(QDialog):
                 self._restore_step_sc_snapshot(snapshot)
                 return
             self.graph_stimulus()
+        elif data_type == "voltage":
+            self.graph_stimulus()
 
     def update_stimulus_info_from_voltage_combo_box(self):
         self.stimulus_info["voltage_type"] = self.voltage_combo_box.currentText()
+        self.graph_stimulus()
 
     def update_amplitude(self):
         self.stimulus_info["amplitude"] = self.get_predict_amplitude(self.voltage_spin_box.value())
@@ -2270,14 +2274,24 @@ class StimulusWindow(QDialog):
         Parameters:
             self: The instance of the class, containing stimulus signal information and the plot area.
         """
+        if not hasattr(self, "plot_stimulus"):
+            return
         self.plot_stimulus.clear()
         sample_rate = self.stimulus_info["sample_rate"]
         if self.stimulus_data is not None:
             signal_duration = np.arange(len(self.stimulus_data)) / sample_rate
+            display_samples, is_voltage = build_stimulus_voltage_preview(
+                self.stimulus_data,
+                self.stimulus_info.get("voltage"),
+                self.stimulus_info.get("voltage_type"),
+            )
             self.plot_stimulus.addItem(AdaptiveWaveformItem(
-                signal_duration, self.stimulus_data, pen=pyqtgraph.mkPen("b", width=2)
+                signal_duration, display_samples, pen=pyqtgraph.mkPen("b", width=2)
             ))
-            self.plot_stimulus.setLabel("left", "Amplitude", **{"font-size": "20px"})
+            self.plot_stimulus.setLabel(
+                "left", "目标电压" if is_voltage else "原始幅度",
+                units="V" if is_voltage else "", **{"font-size": "20px"}
+            )
             self.plot_stimulus.setLabel("bottom", "Time (s)", **{"font-size": "20px"})
             font = QFont()
             font.setPixelSize(20)
