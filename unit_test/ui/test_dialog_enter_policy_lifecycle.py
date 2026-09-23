@@ -104,3 +104,71 @@ def test_cleared_filter_state_ignores_delayed_autorepeat(
         held_enter.disarm()
         sip.delete(dialog)
         ui_qapp.processEvents()
+
+
+def test_closed_dialogs_can_be_garbage_collected():
+    # Use a fresh process: collection order must not depend on other UI tests,
+    # and an exception in a Qt callback must not abort the whole test suite.
+    script = textwrap.dedent("""\
+        import gc
+        import sys
+        import traceback
+        import weakref
+
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+        from PyQt5.QtWidgets import (
+            QApplication, QDialog, QLineEdit, QPushButton, QVBoxLayout,
+        )
+
+        from ui.dialog_enter_policy import install_dialog_enter_policy
+
+        app = QApplication([])
+        errors = []
+        references = []
+
+        def capture(kind, value, tb):
+            errors.append(''.join(traceback.format_exception(kind, value, tb)))
+
+        sys.excepthook = capture
+
+        def exercise_dialog(track_input, visible):
+            dialog = QDialog()
+            layout = QVBoxLayout(dialog)
+            editor = QLineEdit('value', dialog)
+            confirm = QPushButton('Confirm', dialog)
+            layout.addWidget(editor)
+            layout.addWidget(confirm)
+            policy = install_dialog_enter_policy(dialog, confirm)
+            references.extend(weakref.ref(obj) for obj in (dialog, policy))
+            if visible:
+                dialog.show()
+                app.processEvents()
+            if track_input:
+                editor.setFocus()
+                QTest.keyClick(editor, Qt.Key_Return)
+            dialog.close()
+
+        for track_input in (False, True):
+            for visible in (False, True):
+                for _ in range(20):
+                    exercise_dialog(track_input, visible)
+                    gc.collect()
+                    app.processEvents()
+
+        sys.excepthook = sys.__excepthook__
+        assert not errors, '\\n'.join(errors)
+        assert all(ref() is None for ref in references), 'Closed dialogs leaked'
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        env={
+            **os.environ,
+            "QT_QPA_PLATFORM": "windows" if sys.platform == "win32" else "offscreen",
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
