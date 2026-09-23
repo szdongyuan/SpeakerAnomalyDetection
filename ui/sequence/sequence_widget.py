@@ -51,6 +51,11 @@ class SequenceWindow(
     def __init__(self, *, recording_bridge=None, ve_prewarm_lifetime=None):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
         super().__init__()
+        self._product_config_refresh_state = "initializing"
+        self._product_config_refresh_error = ""
+        self._applied_product_snapshot = None
+        self._pending_initial_product_snapshot = None
+        self.default_logger = LogManager.set_log_handler("core")
         self.recording_bridge = recording_bridge
         self.ve_prewarm_lifetime = ve_prewarm_lifetime
         self._owns_recording_bridge = False
@@ -80,16 +85,16 @@ class SequenceWindow(
         self._raw_audio_csv_export_threads = set()
 
         self.init_result_files()
+        self._prepare_initial_product_configuration()
+        self.init_data_struct_stimulus_config()
+        self.init_fft_and_stft_flag()
         self.count_board = SequenceCountBoard(self.analysis_config)
-        self.product_test_condition_configs = self.load_active_product_test_condition_configs()
-        self.product_test_project_context = self.load_active_product_test_context()
         self.product_test_close_trigger_state = (
             self.load_active_product_test_close_trigger_state()
         )
         self.product_test_pdf_report_config = self.load_active_product_test_pdf_report_config()
         self._product_pdf_report_states = {}
         self._product_pdf_report_paths = {}
-        self.default_logger = LogManager.set_log_handler("core")
         self.raw_audio_csv_export_succeeded.connect(
             self._on_raw_audio_csv_export_succeeded
         )
@@ -99,6 +104,7 @@ class SequenceWindow(
         self.left_panel = MotorDetectionLeftPanel(
             self.count_board,
             condition_configs=self.product_test_condition_configs,
+            queue_catalog=self._product_queue_catalog,
         )
         self._initialize_analysis_process_runtime()
         self._init_test_round_metadata()
@@ -236,6 +242,7 @@ class SequenceWindow(
         self.bind_hw_signals()
         self.init_lineedit_text()
         self.init_ui()
+        self._finish_initial_product_configuration()
         self._serial_trigger_runtime_initialized = False
         self._init_product_progress_runtime()
         self.restore_scanner_checkbox_state()

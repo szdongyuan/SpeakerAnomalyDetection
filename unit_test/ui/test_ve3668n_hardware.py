@@ -1504,6 +1504,10 @@ def test_default_mainwindow_constructs_with_baseline_sequence(controls, ui_qapp,
     if legacy_config is not None:
         legacy_path.write_text(legacy_config, encoding="utf-8")
     monkeypatch.setattr(load_config, "DEFAULT_DIR", config_root.as_posix() + "/")
+    from base.product_test_progress import ProductTestProgressStore
+    from ui.sequence import sequence_widget_progress_ops
+    monkeypatch.setattr(sequence_widget_progress_ops, "ProductTestProgressStore",
+                        lambda: ProductTestProgressStore(tmp_path / "progress.json"))
     monkeypatch.setattr(main_window.MainWindow, "get_current_version", lambda self: "test")
     for name in ("critical", "information", "question"):
         monkeypatch.setattr(main_window.QMessageBox, name, lambda *a, **kw: main_window.QMessageBox.No)

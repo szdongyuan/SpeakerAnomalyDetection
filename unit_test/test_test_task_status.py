@@ -18,6 +18,7 @@ def host():
     widget.left_panel = MotorResultPanel(
         condition_configs=widget.product_test_condition_configs
     )
+    widget.left_panel.reset_result_panel = widget.left_panel.reset
     widget.left_panel.set_channels(list(range(5)))
     widget.recorded_signal_info = {"labels": "not_labeled"}
     widget._capture_analysis_report_failure = Mock()

@@ -277,7 +277,9 @@ class SequenceWidgetAnalysisOpsMixin(
             serial_number=self.lineedit_s_or_n.text().strip(),
         )
 
-    def _reset_manual_product_condition_cycle(self, clear_waveforms=False) -> None:
+    def _reset_manual_product_condition_cycle(
+        self, clear_waveforms=False, *, refresh_display=True
+    ) -> None:
         reset_serial_ports = getattr(self, "_reset_serial_product_port_state", None)
         if callable(reset_serial_ports):
             reset_serial_ports()
@@ -312,7 +314,8 @@ class SequenceWidgetAnalysisOpsMixin(
             clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
             if callable(clear_all_direction_waveforms):
                 clear_all_direction_waveforms()
-        self._reset_product_condition_display_state()
+        if refresh_display:
+            self._reset_product_condition_display_state()
 
     def _reset_product_condition_display_state(self) -> None:
         left_panel = getattr(self, "left_panel", None)
@@ -321,13 +324,7 @@ class SequenceWidgetAnalysisOpsMixin(
         set_current_stage = getattr(left_panel, "set_current_stage", None)
         if callable(set_current_stage):
             set_current_stage("", tone="pending")
-        for index, item in enumerate(self._product_condition_sequence()):
-            left_panel.set_condition_result(
-                self._product_condition_runtime_key(item, index),
-                "待检测",
-                tone="pending",
-            )
-        left_panel.set_final_result("待判定", tone="pending")
+        left_panel.reset_result_panel()
 
     def _set_product_condition_round_pending(self) -> None:
         self._reset_product_condition_display_state()

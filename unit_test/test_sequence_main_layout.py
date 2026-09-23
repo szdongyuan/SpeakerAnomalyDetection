@@ -236,59 +236,6 @@ def _begin_deferred_streaming_waveform_session(
     return scheduled_callbacks
 
 
-class _SyncLeftPanel:
-    def __init__(self):
-        self.set_calls = []
-        self.refresh_calls = []
-
-    def set_condition_configs(self, condition_configs):
-        self.set_calls.append(list(condition_configs or []))
-
-    def refresh_condition_configs(self, condition_configs):
-        self.refresh_calls.append(list(condition_configs or []))
-        return True
-
-
-class _SyncRecentPanel:
-    def __init__(self):
-        self.set_calls = []
-
-    def set_conditions(self, condition_configs):
-        self.set_calls.append(list(condition_configs or []))
-
-
-class _ProductConditionSyncWidget(SequenceWidgetStreamingOpsMixin):
-    def __init__(self, condition_configs):
-        self.product_test_condition_configs = list(condition_configs)
-        self.left_panel = _SyncLeftPanel()
-        self.channel_workspace = _DummyChannelWorkspace(
-            [
-                str(item.get("key") or "")
-                for item in DirectionWaveformPanel._normalize_conditions(condition_configs)
-            ]
-        )
-        self.recent_session_panel = _SyncRecentPanel()
-        self.cleared_history = 0
-        self.reset_cycles = []
-        self.reset_display_count = 0
-        self.apply_mode_count = 0
-
-    def _get_active_product_program_path(self):
-        return "active_program.json"
-
-    def _clear_recent_session_history(self, reset_panel=True):
-        self.cleared_history += 1
-
-    def _reset_manual_product_condition_cycle(self, clear_waveforms=False):
-        self.reset_cycles.append(bool(clear_waveforms))
-
-    def _reset_product_condition_display_state(self):
-        self.reset_display_count += 1
-
-    def _apply_condition_mode_to_waveforms(self):
-        self.apply_mode_count += 1
-
-
 class TestSequenceMainLayout(unittest.TestCase):
     def _wait_for_plot_ranges_stable(self, row):
         elapsed = QElapsedTimer()
@@ -1499,48 +1446,6 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(board.mode, "mark")
         self.assertFalse(board.test_btn.isEnabled())
 
-    def test_sync_product_conditions_preserves_state_when_signature_unchanged(self):
-        condition_configs = [
-            {"key": "q6000", "condition_name": "6000", "test_queue": "queue_6000"},
-            {"key": "q7000", "condition_name": "7000", "test_queue": "queue_7000"},
-        ]
-        widget = _ProductConditionSyncWidget(condition_configs)
-
-        with patch(
-            "ui.sequence.sequence_widget_streaming_ops.LoadUiConfig.load_product_test_program_condition_configs",
-            return_value=[dict(item) for item in condition_configs],
-        ):
-            widget._sync_product_test_conditions(clear_recent_history=False)
-
-        self.assertEqual(widget.left_panel.set_calls, [])
-        self.assertEqual(len(widget.left_panel.refresh_calls), 1)
-        self.assertEqual(widget.channel_workspace.set_condition_calls, [])
-        self.assertEqual(widget.recent_session_panel.set_calls, [])
-        self.assertEqual(widget.cleared_history, 0)
-        self.assertEqual(widget.reset_display_count, 0)
-        self.assertEqual(widget.reset_cycles, [])
-        self.assertEqual(widget.apply_mode_count, 1)
-
-    def test_sync_product_conditions_rebuilds_when_forced_by_config_switch(self):
-        condition_configs = [
-            {"key": "q6000", "condition_name": "6000", "test_queue": "queue_6000"},
-            {"key": "q7000", "condition_name": "7000", "test_queue": "queue_7000"},
-        ]
-        widget = _ProductConditionSyncWidget(condition_configs)
-
-        with patch(
-            "ui.sequence.sequence_widget_streaming_ops.LoadUiConfig.load_product_test_program_condition_configs",
-            return_value=[dict(item) for item in condition_configs],
-        ):
-            widget._sync_product_test_conditions(clear_recent_history=True)
-
-        self.assertEqual(len(widget.left_panel.set_calls), 1)
-        self.assertEqual(widget.left_panel.refresh_calls, [])
-        self.assertEqual(len(widget.channel_workspace.set_condition_calls), 1)
-        self.assertEqual(widget.cleared_history, 1)
-        self.assertEqual(widget.reset_display_count, 1)
-        self.assertEqual(widget.reset_cycles, [False])
-        self.assertEqual(widget.apply_mode_count, 1)
 
     def test_using_config_combobox_reads_product_project_registry(self):
         with tempfile.TemporaryDirectory() as folder:

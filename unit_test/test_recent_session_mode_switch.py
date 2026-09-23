@@ -169,50 +169,6 @@ class TestRecentSessionModeSwitch(unittest.TestCase):
         self.assertEqual(widget.count_board.mark_calls, 1)
         self.assertEqual(widget.toolsbar.condition_mode_combobox.current_text, "标记")
 
-    def test_config_sync_keeps_recent_history_when_conditions_do_not_change(self):
-        widget = _DummySequenceWidget()
-        condition_configs = [{"key": "01", "condition_name": "6000"}]
-
-        with patch(
-            "ui.sequence.sequence_widget_streaming_ops.LoadUiConfig.load_product_test_program_condition_configs",
-            return_value=condition_configs,
-        ):
-            widget._sync_product_test_conditions()
-
-        self.assertEqual(widget.recent_test_sessions, ["recent_1", "recent_2"])
-        self.assertEqual(widget.recent_session_panel.reset_count, 0)
-        self.assertIsNone(widget.recent_session_panel.conditions)
-
-    def test_config_sync_clears_recent_history_when_conditions_change(self):
-        widget = _DummySequenceWidget()
-        condition_configs = [{"key": "02", "condition_name": "7000"}]
-
-        with patch(
-            "ui.sequence.sequence_widget_streaming_ops.LoadUiConfig.load_product_test_program_condition_configs",
-            return_value=condition_configs,
-        ):
-            widget._sync_product_test_conditions()
-
-        self.assertEqual(widget.recent_test_sessions, [])
-        self.assertEqual(widget.recent_test_session_by_id, {})
-        self.assertIsNone(widget._current_recent_session_id)
-        self.assertFalse(widget._pending_recent_session_append)
-        self.assertEqual(widget.recent_session_panel.reset_count, 1)
-        self.assertEqual(widget.recent_session_panel.conditions, condition_configs)
-
-    def test_config_switch_forces_recent_history_clear(self):
-        widget = _DummySequenceWidget()
-        condition_configs = [{"key": "01", "condition_name": "6000"}]
-
-        with patch(
-            "ui.sequence.sequence_widget_streaming_ops.LoadUiConfig.load_product_test_program_condition_configs",
-            return_value=condition_configs,
-        ):
-            widget._sync_product_test_conditions(clear_recent_history=True)
-
-        self.assertEqual(widget.recent_test_sessions, [])
-        self.assertEqual(widget.recent_session_panel.reset_count, 1)
-        self.assertEqual(widget.recent_session_panel.conditions, condition_configs)
 
 if __name__ == "__main__":
     unittest.main()

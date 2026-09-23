@@ -274,12 +274,15 @@ class AnalysisWaveformPanel(ChannelPlotWorkspace):
             win_h=max(90, viewport_h // max(1, num_windows)), gap=0, pad=0,
         )
 
-    def set_conditions(self, condition_configs):
+    def set_conditions(self, condition_configs, *, reset_context=False):
+        if reset_context:
+            self._condition_contexts.clear()
+            self._audio_paths.clear()
         self._conditions = {
             item["key"]: item
             for item in DirectionWaveformPanel._normalize_conditions(condition_configs)
         }
-        key = self._active_condition_key
+        key = "" if reset_context else self._active_condition_key
         if key not in self._conditions:
             key = next(iter(self._conditions), "")
         self._condition_contexts = {

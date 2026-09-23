@@ -19,7 +19,8 @@ from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMi
 
 
 class _SpyLeftPanel:
-    def __init__(self):
+    def __init__(self, conditions):
+        self.conditions = conditions
         self.condition_results = []
         self.final_results = []
         self.stages = []
@@ -28,6 +29,11 @@ class _SpyLeftPanel:
 
     def set_condition_result(self, condition, result_text, tone=None):
         self.condition_results.append((condition, result_text, tone))
+
+    def reset_result_panel(self):
+        for condition in self.conditions:
+            self.set_condition_result(condition["key"], "待检测", "pending")
+        self.set_final_result("待判定", "pending")
 
     def set_final_result(self, result_text, tone=None):
         self.final_results.append((result_text, tone))
@@ -81,7 +87,7 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
         self.sequence_config = []
         self.analysis_config = {}
         self.count_board = _SpyCountBoard()
-        self.left_panel = _SpyLeftPanel()
+        self.left_panel = _SpyLeftPanel(self.product_test_condition_configs)
         self.channel_workspace = SimpleNamespace(results=[])
         self.channel_workspace.set_condition_result = lambda key, label: self.channel_workspace.results.append((key, label))
         self.recent_test_sessions = []

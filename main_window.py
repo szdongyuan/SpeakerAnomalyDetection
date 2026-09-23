@@ -635,19 +635,27 @@ class MainWindow(QMainWindow):
     def _open_analysis_model_select(self, using_config_path, parent_draft_provider=None):
         context = ({"parent_draft_provider": parent_draft_provider}
                    if parent_draft_provider is not None else {})
-        analysis_model_select_dialog = AnalysisModelSelect(
-            using_config_path,
-            mic=self.mic,
-            speaker=self.speaker,
-            mic_channels=self.mic_channels,
-            speaker_channels=self.speaker_channels,
-            ve_profile_provider=lambda device: self.ve_profile_store.load(
-                device, self.ve_calibration_store),
-            **context,
-        )
-        analysis_model_select_dialog.exec()
-        # Refresh active sequence config without forcing mode switch
-        self.sequence_window.on_sequence_config_updated()
+        sequence = self.sequence_window
+        was_open = getattr(sequence, "_test_queue_config_dialog_open", False)
+        sequence._test_queue_config_dialog_open = True
+        try:
+            analysis_model_select_dialog = AnalysisModelSelect(
+                using_config_path,
+                mic=self.mic,
+                speaker=self.speaker,
+                mic_channels=self.mic_channels,
+                speaker_channels=self.speaker_channels,
+                ve_profile_provider=lambda device: self.ve_profile_store.load(
+                    device, self.ve_calibration_store),
+                **context,
+            )
+            analysis_model_select_dialog.exec()
+        finally:
+            try:
+                sequence.on_sequence_config_updated()
+            finally:
+                sequence._test_queue_config_dialog_open = was_open
+                sequence.update_player_btn_is_paused()
 
     def on_product_test_program_config(self):
         if getattr(

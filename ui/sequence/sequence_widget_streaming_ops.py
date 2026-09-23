@@ -678,22 +678,9 @@ class SequenceWidgetStreamingOpsMixin:
         )
 
     def on_sequence_config_updated(self, *_):
-        """
-        Called when the test-queue window confirms config changes.
-
-        Refresh the combobox items from registry, then reload the active config so the
-        main window immediately reflects newly saved/imported entries.
-        """
-        try:
-            self.update_using_file_combobox()
-            self.get_sequence_config_from_json()
-            self.init_data_struct_stimulus_config()
-            self.init_fft_and_stft_flag()
-            if self.count_board:
-                self.count_board.analysis_config = self.analysis_config
-                self._refresh_test_mode_availability()
-        except Exception as e:
-            self.default_logger.warning(f"Failed to refresh sequence config after update: {e}")
+        """A shared queue edit uses the same comparison as a product save."""
+        self.update_using_file_combobox()
+        self._refresh_active_product_configuration()
 
     def _refresh_test_mode_availability(self):
         """
@@ -705,7 +692,15 @@ class SequenceWidgetStreamingOpsMixin:
                 self._active_product_program_test_mode_availability()
             )
             if count_board:
-                count_board.set_test_available(bool(can_output), reason or "")
+                if getattr(self, "_product_config_refresh_state", "ready") in (
+                    "applying", "failed", "empty",
+                ):
+                    # Changing mode here would independently clear results a second time.
+                    count_board.set_test_available(
+                        bool(can_output), reason or "", preserve_mode=True
+                    )
+                else:
+                    count_board.set_test_available(bool(can_output), reason or "")
         except Exception:
             if count_board:
                 count_board.set_test_available(False, "产品配置校验失败，无法进入测试模式")
@@ -750,83 +745,6 @@ class SequenceWidgetStreamingOpsMixin:
             )
         return tuple(signature)
 
-    def _sync_product_test_conditions(self, clear_recent_history=False):
-        config_path = None
-        get_active_program_path = getattr(self, "_get_active_product_program_path", None)
-        if callable(get_active_program_path):
-            config_path = get_active_program_path()
-
-        old_signature = self._product_condition_signature(
-            getattr(self, "product_test_condition_configs", []) or []
-        )
-        old_pdf_report_config = dict(
-            getattr(self, "product_test_pdf_report_config", {}) or {}
-        )
-        old_close_trigger_state = str(
-            getattr(self, "product_test_close_trigger_state", "") or ""
-        ).strip()
-        self.product_test_condition_configs = LoadUiConfig.load_product_test_program_condition_configs(config_path)
-        load_project_context = getattr(self, "load_active_product_test_context", None)
-        self.product_test_project_context = (
-            load_project_context() if callable(load_project_context) else {}
-        )
-        self.product_test_close_trigger_state = ""
-        self.product_test_pdf_report_config = {"enabled": False, "save_dir": ""}
-        new_signature = self._product_condition_signature(self.product_test_condition_configs)
-        close_trigger_state_changed = (
-            old_close_trigger_state != self.product_test_close_trigger_state
-        )
-        conditions_changed = (
-            old_signature != new_signature or close_trigger_state_changed
-        )
-        pdf_report_config_changed = (
-            old_pdf_report_config != self.product_test_pdf_report_config
-        )
-        should_clear_history = bool(clear_recent_history) or (
-            old_signature and conditions_changed
-        )
-        should_rebuild_condition_views = bool(clear_recent_history) or conditions_changed or not old_signature
-        clear_recent_history_func = getattr(self, "_clear_recent_session_history", None)
-        if should_clear_history and callable(clear_recent_history_func):
-            clear_recent_history_func(reset_panel=False)
-        if should_clear_history:
-            reset_manual_product_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
-            if callable(reset_manual_product_cycle):
-                reset_manual_product_cycle(clear_waveforms=False)
-        if should_clear_history or pdf_report_config_changed:
-            reset_pdf_tracking = getattr(
-                self,
-                "_reset_product_pdf_report_tracking",
-                None,
-            )
-            if callable(reset_pdf_tracking):
-                reset_pdf_tracking()
-        if getattr(self, "left_panel", None) is not None:
-            if should_rebuild_condition_views:
-                self.left_panel.set_condition_configs(self.product_test_condition_configs)
-                reset_display_state = getattr(self, "_reset_product_condition_display_state", None)
-                if callable(reset_display_state):
-                    reset_display_state()
-            else:
-                refresh_condition_configs = getattr(self.left_panel, "refresh_condition_configs", None)
-                if callable(refresh_condition_configs):
-                    refresh_condition_configs(self.product_test_condition_configs)
-        if getattr(self, "channel_workspace", None) is not None:
-            if should_rebuild_condition_views and hasattr(
-                self.channel_workspace, "set_conditions"
-            ):
-                self.channel_workspace.set_conditions(self.product_test_condition_configs)
-            self._refresh_waveform_condition_metadata()
-            apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
-            if callable(apply_mode):
-                apply_mode()
-            self._sync_waveform_condition_from_left(
-                getattr(self.left_panel, "selected_condition_key", "")
-            )
-        if getattr(self, "recent_session_panel", None) is not None:
-            if should_clear_history and hasattr(self.recent_session_panel, "set_conditions"):
-                self.recent_session_panel.set_conditions(self.product_test_condition_configs)
-        self._refresh_test_mode_availability()
 
     def _summarize_ok_ng(self):
         """
@@ -1084,7 +1002,9 @@ class SequenceWidgetStreamingOpsMixin:
         )
         if not conditions:
             return
-        queue_catalog = self._get_product_program_manager().load_queue_catalog()
+        queue_catalog = getattr(self, "_product_queue_catalog", None)
+        if queue_catalog is None:
+            queue_catalog = self._get_product_program_manager().load_queue_catalog()
         for condition in conditions:
             queue_info = queue_catalog.get(condition["test_queue"], {})
             duration = queue_info.get("duration")

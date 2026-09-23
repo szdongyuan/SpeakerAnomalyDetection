@@ -505,7 +505,9 @@ def test_main_window_passes_parent_context_to_real_queue_editor(editor, monkeypa
     monkeypatch.setattr(window, "exec", execute)
     refreshes = []
     host = SimpleNamespace(mic=None, speaker=None, mic_channels=[0], speaker_channels=[],
-                           sequence_window=SimpleNamespace(on_sequence_config_updated=lambda: refreshes.append(True)))
+                           sequence_window=SimpleNamespace(
+                               on_sequence_config_updated=lambda: refreshes.append(True),
+                               update_player_btn_is_paused=lambda: None))
     main_window.MainWindow._open_analysis_model_select(host, str(target), provider)
     assert [r.sources for r in observed[0].references] == [{"saved", "draft"}, {"saved"}]
     assert refreshes == [True]

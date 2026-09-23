@@ -315,6 +315,10 @@ class SequenceWidgetSerialTriggerOpsMixin:
         return result
 
     def on_serial_full_frame_received(self, payload):
+        if getattr(self, "_product_config_refresh_state", "ready") != "ready":
+            return
+        if getattr(self, "_test_queue_config_dialog_open", False):
+            return
         if not (getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", True):
             return
         if getattr(self, "_serial_trigger_config_dialog_open", False):
