@@ -405,9 +405,14 @@ class SequenceWidgetSerialTriggerOpsMixin:
             not can_start() if callable(can_start)
             else bool(getattr(self, "_record_workflow_busy", False)))
         if admission_blocked and not executing:
-            self.default_logger.info(
-                f"serial_product_frame_ignored_manual_busy frame={received_frame}"
-            )
+            csv_reason = getattr(self, "_raw_audio_csv_admission_reason", lambda: "")()
+            if csv_reason:
+                self.default_logger.info(
+                    f"serial_product_frame_rejected_csv_busy frame={received_frame} reason={csv_reason}")
+            else:
+                self.default_logger.info(
+                    f"serial_product_frame_ignored_manual_busy frame={received_frame}"
+                )
             return
         if executing:
             active_condition = getattr(self, "_active_product_condition_config", None)
@@ -454,9 +459,15 @@ class SequenceWidgetSerialTriggerOpsMixin:
                 )
                 return
 
-        self._manual_product_condition_index = frame_index
-        if self._start_serial_product_condition(received_frame):
-            self._serial_product_latched_frame = received_frame
+        from ui.sequence.sequence_widget_raw_csv_ops import CsvRecordingAdmissionScope
+        with CsvRecordingAdmissionScope(self) as csv_scope:
+            if not csv_scope.allowed:
+                self.default_logger.info(
+                    f"serial_product_start_rejected_csv_busy frame={received_frame}")
+                return
+            self._manual_product_condition_index = frame_index
+            if self._start_serial_product_condition(received_frame):
+                self._serial_product_latched_frame = received_frame
 
     def _handle_serial_product_close_frame(self, close_frame):
         group_id = str(
@@ -552,47 +563,52 @@ class SequenceWidgetSerialTriggerOpsMixin:
         )
 
     def _start_serial_product_condition(self, received_frame):
-        can_start = getattr(self, "_can_prepare_recording_workflow",
-                            getattr(self, "_can_start_recording_workflow", None))
-        if callable(can_start) and not can_start():
-            self.default_logger.info(
-                f"serial_product_start_rejected_busy frame={received_frame}"
-            )
-            return False
-        prepare = getattr(self, "_prepare_next_manual_product_condition_recording", None)
-        if not callable(prepare):
-            reason = "产品工况运行入口不可用，请检查程序版本或重新打开测试页面。"
-            self.default_logger.error(f"serial_product_start_rejected reason={reason}")
-            self._show_serial_product_notice_once("产品测试无法开始", reason)
-            return False
+        from ui.sequence.sequence_widget_raw_csv_ops import CsvRecordingAdmissionScope
+        with CsvRecordingAdmissionScope(self) as csv_scope:
+            if not csv_scope.allowed:
+                self.default_logger.info(f"serial_product_start_rejected_csv_busy frame={received_frame}")
+                return False
+            can_start = getattr(self, "_can_prepare_recording_workflow",
+                                getattr(self, "_can_start_recording_workflow", None))
+            if callable(can_start) and not can_start():
+                self.default_logger.info(
+                    f"serial_product_start_rejected_busy frame={received_frame}"
+                )
+                return False
+            prepare = getattr(self, "_prepare_next_manual_product_condition_recording", None)
+            if not callable(prepare):
+                reason = "产品工况运行入口不可用，请检查程序版本或重新打开测试页面。"
+                self.default_logger.error(f"serial_product_start_rejected reason={reason}")
+                self._show_serial_product_notice_once("产品测试无法开始", reason)
+                return False
 
-        prepared = prepare()
-        if prepared is not True:
-            self.default_logger.warning(
-                "serial_product_start_rejected reason=当前产品工况或测试队列无法加载"
-            )
-            return False
+            prepared = prepare()
+            if prepared is not True:
+                self.default_logger.warning(
+                    "serial_product_start_rejected reason=当前产品工况或测试队列无法加载"
+                )
+                return False
 
-        preflight = getattr(self, "checked_work_status_message", None)
-        if callable(preflight) and preflight():
-            self._cancel_prepared_serial_product_condition()
-            return False
+            preflight = getattr(self, "checked_work_status_message", None)
+            if callable(preflight) and preflight():
+                self._cancel_prepared_serial_product_condition()
+                return False
 
-        self._serial_product_condition_executing = True
-        self._serial_product_session_started = False
-        self.default_logger.info(f"serial_product_condition_start frame={received_frame}")
-        self.clicked_player_flag = True
-        self.start_this_play("not_labeled")
+            self._serial_product_condition_executing = True
+            self._serial_product_session_started = False
+            self.default_logger.info(f"serial_product_condition_start frame={received_frame}")
+            self.clicked_player_flag = True
+            self.start_this_play("not_labeled")
 
-        if (
-            getattr(self, "_serial_product_condition_executing", False)
-            and not getattr(self, "_record_workflow_busy", False)
-            and not getattr(self, "player_status_flag", False)
-            and bool(getattr(self, "_get_active_product_condition_key", lambda: "")())
-        ):
-            self._abort_serial_product_round("录音流程未能启动")
-            return False
-        return True
+            if (
+                getattr(self, "_serial_product_condition_executing", False)
+                and not getattr(self, "_record_workflow_busy", False)
+                and not getattr(self, "player_status_flag", False)
+                and bool(getattr(self, "_get_active_product_condition_key", lambda: "")())
+            ):
+                self._abort_serial_product_round("录音流程未能启动")
+                return False
+            return True
 
     def _cancel_prepared_serial_product_condition(self):
         """Cancel a condition that failed preflight without deleting prior round data."""
@@ -832,13 +848,28 @@ class SequenceWidgetSerialTriggerOpsMixin:
                             raise OSError(f"serial_product_round_audio_delete_failed path={path} message={delete_message}")
 
                     bridge = getattr(self, "recording_bridge", None)
-                    deferred = bridge is not None and bridge.service.defer_path_cleanup(
-                        recorded_path, delete_exact_record)
-                    if not deferred:
-                        try:
-                            delete_exact_record(recorded_path)
-                        except OSError as error:
-                            self.default_logger.warning(str(error))
+                    csv_service = getattr(self, "raw_audio_csv_service", None)
+                    if csv_service is not None:
+                        recording_service = bridge.service if bridge is not None else None
+                        # Claim future deletion now, before either service releases
+                        # the old path. The readiness query and deletion run on the
+                        # CSV supervisor, outside its ledger lock and without Qt.
+                        accepted = csv_service.defer_mutation(
+                            (recorded_path,),
+                            lambda path=recorded_path, delete=delete_exact_record: delete(path),
+                            ready=lambda path=recorded_path, service=recording_service:
+                                service is None or not service.is_path_leased(path))
+                        if not accepted:
+                            self.default_logger.warning(
+                                f"serial_product_round_audio_delete_not_scheduled path={recorded_path}")
+                    else:
+                        deferred = bridge is not None and bridge.service.defer_path_cleanup(
+                            recorded_path, delete_exact_record)
+                        if not deferred:
+                            try:
+                                delete_exact_record(recorded_path)
+                            except OSError as error:
+                                self.default_logger.warning(str(error))
 
             try:
                 self.recent_test_sessions.remove(session_id)

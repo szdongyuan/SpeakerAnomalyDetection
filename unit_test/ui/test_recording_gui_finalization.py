@@ -227,10 +227,14 @@ def test_child_and_reader_report_request_correlated_local_durations(tmp_path, ca
 def test_finalizing_is_once_only_and_cancel_blocks_fallback():
     from base.recording_service import RecordingService, RecordingSession, RecordingCallbacks
     from base.recording_timing_logger import RecordingTimingLogger
+    from base.recording_diagnostics import RecordingDiagnostics
     from types import SimpleNamespace
     service = object.__new__(RecordingService)
     service._logger = logging.Logger("finalizing-callback-test", logging.ERROR)
     service._timing_logger = RecordingTimingLogger()
+    service._recording_diagnostics = RecordingDiagnostics(
+        service._logger, timing_logger=service._timing_logger, categories=("callback_finalizing",))
+    service._capture_session = None
     seen = []
     session = RecordingSession(service, SimpleNamespace(request_id="once"), RecordingCallbacks(finalizing=lambda s: seen.append(s)))
     service._notify_finalizing(session)

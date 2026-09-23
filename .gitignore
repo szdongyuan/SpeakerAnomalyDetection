@@ -22,3 +22,9 @@ docs
 vkinging_daq.py
 record_vkinging_continuous.py
 recordings
+111/
+dist/
+output/
+tmp
+build/
+.double-sdd

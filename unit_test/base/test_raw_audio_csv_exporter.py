@@ -1,10 +1,145 @@
 import csv
+import os
+from pathlib import Path
 
 import numpy as np
 import pytest
 import soundfile as sf
 
 from base.raw_audio_csv_exporter import export_raw_audio_csv
+
+
+@pytest.fixture
+def export_paths(tmp_path):
+    wav = tmp_path / "recording.wav"
+    sf.write(wav, np.array([0.25], dtype=np.float32), 48000, subtype="FLOAT")
+    return wav, tmp_path / "recording.csv", tmp_path / ".recording.task.tmp"
+
+
+def test_export_uses_controlled_temporary_path(export_paths, monkeypatch):
+    wav, target, temporary = export_paths
+    replace = os.replace
+    published = []
+
+    def observe_replace(source, destination):
+        published.append((Path(source), Path(destination)))
+        replace(source, destination)
+
+    monkeypatch.setattr("base.raw_audio_csv_exporter.os.replace", observe_replace)
+    assert export_raw_audio_csv(wav, target, (0,), temporary_path=temporary) == target
+    assert published == [(temporary, target)]
+    assert not temporary.exists()
+
+
+@pytest.mark.parametrize("invalid", ["outside", "target", "source", "directory"])
+def test_export_rejects_unsafe_temporary_path(export_paths, invalid):
+    wav, target, temporary = export_paths
+    choices = {"outside": target.parent / "other" / "task.tmp", "target": target,
+               "source": wav, "directory": target.parent}
+    with pytest.raises(ValueError, match="temporary"):
+        export_raw_audio_csv(wav, target, (0,), temporary_path=choices[invalid])
+    assert wav.exists()
+    assert not target.exists()
+
+
+def test_controlled_temporary_collision_preserves_existing_files(export_paths):
+    wav, target, temporary = export_paths
+    temporary.write_bytes(b"belongs to another task")
+    target.write_bytes(b"old csv")
+    with pytest.raises(FileExistsError):
+        export_raw_audio_csv(wav, target, (0,), temporary_path=temporary)
+    assert temporary.read_bytes() == b"belongs to another task"
+    assert target.read_bytes() == b"old csv"
+
+
+@pytest.mark.parametrize("failure_stage", ["open", "fdopen", "write", "replace"])
+def test_controlled_temporary_failure_closes_and_cleans_owned_file(
+    export_paths, monkeypatch, failure_stage
+):
+    wav, target, temporary = export_paths
+    target.write_bytes(b"old csv")
+    descriptors = []
+    real_open = os.open
+    real_writer = csv.writer
+
+    def observe_open(*args, **kwargs):
+        descriptor = real_open(*args, **kwargs)
+        descriptors.append(descriptor)
+        return descriptor
+
+    def fail(*args, **kwargs):
+        raise OSError("injected " + failure_stage)
+
+    class PartialWriter:
+        def __init__(self, *args, **kwargs):
+            self.writer = real_writer(*args, **kwargs)
+
+        def writerow(self, row):
+            return self.writer.writerow(row)
+
+        def writerows(self, rows):
+            self.writer.writerow(next(iter(rows)))
+            fail()
+
+    monkeypatch.setattr("base.raw_audio_csv_exporter.os.open", observe_open)
+    boundary = {"open": "os.open", "fdopen": "os.fdopen", "write": "csv.writer",
+                "replace": "os.replace"}[failure_stage]
+    monkeypatch.setattr("base.raw_audio_csv_exporter." + boundary,
+                        PartialWriter if failure_stage == "write" else fail)
+    with pytest.raises(OSError, match="injected"):
+        export_raw_audio_csv(wav, target, (0,), temporary_path=temporary)
+    assert target.read_bytes() == b"old csv"
+    assert not temporary.exists()
+    for descriptor in descriptors:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
+@pytest.mark.parametrize("callback_raises", [False, True])
+def test_cleanup_failure_reports_exact_path_without_hiding_export_error(
+    export_paths, monkeypatch, callback_raises
+):
+    wav, target, temporary = export_paths
+    cleanup_error = PermissionError("cannot unlink owned temporary")
+    diagnostics = []
+
+    def fail_replace(*args):
+        raise OSError("publish failed")
+
+    def fail_unlink(path, *args, **kwargs):
+        assert path == temporary
+        raise cleanup_error
+
+    def on_cleanup(path, error):
+        diagnostics.append((path, error))
+        if callback_raises:
+            raise RuntimeError("diagnostic consumer failed")
+
+    monkeypatch.setattr("base.raw_audio_csv_exporter.os.replace", fail_replace)
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    with pytest.raises(OSError, match="publish failed"):
+        export_raw_audio_csv(wav, target, (0,), temporary_path=temporary,
+                             cleanup_failed=on_cleanup)
+    assert diagnostics == [(temporary, cleanup_error)]
+    assert temporary.exists()
+
+
+def test_temporary_created_acknowledges_owned_file_and_closes_on_callback_failure(export_paths):
+    wav, target, temporary = export_paths
+    observed = []
+
+    def created(path, identity):
+        observed.append((path, identity))
+        info = temporary.stat()
+        assert identity == (info.st_dev, info.st_ino)
+        raise RuntimeError("acknowledgment failed")
+
+    with pytest.raises(RuntimeError, match="acknowledgment failed"):
+        export_raw_audio_csv(wav, target, (0,), temporary_path=temporary, temporary_created=created)
+    assert len(observed) == 1
+    assert observed[0][0] == temporary
+    assert not temporary.exists()
+    wav.unlink()
 
 
 def test_export_raw_audio_csv_preserves_physical_channels_and_samples(tmp_path):

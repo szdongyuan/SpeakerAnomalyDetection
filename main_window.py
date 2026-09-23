@@ -1,5 +1,14 @@
 import sys
 
+if __name__ == "__main__":
+    # Frozen spawn children must be diverted before loading GUI/hardware modules.
+    from multiprocessing import freeze_support
+    freeze_support()
+    from tools.raw_audio_csv_frozen_smoke import maybe_run_raw_csv_smoke
+    diagnostic_exit = maybe_run_raw_csv_smoke(sys.argv[1:])
+    if diagnostic_exit is not None:
+        sys.exit(diagnostic_exit)
+
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
@@ -25,6 +34,7 @@ from ui.vkinging_presentation import device_display_name, ve_failure_text
 class MainWindow(QMainWindow):
 
     def __init__(self, *, ve_prewarm_lifetime=None, recording_bridge=None,
+                 raw_audio_csv_bridge=None,
                  ve_profile_store=None, ve_calibration_store=None,
                  discovery_factory=None, hardware_selection_path=None):
         from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
@@ -47,6 +57,14 @@ class MainWindow(QMainWindow):
             from ui.recording_service_bridge import RecordingServiceBridge
             recording_bridge = RecordingServiceBridge(RecordingService(), self)
         self.recording_bridge = recording_bridge
+        self._owns_raw_audio_csv_service = raw_audio_csv_bridge is None
+        if raw_audio_csv_bridge is None:
+            from base.raw_audio_csv_service import RawAudioCsvService
+            from ui.raw_audio_csv_service_bridge import RawAudioCsvServiceBridge
+            raw_audio_csv_bridge = RawAudioCsvServiceBridge(RawAudioCsvService(), self)
+            app.aboutToQuit.connect(raw_audio_csv_bridge.begin_shutdown)
+        self.raw_audio_csv_bridge = raw_audio_csv_bridge
+        self.raw_audio_csv_service = raw_audio_csv_bridge.service
         from base.ve3668n_stores import VEInputProfileStore, VECalibrationStore
         self.ve_profile_store = ve_profile_store if ve_profile_store is not None else VEInputProfileStore()
         self.ve_calibration_store = ve_calibration_store if ve_calibration_store is not None else VECalibrationStore()
@@ -512,6 +530,7 @@ class MainWindow(QMainWindow):
         self.sequence_window = SequenceWindow(
             recording_bridge=self.recording_bridge,
             ve_prewarm_lifetime=self.ve_prewarm_lifetime,
+            raw_audio_csv_bridge=self.raw_audio_csv_bridge,
         )
         if hasattr(self, "ve_profile_store"):
             self.sequence_window.ve_profile_store = self.ve_profile_store
@@ -717,9 +736,11 @@ class MainWindow(QMainWindow):
             "当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl)
         )
 
-    @staticmethod
-    def on_audio_manager_init():
-        dlg = ArchiveAudioDataDialog(LogManager.set_log_handler("core"))
+    def on_audio_manager_init(self):
+        dlg = ArchiveAudioDataDialog(
+            LogManager.set_log_handler("core"),
+            raw_audio_csv_service=self.raw_audio_csv_service,
+            recording_service=self.recording_bridge.service)
         dlg.exec()
 
 
@@ -922,6 +943,9 @@ class MainWindow(QMainWindow):
             shutdown_product_pdf()
 
     def closeEvent(self, event):
+        if getattr(self, "_exit_cleanup_complete", False):
+            event.accept()
+            return
         sequence = getattr(self, "sequence_window", None)
         has_pending_analysis = getattr(
             sequence,
@@ -930,12 +954,30 @@ class MainWindow(QMainWindow):
         )
         if callable(has_pending_analysis) and has_pending_analysis():
             event.ignore()
+            if getattr(self, "_closing", False):
+                # A recording can enqueue analysis during asynchronous video
+                # shutdown. Allow the operator to close again once it finishes;
+                # the sequence's recording admission remains closed.
+                self.setEnabled(True)
             QMessageBox.information(
                 self,
                 "分析任务未完成",
                 "还有分析任务未完成，请等待分析结束后再退出。",
             )
             return
+        if not getattr(self, "_closing", False):
+            self._closing = True
+            begin_close = getattr(sequence, "_begin_raw_audio_csv_close", None)
+            if callable(begin_close):
+                begin_close(application_exit=True)
+            # Creation ownership is independent of application exit authority:
+            # the launcher-injected service must drain here too.
+            csv_bridge = getattr(self, "raw_audio_csv_bridge", None)
+            if csv_bridge is not None:
+                self._raw_audio_csv_close_subscription = csv_bridge.subscribe(
+                    self._on_raw_audio_csv_close_event, owner=self)
+                csv_bridge.closed.connect(self.close)
+                csv_bridge.begin_shutdown()
         if hasattr(self, "ve_discovery"):
             self._close_ve_discovery()
         video = getattr(self, "video_controller", None)
@@ -965,14 +1007,32 @@ class MainWindow(QMainWindow):
                 bridge.shutdown(self._finish_recording_shutdown)
             return
 
-        # Close any other sub windows/dialogs that may still be open.
+        csv_bridge = getattr(self, "raw_audio_csv_bridge", None)
+        if csv_bridge is not None and not csv_bridge.service_closed:
+            self._show_raw_audio_csv_close_status()
+            event.ignore()
+            return
+
+        # Children observe application exit only after the shared drain ends.
+        if sequence is not None:
+            sequence._application_csv_drain_complete = True
+            close_sequence = getattr(sequence, "close", None)
+            if callable(close_sequence):
+                close_sequence()
         self._close_all_subwindows()
 
-        if sequence is not None:
-            sequence._wait_for_raw_audio_csv_exports()
-
         self._shutdown_product_pdf_exporter_before_exit()
+        self._exit_cleanup_complete = True
         event.accept()
+
+    def _on_raw_audio_csv_close_event(self, event):
+        if not self.raw_audio_csv_bridge.service_closed:
+            self._show_raw_audio_csv_close_status()
+
+    def _show_raw_audio_csv_close_status(self):
+        count = self.raw_audio_csv_service.snapshot().outstanding
+        self.statusBar().showMessage(
+            f"正在保存/压缩原始 CSV（剩余 {count} 份），等待资源释放后退出…")
 
     def _finish_recording_shutdown(self):
         self._recording_shutdown_reported = True

@@ -89,6 +89,7 @@ def test_sequence_initialization_keeps_prewarm_stores_and_video_panel(ui_qapp, m
     monkeypatch.setattr(main_window_module, "SequenceWindow", factory)
     host = SimpleNamespace(
         recording_bridge=object(),
+        raw_audio_csv_bridge=object(),
         ve_prewarm_lifetime=object(),
         ve_profile_store=object(),
         ve_calibration_store=object(),
@@ -104,6 +105,7 @@ def test_sequence_initialization_keeps_prewarm_stores_and_video_panel(ui_qapp, m
         factory.assert_called_once_with(
             recording_bridge=host.recording_bridge,
             ve_prewarm_lifetime=host.ve_prewarm_lifetime,
+            raw_audio_csv_bridge=host.raw_audio_csv_bridge,
         )
         assert sequence.ve_profile_store is host.ve_profile_store
         assert sequence.ve_calibration_store is host.ve_calibration_store

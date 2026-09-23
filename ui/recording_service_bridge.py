@@ -8,7 +8,7 @@ import threading
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
 
 from base.log_manager import LogManager
-from base.recording_service import RecordingCallbacks
+from base.recording_service import RecordingCallbacks, RecordingSession
 
 
 class RecordingServiceBridge(QObject):
@@ -214,6 +214,8 @@ class RecordingServiceBridge(QObject):
         if callbacks is None or token in self._delivered:
             return
         self._delivered.add(token)
+        if kind == "started" and isinstance(session, RecordingSession):
+            session._observe_qt_started()
         callback = getattr(callbacks, kind)
         try:
             if callback is not None:

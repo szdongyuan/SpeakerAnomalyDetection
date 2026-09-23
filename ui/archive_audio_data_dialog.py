@@ -22,7 +22,9 @@ from base.audio_record_delete import (
     count_audio_deletion_files, delete_audio_recordings, plan_audio_record_deletion,
 )
 from base.audio_record_filter import filter_audio_records, parse_audio_filter_metadata
-from base.audio_record_package import collect_audio_package_files, select_audio_package_files
+from base.audio_record_package import (
+    audio_record_mutation_paths, collect_audio_package_files, select_audio_package_files,
+)
 from base.log_manager import LogManager
 from base.playback_controller import PlaybackController
 from consts import error_code, model_consts
@@ -51,9 +53,13 @@ class _AudioPackageProgressDialog(QProgressDialog):
 
 class ArchiveAudioDataDialog(AudioDataManageDialog):
 
-    def __init__(self, logger: LogManager):
+    def __init__(self, logger: LogManager, *, raw_audio_csv_service=None, recording_service=None):
+        # Standalone managers explicitly have no application recording/CSV owner.
+        self.raw_audio_csv_service = raw_audio_csv_service
+        self.recording_service = recording_service
         self._audio_filter_cache = {}
         self._package_thread = None
+        self._package_mutation_permit = None
         self._play_btn_col = 6
         self._analysis_btn_col = 7
         self._analysis_dialog = None
@@ -569,7 +575,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
                 )
                 if dialog.exec() != dialog.Accepted:
                     return
-                package_files = select_audio_package_files(grouped, dialog.selected_kinds())
+                selected_kinds = dialog.selected_kinds()
             except (OSError, ValueError) as error:
                 self.logger.error(f"failed to collect audio package files: {error}")
                 QMessageBox.warning(self, "打包失败", f"无法收集打包文件：{error}")
@@ -589,28 +595,75 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         if not file_path.endswith(".zip"):
             file_path += ".zip"
 
-        file_path_list = [entry.source for entry in package_files]
-        archive_names = {entry.source: entry.archive_name for entry in package_files}
-        file_path_list.append("database/audio_data.db")
-        archive_names["database/audio_data.db"] = "audio_data.db"
-        self._start_audio_package(file_path_list, file_path, archive_names)
+        permit = None
+        try:
+            if selected_paths:
+                paths = audio_record_mutation_paths(selected_paths)
+                if self.raw_audio_csv_service is not None:
+                    permit = self.raw_audio_csv_service.try_acquire_mutation(paths)
+                    if permit is None:
+                        QMessageBox.warning(self, "暂不能打包", "录音或 CSV 文件正在保存/压缩，请稍后重试。")
+                        return
+                if self.recording_service is not None and any(
+                        self.recording_service.is_path_leased(path) for path in paths):
+                    QMessageBox.warning(self, "暂不能打包", "录音文件尚未释放，请稍后重试。")
+                    return
+                grouped = collect_audio_package_files(selected_paths)
+                package_files = select_audio_package_files(grouped, selected_kinds)
+            file_path_list = [entry.source for entry in package_files]
+            archive_names = {entry.source: entry.archive_name for entry in package_files}
+            file_path_list.append("database/audio_data.db")
+            archive_names["database/audio_data.db"] = "audio_data.db"
+            # Opening the output ZIP truncates it before any source is read.
+            # Keep this check inside the input permit, including hardlink aliases.
+            output_key = os.path.normcase(os.path.abspath(file_path))
+            for source in file_path_list:
+                source_path = os.path.abspath(os.path.join(DEFAULT_DIR, source))
+                if (output_key == os.path.normcase(source_path)
+                        or (os.path.exists(file_path) and os.path.exists(source_path)
+                            and os.path.samefile(file_path, source_path))):
+                    raise ValueError("输出压缩文件不能与待打包文件相同，请选择其他保存位置。")
+            self._start_audio_package(file_path_list, file_path, archive_names)
+            # Qt finished delivery is queued, so ownership transfers before it runs.
+            self._package_mutation_permit = permit
+            permit = None
+        except (OSError, ValueError, RuntimeError) as error:
+            self.logger.error(f"failed to start audio package: {error}")
+            QMessageBox.warning(self, "打包失败", f"无法打包文件：{error}")
+        finally:
+            if permit is not None:
+                self.raw_audio_csv_service.release_mutation(permit)
 
     def _start_audio_package(self, file_paths, output_path, archive_names):
         thread = AudioPackageThread(file_paths, output_path, archive_names, self)
-        self._package_thread = thread
-        self.package_btn.setEnabled(False)
-        self.packaging_progress = _AudioPackageProgressDialog(
-            "正在打包...", None, 0, len(file_paths), self,
-        )
-        self.packaging_progress.setWindowTitle("打包进度")
-        self.packaging_progress.setWindowModality(Qt.WindowModal)
-        self.packaging_progress.setWindowFlags(self.packaging_progress.windowFlags() & ~Qt.WindowCloseButtonHint)
-        self.packaging_progress.setAutoClose(False)
-        self.packaging_progress.setAutoReset(False)
-        self.packaging_progress.show()
-        thread.progress.connect(self.update_packaging_progress, Qt.QueuedConnection)
-        thread.finished.connect(self._on_package_finished, Qt.QueuedConnection)
-        thread.start()
+        progress = None
+        try:
+            # Qt object creation/setup and QThread launch can fail before any
+            # finished signal exists; dispose those objects and restore admission.
+            progress = _AudioPackageProgressDialog(
+                "正在打包...", None, 0, len(file_paths), self,
+            )
+            progress.setWindowTitle("打包进度")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setWindowFlags(progress.windowFlags() & ~Qt.WindowCloseButtonHint)
+            progress.setAutoClose(False)
+            progress.setAutoReset(False)
+            progress.show()
+            thread.progress.connect(self.update_packaging_progress, Qt.QueuedConnection)
+            thread.finished.connect(self._on_package_finished, Qt.QueuedConnection)
+            self._package_thread = thread
+            self.packaging_progress = progress
+            self.package_btn.setEnabled(False)
+            thread.start()
+        except RuntimeError:
+            self._package_thread = None
+            thread.deleteLater()
+            if progress is not None:
+                progress.hide()
+                progress.deleteLater()
+            self.packaging_progress = None
+            self.package_btn.setEnabled(True)
+            raise
 
     def _on_package_finished(self):
         thread = self._package_thread
@@ -618,6 +671,10 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         # the dialog (and its child QThread) to be destroyed.
         thread.wait()
         error = thread.error_message
+        permit = self._package_mutation_permit
+        self._package_mutation_permit = None
+        if permit is not None:
+            self.raw_audio_csv_service.release_mutation(permit)
         self._package_thread = None
         thread.deleteLater()
         self.packaging_progress.hide()
@@ -646,8 +703,30 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         if dialog.exec() != dialog.Accepted:
             return
 
-        self._stop_playback_if_needed()
-        deleted_ids, errors = delete_audio_recordings(plans, self.recording_manager)
+        paths = tuple(set(audio_record_mutation_paths(row[1] for row in selected_rows)) | {
+            path for plan in plans for files in plan.files.values() for path in files})
+        csv_service = self.raw_audio_csv_service
+        permit = csv_service.try_acquire_mutation(paths) if csv_service is not None else None
+        if csv_service is not None and permit is None:
+            QMessageBox.warning(self, "暂不能删除", "录音或 CSV 文件正在保存，请稍后重试。")
+            return
+        try:
+            # Main recording startup holds the same CSV permit before obtaining
+            # its recording lease. Existing leases may outlive CSV completion.
+            if self.recording_service is not None and any(
+                    self.recording_service.is_path_leased(path) for path in paths):
+                QMessageBox.warning(self, "暂不能删除", "录音文件尚未释放，请稍后重试。")
+                return
+            try:
+                plans = plan_audio_record_deletion(selected_rows)
+            except (OSError, ValueError) as error:
+                QMessageBox.warning(self, "无法删除", f"无法确认待删除文件：{error}")
+                return
+            self._stop_playback_if_needed()
+            deleted_ids, errors = delete_audio_recordings(plans, self.recording_manager)
+        finally:
+            if permit is not None:
+                csv_service.release_mutation(permit)
         for plan in plans:
             self._audio_duration_cache.pop(plan.wav_path, None)
         self.delete_audio_data_with_id(deleted_ids)

@@ -566,3 +566,7 @@ class SequenceWidgetUiOpsMixin:
         config_error = getattr(self, "_ve_recording_config_error", None)
         if config_error:
             self.player_btn.setToolTip(ve_failure_text("unavailable"))
+        csv_reason = getattr(self, "_raw_audio_csv_admission_reason", lambda: "")()
+        if csv_reason:
+            self.player_btn.setDisabled(True)
+            self.player_btn.setToolTip(csv_reason)

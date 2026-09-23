@@ -11,7 +11,7 @@ Failure/cancellation may also precede release. Always use that exact session's
 released continuation, never a mutable current-recording path, for file actions.
 """
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 import math
 import multiprocessing
 import os
@@ -21,7 +21,7 @@ import shutil
 import tempfile
 import threading
 import time
-from time import perf_counter_ns, monotonic as diagnostic_monotonic
+from time import perf_counter, perf_counter_ns, monotonic as diagnostic_monotonic
 
 from base.log_manager import LogManager
 from base.log_exit import ProcessLogDrain, run_with_log_drain
@@ -102,11 +102,46 @@ class RecordingCallbacks:
     finalizing: object = None
 
 
+@dataclass(frozen=True)
+class RecordingStartupTiming:
+    """Same-parent perf_counter boundaries, never child hardware timestamps.
+
+    Capture observation is after validation of the worker's existing started
+    event and therefore includes IPC/supervisor delay. None means unavailable.
+    """
+    request_id: str
+    generation: int | None = None
+    worker_pid: int | None = None
+    accepted_seconds: float | None = None
+    capture_observed_seconds: float | None = None
+    qt_started_seconds: float | None = None
+
+    @property
+    def request_to_capture_seconds(self):
+        if self.accepted_seconds is None or self.capture_observed_seconds is None:
+            return None
+        return self.capture_observed_seconds - self.accepted_seconds
+
+    @property
+    def request_to_qt_seconds(self):
+        if self.accepted_seconds is None or self.qt_started_seconds is None:
+            return None
+        return self.qt_started_seconds - self.accepted_seconds
+
+    @property
+    def qt_delivery_seconds(self):
+        if self.capture_observed_seconds is None or self.qt_started_seconds is None:
+            return None
+        return self.qt_started_seconds - self.capture_observed_seconds
+
+
 class RecordingSession:
     def __init__(self, service, request, callbacks):
         self.service, self.request, self.callbacks = service, request, callbacks
         self.state = "starting"
         self.generation = self.worker_pid = None
+        self._startup_timing_lock = threading.Lock()
+        self._startup_timing = RecordingStartupTiming(request.request_id)
         self.released = threading.Event()
         self.reader = None
         self.audio = self.descriptor = None
@@ -145,6 +180,24 @@ class RecordingSession:
         self._lease_keys = set()
 
     @property
+    def startup_timing(self):
+        """A fixed-size immutable snapshot; missing observations remain None."""
+        with self._startup_timing_lock:
+            return replace(self._startup_timing, generation=self.generation, worker_pid=self.worker_pid)
+
+    def _observe_capture_started(self):
+        with self._startup_timing_lock:
+            timing = self._startup_timing
+            if timing.accepted_seconds is not None and timing.capture_observed_seconds is None:
+                self._startup_timing = replace(timing, capture_observed_seconds=perf_counter())
+
+    def _observe_qt_started(self):
+        with self._startup_timing_lock:
+            timing = self._startup_timing
+            if timing.capture_observed_seconds is not None and timing.qt_started_seconds is None:
+                self._startup_timing = replace(timing, qt_started_seconds=perf_counter())
+
+    @property
     def lifecycle_diagnostics(self):
         """Immutable parent-observed admission evidence for production runs."""
         return {
@@ -154,6 +207,7 @@ class RecordingSession:
             "capture_slot_released_at": self._slot_released_at,
             "lifecycle_counts": self._slot_lifecycle_counts,
             "admission_reason": self._admission_reason,
+            "startup_timing": asdict(self.startup_timing),
         }
 
     def cancel(self):
@@ -378,7 +432,9 @@ class RecordingService:
                 raise RuntimeError("recording service is busy or pipeline capacity is exhausted")
             if request.request_id in self._request_ids:
                 raise ValueError("request_id must be unique for the lifetime of this service")
+            accepted_at = perf_counter()
             session = RecordingSession(self, request, callbacks or RecordingCallbacks())
+            session._startup_timing = replace(session._startup_timing, accepted_seconds=accepted_at)
             session._lease_key = key
             if key is not None:
                 self._leases[key] = session
@@ -1511,6 +1567,7 @@ class RecordingService:
                         return
                     session._capture_deadline = VeCaptureDeadline(
                         session.request.sample_rate, session.request.target_samples, event.payload)
+                session._observe_capture_started()
                 session.state = "recording"
                 if is_ve:
                     self._retained_ve_signature = self._request_signature(session.request)

@@ -409,7 +409,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self.select_result_root_btn = QPushButton("选择")
         self.raw_audio_save_group = QButtonGroup(self)
         self.wav_only_radio = QRadioButton("仅 WAV")
-        self.wav_and_csv_radio = QRadioButton("WAV + CSV")
+        self.wav_and_csv_radio = QRadioButton("WAV + CSV（ZIP 压缩）")
         self.raw_audio_save_group.addButton(self.wav_only_radio)
         self.raw_audio_save_group.addButton(self.wav_and_csv_radio)
         self.wav_only_radio.setChecked(True)

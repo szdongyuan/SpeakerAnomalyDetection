@@ -1,5 +1,4 @@
 import sqlite3
-import threading
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +14,7 @@ from base.analysis_artifact_paths import (
     build_raw_audio_csv_path,
     build_wav_path,
 )
+from base.raw_audio_csv_tasks import CsvTaskLedger
 from base.test_round_data import RoundDataRecord
 from consts import error_code
 from base.recording_management import RecordingManager
@@ -40,8 +40,7 @@ class ResetHost(SequenceWidgetRoundResetOpsMixin, _MetadataHost):
         self.recent_test_session_by_id = {}
         self.recent_session_panel = None
         self._condition_record_cache = {}
-        self._raw_audio_csv_export_lock = threading.Lock()
-        self._raw_audio_csv_export_threads = set()
+        self.raw_audio_csv_service = CsvTaskLedger()
         self._init_round_reset()
 
 
@@ -266,7 +265,7 @@ def test_cancel_and_busy_leave_state_unchanged(host, tmp_path):
     host._analysis_has_pending_tasks.return_value = True
     host._on_reset_current_round()
     host._analysis_has_pending_tasks.return_value = False
-    host._raw_audio_csv_export_threads.add(object())
+    host.raw_audio_csv_service.reserve("recording")
     host._on_reset_current_round()
     host._confirm_round_reset.assert_not_called()
 
@@ -472,6 +471,8 @@ def test_deletion_summary_distinguishes_raw_and_analysis_csv(host, tmp_path):
     for index in range(2):
         host._register_round_file(info, str(tmp_path / f"analysis{index}.csv"))
     host._register_round_file(info, str(tmp_path / "analysis0.csv"))
+    for filename in host._round_record_for_info(info).files:
+        Path(filename).touch()
     assert host._round_deletion_summary(group) == (
         "将删除：原始音频 1 个、原始 CSV 1 个、分析图片 5 张、分析 CSV 2 个。"
     )
@@ -515,6 +516,8 @@ def test_reset_dialog_grows_when_checked_summary_wraps(host, tmp_path, monkeypat
         host._register_round_file(info, str(tmp_path / f"plot{index}.png"))
     for index in range(3):
         host._register_round_file(info, str(tmp_path / f"result{index}.csv"))
+    for filename in host._round_record_for_info(info).files:
+        Path(filename).touch()
 
     def inspect_dialog(dialog):
         dialog.setFont(QFont("SimSun", 10))
@@ -865,3 +868,66 @@ def test_marking_current_record_does_not_update_an_older_session(host, tmp_path)
     record = host._resolve_condition_record("a")
     assert record["session_id"] == ""
     assert record["recorded_signal_info"]["labels"] == "OK"
+
+
+def test_confirmation_race_does_not_reset_or_delete_busy_round(host, round_artifacts):
+    from base.raw_audio_csv_tasks import CsvTaskLedger
+    info, wav, paths = round_artifacts
+    ledger = host.raw_audio_csv_service = CsvTaskLedger()
+    group = host._round_reset_group_id
+    def confirm(_group):
+        ledger.try_acquire_mutation((str(paths[2]),))
+        return True
+    host._confirm_round_reset = confirm
+    host._on_reset_current_round()
+    assert host._round_reset_group_id == group
+    assert wav.exists() and all(path.exists() for path in paths)
+
+
+def test_round_delete_claim_covers_all_outputs(host, round_artifacts):
+    from base.raw_audio_csv_tasks import CsvTaskLedger
+    info, wav, paths = round_artifacts
+    ledger = host.raw_audio_csv_service = CsvTaskLedger()
+    record = host._round_record_for_info(info)
+    original = record.delete_generated_data
+    def delete():
+        for path in [wav, *paths]:
+            assert ledger.try_acquire_mutation((str(path),)) is None
+        return original()
+    record.delete_generated_data = delete
+    host._confirm_round_reset = Mock(return_value=True)
+    host._on_reset_current_round()
+    assert not ledger.paths_busy((str(wav), *map(str, paths)))
+
+
+@pytest.mark.parametrize('present', [(), ('csv',), ('zip',), ('csv', 'zip')])
+def test_raw_expected_artifacts_count_actual_files_and_missing_is_normal(host, round_artifacts, present):
+    from base.raw_audio_csv_zip import raw_csv_zip_path
+    info, wav, paths = round_artifacts
+    csv = paths[2]
+    archive = raw_csv_zip_path(csv)
+    csv.unlink()
+    for key, path in [('csv', csv), ('zip', archive)]:
+        host._register_round_file(info, str(path), is_raw_csv=True)
+        if key in present:
+            path.write_bytes(b'raw')
+    unrelated = archive.with_name('neighbor.csv.zip')
+    unrelated.write_bytes(b'keep')
+    host._register_round_file(info, str(unrelated), is_raw_csv=True)
+    host._register_round_file(info, str(archive.with_name('report.zip')))
+    record = host._round_record_for_info(info)
+    assert record.raw_csv_files == {str(csv), str(archive)}
+    summary = host._round_deletion_summary(info['round_data_group_id'])
+    assert (f'原始 CSV {len(present)} 个' in summary) == bool(present)
+    assert record.delete_generated_data() == []
+    assert unrelated.read_bytes() == b'keep'
+
+
+def test_missing_unrelated_wav_and_analysis_still_warn(tmp_path):
+    wav, analysis, csv, archive = [tmp_path / name for name in ('a.wav', 'analysis.csv', 'a.csv', 'a.csv.zip')]
+    record = RoundDataRecord(str(wav), {str(p) for p in (wav, analysis, csv, archive)},
+                            raw_csv_files={str(csv), str(archive)})
+    errors = record.delete_generated_data()
+    assert len(errors) == 2
+    assert any(str(wav) in error for error in errors)
+    assert any(str(analysis) in error for error in errors)

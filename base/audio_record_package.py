@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 
 from base.audio_record_filter import parse_audio_filter_metadata
+from base.analysis_artifact_paths import sanitize_path_component
+from base.raw_audio_csv_zip import raw_csv_zip_path
 from consts.running_consts import DEFAULT_DIR
 
 
@@ -15,6 +17,29 @@ PACKAGE_KINDS = ("wav", "raw_csv", "images", "analysis_csv")
 class AudioPackageFile:
     source: str
     archive_name: str
+
+
+def _raw_csv_companion(wav_path):
+    metadata = parse_audio_filter_metadata(str(wav_path))
+    if metadata.project_key is None:
+        return None
+    parts = wav_path.relative_to(Path(metadata.project_key)).parts
+    project_dir = wav_path.parents[len(parts) - 1]
+    sample_dir = project_dir / parts[0] / parts[1]
+    stem = sanitize_path_component(wav_path.stem, max_length=220)
+    return sample_dir / "audio" / "raw_csv" / f"{stem}.csv"
+
+
+def audio_record_mutation_paths(wav_paths, *, application_root=DEFAULT_DIR):
+    """Claim expected companions even before they have been published."""
+    paths = set()
+    for raw_path in wav_paths:
+        wav = Path(os.path.abspath(Path(application_root) / raw_path))
+        paths.add(str(wav))
+        csv = _raw_csv_companion(wav)
+        if csv is not None:
+            paths.update((str(csv), str(raw_csv_zip_path(csv))))
+    return tuple(sorted(paths))
 
 
 def collect_audio_package_files(wav_paths, *, application_root=DEFAULT_DIR):
@@ -46,8 +71,11 @@ def collect_audio_package_files(wav_paths, *, application_root=DEFAULT_DIR):
         sample_dir = project_dir / relative_parts[0] / relative_parts[1]
         archive_root = project_dir.parent
         add("wav", wav_path, wav_path.relative_to(archive_root).as_posix())
-        raw_csv = sample_dir / "audio" / "raw_csv" / f"{wav_path.stem}.csv"
-        add("raw_csv", raw_csv, raw_csv.relative_to(archive_root).as_posix())
+        raw_csv = _raw_csv_companion(wav_path)
+        for companion in (raw_csv, raw_csv_zip_path(raw_csv)):
+            if not companion.parent.resolve().is_relative_to(sample_dir.resolve()):
+                raise ValueError(f"配套文件路径超出录音样本目录：{companion}")
+            add("raw_csv", companion, companion.relative_to(archive_root).as_posix())
         for kind, directory, suffixes in (
             ("images", sample_dir / "images" / wav_path.stem, {".png", ".jpg", ".jpeg"}),
             ("analysis_csv", sample_dir / "csv" / wav_path.stem, {".csv"}),

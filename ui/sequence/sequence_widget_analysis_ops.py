@@ -1013,115 +1013,120 @@ class SequenceWidgetAnalysisOpsMixin(
         return self._update_manual_product_mark_group_count(session_record.get("group_id"))
 
     def _prepare_next_manual_product_condition_recording(self):
-        if getattr(self, "_round_reset_delete_failed", False):
-            QMessageBox.warning(self, "删除未完成", "请先点击重置，完成剩余数据的删除。")
-            return None
-        can_start = getattr(self, "_can_prepare_recording_workflow",
-                            getattr(self, "_can_start_recording_workflow", None))
-        if callable(can_start):
-            if not can_start():
+        from ui.sequence.sequence_widget_raw_csv_ops import CsvRecordingAdmissionScope
+        with CsvRecordingAdmissionScope(self) as csv_scope:
+            if not csv_scope.allowed:
+                return
+            if getattr(self, "_round_reset_delete_failed", False):
+                QMessageBox.warning(self, "删除未完成", "请先点击重置，完成剩余数据的删除。")
                 return None
-        elif (getattr(self, "_record_workflow_busy", False)
-              or getattr(self, "player_status_flag", False)):
-            return None
-        if getattr(self, "_analysis_round_completion_pending", False):
-            self.default_logger.info(
-                "next_round_blocked: waiting for background analysis"
-            )
-            return None
-        validate_metadata = getattr(self, "_validate_test_round_metadata", None)
-        if callable(validate_metadata) and not validate_metadata():
-            return None
-        load_condition_config = getattr(self, "_load_sequence_config_for_product_condition", None)
-        workflow_enabled = callable(load_condition_config)
-
-        conditions = self._product_condition_sequence()
-        if not conditions:
-            # In motor/product-condition workflow, empty config should block "播放"
-            # instead of falling back to legacy single-shot recording.
-            if workflow_enabled:
-                QMessageBox.information(self, "提示", "当前产品工况配置为空，请先配置工况后再开始测试。")
-                return None
-            return False
-
-        try:
-            index = int(getattr(self, "_manual_product_condition_index", 0) or 0)
-        except (TypeError, ValueError):
-            index = 0
-        if index < 0 or index >= len(conditions):
-            index = 0
-
-        condition = conditions[index]
-        if not workflow_enabled:
-            QMessageBox.warning(self, "提示", "当前工况无法加载测试队列配置。")
-            return None
-        ok, message = load_condition_config(condition)
-        if not ok:
-            QMessageBox.warning(self, "提示", message or "当前工况测试队列配置不可用。")
-            return None
-
-        can_start = getattr(self, "_can_start_recording_workflow", None)
-        if callable(can_start) and not can_start():
-            config_error = getattr(self, "_ve_recording_config_error", None)
-            if config_error:
-                QMessageBox.warning(self, "VE 设备不可用", ve_failure_text("unavailable"))
-            return None
-
-        validate_analysis_channels = getattr(
-            self,
-            "_validate_automatic_analysis_channels_before_recording",
-            None,
-        )
-        if callable(validate_analysis_channels) and not validate_analysis_channels():
-            return None
-
-        begin_metadata = getattr(self, "_begin_test_round_metadata", None)
-        if callable(begin_metadata) and not begin_metadata():
-            return None
-        group_id = str(getattr(self, "_manual_product_condition_group_id", "") or "").strip()
-        if not group_id:
-            capture_progress_config = getattr(self, "_capture_product_progress_config", None)
-            if callable(capture_progress_config):
-                try:
-                    capture_progress_config()
-                except (OSError, ValueError) as error:
-                    QMessageBox.warning(self, "测试配置读取失败", str(error))
-                    self._end_test_round_metadata()
+            can_start = getattr(self, "_can_prepare_recording_workflow",
+                                getattr(self, "_can_start_recording_workflow", None))
+            if callable(can_start):
+                if not can_start():
                     return None
-            group_id = self._generate_product_condition_group_id()
-            self._manual_product_condition_group_id = group_id
-            self._condition_record_cache = {}
-            activate_round = getattr(self, "_activate_reset_round", None)
-            if callable(activate_round):
-                activate_round(group_id)
-            self._displayed_manual_product_condition_group_id = group_id
-            self._current_cycle_recorded_count = group_id
-            self._manual_product_condition_results = {}
-            self._manual_product_condition_completed_keys = set()
-            clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
-            if callable(clear_all_direction_waveforms):
-                clear_all_direction_waveforms()
-            self._set_product_condition_round_pending()
-            lock_round_config = getattr(
+            elif (getattr(self, "_record_workflow_busy", False)
+                  or getattr(self, "player_status_flag", False)):
+                return None
+            if getattr(self, "_analysis_round_completion_pending", False):
+                self.default_logger.info(
+                    "next_round_blocked: waiting for background analysis"
+                )
+                return None
+            validate_metadata = getattr(self, "_validate_test_round_metadata", None)
+            if callable(validate_metadata) and not validate_metadata():
+                return None
+            load_condition_config = getattr(self, "_load_sequence_config_for_product_condition", None)
+            workflow_enabled = callable(load_condition_config)
+
+            conditions = self._product_condition_sequence()
+            if not conditions:
+                # In motor/product-condition workflow, empty config should block "播放"
+                # instead of falling back to legacy single-shot recording.
+                if workflow_enabled:
+                    QMessageBox.information(self, "提示", "当前产品工况配置为空，请先配置工况后再开始测试。")
+                    return None
+                return False
+
+            try:
+                index = int(getattr(self, "_manual_product_condition_index", 0) or 0)
+            except (TypeError, ValueError):
+                index = 0
+            if index < 0 or index >= len(conditions):
+                index = 0
+
+            condition = conditions[index]
+            if not workflow_enabled:
+                QMessageBox.warning(self, "提示", "当前工况无法加载测试队列配置。")
+                return None
+            ok, message = load_condition_config(condition)
+            if not ok:
+                QMessageBox.warning(self, "提示", message or "当前工况测试队列配置不可用。")
+                return None
+
+            can_start = getattr(self, "_can_start_recording_workflow", None)
+            if callable(can_start) and not can_start():
+                config_error = getattr(self, "_ve_recording_config_error", None)
+                if config_error:
+                    QMessageBox.warning(self, "VE 设备不可用", ve_failure_text("unavailable"))
+                return None
+
+            validate_analysis_channels = getattr(
                 self,
-                "_lock_analysis_round_config",
+                "_validate_automatic_analysis_channels_before_recording",
                 None,
             )
-            if callable(lock_round_config):
-                lock_round_config()
-        else:
-            self._current_cycle_recorded_count = group_id
+            if callable(validate_analysis_channels) and not validate_analysis_channels():
+                return None
 
-        key = self._product_condition_runtime_key(condition, index)
-        self._active_product_condition_key = key
-        self._active_product_condition_config = dict(condition)
-        self._waveform_display_override_direction = key
-        self._current_trigger_direction = key
+            begin_metadata = getattr(self, "_begin_test_round_metadata", None)
+            if callable(begin_metadata) and not begin_metadata():
+                return None
+            group_id = str(getattr(self, "_manual_product_condition_group_id", "") or "").strip()
+            if not group_id:
+                capture_progress_config = getattr(self, "_capture_product_progress_config", None)
+                if callable(capture_progress_config):
+                    try:
+                        capture_progress_config()
+                    except (OSError, ValueError) as error:
+                        QMessageBox.warning(self, "测试配置读取失败", str(error))
+                        self._end_test_round_metadata()
+                        return None
+                group_id = self._generate_product_condition_group_id()
+                self._manual_product_condition_group_id = group_id
+                self._condition_record_cache = {}
+                activate_round = getattr(self, "_activate_reset_round", None)
+                if callable(activate_round):
+                    activate_round(group_id)
+                self._displayed_manual_product_condition_group_id = group_id
+                self._current_cycle_recorded_count = group_id
+                self._manual_product_condition_results = {}
+                self._manual_product_condition_completed_keys = set()
+                clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
+                if callable(clear_all_direction_waveforms):
+                    clear_all_direction_waveforms()
+                self._set_product_condition_round_pending()
+                lock_round_config = getattr(
+                    self,
+                    "_lock_analysis_round_config",
+                    None,
+                )
+                if callable(lock_round_config):
+                    lock_round_config()
+            else:
+                self._current_cycle_recorded_count = group_id
 
-        left_panel = getattr(self, "left_panel", None)
-        if left_panel is not None:
-            left_panel.set_final_result("待判定", tone="pending")
-        return True
+            key = self._product_condition_runtime_key(condition, index)
+            self._active_product_condition_key = key
+            self._active_product_condition_config = dict(condition)
+            self._waveform_display_override_direction = key
+            self._current_trigger_direction = key
+
+            left_panel = getattr(self, "left_panel", None)
+            if left_panel is not None:
+                left_panel.set_final_result("待判定", tone="pending")
+            csv_scope.keep = True
+            return True
 
     def _advance_manual_product_condition_cycle_after_recording(self) -> None:
         if not self._get_active_product_condition_key():
@@ -2232,43 +2237,47 @@ class SequenceWidgetAnalysisOpsMixin(
         # Triggering a second silent run here clears those window references immediately.
 
     def start_this_play(self, label="not_labeled"):
-        can_start = getattr(self, "_can_prepare_recording_workflow",
-                            getattr(self, "_can_start_recording_workflow", None))
-        if callable(can_start) and not can_start():
-            return
-        if not callable(can_start) and (getattr(self, "_record_workflow_busy", False)
-                                        or getattr(self, "player_status_flag", False)):
-            return
-        cancel_pending_serial_trigger = getattr(self, "_cancel_pending_serial_trigger_delay", None)
-        if callable(cancel_pending_serial_trigger):
-            cancel_pending_serial_trigger()
-        if self.checked_work_status_message():
-            cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
-            if callable(cancel_metadata):
-                cancel_metadata()
-            return
+        from ui.sequence.sequence_widget_raw_csv_ops import CsvRecordingAdmissionScope
+        with CsvRecordingAdmissionScope(self) as csv_scope:
+            if not csv_scope.allowed:
+                return
+            can_start = getattr(self, "_can_prepare_recording_workflow",
+                                getattr(self, "_can_start_recording_workflow", None))
+            if callable(can_start) and not can_start():
+                return
+            if not callable(can_start) and (getattr(self, "_record_workflow_busy", False)
+                                            or getattr(self, "player_status_flag", False)):
+                return
+            cancel_pending_serial_trigger = getattr(self, "_cancel_pending_serial_trigger_delay", None)
+            if callable(cancel_pending_serial_trigger):
+                cancel_pending_serial_trigger()
+            if self.checked_work_status_message():
+                cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
+                if callable(cancel_metadata):
+                    cancel_metadata()
+                return
 
-        can_start = getattr(self, "_can_start_recording_workflow", None)
-        if callable(can_start) and not can_start():
-            return
+            can_start = getattr(self, "_can_start_recording_workflow", None)
+            if callable(can_start) and not can_start():
+                return
 
-        manual_start = self.clicked_player_flag is True
-        close_analysis_windows = getattr(self, "_close_analysis_windows", None)
-        if callable(close_analysis_windows):
-            close_analysis_windows()
-        else:
-            if self.analysis_window:
-                self.analysis_window = []
-            if self._analysis_result_summary_window:
-                self._analysis_result_summary_window = None
+            manual_start = self.clicked_player_flag is True
+            close_analysis_windows = getattr(self, "_close_analysis_windows", None)
+            if callable(close_analysis_windows):
+                close_analysis_windows()
+            else:
+                if self.analysis_window:
+                    self.analysis_window = []
+                if self._analysis_result_summary_window:
+                    self._analysis_result_summary_window = None
 
-        self._current_run_recording_token = self._reserve_recorded_count_for_run()
+            self._current_run_recording_token = self._reserve_recorded_count_for_run()
 
-        # Consume this invocation's manual intent before a callback can start
-        # another run.
-        if manual_start:
-            self.clicked_player_flag = False
-        self.judge_play_and_record(label, is_replay=False)
+            # Consume this invocation's manual intent before a callback can start
+            # another run.
+            if manual_start:
+                self.clicked_player_flag = False
+            self.judge_play_and_record(label, is_replay=False)
 
     def checked_work_status_message(self):
         validate_metadata = getattr(self, "_validate_test_round_metadata", None)
@@ -2609,151 +2618,178 @@ class SequenceWidgetAnalysisOpsMixin(
             drain()
         return superseded()
 
+    def _rollback_closed_recording_start(self):
+        """Undo pre-capture UI changes without advancing any queued workflow."""
+        from ui.sequence.sequence_widget_streaming_ops import _refresh_manual_analysis_action
+        cleanup_in_progress = getattr(self, "_recording_cleanup_in_progress", False)
+        self._recording_cleanup_in_progress = True
+        try:
+            unlock_sn = getattr(self, "_unlock_sn_after_recording_if_needed", None)
+            if callable(unlock_sn):
+                unlock_sn()
+            self.player_status_flag = False
+            self._record_workflow_busy = False
+            self.replayer_btn.setDisabled(False)
+            _refresh_manual_analysis_action(self, fallback_enabled=True)
+        finally:
+            self._recording_cleanup_in_progress = cleanup_in_progress
+        # The ordinary failure cleanup can drain a directional trigger or abort
+        # a serial round. Closing only rolls back this never-started capture.
+        self.update_player_btn_is_paused()
+
     def judge_play_and_record(self, label="not_labeled", is_replay=False):
-        device = getattr(self, "mic", None) or {}
-        ve_recording = device.get("backend") == "vkinging"
-        machine_id = device.get("machine_id")
-        can_start = getattr(self, "_can_start_recording_workflow", None)
-        if callable(can_start) and not can_start():
-            config_error = getattr(self, "_ve_recording_config_error", None)
-            if config_error:
-                self.default_logger.error(
-                    f"VE recording admission failed machine_id={machine_id}: {config_error}")
-                QMessageBox.warning(self, "VE 设备不可用", ve_failure_text("unavailable"))
-            return
-        if not callable(can_start) and getattr(self, "_record_workflow_busy", False):
-            return
-        bridge = getattr(self, "recording_bridge", None)
-        if (bridge is not None
-                and not getattr(bridge.service, "can_start_recording",
-                                not getattr(bridge.service, "busy", False))):
-            cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
-            if callable(cancel_metadata):
-                cancel_metadata()
-            QMessageBox.warning(self, "提示", "录音服务正在使用或等待文件释放，请稍后重试。")
-            return
-        if self.checked_work_status_message():
-            cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
-            if callable(cancel_metadata):
-                cancel_metadata()
-            return
-        if is_replay and self.last_play_count is None:
-            QMessageBox.warning(self, "提示", "请先进行录音")
-            return
-        begin_metadata = getattr(self, "_begin_test_round_metadata", None)
-        if callable(begin_metadata) and not begin_metadata():
-            return
+        from ui.sequence.sequence_widget_raw_csv_ops import CsvRecordingAdmissionScope
+        with CsvRecordingAdmissionScope(self) as csv_scope:
+            if not csv_scope.allowed:
+                return
+            device = getattr(self, "mic", None) or {}
+            ve_recording = device.get("backend") == "vkinging"
+            machine_id = device.get("machine_id")
+            can_start = getattr(self, "_can_start_recording_workflow", None)
+            if callable(can_start) and not can_start():
+                config_error = getattr(self, "_ve_recording_config_error", None)
+                if config_error:
+                    self.default_logger.error(
+                        f"VE recording admission failed machine_id={machine_id}: {config_error}")
+                    QMessageBox.warning(self, "VE 设备不可用", ve_failure_text("unavailable"))
+                return
+            if not callable(can_start) and getattr(self, "_record_workflow_busy", False):
+                return
+            bridge = getattr(self, "recording_bridge", None)
+            if (bridge is not None
+                    and not getattr(bridge.service, "can_start_recording",
+                                    not getattr(bridge.service, "busy", False))):
+                cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
+                if callable(cancel_metadata):
+                    cancel_metadata()
+                QMessageBox.warning(self, "提示", "录音服务正在使用或等待文件释放，请稍后重试。")
+                return
+            if self.checked_work_status_message():
+                cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
+                if callable(cancel_metadata):
+                    cancel_metadata()
+                return
+            if is_replay and self.last_play_count is None:
+                QMessageBox.warning(self, "提示", "请先进行录音")
+                return
+            begin_metadata = getattr(self, "_begin_test_round_metadata", None)
+            if callable(begin_metadata) and not begin_metadata():
+                return
 
 
-        close_analysis_windows = getattr(self, "_close_analysis_windows", None)
-        if callable(close_analysis_windows):
-            close_analysis_windows()
-        else:
-            if self.analysis_window:
-                self.analysis_window = []
-            if self._analysis_result_summary_window:
-                self._analysis_result_summary_window = None
-
-        self._record_workflow_busy = True
-        self._recording_workflow_token = object()
-        self._recording_wav_calibration_metadata = None
-        is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
-        sync_active_recording_direction = getattr(self, "_sync_active_recording_direction_from_trigger", None)
-        clear_active_recording_direction = getattr(self, "_clear_active_recording_direction", None)
-        if callable(is_directional_cycle_active) and is_directional_cycle_active():
-            if callable(sync_active_recording_direction):
-                sync_active_recording_direction()
-        elif callable(clear_active_recording_direction):
-            clear_active_recording_direction()
-
-        lock_sn_for_recording = getattr(self, "_lock_sn_for_recording_if_needed", None)
-        if callable(lock_sn_for_recording):
-            lock_sn_for_recording()
-
-        self._clear_plot_area()
-        self._cleanup_streaming_resources()
-
-        self.update_player_btn_is_playing()
-
-        # Clear plot and reset streaming state for NEW recording
-        if self.player_status_flag:
-            self._clear_plot_area()
-
-        self._streaming_first_chunk_logged = False
-        self._streaming_completion_processor = None
-        self._streaming_chunk_contract_failed = False
-        self._streaming_invalid_terminal_handled = False
-
-        self.player_status_flag = True
-
-        # Replay stays unavailable during capture. Manual analysis may still use
-        # a different condition whose WAV was already finalized.
-        self.replayer_btn.setDisabled(True)
-        refresh_analysis_action = getattr(
-            self,
-            "_refresh_analysis_action_state",
-            None,
-        )
-        if callable(refresh_analysis_action):
-            refresh_analysis_action()
-        else:
-            # Standalone mixin hosts retain the legacy recording-time behavior.
-            self.data_btn.setDisabled(True)
-
-        QApplication.processEvents()
-
-        # For replay: use cached count to overwrite the same file
-        # For play: use current lineedit count (already incremented in start_this_play)
-        try:
-            if is_replay:
-                recorded_dict, sample_rate = self.reset_work_pram(label, count=self.last_play_count)
+            close_analysis_windows = getattr(self, "_close_analysis_windows", None)
+            if callable(close_analysis_windows):
+                close_analysis_windows()
             else:
-                recorded_dict, sample_rate = self.reset_work_pram(label)
-        except Exception as e:
-            self.default_logger.error(f"reset_work_pram_error: {e}; machine_id={machine_id}")
-            reason = ve_failure_text("recording") if ve_recording else f"初始化录音失败: {e}"
-            handled = self._cleanup_failed_recording_initialization(reason)
-            if not handled:
-                QMessageBox.warning(self, "提示", reason)
-            return
+                if self.analysis_window:
+                    self.analysis_window = []
+                if self._analysis_result_summary_window:
+                    self._analysis_result_summary_window = None
 
-        # A successful reset supplies the device actually admitted for this run.
-        device = recorded_dict["device"]
-        ve_recording = device.get("backend") == "vkinging"
-        machine_id = device.get("machine_id")
-        try:
-            self._capture_recording_wav_calibration_metadata()
-        except Exception as error:
-            # Snapshot module boundary: restore UI admission state even for an
-            # unexpected builder fault, then re-raise programming errors. Only
-            # expected VE store/schema errors become actionable UI failures.
+            self._record_workflow_busy = True
+            self._recording_workflow_token = object()
             self._recording_wav_calibration_metadata = None
-            self.default_logger.error(
-                f"recording_calibration_snapshot_unexpected_error: {error}; machine_id={machine_id}"
+            is_directional_cycle_active = getattr(self, "_is_directional_cycle_active", None)
+            sync_active_recording_direction = getattr(self, "_sync_active_recording_direction_from_trigger", None)
+            clear_active_recording_direction = getattr(self, "_clear_active_recording_direction", None)
+            if callable(is_directional_cycle_active) and is_directional_cycle_active():
+                if callable(sync_active_recording_direction):
+                    sync_active_recording_direction()
+            elif callable(clear_active_recording_direction):
+                clear_active_recording_direction()
+
+            lock_sn_for_recording = getattr(self, "_lock_sn_for_recording_if_needed", None)
+            if callable(lock_sn_for_recording):
+                lock_sn_for_recording()
+
+            self._clear_plot_area()
+            self._cleanup_streaming_resources()
+
+            self.update_player_btn_is_playing()
+
+            # Clear plot and reset streaming state for NEW recording
+            if self.player_status_flag:
+                self._clear_plot_area()
+
+            self._streaming_first_chunk_logged = False
+            self._streaming_completion_processor = None
+            self._streaming_chunk_contract_failed = False
+            self._streaming_invalid_terminal_handled = False
+
+            self.player_status_flag = True
+
+            # Replay stays unavailable during capture. Manual analysis may still use
+            # a different condition whose WAV was already finalized.
+            self.replayer_btn.setDisabled(True)
+            refresh_analysis_action = getattr(
+                self,
+                "_refresh_analysis_action_state",
+                None,
             )
-            reason = (ve_failure_text("recording") if ve_recording
-                      else f"初始化录音失败: 无法创建录音校准快照: {error}")
-            handled = self._cleanup_failed_recording_initialization(reason)
-            if isinstance(error, (ValueError, OSError)) and ve_recording:
+            if callable(refresh_analysis_action):
+                refresh_analysis_action()
+            else:
+                # Standalone mixin hosts retain the legacy recording-time behavior.
+                self.data_btn.setDisabled(True)
+
+            QApplication.processEvents()
+            if (getattr(self, "_close_in_progress", False)
+                    or (csv_scope.admission is not None and csv_scope.admission.cancelled)):
+                self._rollback_closed_recording_start()
+                return
+
+            # For replay: use cached count to overwrite the same file
+            # For play: use current lineedit count (already incremented in start_this_play)
+            try:
+                if is_replay:
+                    recorded_dict, sample_rate = self.reset_work_pram(label, count=self.last_play_count)
+                else:
+                    recorded_dict, sample_rate = self.reset_work_pram(label)
+            except Exception as e:
+                self.default_logger.error(f"reset_work_pram_error: {e}; machine_id={machine_id}")
+                reason = ve_failure_text("recording") if ve_recording else f"初始化录音失败: {e}"
+                handled = self._cleanup_failed_recording_initialization(reason)
                 if not handled:
                     QMessageBox.warning(self, "提示", reason)
                 return
-            raise
 
-        try:
-            self._start_process_recording(recorded_dict, sample_rate)
-        except (RuntimeError, ValueError, TypeError, KeyError, OSError) as error:
-            self._recording_wav_calibration_metadata = None
-            self.default_logger.error(f"start_recording_process_error: {error}; machine_id={machine_id}")
-            reason = ve_failure_text("recording") if ve_recording else f"启动录音失败: {error}"
-            handled = self._cleanup_failed_recording_initialization(reason)
-            if not handled:
-                QMessageBox.warning(self, "提示", reason)
+            # A successful reset supplies the device actually admitted for this run.
+            device = recorded_dict["device"]
+            ve_recording = device.get("backend") == "vkinging"
+            machine_id = device.get("machine_id")
+            try:
+                self._capture_recording_wav_calibration_metadata()
+            except Exception as error:
+                # Snapshot module boundary: restore UI admission state even for an
+                # unexpected builder fault, then re-raise programming errors. Only
+                # expected VE store/schema errors become actionable UI failures.
+                self._recording_wav_calibration_metadata = None
+                self.default_logger.error(
+                    f"recording_calibration_snapshot_unexpected_error: {error}; machine_id={machine_id}"
+                )
+                reason = (ve_failure_text("recording") if ve_recording
+                          else f"初始化录音失败: 无法创建录音校准快照: {error}")
+                handled = self._cleanup_failed_recording_initialization(reason)
+                if isinstance(error, (ValueError, OSError)) and ve_recording:
+                    if not handled:
+                        QMessageBox.warning(self, "提示", reason)
+                    return
+                raise
+
+            try:
+                self._start_process_recording(recorded_dict, sample_rate)
+            except (RuntimeError, ValueError, TypeError, KeyError, OSError) as error:
+                self._recording_wav_calibration_metadata = None
+                self.default_logger.error(f"start_recording_process_error: {error}; machine_id={machine_id}")
+                reason = ve_failure_text("recording") if ve_recording else f"启动录音失败: {error}"
+                handled = self._cleanup_failed_recording_initialization(reason)
+                if not handled:
+                    QMessageBox.warning(self, "提示", reason)
+                return
+
+            # Return immediately - completion will be handled by _on_streaming_complete()
+            # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
             return
-
-        # Return immediately - completion will be handled by _on_streaming_complete()
-        # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
-        return
 
     def run(
         self,

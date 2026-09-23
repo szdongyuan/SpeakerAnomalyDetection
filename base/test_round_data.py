@@ -26,7 +26,8 @@ class RoundDataRecord:
             try:
                 Path(filename).unlink()
             except FileNotFoundError:
-                errors.append(f"{filename}：原路径不存在，可能仍有残留文件。")
+                if filename not in self.raw_csv_files:
+                    errors.append(f"{filename}：原路径不存在，可能仍有残留文件。")
                 self.files.remove(filename)
             except OSError as error:
                 errors.append(f"{filename}：{error}")

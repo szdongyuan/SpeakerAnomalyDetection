@@ -1,16 +1,13 @@
 import copy
 import json
-import threading
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from unit_test.ui.test_raw_audio_csv_shutdown import runtime
 from PyQt5.QtGui import QCloseEvent
-from PyQt5.QtWidgets import QMainWindow, QWidget
 
-from main_window import MainWindow
 from ui.operation_sequence import AnalysisModelSelect, OptionList
-from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 from ui.sequence.analysis_task_builder import AnalysisTaskBuildError, build_analysis_task_request
 from unit_test.ui.test_analysis_task_builder import _write_wav
 from unit_test.test_product_test_project_config import make_manager
@@ -95,73 +92,31 @@ def test_retired_excel_is_excluded_from_queue_catalog(tmp_path, valid):
     assert path.read_bytes() == original
 
 
-class CsvHost(SequenceWidgetStreamingOpsMixin, QWidget):
-    def __init__(self):
-        QWidget.__init__(self)
-        self._raw_audio_csv_export_lock = threading.Lock()
-        self._raw_audio_csv_export_threads = set()
-        self._cleanup_streaming_resources = mock.Mock()
-        self.hw_manager = SimpleNamespace(stop=mock.Mock())
-        self._shutdown_product_pdf_exporter = mock.Mock()
-        # Isolate the old close wrapper: it must not be needed for CSV waiting.
-        self.flush_excel_spool_build = lambda **kwargs: []
-
-
 @pytest.mark.parametrize("boundary", ["main", "visible", "hidden"])
-def test_close_waits_for_pending_csv_before_final_cleanup(ui_qapp, tmp_path, boundary):
-    host = CsvHost()
-    released = threading.Event()
-    entered = threading.Event()
-    completed = threading.Event()
-    csv_path = tmp_path / "raw.csv"
-
-    def write_csv():
-        entered.set()
-        released.wait()
-        csv_path.write_text("sample,value\n0,1\n", encoding="utf-8")
-        with host._raw_audio_csv_export_lock:
-            host._raw_audio_csv_export_threads.discard(threading.current_thread())
-        completed.set()
-
-    class PendingWriter(threading.Thread):
-        def join(self, timeout=None):
-            released.set()
-            super().join(timeout)
-
-    writer = PendingWriter(target=write_csv)
-    host._raw_audio_csv_export_threads.add(writer)
-    writer.start()
-    observations = []
-    host.hw_manager.stop.side_effect = lambda: observations.append(("hardware", completed.is_set()))
-    host._shutdown_product_pdf_exporter.side_effect = lambda: observations.append(("pdf", completed.is_set()))
-    window = None
+def test_close_waits_for_pending_csv_before_final_cleanup(ui_qapp, runtime, tmp_path, boundary):
+    # CSV lifecycle lives independently of the retired Excel spool wrapper.
+    from PyQt5 import sip
+    from unit_test.ui.test_raw_audio_csv_shutdown import Sequence, Window, submit, pump
+    service, bridge, gate = runtime
+    host = Sequence(bridge)
+    host.flush_excel_spool_build = mock.Mock(side_effect=AssertionError("retired Excel spool"))
+    window = Window(host, bridge) if boundary == "main" else host
+    if boundary != "hidden":
+        window.show()
+    submit(host, tmp_path)
     try:
-        assert entered.wait(2)
         event = QCloseEvent()
-        if boundary == "main":
-            class Window(MainWindow):
-                def __init__(self):
-                    QMainWindow.__init__(self)
-                    self.sequence_window = host
-                    self._close_all_subwindows = mock.Mock()
-            window = Window()
-            MainWindow.closeEvent(window, event)
+        window.closeEvent(event)
+        assert event.isAccepted() is (boundary == "hidden")
+        host._shutdown_product_pdf_exporter.assert_not_called()
+        gate.set()
+        if boundary != "hidden":
+            pump(ui_qapp, lambda: not window.isVisible())
+            host._shutdown_product_pdf_exporter.assert_called_once()
         else:
-            if boundary == "visible":
-                host.show()
-            host.closeEvent(event)
-        assert event.isAccepted()
-        if boundary == "hidden":
-            assert not completed.is_set()
-            assert observations == []
-        else:
-            assert completed.is_set()
-            assert csv_path.read_text(encoding="utf-8") == "sample,value\n0,1\n"
-            assert observations == ([("pdf", True)] if boundary == "main" else [("hardware", True), ("pdf", True)])
+            assert service.snapshot().phase == "open"
+        host.flush_excel_spool_build.assert_not_called()
     finally:
-        released.set()
-        writer.join(2)
-        host.hide()
-        host.deleteLater()
-        if window is not None:
-            window.deleteLater()
+        sip.delete(window)
+        if window is not host:
+            sip.delete(host)

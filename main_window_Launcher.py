@@ -10,6 +10,8 @@ class MainWindowLauncher(object):
         from base.recording_service import RecordingService
         from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
         from ui.recording_service_bridge import RecordingServiceBridge
+        from base.raw_audio_csv_service import RawAudioCsvService
+        from ui.raw_audio_csv_service_bridge import RawAudioCsvServiceBridge
 
         self.app = QApplication(sys.argv)
         self.app.setFont(QFont(ui_style_const.UI_FONT_FAMILY_NAME))
@@ -17,6 +19,9 @@ class MainWindowLauncher(object):
         self.recording_service = RecordingService()
         self.recording_bridge = RecordingServiceBridge(self.recording_service, self.app)
         self.app.aboutToQuit.connect(self.recording_bridge.shutdown)
+        self.raw_audio_csv_service = RawAudioCsvService()
+        self.raw_audio_csv_bridge = RawAudioCsvServiceBridge(self.raw_audio_csv_service, self.app)
+        self.app.aboutToQuit.connect(self.raw_audio_csv_bridge.begin_shutdown)
         self.splash = Splash()
         self.splash.show()
         self.app.processEvents()
@@ -46,6 +51,7 @@ class MainWindowLauncher(object):
             self.window = MainWindow(
                 ve_prewarm_lifetime=self.ve_prewarm_lifetime,
                 recording_bridge=self.recording_bridge,
+                raw_audio_csv_bridge=self.raw_audio_csv_bridge,
             )
             self.window.show()
         except Exception as e:
@@ -63,5 +69,9 @@ class MainWindowLauncher(object):
 if __name__ == "__main__":
     from multiprocessing import freeze_support
     freeze_support()
+    from tools.raw_audio_csv_frozen_smoke import maybe_run_raw_csv_smoke
+    diagnostic_exit = maybe_run_raw_csv_smoke(sys.argv[1:])
+    if diagnostic_exit is not None:
+        sys.exit(diagnostic_exit)
     mwl = MainWindowLauncher()
     mwl.run()

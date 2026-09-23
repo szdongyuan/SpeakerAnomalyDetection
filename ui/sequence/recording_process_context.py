@@ -27,3 +27,6 @@ class RecordingProcessContext:
     workflow_token: object = None
     publication_started: bool = False
     publication_delivered: bool = False
+    csv_reservation: object = None
+    csv_enabled_snapshot: bool = False
+    csv_path_permit: object = None
