@@ -154,8 +154,10 @@ class DialogEnterPolicy(QObject):
             signal.connect(slot)
 
     def eventFilter(self, obj, event):
+        # Cyclic GC can clear the Python state before Qt finishes destroying
+        # the dialog and its children. Those final events must pass through.
         dialog = getattr(self, "_dialog", None)
-        if dialog is None:
+        if dialog is None or sip.isdeleted(dialog):
             return False
         if not isinstance(obj, QWidget):
             return False
