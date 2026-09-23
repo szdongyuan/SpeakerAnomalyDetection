@@ -76,6 +76,7 @@ def test_clear_hides_children_and_readd_recovers(qapp):
 
 def test_zoom_streaming_and_original_data(qapp, monkeypatch):
     widget = pg.PlotWidget()
+    widget.getAxis("left").setWidth(60)
     widget.resize(800, 400)
     widget.show()
     x = np.arange(48000) / 48000
@@ -86,8 +87,25 @@ def test_zoom_streaming_and_original_data(qapp, monkeypatch):
     vb.setRange(xRange=(0, 1), yRange=(-1.2, 1.2), padding=0)
     qapp.processEvents()
     assert not item._smooth
-    vb.setXRange(0.1, 0.1005, padding=0)
-    qapp.processEvents()
+    dt = x[1] - x[0]
+    for spacing in (3.5, 4 - 1e-6, 4, 4.5, 6, 12.5, 3.5, 6):
+        # Starting at zero avoids cancellation at the exact 4 px boundary.
+        vb.setXRange(0, dt * vb.width() / spacing, padding=0)
+        qapp.processEvents()
+        left, right = vb.viewRange()[0]
+        actual_spacing = dt * vb.width() / (right - left)
+        assert actual_spacing == pytest.approx(spacing, abs=1e-9)
+        if spacing == 4:
+            assert actual_spacing == 4
+        assert item._smooth
+        assert item._markers.isVisible() == (spacing >= 4)
+        if spacing >= 4:
+            marker_x, marker_y = item._markers.getData()
+            indices = np.searchsorted(x, marker_x)
+            np.testing.assert_array_equal(marker_x, x[indices])
+            np.testing.assert_array_equal(marker_y, y[indices])
+            visible = (marker_x >= left) & (marker_x <= right)
+            np.testing.assert_array_equal(marker_x[visible], x[(x >= left) & (x <= right)])
     assert item._smooth
     assert item._markers.isVisible()
     assert item._markers.scene() is widget.scene()
@@ -99,21 +117,32 @@ def test_zoom_streaming_and_original_data(qapp, monkeypatch):
     item._refresh_smoothing()
     assert item._reconstruction.path() == original_path
 
+    for width, expected in ((450, False), (800, True)):
+        widget.resize(width, 400)
+        qapp.processEvents()
+        left, right = vb.viewRange()[0]
+        assert (dt * vb.width() / (right - left) >= 4) == expected
+        assert item._smooth
+        assert item._markers.isVisible() == expected
+
     def forbidden(*args):
         pytest.fail("Streaming must never evaluate sinc interpolation")
 
     with monkeypatch.context() as patch:
         patch.setattr("ui.adaptive_waveform.bandlimited_values", forbidden)
         item.setData(x, y, streaming=True)
-        vb.setXRange(0.2, 0.2005, padding=0)
+        vb.setXRange(0.2, 0.2 + dt * vb.width() / 6, padding=0)
         qapp.processEvents()
         assert not item._smooth
+        assert not item._markers.isVisible()
         assert item.curve.isVisible()
     item.setData(x, y, streaming=False)
     assert item._smooth
+    assert item._markers.isVisible()
     vb.setXRange(0, 1, padding=0)
     qapp.processEvents()
     assert not item._smooth
+    assert not item._markers.isVisible()
     widget.close()
 
 
