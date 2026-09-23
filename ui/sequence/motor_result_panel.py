@@ -136,7 +136,7 @@ class MotorResultPanel(QWidget):
         port_layout.setContentsMargins(10, 8, 10, 8)
         port_layout.setSpacing(8)
         port_label = QLabel("当前端口")
-        port_label.setStyleSheet(self._small_text_style("#64748B"))
+        port_label.setStyleSheet(self._small_text_style(ui_style_const.COLOR_TEXT, font_size=14))
         self.current_port_combo = QComboBox()
         self.current_port_combo.setObjectName("testTaskPortCombo")
         self.current_port_combo.setMinimumHeight(34)
@@ -1204,12 +1204,12 @@ class MotorResultPanel(QWidget):
         )
 
     @staticmethod
-    def _small_text_style(color, bold=False):
+    def _small_text_style(color, bold=False, font_size=13):
         weight = "font-weight:bold;" if bold else ""
         return (
             "QLabel { background:transparent; border:none; border-radius:0; "
             f"color:{color}; font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; "
-            f"font-size:13px; {weight} }}"
+            f"font-size:{font_size}px; {weight} }}"
         )
 
     @classmethod
