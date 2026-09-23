@@ -2,6 +2,7 @@
 
 from collections import Counter
 import copy
+import re
 
 from PyQt5.QtCore import QDate, Qt
 from PyQt5.QtGui import QIcon
@@ -18,6 +19,9 @@ from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
 from ui.dialog_enter_policy import install_dialog_enter_policy
 
+
+_MIN_SAMPLE_RATE = 4000
+_MAX_SAMPLE_RATE = 192000
 
 _SELECT_FIELDS = (
     ("select_product_model", "产品型号", "全部型号"),
@@ -80,9 +84,26 @@ class ArchiveAudioFilterDialog(ConfigDialogBase):
         dates.addStretch(1)
         layout.addLayout(dates)
 
-        rates_row, self.rate_boxes = self._checkbox_row(
-            "采样率", [("44100 Hz", 44100), ("48000 Hz", 48000)],
+        rates_row = QHBoxLayout()
+        rates_row.setSpacing(8)
+        rates_row.addWidget(QLabel("采样率 (Hz)"))
+        self.sample_rate_combobox = QComboBox()
+        self.sample_rate_combobox.setAccessibleName("采样率 (Hz)")
+        self.sample_rate_combobox.setEditable(True)
+        self.sample_rate_combobox.setInsertPolicy(QComboBox.NoInsert)
+        self.sample_rate_combobox.addItem("ALL")
+        rates = {44100, 48000} | {row[3] for row in self.rows if row[3]}
+        self.sample_rate_combobox.addItems([
+            str(rate) for rate in sorted(rates)
+            if _MIN_SAMPLE_RATE <= rate <= _MAX_SAMPLE_RATE
+        ])
+        self.sample_rate_combobox.setMinimumWidth(180)
+        self.sample_rate_combobox.setToolTip(
+            f"输入 {_MIN_SAMPLE_RATE}–{_MAX_SAMPLE_RATE} Hz 的整数采样率（含边界），"
+            "多个值用逗号分隔；ALL 表示不限采样率。"
         )
+        rates_row.addWidget(self.sample_rate_combobox, 1)
+        rates_row.addStretch(1)
         layout.addLayout(rates_row)
         layout.addStretch()
         buttons = QHBoxLayout()
@@ -161,10 +182,13 @@ class ArchiveAudioFilterDialog(ConfigDialogBase):
                 if combo.itemData(index) == selected:
                     combo.setCurrentIndex(index)
                     break
-        for key, boxes in (("select_labels", self.label_boxes), ("select_sample_rate", self.rate_boxes)):
-            chosen = self.filter_config.get(key, boxes)
-            for value, box in boxes.items():
-                box.setChecked(value in chosen)
+        chosen = self.filter_config.get("select_labels", self.label_boxes)
+        for value, box in self.label_boxes.items():
+            box.setChecked(value in chosen)
+        selected_rates = self.filter_config.get("select_sample_rate")
+        self.sample_rate_combobox.setCurrentText(
+            "ALL" if selected_rates is None else ", ".join(map(str, selected_rates))
+        )
         self.date_filter_combobox.setCurrentText(self.filter_config.get("select_record_date", "ALL"))
 
     def _project_changed(self):
@@ -194,25 +218,39 @@ class ArchiveAudioFilterDialog(ConfigDialogBase):
         self.combos["select_project"].setCurrentIndex(0)
         for combo in self.combos.values():
             combo.setCurrentIndex(0)
-        for box in (*self.label_boxes.values(), *self.rate_boxes.values()):
+        for box in self.label_boxes.values():
             box.setChecked(True)
         self.date_filter_combobox.setCurrentText("ALL")
+        self.sample_rate_combobox.setCurrentText("ALL")
 
     def apply_filters(self):
         filters = {
             key: combo.currentData() for key, combo in self.combos.items()
             if combo.currentData() is not None
         }
-        for key, boxes, label in (
-            ("select_labels", self.label_boxes, "标签"),
-            ("select_sample_rate", self.rate_boxes, "采样率"),
-        ):
-            values = [value for value, box in boxes.items() if box.isChecked()]
-            if not values:
-                QMessageBox.warning(self, "提示", f"请至少选择一个{label}。")
+        labels = [value for value, box in self.label_boxes.items() if box.isChecked()]
+        if not labels:
+            QMessageBox.warning(self, "提示", "请至少选择一个标签。")
+            return
+        if len(labels) != len(self.label_boxes):
+            filters["select_labels"] = labels
+        selected_rates = self.sample_rate_combobox.currentText().strip()
+        if selected_rates.upper() != "ALL":
+            parts = [part.strip() for part in selected_rates.replace("，", ",").split(",")]
+            try:
+                if any(re.fullmatch(r"[0-9]+", part) is None for part in parts):
+                    raise ValueError
+                rates = list(dict.fromkeys(int(part) for part in parts))
+                if any(not _MIN_SAMPLE_RATE <= rate <= _MAX_SAMPLE_RATE for rate in rates):
+                    raise ValueError
+            except ValueError:
+                QMessageBox.warning(
+                    self, "提示",
+                    f"请输入 {_MIN_SAMPLE_RATE}–{_MAX_SAMPLE_RATE} Hz 范围内的正整数采样率（含边界），"
+                    "多个值用逗号分隔，或选择 ALL。",
+                )
                 return
-            if len(values) != len(boxes):
-                filters[key] = values
+            filters["select_sample_rate"] = rates
         selected_date = self.date_filter_combobox.currentText().strip()
         if selected_date.upper() != "ALL":
             parsed_date = QDate.fromString(selected_date, "yyyy-MM-dd")
