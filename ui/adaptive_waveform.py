@@ -180,7 +180,7 @@ class AdaptiveWaveformItem(pg.PlotDataItem):
                               and np.allclose(np.diff(halo_x), x[1] - x[0], rtol=1e-5, atol=0))
         self._smooth = bool(smooth)
         self._reconstruction.setVisible(self._smooth)
-        self._markers.setVisible(bool(self._smooth and spacing >= 12))
+        self._markers.setVisible(bool(self._smooth and spacing >= 4))
         self.curve.setVisible(not self._smooth and x is not None and len(x) > 0)
         if not self._smooth:
             return
