@@ -569,7 +569,7 @@ def test_legacy_external_wav_round_trip_through_step_sc_restores_wav_branch(
     assert window.step_box.value() == 5
     assert window.stimulus_type_combo_box.currentText() == "对数"
     restored_plot_y = window.plot_stimulus.listDataItems()[0].yData
-    assert np.array_equal(restored_plot_y, wav_data)
+    np.testing.assert_allclose(restored_plot_y, wav_data / np.sqrt(np.mean(wav_data ** 2)))
 
     monkeypatch.setattr(window, "set_ai_popup", lambda: None)
     monkeypatch.setattr(window, "close", lambda: None)
@@ -3076,6 +3076,136 @@ def test_stimulus_adaptive_waveform_retains_dense_plot_options(window_factory, q
         assert item.opts["downsampleMethod"] == "peak"
         assert len(item.getData()[0]) < len(source)
         np.testing.assert_array_equal(item.xData, np.arange(len(source)) / 48000)
-        np.testing.assert_array_equal(item.yData, source)
+        np.testing.assert_allclose(item.yData, source / np.sqrt(np.mean(source ** 2)))
+        assert window.stimulus_data is source
+        np.testing.assert_array_equal(source, np.sin(np.arange(48001)))
     finally:
         window.close()
+
+
+@pytest.mark.parametrize('kind,peak', [('Peak', .1), ('RMS', np.sqrt(2) * .1)])
+def test_target_voltage_preview_whole_cycle(window_factory, kind, peak):
+    window = window_factory({'voltage': .1, 'voltage_type': kind})
+    source = np.array([0., 1., 0., -1.])
+    window.stimulus_data = source
+    window.graph_stimulus()
+    np.testing.assert_allclose(window.plot_stimulus.listDataItems()[0].yData, [0., peak, 0., -peak])
+    assert window.stimulus_data is source
+    np.testing.assert_array_equal(source, [0., 1., 0., -1.])
+    axis = window.plot_stimulus.getAxis('left')
+    assert axis.labelText == '目标电压'
+    assert axis.labelUnits == 'V'
+
+
+def test_target_voltage_type_only_refresh_preserves_audio(window_factory, monkeypatch):
+    window = window_factory({'use_custom_stimulus': False, 'voltage': .1, 'voltage_type': 'Peak'})
+    source = np.array([0., .03, 0., -.03])
+    window.stimulus_data = source
+    window.graph_stimulus()
+    amplitude = window.stimulus_info['amplitude']
+    played, saved = [], []
+    monkeypatch.setattr(stimulus_window, 'SoundcardAudioProcessor', lambda: SimpleNamespace(
+        sd_play=lambda params: (played.append(dict(params)) or (error_code.OK, ''))))
+    monkeypatch.setattr(stimulus_window.QFileDialog, 'getSaveFileName', lambda *a, **kw: ('test.wav', ''))
+    monkeypatch.setattr(stimulus_window, 'save_audio_simple', lambda path, data, sr: saved.append((data, sr)))
+    window.play_btn_clicked()
+    window.save_wav_btn_clicked()
+    window.voltage_combo_box.setCurrentText('RMS')
+    np.testing.assert_allclose(window.plot_stimulus.listDataItems()[0].yData, [0., np.sqrt(2)*.1, 0., -np.sqrt(2)*.1])
+    window.play_btn_clicked()
+    window.save_wav_btn_clicked()
+    assert window.stimulus_data is source
+    assert window.stimulus_info['amplitude'] == amplitude
+    for params in played:
+        assert params['data'] is source
+        assert params['amplitude'] == amplitude
+        assert params['sr'] == 44100
+    assert len(played) == len(saved) == 2
+    assert all(data is source and sr == 44100 for data, sr in saved)
+    np.testing.assert_array_equal(source, [0., .03, 0., -.03])
+
+
+def test_target_voltage_external_wav_edit_refreshes_without_generation(window_factory, monkeypatch):
+    window = window_factory({'use_custom_stimulus': False, 'voltage_type': 'Peak'})
+    source = np.array([0., .2, 0., -.2])
+    window.stimulus_data = source
+    window.graph_stimulus()
+    monkeypatch.setattr(window, 'create_signal_from_stimulus_info', lambda: pytest.fail('WAV must not regenerate'))
+    window.voltage_spin_box.setValue(.1)
+    np.testing.assert_allclose(window.plot_stimulus.listDataItems()[0].yData, [0., .1, 0., -.1])
+    assert window.stimulus_data is source
+    np.testing.assert_array_equal(source, [0., .2, 0., -.2])
+
+
+@pytest.mark.parametrize('method', ['frequency_stepped', 'noise', 'wav'])
+def test_target_voltage_full_source_normalization_survives_zoom(window_factory, qapp, method):
+    info = _step_sc_payload(amplitude=.037, voltage=.1) if method == 'frequency_stepped' else {
+        'stimulus_method': 'noise' if method == 'noise' else 'chirp',
+        'stimulus_type': 'white_noise' if method == 'noise' else 'log',
+        'use_custom_stimulus': method != 'wav', 'voltage': .1}
+    window = window_factory(info)
+    try:
+        if method != 'frequency_stepped':
+            window.stimulus_data = np.r_[np.random.default_rng(43).normal(size=1000) * .03, np.zeros(500)]
+        source = window.stimulus_data
+        before = source.copy()
+        expected = source / np.sqrt(np.mean(source ** 2)) * .1
+        window.resize(800, 600)
+        window.show()
+        window.graph_stimulus()
+        item, = window.plot_stimulus.listDataItems()
+        np.testing.assert_allclose(item.yData, expected)
+        window.plot_stimulus.setXRange(0, 4 / 44100, padding=0)
+        qapp.processEvents()
+        np.testing.assert_allclose(item.yData, expected)
+        assert np.sqrt(np.mean(item.yData ** 2)) == pytest.approx(.1)
+        assert window.stimulus_data is source
+        np.testing.assert_array_equal(source, before)
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize('source,voltage,kind,converted', [
+    ([0., 0.], .1, 'Peak', True), ([], .1, 'RMS', True),
+    ([.2, np.nan, -.4], .1, 'RMS', False),
+    ([.2, np.inf, -.4], .1, 'Peak', False),
+    ([.2, -.4], None, 'RMS', False),
+    ([.2, -.4], .1, 'unsupported', False),
+])
+def test_target_voltage_fallback_labels_and_gaps(window_factory, monkeypatch, source, voltage, kind, converted):
+    window = window_factory()
+    monkeypatch.setattr(stimulus_window.MessageBox, 'warning', staticmethod(lambda *a, **kw: pytest.fail('unexpected warning')))
+    raw = np.array(source)
+    window.stimulus_data = raw
+    window.stimulus_info.update(voltage=voltage, voltage_type=kind)
+    for _ in range(2):
+        window.graph_stimulus()
+        axis = window.plot_stimulus.getAxis('left')
+        assert axis.labelText == ('目标电压' if converted else '原始幅度')
+        assert axis.labelUnits == ('V' if converted else '')
+        item, = window.plot_stimulus.listDataItems()
+        if len(raw):
+            np.testing.assert_array_equal(item.yData, raw)
+            assert item.opts['connect'] == 'finite'
+        assert window.stimulus_data is raw
+
+
+@pytest.mark.parametrize('kind', ['Peak', 'RMS'])
+@pytest.mark.parametrize('custom', [False, True])
+def test_target_voltage_initialization_and_loaded_config(window_factory, monkeypatch, kind, custom):
+    callback_errors = []
+    import sys
+    monkeypatch.setattr(sys, 'excepthook', lambda *args: callback_errors.append(args))
+    window = window_factory({'voltage_type': kind, 'voltage': .1, 'use_custom_stimulus': custom})
+    warnings = []
+    payload = dict(window.stimulus_info, voltage_type='RMS' if kind == 'Peak' else 'Peak', voltage=.2)
+    if not custom:
+        payload['load_stimulus_signal_path'] = 'seed.wav'
+    _load_payload(window, monkeypatch, payload, warnings)
+    assert callback_errors == []
+    assert warnings == []
+    assert window.plot_stimulus.getAxis('left').labelUnits == 'V'
+    if window.stimulus_data.size and np.any(window.stimulus_data):
+        display = window.plot_stimulus.listDataItems()[0].yData
+        statistic = np.sqrt(np.mean(display ** 2)) if payload['voltage_type'] == 'RMS' else np.max(np.abs(display))
+        assert statistic == pytest.approx(.2)
