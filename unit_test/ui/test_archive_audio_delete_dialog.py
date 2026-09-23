@@ -150,3 +150,103 @@ def test_delete_all_clears_filter_and_selection_state(archive, monkeypatch):
     assert not window.all_select_flag
     assert not window._audio_filter_cache
     assert not any(path.exists() for path in (*first.values(), *second.values()))
+
+
+@pytest.mark.parametrize('leased', [False, True])
+def test_archive_rechecks_ownership_after_confirmation(archive, monkeypatch, leased):
+    from base.raw_audio_csv_tasks import CsvTaskLedger
+    from base.raw_audio_csv_protocol import CsvExportRequest
+    from types import SimpleNamespace
+    window, first, _, database_delete = archive
+    ledger = CsvTaskLedger()
+    window.raw_audio_csv_service = ledger
+    window.recording_service = SimpleNamespace(is_path_leased=lambda path: leased)
+    def confirm(dialog):
+        if not leased:
+            token = ledger.reserve('recording').reservation
+            assert ledger.commit(token, CsvExportRequest('task', 'recording', str(first['wav']),
+                str(first['wav'])+'.csv', (0,), '', '')) == 'accepted'
+        return dialog.Accepted
+    monkeypatch.setattr(ArchiveAudioDeleteDialog, 'exec', confirm)
+    monkeypatch.setattr(QMessageBox, 'warning', Mock())
+    window.on_clicked_delete_btn()
+    database_delete.assert_not_called()
+    assert all(path.exists() for path in first.values())
+
+
+def test_archive_holds_permit_through_deletion_and_releases_on_exception(archive, monkeypatch):
+    from base.raw_audio_csv_tasks import CsvTaskLedger
+    from ui import archive_audio_data_dialog as module
+    window, first, _, _ = archive
+    ledger = window.raw_audio_csv_service = CsvTaskLedger()
+    monkeypatch.setattr(ArchiveAudioDeleteDialog, 'exec', lambda self: self.Accepted)
+    def delete(plans, manager):
+        for path in (str(first['wav']), str(first['raw_csv']), str(first['raw_csv']) + '.zip'):
+            assert ledger.try_acquire_mutation((path,)) is None
+        raise OSError('test external failure')
+    monkeypatch.setattr(module, 'delete_audio_recordings', delete)
+    with pytest.raises(OSError, match='test external failure'):
+        window.on_clicked_delete_btn()
+    assert not ledger.paths_busy((str(first['wav']),))
+
+
+
+def test_confirmation_csv_becomes_zip_replans_captured_rows_under_all_paths(archive, monkeypatch):
+    from pathlib import Path
+    from base.raw_audio_csv_tasks import CsvTaskLedger
+    from ui import archive_audio_data_dialog as module
+    window, first, second, database_delete = archive
+    ledger = window.raw_audio_csv_service = CsvTaskLedger()
+    archive_path = Path(str(first['raw_csv']) + '.zip')
+    def confirm(dialog):
+        first['raw_csv'].unlink()
+        archive_path.write_bytes(b'published ZIP')
+        window.select_wave_data.clear()
+        return dialog.Accepted
+    monkeypatch.setattr(ArchiveAudioDeleteDialog, 'exec', confirm)
+    original = module.plan_audio_record_deletion
+    calls = []
+    def plan(rows):
+        calls.append(tuple(rows))
+        if len(calls) == 2:
+            for path in (first['wav'], first['raw_csv'], archive_path):
+                assert ledger.try_acquire_mutation((str(path),)) is None
+        return original(rows)
+    monkeypatch.setattr(module, 'plan_audio_record_deletion', plan)
+    window.on_clicked_delete_btn()
+    assert len(calls) == 2 and calls[0] == calls[1]
+    assert not archive_path.exists()
+    database_delete.assert_called_once_with([0])
+    assert all(path.exists() for path in second.values())
+    assert not ledger.paths_busy((str(first['wav']), str(archive_path)))
+
+
+@pytest.mark.parametrize('stage', ['zip_write', 'zip_verify'])
+def test_archive_delete_is_blocked_during_real_zip_stage(archive, monkeypatch, stage):
+    import multiprocessing
+    import numpy as np
+    import soundfile as sf
+    from base.raw_audio_csv_service import RawAudioCsvService
+    from base.raw_audio_csv_protocol import CsvExportRequest
+    from unit_test.base.raw_audio_csv_fakes import zip_phase_worker
+    window, first, _, database_delete = archive
+    sf.write(str(first['wav']), np.zeros(10, dtype=np.float32), 8000)
+    ctx = multiprocessing.get_context('spawn')
+    entered, gate = ctx.Event(), ctx.Event()
+    service = RawAudioCsvService(worker_target=zip_phase_worker, worker_args=(stage, entered, gate))
+    window.raw_audio_csv_service = service
+    monkeypatch.setattr(ArchiveAudioDeleteDialog, 'exec', lambda self: self.Accepted)
+    warning = Mock()
+    monkeypatch.setattr(QMessageBox, 'warning', warning)
+    req = CsvExportRequest('task', 'recording', str(first['wav']), str(first['raw_csv']), (0,), 'old', 'old')
+    try:
+        assert service.commit(service.reserve('recording').reservation, req) == 'accepted'
+        assert entered.wait(10)
+        window.on_clicked_delete_btn()
+        database_delete.assert_not_called()
+        warning.assert_called_once()
+        assert first['wav'].exists() and first['raw_csv'].exists()
+    finally:
+        gate.set()
+        service.begin_shutdown()
+        assert service.closed.wait(10)

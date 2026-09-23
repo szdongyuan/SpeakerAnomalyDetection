@@ -1,9 +1,10 @@
+from time import perf_counter
+from ui.sequence.sequence_widget_raw_csv_ops import record_gui_stage
 from collections.abc import Mapping
 from functools import wraps
 import json
 import logging
 import os
-import threading
 from time import perf_counter_ns
 from datetime import datetime
 
@@ -16,10 +17,6 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QMessageBox, QVBoxLayout, QSplitter
 
 from base.play_and_record import resolve_startup_trim_samples
-from base.analysis_artifact_paths import (
-    build_raw_audio_csv_path,
-    storage_context_from_metadata,
-)
 from base.recording_preview_config import (
     resolve_recording_preview_time_mode,
     validate_recording_preview_time_mode,
@@ -32,7 +29,6 @@ from base.file_ops import FileOps
 from base.load_config import LoadUiConfig
 from base.playback_controller import PlaybackController
 from base.recording_management import RecordingManager
-from base.raw_audio_csv_exporter import export_raw_audio_csv
 from base.save_data import ensure_test_result_file, save_audio_simple
 from base.soundcard_calibration_manager import (
     MicCalibrationFormatError,
@@ -41,7 +37,6 @@ from base.soundcard_calibration_manager import (
 )
 from base.wav_calibration_metadata import append_wav_calibration_metadata
 from consts import error_code, model_consts
-from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
 from consts.recording_preview_consts import (
     MAIN_RECORDING_FINAL_MAX_POINTS,
     MAIN_RECORDING_LIVE_MAX_POINTS,
@@ -608,66 +603,81 @@ class SequenceWidgetStreamingOpsMixin:
                 updated_signal_info["labels"] = previous_label or "not_labeled"
             return save_code, msg, source_path, updated_signal_info
 
+        csv_service = getattr(self, "raw_audio_csv_service", None)
+        permit = None
         try:
-            recording_root = str(
-                updated_signal_info.get(
-                    model_consts.RECORDING_ROOT_CONFIG_KEY,
-                    "",
-                )
-                or ""
-            ).strip()
-            target_path = FileOps.resolve_wav_label_target(
-                source_path, target_label, recording_root)
-            if target_path and callable(leased) and leased(target_path):
-                return error_code.INVALID_PATH, "目标录音文件尚未释放，请稍后重试。", None, None
-            new_file_path = FileOps.move_wav_to_dir(
-                source_path,
-                target_label,
-                recording_root,
-            )
-        except Exception as exc:
-            return error_code.INVALID_MOVE, f"移动音频文件失败: {exc}", None, None
-
-        if not new_file_path:
-            return error_code.INVALID_MOVE, "未能生成新的音频路径。", None, None
-
-        updated_signal_info["labels"] = target_label
-        updated_signal_info["file_path"] = self._normalize_db_audio_path(new_file_path)
-        save_code = error_code.INVALID_UPDATE
-        msg = "未找到可更新的数据库记录。"
-        for old_file_path in old_file_path_candidates:
-            save_code, msg = RecordingManager().update_audio_label(updated_signal_info, old_file_path)
-            if save_code == error_code.OK:
-                break
-        final_file_path = new_file_path
-        if save_code != error_code.OK:
-            if os.path.abspath(new_file_path) != os.path.abspath(source_path):
-                try:
-                    rollback_label = previous_label or "not_labeled"
-                    rollback_path = FileOps.move_wav_to_dir(
-                        new_file_path,
-                        rollback_label,
-                        recording_root,
+            try:
+                recording_root = str(
+                    updated_signal_info.get(
+                        model_consts.RECORDING_ROOT_CONFIG_KEY,
+                        "",
                     )
-                    if rollback_path:
-                        final_file_path = rollback_path
-                        updated_signal_info["file_path"] = self._normalize_db_audio_path(
-                            rollback_path
-                        )
-                        updated_signal_info["labels"] = rollback_label
-                    else:
-                        msg = f"{msg}；文件回滚失败：未生成回滚路径。"
-                except Exception as exc:
-                    msg = f"{msg}；文件回滚失败：{exc}"
-            else:
-                updated_signal_info["file_path"] = self._normalize_db_audio_path(
-                    source_path
+                    or ""
+                ).strip()
+                target_path = FileOps.resolve_wav_label_target(
+                    source_path, target_label, recording_root)
+                if target_path and callable(leased) and leased(target_path):
+                    return error_code.INVALID_PATH, "目标录音文件尚未释放，请稍后重试。", None, None
+                rollback_target = FileOps.resolve_wav_label_target(
+                    target_path, previous_label or "not_labeled", recording_root)
+                mutation_paths = (source_path, target_path, rollback_target)
+                if csv_service is not None:
+                    permit = csv_service.try_acquire_mutation(mutation_paths)
+                    if permit is None:
+                        return error_code.INVALID_PATH, "音频或 CSV 正在保存，请稍后重试。", None, None
+                if callable(leased) and any(leased(path) for path in mutation_paths):
+                    return error_code.INVALID_PATH, "录音文件尚未释放，请稍后重试。", None, None
+                new_file_path = FileOps.move_wav_to_dir(
+                    source_path,
+                    target_label,
+                    recording_root,
                 )
-                updated_signal_info["labels"] = previous_label or "not_labeled"
-        update_round_path = getattr(self, "_update_round_audio_path", None)
-        if callable(update_round_path):
-            update_round_path(updated_signal_info, source_path, final_file_path)
-        return save_code, msg, final_file_path, updated_signal_info
+            except Exception as exc:
+                return error_code.INVALID_MOVE, f"移动音频文件失败: {exc}", None, None
+
+            if not new_file_path:
+                return error_code.INVALID_MOVE, "未能生成新的音频路径。", None, None
+
+            updated_signal_info["labels"] = target_label
+            updated_signal_info["file_path"] = self._normalize_db_audio_path(new_file_path)
+            save_code = error_code.INVALID_UPDATE
+            msg = "未找到可更新的数据库记录。"
+            for old_file_path in old_file_path_candidates:
+                save_code, msg = RecordingManager().update_audio_label(updated_signal_info, old_file_path)
+                if save_code == error_code.OK:
+                    break
+            final_file_path = new_file_path
+            if save_code != error_code.OK:
+                if os.path.abspath(new_file_path) != os.path.abspath(source_path):
+                    try:
+                        rollback_label = previous_label or "not_labeled"
+                        rollback_path = FileOps.move_wav_to_dir(
+                            new_file_path,
+                            rollback_label,
+                            recording_root,
+                        )
+                        if rollback_path:
+                            final_file_path = rollback_path
+                            updated_signal_info["file_path"] = self._normalize_db_audio_path(
+                                rollback_path
+                            )
+                            updated_signal_info["labels"] = rollback_label
+                        else:
+                            msg = f"{msg}；文件回滚失败：未生成回滚路径。"
+                    except Exception as exc:
+                        msg = f"{msg}；文件回滚失败：{exc}"
+                else:
+                    updated_signal_info["file_path"] = self._normalize_db_audio_path(
+                        source_path
+                    )
+                    updated_signal_info["labels"] = previous_label or "not_labeled"
+            update_round_path = getattr(self, "_update_round_audio_path", None)
+            if callable(update_round_path):
+                update_round_path(updated_signal_info, source_path, final_file_path)
+            return save_code, msg, final_file_path, updated_signal_info
+        finally:
+            if permit is not None:
+                csv_service.release_mutation(permit)
 
     def _should_run_silent_analysis_after_recording(self) -> bool:
         return bool(
@@ -1198,49 +1208,58 @@ class SequenceWidgetStreamingOpsMixin:
                 json.dump(mark_result_template, f, indent=4)
 
     def closeEvent(self, event):
-        """窗口关闭时等待原始音频 CSV 保存完成并释放硬件资源"""
-        cleanup_streaming = getattr(self, "_cleanup_streaming_resources", None)
-        if callable(cleanup_streaming):
-            cleanup_streaming()
-        else:
-            end_live_waveform = getattr(self, "_end_streaming_waveform_session", None)
-            if callable(end_live_waveform):
-                end_live_waveform()
-            abort_channel_selection = getattr(
-                self, "_abort_recording_channel_selection", None
-            )
-            if callable(abort_channel_selection):
-                abort_channel_selection()
-
-        # Startup-close trick: ``MainWindow.init_ui`` constructs the
-        # sequence window and immediately calls ``close()`` on it as a
-        # UI-reset step *before* it is ever shown. In that path we must
-        # NOT tear down hardware listeners:
-        #   * ``restore_scanner_checkbox_state`` runs during the widget's
-        #     __init__ and, if the last saved state was "enabled", will
-        #     have already spun up the serial/HID scanner worker.
-        #   * If we stop them here, the window is subsequently shown with
-        #     the checkbox still visually checked, but the worker is
-        #     dead and never restarted -- scans silently go nowhere.
-        # The real shutdown path goes through the visible branch below
-        # (or the outer MainWindow.closeEvent) and will ``hw_manager.stop()``
-        # there, so skipping it here does not leak anything on exit.
-        if not self.isVisible():
+        # MainWindow initializes its embedded sequence with a hidden close.
+        # That UI reset must not cancel reservations or stop hardware listeners.
+        application_exit = getattr(self, "_application_close_in_progress", False)
+        active_capture = (getattr(self, "_recording_process_contexts", None)
+                          or getattr(self, "streaming_processor", None) is not None
+                          or getattr(self, "streaming_wav_writer", None) is not None)
+        if not self.isVisible() and not application_exit and not active_capture:
             super().closeEvent(event)
             return
-
-        self._wait_for_raw_audio_csv_exports()
-
+        if application_exit:
+            if not getattr(self, "_application_csv_drain_complete", False):
+                event.ignore()
+                return
+            if getattr(self, "_sequence_close_finalized", False):
+                super().closeEvent(event)
+                return
+        begin_close = getattr(self, "_begin_raw_audio_csv_close", None)
+        if callable(begin_close):
+            begin_close(application_exit=application_exit)
+        if not getattr(self, "_sequence_close_cleanup_started", False):
+            self._sequence_close_cleanup_started = True
+            cleanup = getattr(self, "_cleanup_streaming_resources", None)
+            if callable(cleanup):
+                cleanup()
+            else:
+                for name in ("_end_streaming_waveform_session", "_abort_recording_channel_selection"):
+                    callback = getattr(self, name, None)
+                    if callable(callback):
+                        callback()
+        # The main window owns application drain and closes children only after
+        # closed delivery. A child must not begin a second application exit.
+        wait_csv = getattr(self, "_wait_for_raw_audio_csv_close", None)
+        if not application_exit and callable(wait_csv) and wait_csv():
+            event.ignore()
+            return
+        timer = getattr(self, "_raw_audio_csv_close_timer", None)
+        if timer is not None:
+            timer.stop()
         if hasattr(self, "hw_manager"):
             self.hw_manager.stop()
-        shutdown_product_pdf = getattr(
-            self,
-            "_shutdown_product_pdf_exporter",
-            None,
-        )
-        if callable(shutdown_product_pdf):
-            shutdown_product_pdf()
+        shutdown_pdf = getattr(self, "_shutdown_product_pdf_exporter", None)
+        if not application_exit and callable(shutdown_pdf):
+            shutdown_pdf()
+        self._sequence_close_finalized = True
         super().closeEvent(event)
+        if not application_exit and not getattr(self, "_owns_raw_audio_csv_service", False):
+            self._close_in_progress = False
+            self._sequence_close_cleanup_started = False
+            self._sequence_close_finalized = False
+            if hasattr(self, "_raw_audio_csv_saved_title"):
+                self.setWindowTitle(self._raw_audio_csv_saved_title)
+                del self._raw_audio_csv_saved_title
 
     def reset_test_reord(self):
         """
@@ -1925,80 +1944,13 @@ class SequenceWidgetStreamingOpsMixin:
                     boundary_name="channel-selection",
                 )
 
-    def _schedule_raw_audio_csv_export(self, raw_channels) -> bool:
-        project_context = dict(
-            getattr(self, "product_test_project_context", {}) or {}
-        )
-        if project_context.get(EXPORT_RAW_AUDIO_CSV_KEY, False) is not True:
-            return False
+    def _schedule_raw_audio_csv_export(self, raw_channels):
+        from ui.sequence.sequence_widget_raw_csv_ops import SequenceWidgetRawCsvOpsMixin
+        return SequenceWidgetRawCsvOpsMixin._schedule_raw_audio_csv_export(self, raw_channels)
 
-        wav_path = str(getattr(self, "recorded_path", "") or "")
-        try:
-            storage_metadata = dict(
-                (getattr(self, "recorded_signal_info", {}) or {}).get(
-                    "analysis_storage", {}
-                )
-            )
-            storage_context = storage_context_from_metadata(storage_metadata)
-            csv_path = build_raw_audio_csv_path(
-                storage_context,
-                os.path.splitext(os.path.basename(wav_path))[0],
-            )
-            channels = tuple(int(channel) for channel in raw_channels)
-        except (TypeError, ValueError, OSError) as error:
-            self._on_raw_audio_csv_export_failed(wav_path, str(error))
-            return False
-
-        def _worker():
-            try:
-                export_raw_audio_csv(wav_path, csv_path, channels)
-            except Exception as error:
-                self.raw_audio_csv_export_failed.emit(wav_path, str(error))
-            else:
-                self.raw_audio_csv_export_succeeded.emit(str(csv_path))
-            finally:
-                with self._raw_audio_csv_export_lock:
-                    self._raw_audio_csv_export_threads.discard(thread)
-
-        register_file = getattr(self, "_register_round_file", None)
-        if callable(register_file):
-            register_file(dict(self.recorded_signal_info), str(csv_path), is_raw_csv=True)
-        thread = threading.Thread(
-            target=_worker,
-            name=f"raw-audio-csv-{os.path.basename(wav_path)}",
-            daemon=False,
-        )
-        with self._raw_audio_csv_export_lock:
-            self._raw_audio_csv_export_threads.add(thread)
-        try:
-            thread.start()
-        except RuntimeError as error:
-            with self._raw_audio_csv_export_lock:
-                self._raw_audio_csv_export_threads.discard(thread)
-            self._on_raw_audio_csv_export_failed(wav_path, str(error))
-            return False
-        return True
-
-    def _wait_for_raw_audio_csv_exports(self) -> None:
-        lock = getattr(self, "_raw_audio_csv_export_lock", None)
-        if lock is None:
-            return
-        while True:
-            with lock:
-                active_threads = tuple(
-                    thread
-                    for thread in self._raw_audio_csv_export_threads
-                    if thread is not threading.current_thread()
-                )
-            if not active_threads:
-                break
-            for thread in active_threads:
-                thread.join()
-        QApplication.processEvents()
-
-    def _on_raw_audio_csv_export_succeeded(self, csv_path) -> None:
+    def _on_raw_audio_csv_export_succeeded(self, archive_path) -> None:
         self.default_logger.info(
-            f"raw_audio_csv_export_succeeded path={csv_path}"
+            f"raw_audio_csv_export_succeeded path={archive_path}"
         )
 
     def _on_raw_audio_csv_export_failed(self, wav_path, error_message) -> None:
@@ -2199,13 +2151,16 @@ class SequenceWidgetStreamingOpsMixin:
                 self._append_recording_wav_calibration_metadata()
 
             self.recorded_signal_info["sample_rate"] = sample_rate
+            stage_started = perf_counter()
             self._schedule_raw_audio_csv_export(run_channels)
+            record_gui_stage(self, "csv_submission", stage_started, request=request)
             condition_key = (
                 self._recording_process_direction if prefinalized
                 else self._resolve_active_recording_waveform_direction(fallback="")
             )
             self._cache_condition_record(condition_key)
 
+            stage_started = perf_counter()
             # Final data and workspace semantic validation have succeeded, so
             # waveform preparation / Qt failures are presentation-only.
             try:
@@ -2234,8 +2189,12 @@ class SequenceWidgetStreamingOpsMixin:
                     "录音已保存，但波形刷新失败。",
                 )
 
+            record_gui_stage(self, "waveform_projection", stage_started, request=request)
+
             # Save to database
+            stage_started = perf_counter()
             save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
+            record_gui_stage(self, "database_save", stage_started, request=request)
             if save_code == error_code.OK:
                 register_database = getattr(self, "_register_round_database_record", None)
                 if callable(register_database):
@@ -2274,7 +2233,9 @@ class SequenceWidgetStreamingOpsMixin:
                 current_label = (self.recorded_signal_info or {}).get("labels", "not_labeled")
             except Exception:
                 current_label = "not_labeled"
+            stage_started = perf_counter()
             self._update_current_recent_session_result(current_label)
+            record_gui_stage(self, "history_update", stage_started, request=request)
 
             is_manual_product_cycle_active = getattr(self, "_is_manual_product_condition_cycle_active", None)
             manual_product_cycle_was_active = (
@@ -2321,8 +2282,10 @@ class SequenceWidgetStreamingOpsMixin:
                 if (getattr(self, "_recording_process_cancelled", False)
                         or (context is not None and (context.cancelled or context.failed or context.cleanup_owned))):
                     return
+            stage_started = perf_counter()
             if callable(enqueue_analysis):
                 enqueue_analysis()
+            record_gui_stage(self, "automatic_analysis_enqueue", stage_started, request=request)
 
             if manual_product_cycle_was_active:
                 mark_manual_product_complete = getattr(

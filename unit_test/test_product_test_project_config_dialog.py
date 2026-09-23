@@ -432,7 +432,7 @@ def test_dialog_uses_project_port_condition_layout(app, tmp_path):
     assert dialog.delete_project_btn.text() == "删除配置"
     assert dialog.delete_project_btn.isEnabled()
     assert dialog.wav_only_radio.text() == "仅 WAV"
-    assert dialog.wav_and_csv_radio.text() == "WAV + CSV"
+    assert dialog.wav_and_csv_radio.text() == "WAV + CSV（ZIP 压缩）"
     assert dialog.wav_only_radio.parentWidget() is dialog.wav_and_csv_radio.parentWidget()
     assert dialog.wav_only_radio.isChecked()
     assert not dialog.wav_and_csv_radio.isChecked()

@@ -89,3 +89,52 @@ def test_same_project_name_in_different_roots_cannot_silently_merge(tmp_path):
     groups = collect_audio_package_files([str(first["wav"]), str(second["wav"])])
     with pytest.raises(ValueError, match="打包路径相同"):
         select_audio_package_files(groups, {"images"})
+
+
+@pytest.mark.parametrize('retain_csv', [False, True])
+@pytest.mark.parametrize('stem_variant', ['ordinary', 'spaces', 'long'])
+def test_exact_raw_zip_reuses_producer_name_and_preserves_nested_bytes(tmp_path, retain_csv, stem_variant):
+    from base.analysis_artifact_paths import sanitize_path_component
+    root = tmp_path / '中文 results'
+    files = make_recording(root)
+    wav = files['wav']
+    stem = wav.stem
+    if stem_variant == 'spaces':
+        stem = stem.replace('High', 'High speed')
+    elif stem_variant == 'long':
+        stem = stem.replace('High', 'H' * 180)
+    renamed = wav.with_name(stem + '.wav')
+    wav.rename(renamed)
+    files['raw_csv'].unlink()
+    csv = files['raw_csv'].with_name(sanitize_path_component(stem, max_length=220) + '.csv')
+    archive = Path(str(csv) + '.zip')
+    with ZipFile(archive, 'w') as inner:
+        inner.writestr(csv.name, b'original csv bytes')
+    if retain_csv:
+        csv.write_bytes(b'original csv bytes')
+    neighbor = archive.with_name('neighbor.csv.zip')
+    neighbor.write_bytes(b'leave alone')
+    grouped = collect_audio_package_files([str(renamed)])
+    entries = grouped['raw_csv']
+    assert {Path(entry.source) for entry in entries} == ({csv, archive} if retain_csv else {archive})
+    output = tmp_path / 'outer.zip'
+    FileOps.create_zip_with_files([entry.source for entry in entries], str(output),
+        archive_names={entry.source: entry.archive_name for entry in entries})
+    with ZipFile(output) as outer:
+        assert outer.read(archive.relative_to(root).as_posix()) == archive.read_bytes()
+
+
+
+def test_zip_companion_directory_cannot_escape_sample(tmp_path, monkeypatch):
+    files = make_recording(tmp_path)
+    archive = Path(str(files['raw_csv']) + '.zip')
+    archive.write_bytes(b'zip')
+    original = Path.resolve
+    def resolve(path, *args, **kwargs):
+        if path == archive.parent:
+            return tmp_path / 'outside'
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'resolve', resolve)
+    with pytest.raises(ValueError, match='超出录音样本目录'):
+        collect_audio_package_files([str(files['wav'])])
+    assert archive.read_bytes() == b'zip'

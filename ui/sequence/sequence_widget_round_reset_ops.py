@@ -8,6 +8,7 @@ from PyQt5.QtCore import QSignalBlocker, QTimer
 from PyQt5.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout
 
 from base.test_round_data import RoundDataRecord
+from base.raw_audio_csv_zip import raw_csv_zip_path
 from base.recording_management import RecordingManager
 from ui.config_dialog_base import ConfigDialogBase
 from ui.dialog_enter_policy import install_dialog_enter_policy
@@ -64,9 +65,13 @@ class SequenceWidgetRoundResetOpsMixin:
         if record is None or not path:
             return
         # Only raw/analysis outputs are supported. Reports are intentionally excluded.
-        if Path(path).suffix.lower() not in {".wav", ".csv", ".png", ".jpg", ".jpeg"}:
-            return
         filename = os.path.abspath(path)
+        matching_raw_zip = is_raw_csv and any(
+            filename == str(raw_csv_zip_path(csv))
+            for csv in record.raw_csv_files if Path(csv).suffix.lower() == ".csv")
+        if (Path(path).suffix.lower() not in {".wav", ".csv", ".png", ".jpg", ".jpeg"}
+                and not matching_raw_zip):
+            return
         record.files.add(filename)
         if is_raw_csv:
             record.raw_csv_files.add(filename)
@@ -108,11 +113,9 @@ class SequenceWidgetRoundResetOpsMixin:
         if getattr(self, "_serial_trigger_delay_timer", None) is not None:
             if self._serial_trigger_delay_timer.isActive():
                 return True
-        lock = getattr(self, "_raw_audio_csv_export_lock", None)
-        if lock is not None:
-            with lock:
-                if self._raw_audio_csv_export_threads:
-                    return True
+        csv_service = getattr(self, "raw_audio_csv_service", None)
+        if csv_service is not None and csv_service.snapshot().outstanding:
+            return True
         return any(
             self._recording_path_is_leased(record.audio_path)
             for record in self._round_data_records.get(self._round_reset_group_id, {}).values()
@@ -137,11 +140,15 @@ class SequenceWidgetRoundResetOpsMixin:
         raw_csv_files = {path for record in records.values() for path in record.raw_csv_files}
         counts = {"原始音频": 0, "原始 CSV": 0, "分析图片": 0, "分析 CSV": 0}
         for path in files:
+            if not Path(path).is_file():
+                continue
             suffix = Path(path).suffix.lower()
             if suffix == ".wav":
                 counts["原始音频"] += 1
+            elif path in raw_csv_files:
+                counts["原始 CSV"] += 1
             elif suffix == ".csv":
-                counts["原始 CSV" if path in raw_csv_files else "分析 CSV"] += 1
+                counts["分析 CSV"] += 1
             elif suffix in {".png", ".jpg", ".jpeg"}:
                 counts["分析图片"] += 1
         parts = [
@@ -222,6 +229,9 @@ class SequenceWidgetRoundResetOpsMixin:
             if delete_data is None:
                 return
             errors = self._delete_round_generated_data(group_id) if delete_data else []
+            if errors is None:
+                QMessageBox.information(self, "暂不能重置", "录音或 CSV 文件尚未释放，请稍后重试。")
+                return
             self._reset_round_presentation()
             self._round_data_records.pop(group_id, None)
             self._round_reset_group_id = ""
@@ -243,15 +253,26 @@ class SequenceWidgetRoundResetOpsMixin:
     def _delete_round_generated_data(self, group_id):
         errors = []
         records = self._round_data_records.get(group_id, {})
-        for key, record in list(records.items()):
-            failures = record.delete_generated_data()
-            if record.audio_path not in record.files:
-                self._remove_deleted_round_history(group_id, key)
-            if failures:
-                errors.extend(failures)
-                continue
-            del records[key]
-        return errors
+        paths = tuple({path for record in records.values() for path in record.files})
+        csv_service = getattr(self, "raw_audio_csv_service", None)
+        permit = csv_service.try_acquire_mutation(paths) if csv_service is not None and paths else None
+        if csv_service is not None and paths and permit is None:
+            return None
+        try:
+            if any(self._recording_path_is_leased(path) for path in paths):
+                return None
+            for key, record in list(records.items()):
+                failures = record.delete_generated_data()
+                if record.audio_path not in record.files:
+                    self._remove_deleted_round_history(group_id, key)
+                if failures:
+                    errors.extend(failures)
+                    continue
+                del records[key]
+            return errors
+        finally:
+            if permit is not None:
+                csv_service.release_mutation(permit)
 
     def _remove_deleted_round_history(self, group_id, key):
         for session_id, session in list(self.recent_test_session_by_id.items()):

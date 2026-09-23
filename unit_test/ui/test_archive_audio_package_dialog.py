@@ -174,6 +174,7 @@ def test_missing_wav_is_explained_without_counting_duplicate_records_as_missing(
 def test_no_selected_recordings_keeps_existing_database_only_export(archive, tmp_path, monkeypatch):
     window, _ = archive
     window.set_all_checkboxes_checked([0], False)
+    window.raw_audio_csv_service = Mock()
     monkeypatch.setattr(QMessageBox, "exec_", lambda self: 0)
     monkeypatch.setattr(QMessageBox, "clickedButton", lambda self: self.buttons()[0])
     contents_dialog = Mock()
@@ -184,6 +185,8 @@ def test_no_selected_recordings_keeps_existing_database_only_export(archive, tmp
     window.on_clicked_package_btn()
     wait_for_package(window)
     contents_dialog.assert_not_called()
+    window.raw_audio_csv_service.try_acquire_mutation.assert_not_called()
+    window.raw_audio_csv_service.release_mutation.assert_not_called()
     assert writer.call_args.args[0] == ("database/audio_data.db",)
     assert writer.call_args.kwargs["archive_names"] == {"database/audio_data.db": "audio_data.db"}
 
@@ -297,3 +300,124 @@ def test_worker_copies_input_manifest(qapp, monkeypatch, tmp_path):
     assert writer.call_args.args[0] == ("one.wav",)
     assert writer.call_args.kwargs["archive_names"] == {"one.wav": "project/one.wav"}
     worker.deleteLater()
+
+
+@pytest.mark.parametrize('outcome', ['success', 'failure', 'startup', 'setup'])
+def test_package_recollects_after_dialog_and_holds_all_companion_paths(archive, tmp_path, monkeypatch, outcome):
+    from pathlib import Path
+    from base.raw_audio_csv_tasks import CsvTaskLedger
+    window, files = archive
+    ledger = window.raw_audio_csv_service = CsvTaskLedger()
+    inner_path = Path(str(files['raw_csv']) + '.zip')
+    def choose(dialog):
+        for kind, box in dialog.checkboxes.items():
+            box.setChecked(kind == 'raw_csv')
+        return dialog.Accepted
+    monkeypatch.setattr(ArchiveAudioPackageDialog, 'exec', choose)
+    def save(*args):
+        with ZipFile(inner_path, 'w') as inner:
+            inner.writestr(files['raw_csv'].name, b'csv')
+        files['raw_csv'].unlink()
+        window.set_all_checkboxes_checked([0], False)
+        assert not window.select_wave_data
+        return str(tmp_path / 'outer.zip'), ''
+    monkeypatch.setattr(QFileDialog, 'getSaveFileName', save)
+    monkeypatch.setattr(QMessageBox, 'warning', Mock())
+    entered, release = threading.Event(), threading.Event()
+    captured = []
+    def write(paths, output, **kwargs):
+        captured.extend(paths)
+        entered.set()
+        assert release.wait(5)
+        if outcome == 'failure':
+            raise OSError('package failed')
+    monkeypatch.setattr(FileOps, 'create_zip_with_files', write)
+    if outcome == 'startup':
+        monkeypatch.setattr(AudioPackageThread, 'start', Mock(side_effect=RuntimeError('start failed')))
+    if outcome == 'setup':
+        from ui import archive_audio_data_dialog as module
+        monkeypatch.setattr(module, '_AudioPackageProgressDialog', Mock(side_effect=RuntimeError('setup failed')))
+    try:
+        window.on_clicked_package_btn()
+        if outcome not in ('startup', 'setup'):
+            wait_until(entered.is_set)
+            assert str(inner_path) in captured and str(files['raw_csv']) not in captured
+            for path in (files['wav'], files['raw_csv'], inner_path):
+                assert ledger.try_acquire_mutation((str(path),)) is None
+            release.set()
+            wait_for_package(window)
+        assert window._package_thread is None
+        assert not ledger.paths_busy(tuple(str(p) for p in (files['wav'], files['raw_csv'], inner_path)))
+    finally:
+        release.set()
+        wait_for_package(window)
+
+
+@pytest.mark.parametrize('stage', ['zip_write', 'zip_verify'])
+def test_package_cannot_read_inputs_during_real_zip_stage(archive, tmp_path, monkeypatch, stage):
+    import multiprocessing
+    import numpy as np
+    import soundfile as sf
+    from base.raw_audio_csv_service import RawAudioCsvService
+    from base.raw_audio_csv_protocol import CsvExportRequest
+    from unit_test.base.raw_audio_csv_fakes import zip_phase_worker
+    window, files = archive
+    sf.write(str(files['wav']), np.zeros(10, dtype=np.float32), 8000)
+    ctx = multiprocessing.get_context('spawn')
+    entered, gate = ctx.Event(), ctx.Event()
+    service = RawAudioCsvService(worker_target=zip_phase_worker, worker_args=(stage, entered, gate))
+    window.raw_audio_csv_service = service
+    monkeypatch.setattr(ArchiveAudioPackageDialog, 'exec', lambda self: self.Accepted)
+    monkeypatch.setattr(QFileDialog, 'getSaveFileName', lambda *args: (str(tmp_path / 'blocked.zip'), ''))
+    warning, writer = Mock(), Mock()
+    monkeypatch.setattr(QMessageBox, 'warning', warning)
+    monkeypatch.setattr(FileOps, 'create_zip_with_files', writer)
+    req = CsvExportRequest('task', 'recording', str(files['wav']), str(files['raw_csv']), (0,), 'old', 'old')
+    try:
+        assert service.commit(service.reserve('recording').reservation, req) == 'accepted'
+        assert entered.wait(10)
+        window.on_clicked_package_btn()
+        writer.assert_not_called()
+        warning.assert_called_once()
+        assert window._package_thread is None
+    finally:
+        gate.set()
+        service.begin_shutdown()
+        assert service.closed.wait(10)
+
+
+@pytest.mark.parametrize('alias', ['exact', 'normalized', 'hardlink_zip', 'hardlink_wav'])
+def test_package_output_cannot_alias_selected_input(archive, tmp_path, monkeypatch, alias):
+    from pathlib import Path
+    from base.raw_audio_csv_tasks import CsvTaskLedger
+    window, files = archive
+    ledger = window.raw_audio_csv_service = CsvTaskLedger()
+    raw_zip = Path(str(files['raw_csv']) + '.zip')
+    with ZipFile(raw_zip, 'w') as zipped:
+        zipped.writestr(files['raw_csv'].name, b'original complete raw CSV')
+    source = files['wav'] if alias == 'hardlink_wav' else raw_zip
+    original_bytes = source.read_bytes()
+    if alias.startswith('hardlink'):
+        output = tmp_path / 'aliased-output.zip'
+        os.link(source, output)
+    elif alias == 'normalized':
+        output = str(raw_zip.parent).upper() + '/../raw_csv/' + raw_zip.name
+    else:
+        output = raw_zip
+    def choose(dialog):
+        for kind, box in dialog.checkboxes.items():
+            box.setChecked(kind in {'wav', 'raw_csv'})
+        return dialog.Accepted
+    monkeypatch.setattr(ArchiveAudioPackageDialog, 'exec', choose)
+    monkeypatch.setattr(QFileDialog, 'getSaveFileName', lambda *args: (str(output), ''))
+    warning = Mock()
+    monkeypatch.setattr(QMessageBox, 'warning', warning)
+    start = Mock(wraps=window._start_audio_package)
+    monkeypatch.setattr(window, '_start_audio_package', start)
+    window.on_clicked_package_btn()
+    wait_for_package(window)
+    assert source.read_bytes() == original_bytes
+    start.assert_not_called()
+    assert '不能与待打包文件相同' in warning.call_args.args[2]
+    assert '其他保存位置' in warning.call_args.args[2]
+    assert not ledger.paths_busy((str(files['wav']), str(files['raw_csv']), str(raw_zip)))

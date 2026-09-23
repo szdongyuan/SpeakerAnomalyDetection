@@ -405,50 +405,54 @@ class SequenceWidgetBarcodeOpsMixin:
             self.left_panel.set_final_result("待判定", tone="pending")
 
     def _start_directional_workflow(self, direction: str):
-        direction = self._normalize_trigger_direction(direction)
-        if not direction:
-            return
+        from ui.sequence.sequence_widget_raw_csv_ops import CsvRecordingAdmissionScope
+        with CsvRecordingAdmissionScope(self) as csv_scope:
+            if not csv_scope.allowed:
+                return
+            direction = self._normalize_trigger_direction(direction)
+            if not direction:
+                return
 
-        policy = self._get_direction_cycle_policy_for_current_mode() if self._is_test_mode() else "forward_then_reverse"
-        first_direction = self._normalize_trigger_direction(getattr(self, "_current_cycle_first_direction", ""))
-        forward_is_second_leg = policy == "any_order_pair" and first_direction == "reverse" and direction == "forward"
+            policy = self._get_direction_cycle_policy_for_current_mode() if self._is_test_mode() else "forward_then_reverse"
+            first_direction = self._normalize_trigger_direction(getattr(self, "_current_cycle_first_direction", ""))
+            forward_is_second_leg = policy == "any_order_pair" and first_direction == "reverse" and direction == "forward"
 
-        if direction == "forward":
-            if not forward_is_second_leg:
-                # Start of a new directional cycle: release previous cycle count reservation
-                # so each forward leg can reserve (+1) exactly once.
-                self._current_cycle_recorded_count = None
-                self._reset_direction_cycle_panel_state()
-                self._current_cycle_first_direction = "forward"
-            self._manual_direction_fallback_next_direction = "reverse"
-            # Lock S/N for the whole forward+reverse cycle in TEST mode only,
-            # so neither operator typing nor a re-scan can change the barcode
-            # mid-cycle on the automated production path. Mark mode keeps the
-            # historical behaviour: S/N stays editable across the cycle and is
-            # not auto-cleared by OK/NG.
-            if self._should_lock_sn_for_cycle():
-                self._lock_sn_for_cycle()
-        else:
-            if not getattr(self, "_direction_cycle_started_at", ""):
-                self._reset_direction_cycle_panel_state()
-                self._current_cycle_first_direction = "reverse"
-            self._manual_direction_fallback_next_direction = "forward"
-            if policy == "any_order_pair" and self._should_lock_sn_for_cycle() and not first_direction:
-                self._lock_sn_for_cycle()
-
-        self._current_trigger_direction = direction
-        # Bind waveform routing to the direction that started this recording.
-        self._set_active_recording_direction(direction)
-
-        if getattr(self, "left_panel", None) is not None:
             if direction == "forward":
-                self.left_panel.set_current_stage("正转检测中", tone="running")
-                self.left_panel.set_forward_result("检测中", tone="running")
+                if not forward_is_second_leg:
+                    # Start of a new directional cycle: release previous cycle count reservation
+                    # so each forward leg can reserve (+1) exactly once.
+                    self._current_cycle_recorded_count = None
+                    self._reset_direction_cycle_panel_state()
+                    self._current_cycle_first_direction = "forward"
+                self._manual_direction_fallback_next_direction = "reverse"
+                # Lock S/N for the whole forward+reverse cycle in TEST mode only,
+                # so neither operator typing nor a re-scan can change the barcode
+                # mid-cycle on the automated production path. Mark mode keeps the
+                # historical behaviour: S/N stays editable across the cycle and is
+                # not auto-cleared by OK/NG.
+                if self._should_lock_sn_for_cycle():
+                    self._lock_sn_for_cycle()
             else:
-                self.left_panel.set_current_stage("反转检测中", tone="running")
-                self.left_panel.set_reverse_result("检测中", tone="running")
+                if not getattr(self, "_direction_cycle_started_at", ""):
+                    self._reset_direction_cycle_panel_state()
+                    self._current_cycle_first_direction = "reverse"
+                self._manual_direction_fallback_next_direction = "forward"
+                if policy == "any_order_pair" and self._should_lock_sn_for_cycle() and not first_direction:
+                    self._lock_sn_for_cycle()
 
-        self.start_this_play("not_labeled")
+            self._current_trigger_direction = direction
+            # Bind waveform routing to the direction that started this recording.
+            self._set_active_recording_direction(direction)
+
+            if getattr(self, "left_panel", None) is not None:
+                if direction == "forward":
+                    self.left_panel.set_current_stage("正转检测中", tone="running")
+                    self.left_panel.set_forward_result("检测中", tone="running")
+                else:
+                    self.left_panel.set_current_stage("反转检测中", tone="running")
+                    self.left_panel.set_reverse_result("检测中", tone="running")
+
+            self.start_this_play("not_labeled")
 
     def _on_directional_recording_completed(self, *, direction=None, owns_active_presentation=True):
         direction = self._normalize_trigger_direction(
@@ -485,6 +489,11 @@ class SequenceWidgetBarcodeOpsMixin:
         direction = str(getattr(self, "_pending_serial_trigger_direction", "") or "")
         self._pending_serial_trigger_direction = ""
         if not direction:
+            return
+        csv_reason = getattr(self, "_raw_audio_csv_admission_reason", lambda: "")()
+        if csv_reason:
+            self.default_logger.info(
+                f"serial_delayed_trigger_rejected_csv_busy direction={direction} reason={csv_reason}")
             return
         can_start = getattr(self, "_can_start_recording_workflow", None)
         blocked = (not can_start() if callable(can_start)
@@ -770,6 +779,11 @@ class SequenceWidgetBarcodeOpsMixin:
         """处理串口离散输入触发信号（区分正反转）"""
         direction = self._normalize_trigger_direction(direction)
         if not direction:
+            return
+        csv_reason = getattr(self, "_raw_audio_csv_admission_reason", lambda: "")()
+        if csv_reason:
+            self.default_logger.info(
+                f"serial_directional_trigger_rejected_csv_busy direction={direction} reason={csv_reason}")
             return
         can_start = getattr(self, "_can_start_recording_workflow", None)
         available = can_start() if callable(can_start) else not getattr(self, "_record_workflow_busy", False)

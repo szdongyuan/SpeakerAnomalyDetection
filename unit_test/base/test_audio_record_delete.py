@@ -192,3 +192,19 @@ def test_empty_result_directory_redirect_is_rejected(recordings, monkeypatch, tm
     assert len(errors) == 1 and "超出录音样本目录" in errors[0]
     assert redirected.is_dir()
     assert database_ids(manager) == ["one", "two"]
+
+
+@pytest.mark.parametrize('retain_csv', [False, True])
+def test_archive_delete_counts_and_removes_exact_zip_companion(recordings, retain_csv):
+    rows, (first, second), manager = recordings
+    archive = Path(str(first['raw_csv']) + '.zip')
+    archive.write_bytes(b'zip')
+    if not retain_csv:
+        first['raw_csv'].unlink()
+    neighbor = archive.with_name('unrelated.csv.zip')
+    neighbor.write_bytes(b'keep')
+    plans = plan_audio_record_deletion(rows[:1])
+    assert count_audio_deletion_files(plans)['raw_csv'] == 1 + retain_csv
+    assert delete_audio_recordings(plans, manager) == (['one'], [])
+    assert not archive.exists() and not first['raw_csv'].exists()
+    assert neighbor.exists() and all(p.exists() for p in second.values())

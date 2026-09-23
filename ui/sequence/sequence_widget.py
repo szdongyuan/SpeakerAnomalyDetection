@@ -1,8 +1,7 @@
 import os
-import threading
 import weakref
 
-from PyQt5.QtCore import QTimer, pyqtSignal
+from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication, QWidget
 
 from base.data_struct.data_deal_struct import DataDealStruct
@@ -29,6 +28,7 @@ from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMi
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.sequence.sequence_widget_product_pdf_ops import SequenceWidgetProductPdfOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
+from ui.sequence.sequence_widget_raw_csv_ops import SequenceWidgetRawCsvOpsMixin
 
 
 class SequenceWindow(
@@ -43,12 +43,12 @@ class SequenceWindow(
     SequenceWidgetConfigOpsMixin,
     SequenceWidgetProductPdfOpsMixin,
     SequenceWidgetStreamingOpsMixin,
+    SequenceWidgetRawCsvOpsMixin,
     QWidget,
 ):
-    raw_audio_csv_export_succeeded = pyqtSignal(str)
-    raw_audio_csv_export_failed = pyqtSignal(str, str)
 
-    def __init__(self, *, recording_bridge=None, ve_prewarm_lifetime=None):
+    def __init__(self, *, recording_bridge=None, ve_prewarm_lifetime=None,
+                 raw_audio_csv_bridge=None):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
         super().__init__()
         self._product_config_refresh_state = "initializing"
@@ -81,8 +81,6 @@ class SequenceWindow(
         self.signal_info = {}
         self.analysis_window = []
         self._analysis_result_summary_window = None
-        self._raw_audio_csv_export_lock = threading.Lock()
-        self._raw_audio_csv_export_threads = set()
 
         self.init_result_files()
         self._prepare_initial_product_configuration()
@@ -95,12 +93,7 @@ class SequenceWindow(
         self.product_test_pdf_report_config = self.load_active_product_test_pdf_report_config()
         self._product_pdf_report_states = {}
         self._product_pdf_report_paths = {}
-        self.raw_audio_csv_export_succeeded.connect(
-            self._on_raw_audio_csv_export_succeeded
-        )
-        self.raw_audio_csv_export_failed.connect(
-            self._on_raw_audio_csv_export_failed
-        )
+        self._initialize_raw_audio_csv_runtime(raw_audio_csv_bridge=raw_audio_csv_bridge)
         self.left_panel = MotorDetectionLeftPanel(
             self.count_board,
             condition_configs=self.product_test_condition_configs,
