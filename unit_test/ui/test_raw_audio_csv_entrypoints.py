@@ -11,39 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.parametrize("filename", ["main_window.py", "main_window_Launcher.py"])
-def test_diagnostic_branch_runs_after_freeze_support_before_gui(filename):
-    script = '''
-import builtins, multiprocessing, runpy, sys, types
-called = []
-multiprocessing.freeze_support = lambda: called.append("freeze")
-helper = types.ModuleType("tools.raw_audio_csv_frozen_smoke")
-def diagnostic(argv):
-    assert called == ["freeze"]
-    assert argv == ["--verify-raw-csv-process", "report.json"]
-    return 17
-helper.maybe_run_raw_csv_smoke = diagnostic
-sys.modules[helper.__name__] = helper
-original = builtins.__import__
-def guarded(name, *args, **kwargs):
-    assert not name.startswith(("PyQt5", "ui.", "base.recording")), name
-    return original(name, *args, **kwargs)
-builtins.__import__ = guarded
-path = sys.argv[1]
-sys.argv = [path, "--verify-raw-csv-process", "report.json"]
-try:
-    runpy.run_path(path, run_name="__main__")
-except SystemExit as result:
-    assert result.code == 17
-else:
-    raise AssertionError("diagnostic did not exit")
-'''
-    result = subprocess.run([sys.executable, "-c", script, str(ROOT / filename)],
-                            cwd=ROOT, capture_output=True, text=True, timeout=15)
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize("filename", ["main_window.py", "main_window_Launcher.py"])
-def test_freeze_support_executes_before_gui_imports(filename):
+def test_bootstrap_reaches_gui_after_freeze_support_without_tools_imports(filename):
     # Stop at the first GUI import: even frozen children must hit bootstrap first.
     script = '''
 import builtins, multiprocessing, runpy
@@ -52,6 +20,7 @@ multiprocessing.freeze_support = lambda: called.append(True)
 original = builtins.__import__
 class ReachedGui(Exception): pass
 def guarded(name, *args, **kwargs):
+    assert name != "tools" and not name.startswith("tools."), name
     if name.startswith(("PyQt5", "ui.")):
         assert called, "GUI imported before freeze_support"
         raise ReachedGui()
@@ -61,6 +30,8 @@ try:
     runpy.run_path(sys.argv[1], run_name="__main__")
 except ReachedGui:
     pass
+else:
+    raise AssertionError("bootstrap did not reach GUI imports")
 assert called
 '''
     result = subprocess.run([sys.executable, "-c", "import sys\n" + script, str(ROOT / filename)],

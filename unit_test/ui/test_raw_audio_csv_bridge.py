@@ -170,3 +170,57 @@ def test_result_presentation_uses_original_task_once(ui_qapp):
     assert not window._owns_raw_audio_csv_service
     service.begin_shutdown.assert_not_called()
     bridge.close_delivery()
+
+
+def test_correlated_parent_timing_survives_disabled_logging_and_delayed_qt(tmp_path, ui_qapp):
+    import logging
+    import os
+    import numpy as np
+    import soundfile as sf
+    import pytest
+    from base.raw_audio_csv_service import RawAudioCsvService
+    from ui.raw_audio_csv_service_bridge import RawAudioCsvServiceBridge
+    source = tmp_path / 'source.wav'
+    sf.write(source, np.ones((32, 2), dtype=np.float32), 8000, subtype='FLOAT')
+    service = RawAudioCsvService()
+    bridge = RawAudioCsvServiceBridge(service)
+    events, delivered, threads = [], [], []
+    service.subscribe(lambda event: (events.append(event), threads.append(threading.current_thread().name)))
+    bridge.subscribe(delivered.append)
+    previous = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        request = CsvExportRequest('task', 'recording', str(source), str(tmp_path / 'out.csv'), (0, 2), 'g', 'r')
+        token = service.reserve('recording').reservation
+        assert service.commit(token, request) == 'accepted'
+        service.begin_shutdown()
+        assert service.closed.wait(15)
+
+        time.sleep(.05)  # Deliberately leave Qt delivery queued after resources close.
+        ui_qapp.processEvents()
+        stages = {e.timing.stage: e for e in events if e.timing is not None}
+        assert {'reserve', 'submit', 'dispatch', 'ready', 'terminal_received', 'released'} <= stages.keys()
+        assert stages['reserve'].timing.recording_id == 'recording'
+        assert stages['submit'].timing.token_id == token.token_id
+        for stage in ('dispatch', 'terminal_received', 'released'):
+            timing = stages[stage].timing
+            assert timing.task_id == 'task'
+            assert timing.generation == 1
+            assert timing.worker_pid != os.getpid()
+            assert timing.worker_pid > 0
+        terminal = next(e for e in delivered if e.kind == 'terminal')
+        assert terminal.qt_delivery_seconds >= .05
+        assert terminal.result.elapsed_seconds == stages['terminal_received'].result.elapsed_seconds
+        assert terminal.result.export_end_seconds - terminal.result.export_begin_seconds == pytest.approx(terminal.result.csv_export_seconds)
+        phases = [terminal.result.csv_export_seconds, terminal.result.zip_write_seconds,
+                  terminal.result.zip_verify_seconds, terminal.result.zip_publish_seconds,
+                  terminal.result.csv_cleanup_seconds]
+        assert all(value >= 0 for value in phases)
+        assert terminal.result.elapsed_seconds >= sum(phases)
+        assert service.snapshot().outstanding == 0
+        assert all(name in ('raw-csv-supervisor', 'raw-csv-completion') for name in threads)
+    finally:
+        logging.disable(previous)
+        bridge.close_delivery()
+        service.begin_shutdown()
+        assert service.closed.wait(15)

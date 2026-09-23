@@ -4,10 +4,6 @@ if __name__ == "__main__":
     # Frozen spawn children must be diverted before loading GUI/hardware modules.
     from multiprocessing import freeze_support
     freeze_support()
-    from tools.raw_audio_csv_frozen_smoke import maybe_run_raw_csv_smoke
-    diagnostic_exit = maybe_run_raw_csv_smoke(sys.argv[1:])
-    if diagnostic_exit is not None:
-        sys.exit(diagnostic_exit)
 
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor

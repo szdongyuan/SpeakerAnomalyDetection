@@ -69,9 +69,5 @@ class MainWindowLauncher(object):
 if __name__ == "__main__":
     from multiprocessing import freeze_support
     freeze_support()
-    from tools.raw_audio_csv_frozen_smoke import maybe_run_raw_csv_smoke
-    diagnostic_exit = maybe_run_raw_csv_smoke(sys.argv[1:])
-    if diagnostic_exit is not None:
-        sys.exit(diagnostic_exit)
     mwl = MainWindowLauncher()
     mwl.run()

@@ -792,3 +792,14 @@ def test_long_csv_name_uses_short_distinct_controlled_temporary_names(services, 
     assert len(temporaries) == len(set(temporaries)) == 2
     assert all(len(Path(path).name) < 64 for path in temporaries)
     assert Path(request.csv_path + ".zip").exists()
+
+
+def test_malformed_commit_diagnostics_preserve_invalid_contract():
+    service = RawAudioCsvService()
+    try:
+        token = service.reserve('invalid-recording').reservation
+        assert service.commit(token, None) == 'invalid'
+        assert service.snapshot().outstanding == 0
+    finally:
+        service.begin_shutdown()
+        assert service.closed.wait(15)
