@@ -5,7 +5,8 @@ from unittest.mock import Mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import QEvent, Qt, QTimer
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from base.audio_record_filter import UNKNOWN, parse_audio_filter_metadata
@@ -41,6 +42,8 @@ def dialog(qapp, rows):
     instance = ArchiveAudioFilterDialog(rows, metadata)
     yield instance
     instance.close()
+    instance.deleteLater()
+    qapp.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
 def choose(combo, value):
@@ -79,7 +82,7 @@ def test_apply_reopen_and_reset_preserve_draft_semantics(qapp, rows, dialog):
     choose(dialog.combos["select_sample_number"], "003")
     choose(dialog.combos["select_test_round"], 2)
     dialog.label_boxes["NG"].setChecked(False)
-    dialog.rate_boxes[48000].setChecked(False)
+    dialog.sample_rate_combobox.setEditText("44100")
     dialog.date_filter_combobox.setEditText("2026-09-13")
     dialog.apply_filters()
     saved = dict(dialog.filter_config)
@@ -88,7 +91,7 @@ def test_apply_reopen_and_reset_preserve_draft_semantics(qapp, rows, dialog):
     assert reopened.date_filter_combobox.currentText() == "2026-09-13"
     assert saved["select_record_date"] == "2026-09-13"
     assert not reopened.label_boxes["NG"].isChecked()
-    assert not reopened.rate_boxes[48000].isChecked()
+    assert reopened.sample_rate_combobox.currentText() == "44100"
     reopened.reset_filters()
     assert reopened.filter_config == saved
     assert saved["select_test_round"] == 2
@@ -100,8 +103,10 @@ def test_apply_reopen_and_reset_preserve_draft_semantics(qapp, rows, dialog):
 def test_reset_and_apply_returns_show_all(dialog):
     choose(dialog.combos["select_port"], "端口1")
     dialog.date_filter_combobox.setEditText("2026-09-13")
+    dialog.sample_rate_combobox.setEditText("96000")
     dialog.reset_filters()
     assert dialog.date_filter_combobox.currentText() == "ALL"
+    assert dialog.sample_rate_combobox.currentText() == "ALL"
     QTimer.singleShot(0, dialog.apply_filters)
     assert dialog.exec() == (2, {})
 
@@ -115,8 +120,7 @@ def test_invalid_single_date_or_empty_checkboxes_cannot_apply(dialog, monkeypatc
         assert "日期格式错误" in warnings[-1]
         assert dialog.result() != dialog.Accepted
     dialog.reset_filters()
-    for box in dialog.rate_boxes.values():
-        box.setChecked(False)
+    dialog.sample_rate_combobox.setEditText("")
     dialog.apply_filters()
     assert "采样率" in warnings[-1]
     dialog.reset_filters()
@@ -132,12 +136,66 @@ def test_controls_are_visible_and_two_column_layout_fits(dialog, qapp):
     left = dialog.combos["select_product_model"]
     right = dialog.combos["select_sample_number"]
     assert left.geometry().right() < right.geometry().left()
-    for widget in (*dialog.combos.values(), *dialog.rate_boxes.values(),
+    for widget in (*dialog.combos.values(), dialog.sample_rate_combobox,
                    dialog.date_filter_combobox, dialog.apply_button):
         assert widget.isVisible()
         assert dialog.rect().contains(widget.geometry())
         assert widget.height() >= widget.minimumSizeHint().height()
-    assert dialog.rate_boxes[44100].text() == "44100 Hz"
+    assert dialog.sample_rate_combobox.isEditable()
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("4000", [4000]),
+    ("8000, 102400", [8000, 102400]),
+    ("192000", [192000]),
+    ("96000", [96000]),
+    ("44100, 48000", [44100, 48000]),
+    (" 96000，192000,96000 ", [96000, 192000]),
+])
+def test_custom_sample_rates_apply_and_reopen(dialog, rows, text, expected):
+    dialog.sample_rate_combobox.setEditText(text)
+    dialog.apply_filters()
+    assert dialog.result() == dialog.Accepted
+    assert dialog.filter_config == {"select_sample_rate": expected}
+    reopened = ArchiveAudioFilterDialog(rows, dialog.metadata_by_id, dialog.filter_config)
+    reopened.apply_filters()
+    assert reopened.filter_config == dialog.filter_config
+    reopened.close()
+
+
+@pytest.mark.parametrize("text", [
+    "", "0", "-1", "3999", "192001", "96000,192001",
+    "44100.5", "48kHz", "44100,", "ALL,48000",
+])
+def test_invalid_sample_rates_keep_dialog_open_and_filters_unchanged(dialog, monkeypatch, text):
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    dialog.sample_rate_combobox.setEditText(text)
+    dialog.apply_filters()
+    assert dialog.result() != dialog.Accepted
+    assert dialog.filter_config == {}
+    assert len(warnings) == 1
+    assert "正整数采样率" in warnings[0]
+    assert "4000–192000" in warnings[0]
+
+
+@pytest.mark.parametrize("key", [Qt.Key_Return, Qt.Key_Enter])
+def test_sample_rate_editor_first_enter_keeps_input_then_second_applies(dialog, qapp, key):
+    dialog.show()
+    dialog.activateWindow()
+    editor = dialog.sample_rate_combobox.lineEdit()
+    editor.setFocus()
+    qapp.processEvents()
+    editor.selectAll()
+    QTest.keyClicks(editor, "96000")
+    QTest.keyClick(editor, key)
+    qapp.processEvents()
+    assert dialog.result() != dialog.Accepted
+    assert editor.text() == "96000"
+    QTest.keyClick(editor, key)
+    qapp.processEvents()
+    assert dialog.result() == dialog.Accepted
+    assert dialog.filter_config == {"select_sample_rate": [96000]}
 
 
 def test_single_date_dropdown_reuses_record_dates_and_accepts_typed_date(dialog):
@@ -181,6 +239,27 @@ def test_archive_entry_applies_real_dialog_and_resets_equal_count_filter(archive
     archive.show_all_wave()
     assert not archive.is_filter_flag
     assert archive.filter_config == {}
+
+
+def test_custom_sample_rate_filters_real_archive_records(archive):
+    archive.all_audio_data.extend([
+        audio_row("custom", rate=96000), audio_row("higher", rate=192000),
+        audio_row("below_range", rate=3999), audio_row("above_range", rate=192001),
+    ])
+    dialog = archive.create_filter_dialog({})
+    combo = dialog.sample_rate_combobox
+    assert "96000" in [combo.itemText(i) for i in range(combo.count())]
+    assert "3999" not in [combo.itemText(i) for i in range(combo.count())]
+    assert "192001" not in [combo.itemText(i) for i in range(combo.count())]
+    combo.setEditText("96000")
+    dialog.apply_filters()
+    archive.filter_audio_data_at_filter_config(dialog.filter_config)
+    assert [row[0] for row in archive.filter_audio_data] == ["custom"]
+    combo.setEditText(" all ")
+    dialog.apply_filters()
+    archive.filter_audio_data_at_filter_config(dialog.filter_config)
+    assert archive.filter_audio_data == archive.all_audio_data
+    dialog.close()
 
 
 def test_metadata_is_cached_by_identity_and_refreshed_when_path_changes(archive, monkeypatch):
