@@ -71,6 +71,8 @@ TARGET_METHODS = {
     "on_audio_chunk_received_playrec",
     "on_audio_chunk_received_rec",
     "_on_streaming_complete",
+    "_cleanup_streaming_resources",
+    "plot_waveform_to_workspace",
     "eventFilter",
 }
 TARGET_MODULE_HELPERS = {
@@ -1608,6 +1610,9 @@ def test_record_only_streaming_completion_stores_mono_and_multi_recorded_data():
         multi_data.mean(axis=1).astype(np.float32, copy=False),
     )
     np.testing.assert_array_equal(window.data_struct.store_wave_data_multi, multi_data)
+    assert len(window.plot_calls) == 1
+    np.testing.assert_array_equal(window.plot_calls[0][0][0], multi_data)
+    assert window.plot_calls[0][0][1] == 48000
 
 
 def test_record_only_streaming_chunk_writes_float64_multi_payload_without_downcast():
@@ -1624,7 +1629,7 @@ def test_record_only_streaming_chunk_writes_float64_multi_payload_without_downca
     window.channel_workspace = types.SimpleNamespace(
         all_subwindows=lambda: [
             types.SimpleNamespace(
-                set_data=lambda time_axis, data: plotted.append(np.asarray(data).copy()),
+                set_data=lambda time_axis, data, *, streaming=False: plotted.append((np.asarray(data).copy(), streaming)),
                 clear_plot=lambda: None,
             )
         ]
@@ -1637,11 +1642,14 @@ def test_record_only_streaming_chunk_writes_float64_multi_payload_without_downca
     assert written_chunks[0].dtype == np.float64
     assert window.streaming_buffer_multi[0].dtype == np.float64
     np.testing.assert_array_equal(written_chunks[0], payload["multi"])
+    assert plotted[0][1] is True
+    np.testing.assert_array_equal(plotted[0][0], payload["multi"][:, 0])
 
 
 def test_play_record_streaming_chunk_writes_float64_mono_payload_without_downcast():
     namespace = _build_method_namespace()
     written_chunks = []
+    plotted = []
 
     window = _build_fake_window(namespace, use_streaming=True, mode="PLAY_AND_RECORD")
     window.streaming_mode = "play_record"
@@ -1651,7 +1659,7 @@ def test_play_record_streaming_chunk_writes_float64_mono_payload_without_downcas
     )
     window.channel_workspace = types.SimpleNamespace(
         all_subwindows=lambda: [
-            types.SimpleNamespace(set_data=lambda time_axis, data: None),
+            types.SimpleNamespace(set_data=lambda time_axis, data, *, streaming=False: plotted.append((data, streaming))),
         ]
     )
 
@@ -1662,6 +1670,8 @@ def test_play_record_streaming_chunk_writes_float64_mono_payload_without_downcas
 
     assert written_chunks[0].dtype == np.float64
     np.testing.assert_array_equal(written_chunks[0], mono)
+    assert plotted[0][1] is True
+    np.testing.assert_array_equal(plotted[0][0], mono.astype(np.float32))
 
 
 def test_streaming_play_record_final_save_receives_float64_aligned_data(monkeypatch):
@@ -1692,8 +1702,17 @@ def test_streaming_play_record_final_save_receives_float64_aligned_data(monkeypa
     window.streaming_processor = processor
     window.streaming_wav_writer = types.SimpleNamespace(finalize=lambda: None)
     window.streaming_stimulus_data = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    plotted = []
+    window.streaming_plot_item = types.SimpleNamespace(
+        set_data=lambda x, y, *, streaming=False: plotted.append((x, y, streaming))
+    )
 
     window._on_streaming_complete()
+
+    assert len(plotted) == 1
+    assert plotted[0][2] is False
+    np.testing.assert_array_equal(plotted[0][0], np.arange(3) / 48000)
+    np.testing.assert_array_equal(plotted[0][1], window.data_struct.store_wave_data)
 
     assert saved[0][0] == "demo.wav"
     assert saved[0][1].dtype == np.float64
@@ -3377,3 +3396,102 @@ def test_sn_ctrl_z_is_swallowed_without_breaking_startup_logic():
     )
 
     assert handled is True
+
+
+@pytest.mark.parametrize("mode", ["record_only", "play_record"])
+@pytest.mark.parametrize("end", ["cancel", "failure"])
+def test_interrupted_streaming_does_not_commit_and_static_load_recovers(mode, end):
+    from PyQt5.QtWidgets import QApplication
+    from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
+
+    app = QApplication.instance() or QApplication([])
+    namespace = _build_method_namespace()
+    window = _build_fake_window(namespace, use_streaming=True)
+    workspace = ChannelPlotWorkspace()
+    workspace.set_channels([0])
+    window.channel_workspace = workspace
+    window.plot_waveform_to_workspace = _bind_method(window, namespace, "plot_waveform_to_workspace")
+    window.streaming_mode = mode
+    window.streaming_buffer_multi = []
+    samples = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+    handler = window.on_audio_chunk_received_rec if mode == "record_only" else window.on_audio_chunk_received_playrec
+    handler({"mono": samples, "multi": samples.reshape(-1, 1)})
+    item = workspace.all_subwindows()[0].plot_item
+    assert item.streaming is True
+    commits = []
+    window._commit_pending_recorded_count = lambda: commits.append(True)
+    try:
+        if end == "cancel":
+            window.streaming_processor = types.SimpleNamespace(stop_streaming=lambda: None)
+            _bind_method(window, namespace, "_cleanup_streaming_resources")()
+        else:
+            window.streaming_processor = FakeStreamingProcessor(raise_on_get=RuntimeError("failed"))
+            window._on_streaming_complete()
+        assert commits == []
+        assert window.plot_calls == []
+        assert item.streaming is True
+        window.plot_waveform_to_workspace(samples, 48000)
+        assert item.streaming is False
+        np.testing.assert_array_equal(item.xData, np.arange(3) / 48000)
+        np.testing.assert_array_equal(item.yData, samples)
+        app.processEvents()
+    finally:
+        workspace.close()
+
+
+@pytest.mark.parametrize("mode", ["record_only", "play_record"])
+def test_successful_streaming_restores_adaptive_final_arrays(mode, monkeypatch):
+    from PyQt5.QtWidgets import QApplication
+    import ui.adaptive_waveform as waveform
+    from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
+
+    app = QApplication.instance() or QApplication([])
+    namespace = _build_method_namespace()
+    namespace["RecordingManager"] = lambda: types.SimpleNamespace(
+        save_signal_info_to_db=lambda *args, **kwargs: ("OK", "saved")
+    )
+    namespace["AlignmentProcessing"] = types.SimpleNamespace(
+        align_play_and_rec_data_using_gccphat=lambda stimulus, recorded: recorded[1:]
+    )
+    window = _build_fake_window(namespace, use_streaming=True)
+    workspace = ChannelPlotWorkspace()
+    workspace.resize(800, 500)
+    workspace.set_channels([0])
+    workspace.show()
+    app.processEvents()
+    window.channel_workspace = workspace
+    window.plot_waveform_to_workspace = _bind_method(window, namespace, "plot_waveform_to_workspace")
+    window.streaming_mode = mode
+    window.streaming_buffer_multi = []
+    samples = np.sin(np.arange(4800)).astype(np.float32)
+    handler = window.on_audio_chunk_received_rec if mode == "record_only" else window.on_audio_chunk_received_playrec
+    calls = []
+    original = waveform.bandlimited_values
+    def interpolate(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(waveform, "bandlimited_values", interpolate)
+    try:
+        handler({"mono": samples, "multi": samples.reshape(-1, 1)})
+        plot = workspace.all_subwindows()[0].plot_widget
+        plot.setXRange(0.01, 0.0102, padding=0)
+        workspace.resize(900, 500)
+        app.processEvents()
+        handler({"mono": samples, "multi": samples.reshape(-1, 1)})
+        assert calls == []
+        item = workspace.all_subwindows()[0].plot_item
+        assert item.streaming is True
+        window.streaming_processor = FakeStreamingProcessor(
+            recorded_data=samples.tolist(), recorded_data_multi=samples.reshape(-1, 1)
+        )
+        if mode == "play_record":
+            window.streaming_stimulus_data = samples
+        window._on_streaming_complete()
+        app.processEvents()
+        expected = samples[1:] if mode == "play_record" else samples
+        assert item.streaming is False
+        np.testing.assert_array_equal(item.yData, expected)
+        np.testing.assert_array_equal(item.xData, np.arange(len(expected)) / 48000)
+        assert calls
+    finally:
+        workspace.close()
