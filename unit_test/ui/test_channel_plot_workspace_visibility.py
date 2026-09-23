@@ -681,3 +681,39 @@ def test_plot_surface_keeps_pyqtgraph_menu_enabled(qapp):
 
     workspace.close()
     _process_events(qapp)
+
+
+def test_channel_adaptive_waveform_attachment_and_static_recovery(qapp):
+    import numpy as np
+    from ui.adaptive_waveform import AdaptiveWaveformItem
+
+    workspace = ChannelPlotWorkspace()
+    workspace.resize(800, 500)
+    workspace.set_channels([0, 1])
+    workspace.show()
+    qapp.processEvents()
+    x = np.arange(48001) / 48000
+    y = np.sin(np.arange(48001))
+    try:
+        for win in workspace.all_subwindows():
+            win.set_data(x, y, streaming=True)
+            item = win.plot_item
+            assert isinstance(item, AdaptiveWaveformItem)
+            assert item.streaming is True
+            assert item.opts["autoDownsample"] is True
+            assert item.opts["downsampleMethod"] == "peak"
+            assert item.opts["clipToView"] is True
+            win.plot_widget.setXRange(0, 1, padding=0)
+            qapp.processEvents()
+            assert len(item.getData()[0]) < len(x)
+            win.set_data(x, y)
+            assert win.plot_item is item
+            assert item.streaming is False
+            np.testing.assert_array_equal(item.xData, x)
+            np.testing.assert_array_equal(item.yData, y)
+            win.plot_widget.setDownsampling(ds=12, auto=False, mode="peak")
+            win.set_data(x, y)
+            assert item.opts["autoDownsample"] is False
+            assert item.opts["downsample"] == 12
+    finally:
+        workspace.close()

@@ -12,6 +12,7 @@ from base.save_data import save_audio_simple
 from consts.running_consts import DEFAULT_DIR
 from ui.custom_ui_widget.widgets import PushButton, LineEdit, CheckBox, DoubleSpinBox, MessageBox
 from ui.graph_widget import DraggablePlotWidget
+from ui.adaptive_waveform import AdaptiveWaveformItem
 
 
 class AudioClipExtractionDialog(QDialog):
@@ -69,7 +70,7 @@ class AudioClipExtractionDialog(QDialog):
         return layout
 
     def create_plot_widget(self):
-        self.plot_curve = pg.PlotDataItem(pen="k")
+        self.plot_curve = AdaptiveWaveformItem(pen="k")
         self.region = pg.LinearRegionItem(
             values=[0, 0], brush=(50, 150, 250, 50), pen={"color": (0, 0, 255), "width": 2}
         )
@@ -77,6 +78,8 @@ class AudioClipExtractionDialog(QDialog):
         self.region.sigRegionChanged.connect(self.on_region_changed)
 
         plot_widget = DraggablePlotWidget(region_item=self.region)
+        plot_widget.setDownsampling(auto=True, mode="peak")
+        plot_widget.setClipToView(True)
         plot_widget.setBackground("white")
         plot_widget.setLabel("left", "Amplitude(V)", **{"font-size": "20px"})
         plot_widget.setLabel("bottom", "Time(s)", **{"font-size": "20px"})
@@ -131,9 +134,12 @@ class AudioClipExtractionDialog(QDialog):
         try:
             audio_data, sample_rate = librosa.load(file_path, sr=self.sample_rate, mono=True)
             self.audio_data, self.sample_rate = audio_data, sample_rate
-            time_array = np.linspace(0, len(audio_data) / sample_rate, num=len(audio_data))
+            time_array = np.arange(len(audio_data)) / sample_rate
             self.plot_curve.setData(time_array, audio_data)
-            self.region.setBounds([0, time_array[-1]])
+            if not len(audio_data):
+                raise ValueError("Audio contains no samples")
+            # Selection ends are exclusive, so allow selecting through the full duration.
+            self.region.setBounds([0, len(audio_data) / sample_rate])
             self.plot_widget.setActive(True)
         except Exception as e:
             MessageBox.critical(self, "错误", f"加载音频文件失败:\n{e}")

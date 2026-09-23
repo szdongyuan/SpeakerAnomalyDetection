@@ -3887,7 +3887,7 @@ class SequenceWindow(QWidget):
 
         # Update plot - preserve zoom/pan by updating existing PlotDataItem
         wins = self.channel_workspace.all_subwindows()
-        wins[0].set_data(time_axis, accumulated_audio)
+        wins[0].set_data(time_axis, accumulated_audio, streaming=True)
         if self.streaming_plot_item is None:
             # First chunk - create new plot item
             self.streaming_plot_item = wins[0]
@@ -3940,7 +3940,7 @@ class SequenceWindow(QWidget):
         ch_n = int(accumulated.shape[1])
         for i, w in enumerate(wins):
             if i < ch_n:
-                w.set_data(time_axis, accumulated[:, i])
+                w.set_data(time_axis, accumulated[:, i], streaming=True)
             else:
                 w.clear_plot()
 
@@ -4028,7 +4028,7 @@ class SequenceWindow(QWidget):
                 )
 
                 # Update plot with aligned data (refresh display)
-                final_time_axis = np.linspace(0, len(aligned_data) / sample_rate, len(aligned_data))
+                final_time_axis = np.arange(len(aligned_data)) / sample_rate
                 if self.streaming_plot_item is not None:
                     self.streaming_plot_item.set_data(final_time_axis, aligned_data)
 
@@ -4133,6 +4133,14 @@ class SequenceWindow(QWidget):
             self._commit_pending_recorded_count()
             self._delete_successful_replay_backup()
             self._clear_recording_output_attempt()
+
+            if self.streaming_mode == "record_only":
+                self._run_post_recording_followup(
+                    "Waveform plotting",
+                    self.plot_waveform_to_workspace,
+                    self.data_struct.store_wave_data_multi,
+                    sample_rate,
+                )
 
             # Handle repeat signal splitting if needed
             if self.streaming_mode == "play_record":

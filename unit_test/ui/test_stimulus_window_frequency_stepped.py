@@ -551,7 +551,7 @@ def test_legacy_external_wav_round_trip_through_step_sc_restores_wav_branch(
     assert window.custom_chk_box.isChecked() is True
     window.start_freq_box.setValue(321)
     assert window.start_freq_box.value() != 123
-    step_sc_plot_y = window.plot_stimulus.listDataItems()[0].getData()[1]
+    step_sc_plot_y = window.plot_stimulus.listDataItems()[0].yData
     assert not np.array_equal(step_sc_plot_y, wav_data)
 
     window.stimulus_method_combo_box.setCurrentText("啁啾")
@@ -568,7 +568,7 @@ def test_legacy_external_wav_round_trip_through_step_sc_restores_wav_branch(
     assert window.repeat_box.value() == 2
     assert window.step_box.value() == 5
     assert window.stimulus_type_combo_box.currentText() == "对数"
-    restored_plot_y = window.plot_stimulus.listDataItems()[0].getData()[1]
+    restored_plot_y = window.plot_stimulus.listDataItems()[0].yData
     assert np.array_equal(restored_plot_y, wav_data)
 
     monkeypatch.setattr(window, "set_ai_popup", lambda: None)
@@ -3054,3 +3054,28 @@ def test_loading_legacy_after_rich_step_sc_strips_rich_fields_and_keeps_filename
     assert "step_durations" not in filename
     assert "[" not in filename
     assert "{" not in filename
+
+
+def test_stimulus_adaptive_waveform_retains_dense_plot_options(window_factory, qapp):
+    from ui.adaptive_waveform import AdaptiveWaveformItem
+
+    window = window_factory()
+    try:
+        window.resize(800, 600)
+        window.show()
+        source = np.sin(np.arange(48001))
+        window.stimulus_data = source
+        window.stimulus_info["sample_rate"] = 48000
+        window.graph_stimulus()
+        window.plot_stimulus.setXRange(0, 1, padding=0)
+        qapp.processEvents()
+        item, = window.plot_stimulus.listDataItems()
+        assert isinstance(item, AdaptiveWaveformItem)
+        assert item.opts["autoDownsample"] is True
+        assert item.opts["clipToView"] is True
+        assert item.opts["downsampleMethod"] == "peak"
+        assert len(item.getData()[0]) < len(source)
+        np.testing.assert_array_equal(item.xData, np.arange(len(source)) / 48000)
+        np.testing.assert_array_equal(item.yData, source)
+    finally:
+        window.close()
