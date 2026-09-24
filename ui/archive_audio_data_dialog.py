@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QWidget,
     QHBoxLayout,
+    QHeaderView,
 )
 from scipy.io import wavfile as scipy_wavfile
 
@@ -93,6 +94,9 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
 
         self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "播放", "分析结果"])
         self.horizontalHeader().setSectionsClickable(False)
+        self.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.data_view.setWordWrap(False)
+        self.data_view.setTextElideMode(Qt.ElideRight)
 
         # 而是在模型里放“播放/停止”文本项，并用 view.clicked 响应点击。
         self.data_view.clicked.connect(self._on_data_view_clicked)
@@ -165,11 +169,13 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
 
     def init_ui(self):
         self.setWindowTitle("音频数据管理")
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
 
         self.set_bottom_layout()
         self._setup_status_row_with_remaining_label()
         self._set_remaining_label_idle()
-        self.resize(880, 350)
+        screen = self.screen().availableGeometry()
+        self.resize(min(1150, screen.width() - 40), min(520, screen.height() - 60))
 
     def mousePressEvent(self, a0):
         print(self.size())
@@ -191,13 +197,14 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
 
         product_model_set = set()
         record_date_set = set()
-        for item in audio_data:
+        for row, item in enumerate(audio_data):
             product_model_set.add(item[2])
             record_date_set.add(item[4])
 
             file_name = extract_audio_file_name(item[1])
             row_data_list = [None, file_name, item[2], item[5], item[3], item[4], None]
             self.add_row_data(row_data_list)
+            self.model().item(row, 1).setToolTip(file_name)
 
         self.resizeColumnsToContents()
         self.resizeRowsToContents()
