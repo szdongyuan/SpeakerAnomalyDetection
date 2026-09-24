@@ -178,7 +178,7 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         self._set_manual_analysis_button_state(
             "analyzing",
             completed=0,
-            total=len(request.instances),
+            total=len(request.instances) * (1 + len(request.segment_plan)),
             source_label=source_label,
         )
         self.default_logger.info(
@@ -917,6 +917,7 @@ class SequenceWidgetAnalysisProcessOpsMixin:
                 config=config_snapshot.get(config_key, {}),
                 channel_labels=channel_labels,
                 source_label=(f"整段概览 · {source_label}" if result.segments else source_label),
+                parent=self,
             )
             window.setAttribute(Qt.WA_DeleteOnClose, True)
             window.destroyed.connect(
@@ -927,13 +928,6 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             window.show()
             window.raise_()
             self.analysis_window.append(window)
-        if result.segments:
-            from ui.segmented_analysis_results_dialog import SegmentedAnalysisResultsDialog
-            window = SegmentedAnalysisResultsDialog(result, config_snapshot, self)
-            window.setAttribute(Qt.WA_DeleteOnClose, True)
-            window.destroyed.connect(lambda _object=None, target=window: self._discard_manual_analysis_window(target))
-            self.analysis_window.append(window)
-            window.show()
         return len(self.analysis_window)
 
     def _discard_manual_analysis_window(self, window):

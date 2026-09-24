@@ -1,6 +1,8 @@
 import base64
+from dataclasses import replace
 
 import pyqtgraph as pg
+import pytest
 
 from base.analysis_process_protocol import AnalysisInstanceResult
 from PyQt5.QtCore import QBuffer, QByteArray, QIODevice
@@ -162,4 +164,43 @@ def test_fba_result_window_draws_discrete_bars_with_band_labels(ui_qapp):
         (1, "1k"),
         (2, "10k"),
     ]
+    assert not plot_item.getAxis("top").isVisible()
+    window.close()
+
+
+@pytest.mark.parametrize("segment_count", [0, 1, 10, 100])
+def test_manual_spl_keeps_whole_curve_without_segment_marks(ui_qapp, segment_count):
+    results = []
+    duration = max(1, segment_count)
+    for channel in (0, 2):
+        result = _result(channel, "OK")
+        payload = result.display_payload.to_dict()
+        payload.update(
+            x=[0, duration / 2, duration], y=[70, 72, 71], lower=[], upper=[],
+            overall_spl=43.21 + channel, unit="dBA", y_label="SPL (dBA)",
+            recording_time_range=[0, duration],
+            segment_boundaries=list(range(1, segment_count)),
+            segment_annotations=[
+                {"start": i, "end": i + 1, "label": f"{i}～{i + 1} s",
+                 "overall_spl": 43.20 + channel, "unit": "dBA",
+                 "execution_status": "分析完成"}
+                for i in range(segment_count)
+            ],
+        )
+        results.append(replace(result, display_payload=payload))
+    window = AnalysisMultichannelResultWindow("声压级", results)
+    window.resize(760, 520)
+    window.show()
+    for index, page in enumerate(window._pages):
+        window.channel_combo.setCurrentIndex(index)
+        ui_qapp.processEvents()
+        plot = page.getPlotItem()
+        assert not plot.getAxis("top").isVisible()
+        assert not any(isinstance(item, pg.InfiniteLine) for item in plot.items)
+        assert plot.titleLabel.text == f"总体声压级：{43.21 + results[index].raw_channel:.2f} dBA"
+        assert plot.getAxis("left").labelText == "SPL (dBA)"
+        assert plot.vb.viewRange()[0] == [0, duration]
+        assert len(plot.listDataItems()) == 1
+        page.setXRange(0.25, 0.75, padding=0)
+        assert plot.vb.viewRange()[0] == [0.25, 0.75]
     window.close()

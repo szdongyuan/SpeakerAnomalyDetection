@@ -136,19 +136,61 @@ def test_every_segment_runs_all_types_and_unknown_items_fail_explicitly(tmp_path
     assert list(events.queue)[-2][1].completed_instances == 15
 
 
-def test_manual_view_keeps_whole_time_axis_and_dashed_boundaries_without_saving(tmp_path, monkeypatch):
+@pytest.mark.parametrize("short", [False, True])
+def test_manual_view_keeps_whole_time_axis_and_segment_details_without_saving(tmp_path, monkeypatch, short):
     import base.analysis_worker as worker
     monkeypatch.setattr(worker, 'render_analysis_png', lambda plot: b'preview')
-    request = replace(make_request(tmp_path), source='手动查看')
+    request = replace(make_request(tmp_path, short=short), source='手动查看')
     queue = Queue()
     analysis_worker_main(request, queue)
     result = list(queue.queue)[-1][1]
     payload = result.instance_results[0].display_payload
-    assert payload['recording_time_range'] == (0, 4)
-    assert payload['segment_boundaries'] == (2,)
+    assert payload['recording_time_range'] == (0, 2 if short else 4)
+    assert 'segment_boundaries' not in payload
+    assert 'segment_annotations' not in payload
+    details = [segment.instance_results[0] for segment in result.segments]
+    assert details[0].metrics['overall_spl'] == pytest.approx(30.9691, abs=0.01)
+    if short:
+        assert details[1].metrics.get('overall_spl') is None
+        assert details[1].execution_status == '分析失败'
+    else:
+        assert details[1].metrics['overall_spl'] - details[0].metrics['overall_spl'] == pytest.approx(20, abs=0.01)
     assert len(result.segments) == 2
     assert not list(tmp_path.rglob('*.csv'))
     assert not list(tmp_path.rglob('*.segments.json'))
+
+
+def test_segment_values_match_analysis_item_and_channel(tmp_path, monkeypatch):
+    import base.analysis_worker as worker
+    monkeypatch.setattr(worker, 'render_analysis_png', lambda plot: b'preview')
+    original = make_request(tmp_path)
+    audio, rate = sf.read(original.wav_path)
+    sf.write(original.wav_path, np.column_stack([audio, audio * 3]), rate, subtype='FLOAT')
+    config = original.analysis_config_snapshot.to_dict()
+    config['声压级']['analysis_channels'] = [0, 1]
+    config['声压级 A'] = {**config['声压级'], 'weighting': 'A'}
+    config['display_sequence'] = ['声压级', '声压级 A']
+    request = build_analysis_task_request(
+        condition_key=original.condition_key, wav_path=original.wav_path, source='手动查看',
+        sequence_config=[{'seq1': {'acq': {'detail': {'total_time': 4}}}}],
+        analysis_config=config, storage_snapshot=original.storage_snapshot.to_dict(),
+        condition_config=original.condition_snapshot.to_dict(),
+    )
+    queue = Queue()
+    analysis_worker_main(request, queue)
+    result = list(queue.queue)[-1][1]
+    assert len(result.instance_results) == 4
+    for overview in result.instance_results:
+        expected_unit = 'dBA' if overview.config_key == '声压级 A' else 'dB'
+        assert overview.display_payload['unit'] == expected_unit
+        assert 'segment_annotations' not in overview.display_payload
+        details = [next(item for item in segment.instance_results if item.runtime_key == overview.runtime_key)
+                   for segment in result.segments]
+        assert all(item.metrics['unit'] == expected_unit for item in details)
+        assert details[1].metrics['overall_spl'] - details[0].metrics['overall_spl'] == pytest.approx(20, abs=0.01)
+    left, right = [item.metrics['overall_spl']
+                   for item in result.segments[0].instance_results[:2]]
+    assert right - left == pytest.approx(20 * np.log10(3), abs=0.01)
 
 
 def test_weighted_window_matches_full_filter_and_uses_absolute_limit_time():
