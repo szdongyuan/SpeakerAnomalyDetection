@@ -105,6 +105,16 @@ def set_previous_queue_failure(host, failure):
             SimpleNamespace(stage="start", detail="old configuration rejected"), ownership_safe=True)
 
 
+def prepare_serial_target_frame(host):
+    old, target = host.product_test_condition_configs
+    old["trigger_state"] = "01 02"
+    target["trigger_state"] = "03 04"
+    # Keep the old queue loaded, but make the target the first eligible condition.
+    # The following condition also keeps the round's first and last frames distinct.
+    host.product_test_condition_configs = [target, old]
+    return {"raw_hex": target["trigger_state"]}
+
+
 def enter_condition(host, entry):
     if entry == "manual":
         from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
@@ -112,10 +122,7 @@ def enter_condition(host, entry):
         assert host.player_btn.isEnabled()
         host.player_btn.click()
     else:
-        host.product_test_condition_configs[0]["trigger_state"] = "01 02"
-        host.product_test_condition_configs[1]["trigger_state"] = "03 04"
-        host._manual_product_condition_index = 0
-        host.on_serial_full_frame_received({"raw_hex": "03 04"})
+        host.on_serial_full_frame_received(prepare_serial_target_frame(host))
 
 
 def test_device_resolver_copies_identity_and_replaces_stale_profile():
@@ -322,7 +329,7 @@ def test_record_button_shows_config_error_then_clears_it_after_repair(host_facto
     try:
         SequenceWidgetUiOpsMixin.update_player_btn_is_paused(host)
         assert not host.player_btn.isEnabled()
-        assert host.player_btn.toolTip() == ve_failure_text("configuration")
+        assert host.player_btn.toolTip() == ve_failure_text("unavailable")
         assert "sample_rate" in caplog.text and host.mic["machine_id"] in caplog.text
         detail["sample_rate"] = 48000
         SequenceWidgetUiOpsMixin.update_player_btn_is_paused(host)
@@ -348,7 +355,7 @@ def test_late_prewarm_completion_reports_invalid_current_queue_without_losing_ow
     assert "sample_rate" in caplog.text and host.mic["machine_id"] in caplog.text
 
 
-@pytest.mark.parametrize("rate", [96000, None, 7999])
+@pytest.mark.parametrize("rate", [4000, 4001, 7999, 96000, None, 3999])
 def test_startup_discovery_uses_explicit_queue_without_reading_broken_profile(host_factory, rate, caplog):
     host = host_factory()
     host.sequence_config[0]["seq1"]["acq"]["detail"].update(sample_rate=rate, ve_range_index=5)
@@ -359,9 +366,9 @@ def test_startup_discovery_uses_explicit_queue_without_reading_broken_profile(ho
     window.mic = device_info(available=False, input_config=None)
     window.mic_channels = host.mic_channels
     window._on_ve_discovery_result(_discovery(device_info()))
-    if rate == 96000:
+    if rate in (4000, 4001, 7999, 96000):
         assert window.mic["available"]
-        assert window.recording_bridge.calls[0].sample_rate == 96000
+        assert window.recording_bridge.calls[0].sample_rate == rate
         assert window.recording_bridge.calls[0].device["input_config"]["range_max"] == .1
     else:
         assert window.mic["available"]
@@ -407,10 +414,12 @@ def test_discovery_configuration_failure_recovers_on_valid_queue_without_redisco
 @pytest.mark.parametrize("previous", ["invalid", "profile_io", "failed_prewarm"])
 def test_condition_entry_loads_target_before_configuration_admission(condition_host, entry, previous):
     host = condition_host
+    target_condition = host.product_test_condition_configs[1]
     set_previous_queue_failure(host, previous)
     assert not host._can_start_recording_workflow()
     enter_condition(host, entry)
-    host._load_sequence_config_for_product_condition.assert_called_once()
+    host._load_sequence_config_for_product_condition.assert_called_once_with(
+        {**target_condition, "_runtime_key": "target"})
     request = host.recording_bridge.requests[0]
     assert request.sample_rate == 96000 and request.device["input_config"]["range_max"] == .1
 
@@ -418,17 +427,19 @@ def test_condition_entry_loads_target_before_configuration_admission(condition_h
 @pytest.mark.parametrize("entry", ["manual", "serial"])
 def test_invalid_target_is_rejected_after_load_before_round_mutation(condition_host, entry, caplog):
     host = condition_host
+    target_condition = host.product_test_condition_configs[1]
     queue = json.loads(host.target_queue_path.read_text(encoding="utf-8"))
     queue[0]["seq1"]["acq"]["detail"]["sample_rate"] = None
     host.target_queue_path.write_text(json.dumps(queue), encoding="utf-8")
     enter_condition(host, entry)
-    host._load_sequence_config_for_product_condition.assert_called_once()
+    host._load_sequence_config_for_product_condition.assert_called_once_with(
+        {**target_condition, "_runtime_key": "target"})
     assert not host.recording_bridge.requests
     assert not getattr(host, "_manual_product_condition_group_id", "")
     assert not host._get_active_product_condition_key()
     assert "sample_rate" in host._ve_recording_config_error
     from ui.sequence import sequence_widget_analysis_ops as analysis
-    assert analysis.QMessageBox.warning.call_args.args[-1] == ve_failure_text("configuration")
+    assert analysis.QMessageBox.warning.call_args.args[-1] == ve_failure_text("unavailable")
     assert "sample_rate" in caplog.text and host.mic["machine_id"] in caplog.text
 
 
@@ -449,9 +460,7 @@ def test_busy_condition_entry_cannot_load_or_mutate_target(condition_host, entry
     if entry == "manual":
         host.on_clicked_player_btn()
     elif entry == "serial":
-        host.product_test_condition_configs[0]["trigger_state"] = "01 02"
-        host.product_test_condition_configs[1]["trigger_state"] = "03 04"
-        host.on_serial_full_frame_received({"raw_hex": "03 04"})
+        host.on_serial_full_frame_received(prepare_serial_target_frame(host))
     else:
         host.start_this_play()
     assert host.sequence_config == before

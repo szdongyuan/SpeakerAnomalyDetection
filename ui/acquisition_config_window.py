@@ -278,7 +278,7 @@ class RecordConfigWindow(BaseConfigWindow):
                 raise ValueError(self._sample_rate_load_error)
             text = self.samplerate_combo.currentText()
             if not text.isascii() or not text.isdecimal():
-                raise ValueError("sample_rate 必须为整数，范围 8000–102400 Hz。")
+                raise ValueError(f"sample_rate 必须为整数，范围 {VE_SAMPLE_RATE_MIN}–{VE_SAMPLE_RATE_MAX} Hz。")
             sample_rate = int(text)
             if self._is_vk:
                 sample_rate = resolve_ve_recording_config({"sample_rate": sample_rate})["sample_rate"]

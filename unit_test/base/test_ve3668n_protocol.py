@@ -33,7 +33,7 @@ def test_signature_rejects_request_rate_different_from_snapshot():
         ve_acquisition_signature(device_info(), (7, 1), 48000)
 
 
-@pytest.mark.parametrize("rate", [44100, 48000, 51200])
+@pytest.mark.parametrize("rate", [4000, 4001, 7999, 44100, 48000, 51200])
 @pytest.mark.parametrize("streaming", [False, True])
 def test_ve_main_freezes_valid_none_snapshot(tmp_path, rate, streaming):
     req = capture_request(tmp_path / "v.wav", sample_rate=rate, streaming=streaming)
@@ -65,7 +65,7 @@ def test_unknown_explicit_backend_rejects_legacy_shaped_device(tmp_path, backend
     assert list(tmp_path.iterdir()) == []
 
 
-@pytest.mark.parametrize("rate", [None, True, False, 44100.0, "48000", 1, 7999, 102401])
+@pytest.mark.parametrize("rate", [None, True, False, 44100.0, "48000", 1, 3999, 102401])
 def test_ve_request_rejects_illegal_rate(tmp_path, rate):
     with pytest.raises(ValueError, match="sample_rate"):
         capture_request(tmp_path / "bad.wav", sample_rate=rate)
@@ -160,7 +160,7 @@ def test_measured_provenance_rate_can_differ_and_mutations_cannot_leak(tmp_path)
     assert req.sample_rate == 44100
 
 
-@pytest.mark.parametrize("rate", [44100, 48000, 51200])
+@pytest.mark.parametrize("rate", [4000, 4001, 7999, 44100, 48000, 51200])
 def test_calibration_requires_no_existing_metadata(tmp_path, rate):
     req = capture_request(tmp_path / "c.wav", purpose="calibration", channels=(7,),
                           sample_rate=rate, target_samples=rate * 10, trim_samples=0,

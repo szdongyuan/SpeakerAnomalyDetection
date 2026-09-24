@@ -28,3 +28,6 @@ output/
 tmp
 build/
 .double-sdd
+recording_interval_launcher.py
+unit_test/test_recording_interval_launcher.py
+tools

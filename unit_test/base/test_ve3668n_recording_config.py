@@ -8,13 +8,14 @@ from base.ve3668n_recording_config import resolve_ve_recording_config
 from unit_test.base.ve3668n_fakes import input_config
 
 
-def test_queue_values_override_profile_without_mutation():
-    detail = {"sample_rate": 96000, "ve_range_index": 4}
+@pytest.mark.parametrize("rate", [4000, 4001, 7999, 96000])
+def test_queue_values_override_profile_without_mutation(rate):
+    detail = {"sample_rate": rate, "ve_range_index": 4}
     profile = input_config(51200)
     result = resolve_ve_recording_config(detail, fallback_profile=profile)
-    assert result == input_config(96000, range_min=-0.5, range_max=0.5)
+    assert result == input_config(rate, range_min=-0.5, range_max=0.5)
     result["sample_rate"] = 8000
-    assert detail == {"sample_rate": 96000, "ve_range_index": 4}
+    assert detail == {"sample_rate": rate, "ve_range_index": 4}
     assert profile == input_config(51200)
 
 
@@ -24,7 +25,7 @@ def test_explicit_bad_range_is_not_defaulted(bad):
         resolve_ve_recording_config({"sample_rate": 48000, "ve_range_index": bad})
 
 
-@pytest.mark.parametrize("bad", [7999, 102401, 48000.5, 48000.0, True, "48000", None])
+@pytest.mark.parametrize("bad", [3999, 102401, 48000.5, 48000.0, True, "48000", None])
 def test_explicit_bad_rate_is_not_replaced_by_profile_or_default(bad):
     for profile in (None, input_config(51200)):
         with pytest.raises(ValueError, match="sample_rate"):

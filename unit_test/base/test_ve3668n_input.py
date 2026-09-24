@@ -68,10 +68,10 @@ def test_ve_acquisition_signature_rejects_incomplete_or_invalid_acquisition(
 
 @pytest.mark.parametrize(
     "value, accepted",
-    [(value, True) for value in (8000, 32000, 44100, 48000, 51200, 96000, 102400,
+    [(value, True) for value in (4000, 4001, 7999, 8000, 32000, 44100, 48000, 51200, 96000, 102400,
                                 44099, 44101, 47999, 48001, 51199, 51201)]
     + [(value, False) for value in (
-        None, True, False, 44100.0, 48000.5, "48000", 1, 7999, 102401,
+        None, True, False, 44100.0, 48000.5, "48000", 1, 3999, 102401,
     )],
 )
 def test_rate_validation_is_strict(value, accepted):
@@ -113,7 +113,7 @@ def test_new_config_defaults_only_at_creation():
     assert create_input_config() == input_config(51200)
 
 
-@pytest.mark.parametrize("rate", [8000, 32000, 44100, 48000, 51200, 96000, 102400])
+@pytest.mark.parametrize("rate", [4000, 4001, 7999, 8000, 32000, 44100, 48000, 51200, 96000, 102400])
 def test_existing_configs_restore_exact_rate(rate):
     from base.ve3668n_input import create_input_config, validate_input_config
 
@@ -123,7 +123,7 @@ def test_existing_configs_restore_exact_rate(rate):
 
 
 @pytest.mark.parametrize("rate", [
-    None, True, False, 44100.0, 48000.5, "48000", 1, 7999, 102401,
+    None, True, False, 44100.0, 48000.5, "48000", 1, 3999, 102401,
 ])
 def test_invalid_rate_never_falls_back_to_default(rate):
     from base.ve3668n_input import (
@@ -242,7 +242,7 @@ def test_routing_display_and_selection_do_not_change_calibration_identity(overri
     )
 
 
-@pytest.mark.parametrize("rate", [None, True, 44100.0, "48000", 1, 7999, 102401])
+@pytest.mark.parametrize("rate", [None, True, 44100.0, "48000", 1, 3999, 102401])
 def test_invalid_rate_is_not_a_calibration_applicability_condition(rate):
     from base.ve3668n_input import calibration_fingerprint, validate_input_config
 
@@ -433,7 +433,7 @@ def test_soundcard_effective_rate_is_returned_untouched(device, rate):
     assert resolve_effective_input_rate(device, rate) is rate
 
 
-@pytest.mark.parametrize("rate", [8000, 32000, 44100, 48000, 51200, 96000, 102400])
+@pytest.mark.parametrize("rate", [4000, 4001, 7999, 8000, 32000, 44100, 48000, 51200, 96000, 102400])
 @pytest.mark.parametrize("product_rate", [22050, 96000, None])
 def test_ve_effective_rate_uses_only_its_input_config(rate, product_rate):
     from base.ve3668n_input import resolve_effective_input_rate
@@ -443,7 +443,7 @@ def test_ve_effective_rate_uses_only_its_input_config(rate, product_rate):
 
 
 @pytest.mark.parametrize("rate", [
-    None, True, False, 44100.0, 48000.5, "48000", 1, 7999, 102401,
+    None, True, False, 44100.0, 48000.5, "48000", 1, 3999, 102401,
 ])
 def test_effective_rate_never_substitutes_a_product_or_default_rate(rate):
     from base.ve3668n_input import resolve_effective_input_rate

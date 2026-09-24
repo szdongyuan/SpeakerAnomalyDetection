@@ -50,7 +50,7 @@ def write_json(path, value):
 
 
 @pytest.mark.parametrize("initial_rate", [44100, 48000, 51200])
-@pytest.mark.parametrize("new_rate", [44100, 48000, 51200])
+@pytest.mark.parametrize("new_rate", [4000, 4001, 7999, 44100, 48000, 51200])
 def test_rate_change_does_not_write_or_mutate_calibration(
     tmp_path, monkeypatch, initial_rate, new_rate,
 ):
@@ -118,7 +118,7 @@ def test_all_legal_ranges_and_rates_retain_calibration_without_writes(tmp_path, 
 
     monkeypatch.setattr(stores.os, "replace", no_write)
     for limit in VE_RANGE_LIMITS:
-        for rate in (8000, 32000, 44100, 48000, 51200, 96000, 102400):
+        for rate in (4000, 4001, 7999, 8000, 32000, 44100, 48000, 51200, 96000, 102400):
             config = input_config(rate, range_min=-limit, range_max=limit)
             current = {**device, "input_config": config}
             write_json(profiles.path, {"schema_version": 1, "devices": {device["machine_id"]: config}})
@@ -213,7 +213,7 @@ def test_routing_name_channel_selection_and_normalized_identity_do_not_invalidat
 
 
 @pytest.mark.parametrize("invalid_rate", [
-    None, True, False, 44100.0, "48000", 1, 7999, 102401,
+    None, True, False, 44100.0, "48000", 1, 3999, 102401,
 ])
 def test_pure_rate_errors_never_invalidate_and_explicit_selection_repairs_saved_rate(tmp_path, invalid_rate):
     profiles, calibrations = make_stores(tmp_path)

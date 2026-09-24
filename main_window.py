@@ -1,12 +1,13 @@
 import sys
+from pathlib import Path
 
 if __name__ == "__main__":
     # Frozen spawn children must be diverted before loading GUI/hardware modules.
     from multiprocessing import freeze_support
     freeze_support()
 
-from PyQt5.QtCore import Qt, QPoint
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
+from PyQt5.QtCore import Qt, QPoint, QUrl
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QDesktopServices
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
 from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox
 
@@ -591,7 +592,8 @@ class MainWindow(QMainWindow):
         function_menu = menu_bar.addMenu("功能")
         hardware_menu = menu_bar.addMenu("硬件")
         user_menu = menu_bar.addMenu("用户")
-        help_menu = menu_bar.addMenu("帮助")
+        help_action = menu_bar.addAction("帮助")
+        help_action.triggered.connect(self.on_help_manual)
 
         function_menu.addAction(self.function_action_product_test_program)
         self.function_action_product_test_program.triggered.disconnect()
@@ -633,6 +635,25 @@ class MainWindow(QMainWindow):
         self.user_action_change_pwd.triggered.connect(self.on_change_pwd_window_init)
 
         return menu_bar
+
+    def on_help_manual(self):
+        root = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+        manual_path = root / "ui" / "ui_config" / "希听异音测试系统用户使用手册.html"
+        try:
+            manual_path = manual_path.resolve()
+            exists = manual_path.is_file()
+        except OSError as exc:
+            QMessageBox.warning(self, "帮助", f"无法访问用户使用手册：\n{manual_path}\n{exc}")
+            return
+        if not exists:
+            QMessageBox.warning(self, "帮助", f"未找到用户使用手册：\n{manual_path}")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(manual_path))):
+            QMessageBox.warning(
+                self,
+                "帮助",
+                f"无法打开用户使用手册，请检查默认浏览器设置或手动打开以下文件：\n{manual_path}",
+            )
 
     def analysis_model_select(self):
         # Test items for configuring speakers

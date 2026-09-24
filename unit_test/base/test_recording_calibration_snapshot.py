@@ -239,7 +239,7 @@ def test_ve_builder_rejects_invalid_or_unavailable_physical_channels(tmp_path, c
         ve3668n_wav_metadata.build_ve_recording_metadata(device, channels, input_config(), store)
 
 
-@pytest.mark.parametrize('profile', [input_config(7999), input_config(True),
+@pytest.mark.parametrize('profile', [input_config(3999), input_config(True),
                                    input_config(sensitivity=1000), None])
 def test_ve_builder_requires_a_valid_current_profile_even_though_file_rates_are_historical(
     tmp_path, profile,
