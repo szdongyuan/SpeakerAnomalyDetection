@@ -1400,7 +1400,7 @@ def test_paused_qt_preview_has_one_wakeup_while_child_file_continues(ui_qapp, se
     assert rss(session.worker_pid) - child_rss < 32 * 1024 * 1024
     pump(ui_qapp, session.released.is_set)
     assert len(offered) == 1
-    assert offered[0].multi[5, 0] == np.float32(.95)
+    assert offered[0].multi[5, 0] == np.float32(7969177 / 8388608)
 
 
 def test_hidden_sequence_close_does_not_shutdown_injected_service(ui_qapp, service):

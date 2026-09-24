@@ -218,7 +218,7 @@ def test_ve_channel_order_survives_refresh_request_metadata_and_wav(host_factory
     request = host._recording_process_session.request
     assert request.channels == (7, 1)
     _, audio = capture_audio(request)
-    np.testing.assert_array_equal(audio.multi, np.tile(np.float32([8.25, 2.5]), (len(audio.multi), 1)))
+    np.testing.assert_array_equal(audio.multi, np.full(audio.multi.shape, 8388607 / 8388608, dtype=np.float32))
     metadata = inspect_wav_calibration_metadata(request.path).metadata
     assert [entry["physical_input_channel"] for entry in metadata["recorded_channels"]] == [7, 1]
 
@@ -270,7 +270,7 @@ def test_request_freezes_shared_store_profile_and_calibration(host_factory, monk
     _, audio = capture_audio(request)
     assert request.calibration_metadata.to_dict() == original
     assert inspect_wav_calibration_metadata(request.path).metadata == original
-    np.testing.assert_array_equal(audio.multi, np.tile(np.float32([8.25, 2.5]), (len(audio.multi), 1)))
+    np.testing.assert_array_equal(audio.multi, np.full(audio.multi.shape, 8388607 / 8388608, dtype=np.float32))
     forbidden.assert_not_called()
 
 
@@ -860,7 +860,7 @@ def test_real_service_bridge_ve_lifecycle(host_factory, ui_qapp, tmp_path, outco
             raw, rate = sf.read(session.request.path, dtype="float32", always_2d=True)
             assert rate == host.data_struct.sample_rate == 51200
             np.testing.assert_array_equal(raw, host.data_struct.store_wave_data_multi)
-            assert np.all(raw[:, 0] == 8.25) and np.all(raw[:, 1] == 2.5)
+            assert np.all(raw == np.float32(8388607 / 8388608))
         else:
             assert host.data_struct.store_wave_data_multi is None
             host.run.assert_not_called()

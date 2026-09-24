@@ -292,7 +292,7 @@ class ControlledWriter:
             raise TimeoutError("test writer release was not signalled")
         if self.fail_at == "write":
             raise OSError("injected disk failure")
-        self.writer.write_chunk(chunk)
+        return self.writer.write_chunk(chunk)
 
     def finalize(self):
         self.finalize_entered.set()
@@ -535,7 +535,7 @@ def process_dependencies(**options):
                     if time.monotonic() >= deadline:
                         raise TimeoutError("test must release the paused synthetic writer")
                     threading.Event().wait(.005)
-            super().write_chunk(chunk)
+            quantized = super().write_chunk(chunk)
             self._fake_chunks_written += 1
             # Long synthetic captures validate the finalized WAV, so bounded
             # flush batching avoids turning 300 tiny fake chunks into a disk
@@ -545,6 +545,7 @@ def process_dependencies(**options):
                 self.sf_file.flush()
             update(writer_pid=os.getpid(), written_frames=self.total_frames)
             writer_consumed.set()
+            return quantized
 
         def finalize(self):
             primary_failure = None
@@ -683,7 +684,7 @@ def persistent_ve_worker_dependencies(**options):
             if identity in pause_writers and self.total_frames == 0:
                 (trace_dir / f"writer-{identity}-entered").touch()
                 wait_for(f"release-writer-{identity}")
-            super().write_chunk(chunk)
+            return super().write_chunk(chunk)
 
     def append_metadata(path, metadata, **kwargs):
         from base.wav_calibration_metadata import append_owned_recording_calibration_metadata_result

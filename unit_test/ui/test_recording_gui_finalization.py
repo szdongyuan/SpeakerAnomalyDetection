@@ -172,6 +172,7 @@ def test_background_preparation_keeps_qt_responsive_and_publishes_without_scans(
         def forbidden(*args, **kwargs):
             raise AssertionError("full waveform preparation on GUI")
         host._prepare_waveform_display_data = forbidden
+        monkeypatch.setattr("ui.sequence.sequence_widget_streaming_ops.quantize_pcm24", forbidden)
         original_equal, original_finite = np.array_equal, np.isfinite
         def guarded(original):
             def invoke(*args, **kwargs):
@@ -264,7 +265,10 @@ def test_changed_legacy_input_recomputes_mono(ui_qapp, tmp_path, monkeypatch, le
         sample_rate=req.sample_rate, prefinalized=legacy_prefinalized,
         completion_source="process" if legacy_prefinalized else "streaming",
         prepared_audio=audio) is True
-    np.testing.assert_array_equal(host.data_struct.store_wave_data, changed.mean(axis=1))
+    expected = changed.copy()
+    if not legacy_prefinalized:
+        expected[:, 0] = np.float32(8388607 / 8388608)
+    np.testing.assert_array_equal(host.data_struct.store_wave_data, expected.mean(axis=1))
     assert host.data_struct.store_wave_data is not audio.mono
 
 
@@ -372,19 +376,23 @@ def test_legacy_reader_retains_writable_array_contract(tmp_path):
     assert audio.waveforms == ()
 
 
-def test_ve_mono_overflow_is_rejected_in_background_with_quality_disabled(tmp_path):
+def test_ve_overrange_pcm24_has_finite_mono_with_quality_disabled(tmp_path):
     import hashlib
     import soundfile as sf
+    from base.save_data import save_audio_simple
     from unit_test.base.test_recording_finalization import prepared_ve_result
     from base.wav_calibration_metadata import append_owned_recording_calibration_metadata_result
     req, descriptor, multi, _ = prepared_ve_result(tmp_path, {"enabled": False})
     multi.fill(np.finfo(np.float32).max)
-    sf.write(req.path, multi, req.sample_rate, subtype="FLOAT")
+    save_audio_simple(req.path, multi, req.sample_rate)
+    expected = np.full(multi.shape, 8388607 / 8388608, dtype=np.float32)
+    assert sf.info(req.path).subtype == "PCM_24"
     assert append_owned_recording_calibration_metadata_result(req.path, req.calibration_metadata).appended
-    descriptor = replace(descriptor, sample_digest=hashlib.sha256(multi.astype("<f4").tobytes()).hexdigest())
+    descriptor = replace(descriptor, sample_digest=hashlib.sha256(expected.astype("<f4").tobytes()).hexdigest())
     outcome = read_result(descriptor, req)
-    assert outcome.audio is None
-    assert "non-finite mono" in outcome.error
+    assert outcome.error is None
+    np.testing.assert_array_equal(outcome.audio.multi, expected)
+    np.testing.assert_array_equal(outcome.audio.mono, expected.mean(axis=1))
 
 
 def test_display_shape_changes_invalidate_preparation(tmp_path):

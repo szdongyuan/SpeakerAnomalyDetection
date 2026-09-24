@@ -4,9 +4,12 @@ Writes audio chunks to disk as they arrive, enabling progressive saving during r
 """
 
 import os
+import struct
 import numpy as np
 import wave
 from base.log_manager import LogManager
+from base.wav_pcm24 import pack_pcm24_le, quantize_pcm24
+from consts.wav_format_consts import WAV_PCM24_SUBTYPE
 
 
 class StreamingWavWriter:
@@ -38,27 +41,25 @@ class StreamingWavWriter:
         self._finalization_log_pending = False
         self.is_open = False
 
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         try:
-            # Try using soundfile for better performance (if available)
             import soundfile as sf
+        except ImportError:
+            sf = None
 
-            self.use_soundfile = True
-
-            # Ensure directory exists before creating file
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-
+        self.use_soundfile = sf is not None
+        if self.use_soundfile:
             self.sf_file = sf.SoundFile(
-                file_path, mode="w", samplerate=sample_rate, channels=channels, format="WAV", subtype="FLOAT"
+                file_path, mode="w", samplerate=sample_rate, channels=channels,
+                format="WAV", subtype=WAV_PCM24_SUBTYPE,
             )
             self.wave_file = None
             self.logger.info(f"StreamingWavWriter initialized with soundfile: {file_path}")
-        except ImportError:
-            # Fallback to wave module (Python standard library)
-            self.use_soundfile = False
+        else:
             self.sf_file = None
             self.wave_file = wave.open(file_path, "wb")
             self.wave_file.setnchannels(channels)
-            self.wave_file.setsampwidth(4)  # 4 bytes for float32
+            self.wave_file.setsampwidth(3)
             self.wave_file.setframerate(sample_rate)
             self.logger.info(f"StreamingWavWriter initialized with wave module: {file_path}")
 
@@ -67,7 +68,7 @@ class StreamingWavWriter:
 
     def write_chunk(self, audio_chunk):
         """
-        Write an audio chunk to the file.
+        Write a chunk and return its quantized float32 samples after success.
 
         Args:
             audio_chunk (np.ndarray): Audio data chunk as numpy array
@@ -79,19 +80,18 @@ class StreamingWavWriter:
             return
 
         try:
-            # Ensure audio is float32
-            audio_chunk = audio_chunk.astype(np.float32)
-
+            quantized = quantize_pcm24(audio_chunk)
+            if (quantized.ndim not in (1, 2)
+                    or (quantized.ndim == 1 and self.channels != 1)
+                    or (quantized.ndim == 2 and quantized.shape[1] != self.channels)):
+                raise ValueError(f"Unsupported audio shape for {self.channels} channels: {quantized.shape}")
             if self.use_soundfile:
-                # soundfile handles float32 directly
-                self.sf_file.write(audio_chunk)
+                self.sf_file.write(quantized)
             else:
-                # wave module requires bytes conversion
-                # Convert float32 to bytes
-                audio_bytes = audio_chunk.tobytes()
-                self.wave_file.writeframes(audio_bytes)
+                self.wave_file.writeframes(pack_pcm24_le(quantized))
 
-            self.total_frames += len(audio_chunk)
+            self.total_frames += len(quantized)
+            return quantized
 
         except Exception as e:
             self.logger.error(f"Error writing audio chunk: {e}")
@@ -114,6 +114,15 @@ class StreamingWavWriter:
                 self.sf_file.close()
             else:
                 self.wave_file.close()
+                # wave omits RIFF padding for odd PCM payload sizes. Padding is
+                # outside data's declared size and must be included in RIFF size.
+                if (self.total_frames * self.channels * 3) % 2:
+                    with open(self.file_path, "r+b") as wav_file:
+                        wav_file.seek(0, os.SEEK_END)
+                        wav_file.write(b"\x00")
+                        riff_size = wav_file.tell() - 8
+                        wav_file.seek(4)
+                        wav_file.write(struct.pack("<I", riff_size))
 
             self._finalization_log_pending = True
             if not getattr(self, "_defer_finalization_log", False):

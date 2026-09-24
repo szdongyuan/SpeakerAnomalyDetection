@@ -213,3 +213,20 @@ def test_export_raw_audio_csv_keeps_existing_target_when_replace_fails(
 
     assert csv_path.read_bytes() == b"existing"
     assert list(csv_path.parent.glob("*.tmp")) == []
+
+
+def test_product_pcm24_export_preserves_low_amplitude_and_sub_lsb_floor(tmp_path):
+    from base.save_data import save_audio_simple
+    source = np.array([[0.5, 2.5], [2**-25, -2**-25],
+                       [0.001953125, -3]], dtype=np.float32)
+    expected_text = [["0.5", "0.999999881"], ["0", "-1.1920929e-07"],
+                     ["0.001953125", "-1"]]
+    wav, target = tmp_path / "pcm24.wav", tmp_path / "pcm24.csv"
+    save_audio_simple(str(wav), source, 8000)
+    export_raw_audio_csv(wav, target, (7, 1), block_frames=1)
+    with target.open(encoding="utf-8-sig", newline="") as stream:
+        rows = list(csv.reader(stream))
+    assert rows[0] == ["time_s", "CH8", "CH2"]
+    assert [row[1:] for row in rows[1:]] == expected_text
+    decoded, _ = sf.read(wav, dtype="float32", always_2d=True)
+    np.testing.assert_array_equal(np.array(expected_text, dtype=np.float32), decoded)

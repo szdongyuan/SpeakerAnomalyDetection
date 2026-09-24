@@ -37,6 +37,7 @@ from consts.recording_preview_consts import (
 )
 from consts.ve3668n_consts import VE_BACKEND
 from consts.recording_result_consts import RECORDING_SAMPLE_DIGEST_ALGORITHM
+from consts.wav_format_consts import WAV_PCM24_SUBTYPE
 
 
 def capture_queue_capacity(sample_rate, channels, *, blocksize=2048, seconds=2.0):
@@ -423,19 +424,22 @@ class RecordingCapture:
         retained = block[skip:]
         if len(retained):
             if lane is None:
-                self._writer.write_chunk(retained)
+                quantized = self._writer.write_chunk(retained)
             else:
                 # Publish an immutable current phase; count complete blocks
                 # once in _consume, not a dictionary counter per sub-stage.
                 lane.active = phase = ("write", lane.perf_ns())
                 try:
-                    self._writer.write_chunk(retained)
+                    quantized = self._writer.write_chunk(retained)
                 finally:
                     intervals.append((phase, lane.perf_ns()))
                     lane.active = consume_phase
             self.written_frames += len(retained)
             self._final_frames = self.written_frames
-            self._sample_digest.update(retained.astype("<f4", copy=False).tobytes(order="C"))
+            if (not isinstance(quantized, np.ndarray) or quantized.dtype != np.float32
+                    or quantized.shape != retained.shape):
+                raise ValueError("writer must return saved float32 samples with the retained shape")
+            self._sample_digest.update(quantized.astype("<f4", copy=False).tobytes(order="C"))
         if self._preview_enabled and self._waveforms is not None:
             preview_error = None
             if lane is not None:
@@ -655,9 +659,9 @@ class RecordingCapture:
             raise ValueError("recording ended before its target sample count")
         self._stage = "read_wav"
         with self._finalization_file(req.path) as source:
-            if (source.subtype != "FLOAT" or source.samplerate != req.sample_rate
+            if (source.subtype != WAV_PCM24_SUBTYPE or source.samplerate != req.sample_rate
                     or source.channels != len(req.channels) or len(source) != self.written_frames):
-                raise ValueError("saved WAV shape, rate or float32 format differs from request")
+                raise ValueError("saved WAV shape, rate or PCM24 format differs from request")
         if req.purpose == "main" and req.trim_samples >= self.raw_frames:
             self._warnings.append("startup trim skipped: trim is not smaller than recorded audio")
         metadata_appended = False
@@ -698,7 +702,7 @@ class RecordingCapture:
             # Optional metadata failure is a warning only while audio remains readable.
             with self._finalization_file(req.path) as source:
                 if (len(source) != self.written_frames or source.channels != len(req.channels)
-                        or source.subtype != "FLOAT" or source.samplerate != req.sample_rate):
+                        or source.subtype != WAV_PCM24_SUBTYPE or source.samplerate != req.sample_rate):
                     raise ValueError("WAV audio became invalid during metadata finalization")
             if self._is_ve:
                 diagnostic = inspect_wav_calibration_metadata(req.path, logger=self._logger)

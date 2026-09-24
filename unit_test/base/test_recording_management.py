@@ -1,9 +1,19 @@
+from pathlib import Path
+
 import mock
 import numpy as np
 import pytest
 
 from base.recording_management import RecordingManager
 from consts import error_code
+
+
+@pytest.fixture(autouse=True)
+def isolated_recording_paths(tmp_path, monkeypatch):
+    # Legacy relative-path cases must never reach the user's audio directories.
+    cwd = tmp_path / "work" / "nested"
+    cwd.mkdir(parents=True)
+    monkeypatch.chdir(cwd)
 
 
 class TestRecordingManager(object):
@@ -63,8 +73,17 @@ class TestRecordingManager(object):
          ),
     ])
     @mock.patch("base.recording_management.RecordingManager.save_signal_info_to_db")
-    def test_save_recording_to_wav(self, mock_signal_db, signal_db_ret, audio_info, stimulus_parameter, ret):
-        mock_signal_db.side_effect = signal_db_ret
+    def test_save_recording_to_wav(self, mock_signal_db, signal_db_ret, audio_info, stimulus_parameter, ret, tmp_path):
+        audio_info = dict(audio_info)
+        if audio_info["file_path"]:
+            path = tmp_path / Path(audio_info["file_path"]).name
+            audio_info["file_path"] = str(path)
+            if ret == (error_code.INVALID_PATH, "The file already exists."):
+                path.write_bytes(b"existing")
+        if isinstance(signal_db_ret, Exception):
+            mock_signal_db.side_effect = signal_db_ret
+        else:
+            mock_signal_db.return_value = (error_code.OK, "saved")
         result = RecordingManager().save_recording_to_wav(audio_info, stimulus_parameter)
         assert result == ret
 
@@ -275,3 +294,35 @@ class TestRecordingManager(object):
         mock_database.return_value.__enter__.return_value.query.side_effect = query_set
         result = RecordingManager().query_signal_info(file_path)
         assert result == ret
+
+
+def test_saved_signal_handoff_matches_pcm24(tmp_path, monkeypatch):
+    import soundfile as sf
+    source = np.array([0.5, 2, -3, 2**-24, -2**-24], dtype=np.float32)
+    original = source.copy()
+    info = {"file_path": str(tmp_path / "record.wav"), "recorded_signal": source, "sample_rate": 8000}
+    manager = RecordingManager()
+    observed = []
+    def save_db(audio_info, stimulus):
+        observed.append(audio_info["recorded_signal"].copy())
+        return error_code.OK, "saved"
+    monkeypatch.setattr(manager, "save_signal_info_to_db", save_db)
+    code, _ = manager.save_recording_to_wav(info, {})
+    assert code == error_code.OK
+    decoded, _ = sf.read(info["file_path"], dtype="float32")
+    np.testing.assert_array_equal(decoded, np.array([0.5, 8388607 / 8388608, -1, 0, -1 / 8388608], dtype=np.float32))
+    np.testing.assert_array_equal(info["recorded_signal"], decoded)
+    np.testing.assert_array_equal(observed[0], decoded)
+    np.testing.assert_array_equal(source, original)
+
+
+def test_failed_wav_save_keeps_source_and_skips_db(tmp_path, monkeypatch):
+    source = np.array([2.0], dtype=np.float32)
+    info = {"file_path": str(tmp_path / "failed.wav"), "recorded_signal": source, "sample_rate": 8000}
+    manager = RecordingManager()
+    db = mock.Mock()
+    monkeypatch.setattr(manager, "save_signal_info_to_db", db)
+    monkeypatch.setattr("base.recording_management.save_audio_simple", mock.Mock(side_effect=OSError("disk full")))
+    assert manager.save_recording_to_wav(info, {})[0] == error_code.INVALID_SAVE
+    assert info["recorded_signal"] is source
+    db.assert_not_called()

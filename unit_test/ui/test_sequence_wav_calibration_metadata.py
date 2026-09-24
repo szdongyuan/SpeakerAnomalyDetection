@@ -23,6 +23,73 @@ STREAMING_OPS_PATH = (
 )
 
 
+@pytest.mark.parametrize("mode", ["streaming", "blocking", "play_record"])
+@pytest.mark.parametrize("trim", [0, 1, 100])
+def test_legacy_completion_publishes_saved_pcm24(tmp_path, monkeypatch, mode, trim):
+    import soundfile as sf
+    from base.streaming_file_writer import StreamingWavWriter
+    from base.soundcard_audio_processor import SoundcardAudioProcessor
+    source = np.array([[0.5, 2], [-3, 0.5], [2**-24, -2**-24]], dtype=np.float32)
+    original = source.copy()
+    expected = np.array([[0.5, 8388607 / 8388608], [-1, 0.5], [0, -1 / 8388608]], dtype=np.float32)
+    if trim == 1:
+        expected = expected[1:]
+    host, _ = _prepare_final_completion_host(source)
+    host.recorded_path = str(tmp_path / "record.wav")
+    host.data_struct.sample_rate = 1000
+    host._resolve_recording_acq_detail = lambda: {"startup_trim_ms": trim, "audio_validation": {"enabled": False}}
+    host._rewrite_recorded_wav = SequenceWidgetStreamingOpsMixin._rewrite_recorded_wav.__get__(host)
+    host._schedule_raw_audio_csv_export = mock.Mock()
+    analyzed = []
+    host._enqueue_automatic_analysis_current_recording = lambda: analyzed.append(host.data_struct.store_wave_data_multi.copy())
+    database = mock.Mock()
+    database.save_signal_info_to_db.return_value = (error_code.OK, "saved")
+    monkeypatch.setattr("ui.sequence.sequence_widget_streaming_ops.RecordingManager", lambda: database)
+    if mode == "blocking":
+        host.streaming_wav_writer = None
+        def capture(record):
+            record["_recorded_multi"] = source
+            return error_code.OK, source.mean(axis=1)
+        monkeypatch.setattr(SoundcardAudioProcessor, "sd_rec", capture)
+        host._start_blocking_recording({"input_channels": [0, 2]}, 1000)
+    else:
+        host.streaming_mode = mode
+        host.streaming_wav_writer = StreamingWavWriter(host.recorded_path, sample_rate=1000, channels=2)
+        host.streaming_wav_writer.write_chunk(source)
+        host._on_streaming_complete()
+    decoded, rate = sf.read(host.recorded_path, dtype="float32", always_2d=True)
+    assert rate == 1000
+    assert sf.info(host.recorded_path).subtype == "PCM_24"
+    np.testing.assert_array_equal(decoded, expected)
+    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, decoded)
+    np.testing.assert_array_equal(host.data_struct.store_wave_data, decoded.mean(axis=1))
+    np.testing.assert_array_equal(analyzed, [decoded])
+    np.testing.assert_array_equal(host._project_normalized_waveform_to_workspace.call_args.args[0], decoded)
+    np.testing.assert_array_equal(source, original)
+
+
+def test_failed_trim_rewrite_does_not_publish_or_analyze(tmp_path, monkeypatch):
+    from base.save_data import save_audio_simple
+    source = np.array([[0.5, 2], [-3, 0.5], [0, 0]], dtype=np.float32)
+    host, _ = _prepare_final_completion_host(source)
+    host.recorded_path = str(tmp_path / "record.wav")
+    save_audio_simple(host.recorded_path, source, 1000)
+    host._resolve_recording_acq_detail = lambda: {"startup_trim_ms": 1, "audio_validation": {"enabled": False}}
+    host._rewrite_recorded_wav = SequenceWidgetStreamingOpsMixin._rewrite_recorded_wav.__get__(host)
+    database = mock.Mock()
+    database.save_signal_info_to_db.return_value = (error_code.OK, "saved")
+    host._on_serial_product_runtime_error = mock.Mock()
+    monkeypatch.setattr("ui.sequence.sequence_widget_streaming_ops.RecordingManager", lambda: database)
+    monkeypatch.setattr("ui.sequence.sequence_widget_streaming_ops.save_audio_simple", mock.Mock(side_effect=OSError("disk full")))
+    host._on_streaming_complete(source.mean(axis=1), source, 1000)
+    assert host.data_struct.store_wave_data_multi is None
+    assert host.data_struct.store_wave_data is None
+    database.save_signal_info_to_db.assert_not_called()
+    host._enqueue_automatic_analysis_current_recording.assert_not_called()
+    host._project_normalized_waveform_to_workspace.assert_not_called()
+    assert any("disk full" in call.args[0] for call in host.default_logger.error.call_args_list)
+
+
 def test_data_struct_initializes_and_clears_wav_metadata_state():
     previous_instance = DataDealStruct._instance
     try:
@@ -284,11 +351,11 @@ def test_success_publishes_trimmed_multi_and_mean_exactly_once():
     assert len(data_struct.mono_publications) == 1
     np.testing.assert_array_equal(
         data_struct.multi_publications[0],
-        np.asarray([[-0.1]], dtype=np.float32),
+        np.asarray([[-838861 / 8388608]], dtype=np.float32),
     )
     np.testing.assert_array_equal(
         data_struct.mono_publications[0],
-        np.asarray([-0.1], dtype=np.float32),
+        np.asarray([-838861 / 8388608], dtype=np.float32),
     )
     assert [call[0] for call in calls].count("db") == 1
 
@@ -438,6 +505,8 @@ def test_final_projection_failure_is_presentation_only_and_releases_run_state(
     host._project_normalized_waveform_to_workspace = mock.Mock(
         side_effect=RuntimeError("Qt plot failed")
     )
+    host._resolve_recording_acq_detail = lambda: {"startup_trim_ms": 0, "audio_validation": {"enabled": False}}
+    expected = np.full(recorded_multi.shape, 8388607 / 8388608, dtype=np.float32)
     database = mock.Mock()
     database.save_signal_info_to_db.return_value = (error_code.OK, "saved")
     warning = mock.Mock()
@@ -461,10 +530,10 @@ def test_final_projection_failure_is_presentation_only_and_releases_run_state(
     processor = host.streaming_processor
     host._on_streaming_recording_finished(processor)
 
-    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, recorded_multi)
+    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, expected)
     np.testing.assert_array_equal(
         host.data_struct.store_wave_data,
-        recorded_multi.mean(axis=1),
+        expected.mean(axis=1),
     )
     database.save_signal_info_to_db.assert_called_once_with(
         host.recorded_signal_info,
@@ -475,7 +544,7 @@ def test_final_projection_failure_is_presentation_only_and_releases_run_state(
     host._handle_invalid_recording.assert_not_called()
     host._project_normalized_waveform_to_workspace.assert_called_once()
     projection_args = host._project_normalized_waveform_to_workspace.call_args.args
-    np.testing.assert_array_equal(projection_args[0], recorded_multi)
+    np.testing.assert_array_equal(projection_args[0], expected)
     assert projection_args[1] == 48000
     assert [window.channel_index for window in projection_args[2]] == [0, 2]
     warning.assert_called_once()
@@ -563,6 +632,8 @@ def test_final_workspace_contract_mismatch_is_presentation_only_after_publicatio
     host._validate_final_waveform_workspace = validate_workspace
     abort_selection = mock.Mock(wraps=host._abort_recording_channel_selection)
     host._abort_recording_channel_selection = abort_selection
+    host._resolve_recording_acq_detail = lambda: {"startup_trim_ms": 0, "audio_validation": {"enabled": False}}
+    expected = np.full(recorded_multi.shape, 8388607 / 8388608, dtype=np.float32)
     database = mock.Mock()
     database.save_signal_info_to_db.return_value = (error_code.OK, "saved")
     warning = mock.Mock()
@@ -587,17 +658,17 @@ def test_final_workspace_contract_mismatch_is_presentation_only_after_publicatio
     assert len(data_struct.multi_publications) == 1
     np.testing.assert_array_equal(
         data_struct.mono_publications[0],
-        recorded_multi.mean(axis=1),
+        expected.mean(axis=1),
     )
     np.testing.assert_array_equal(
         data_struct.multi_publications[0],
-        recorded_multi,
+        expected,
     )
     np.testing.assert_array_equal(
         data_struct.store_wave_data,
-        recorded_multi.mean(axis=1),
+        expected.mean(axis=1),
     )
-    np.testing.assert_array_equal(data_struct.store_wave_data_multi, recorded_multi)
+    np.testing.assert_array_equal(data_struct.store_wave_data_multi, expected)
     assert [call for call in calls if call == ("finalize",)] == [("finalize",)]
     host._append_recording_wav_calibration_metadata.assert_called_once_with()
     validate_workspace.assert_called_once_with((0, 2))

@@ -16,7 +16,7 @@ from unit_test.base.ve3668n_fakes import wav_metadata
 def recording(tmp_path):
     path = tmp_path / "new-recording.wav"
     audio = np.arange(20000, dtype=np.float32).reshape(-1, 2) / 32768
-    sf.write(path, audio, 44100, subtype="FLOAT")
+    sf.write(path, audio, 44100, subtype="PCM_24")
     metadata = _metadata(_channel_with_physical(0, 4), _channel_with_physical(1, 1))
     return path, audio, metadata
 
@@ -116,20 +116,21 @@ def test_riff_limit_rejection_does_not_write(recording, monkeypatch):
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize("damage", ["unknown-tag", "pcm-tag", "extensible-tag", "float31",
-                                    "float64", "incomplete-extension", "bad-byte-rate"])
+@pytest.mark.parametrize("damage", ["unknown-tag", "float-tag", "extensible-tag", "pcm23",
+                                    "double64", "incomplete-extension", "bad-byte-rate"])
 def test_unsupported_owned_format_is_rejected_before_write(recording, monkeypatch, damage):
     path, _, metadata = recording
     raw = bytearray(path.read_bytes())
     fmt_start = raw.index(b"fmt ") + 8
-    if damage in {"unknown-tag", "pcm-tag", "extensible-tag"}:
-        tag = {"unknown-tag": 0x1234, "pcm-tag": 1, "extensible-tag": 0xFFFE}[damage]
+    if damage in {"unknown-tag", "float-tag", "extensible-tag"}:
+        tag = {"unknown-tag": 0x1234, "float-tag": 3, "extensible-tag": 0xFFFE}[damage]
         struct.pack_into("<H", raw, fmt_start, tag)
-    elif damage == "float31":
+    elif damage == "pcm23":
         # Rounded bytes-per-sample still matches the original block alignment.
-        struct.pack_into("<H", raw, fmt_start + 14, 31)
-    elif damage == "float64":
-        # Even a coherent DOUBLE header is outside the capture writer's FLOAT scope.
+        struct.pack_into("<H", raw, fmt_start + 14, 23)
+    elif damage == "double64":
+        # Even a coherent DOUBLE header is outside the capture writer's PCM24 scope.
+        struct.pack_into("<H", raw, fmt_start, 3)
         struct.pack_into("<IHH", raw, fmt_start + 8, 44100 * 16, 16, 64)
     elif damage == "incomplete-extension":
         raw[fmt_start + 16:fmt_start + 16] = b"\0\0"
@@ -157,7 +158,7 @@ def test_unsupported_owned_format_is_rejected_before_write(recording, monkeypatc
     assert path.read_bytes() == raw
 
 
-@pytest.mark.parametrize("subtype", ["PCM_16", "DOUBLE"])
+@pytest.mark.parametrize("subtype", ["PCM_16", "FLOAT", "DOUBLE"])
 def test_generic_append_retains_other_wav_format_support(recording, subtype):
     path, audio, metadata = recording
     sf.write(path, audio, 44100, subtype=subtype)
@@ -390,3 +391,27 @@ def test_oversized_metadata_is_rejected_before_write(recording, monkeypatch):
     assert not result.appended
     assert "read limit" in result.primary_error
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("frames", [1, 3, 5])
+@pytest.mark.parametrize("fallback", [False, True])
+def test_owned_append_preserves_odd_pcm24_payload_and_pad(tmp_path, monkeypatch, frames, fallback):
+    import sys
+    from base.streaming_file_writer import StreamingWavWriter
+    if fallback:
+        monkeypatch.setitem(sys.modules, "soundfile", None)
+    path = tmp_path / "odd.wav"
+    with StreamingWavWriter(str(path), 44100, 1) as writer:
+        writer.write_chunk(np.full(frames, .5, dtype=np.float32))
+    original = path.read_bytes()
+    data_offset = original.index(b"data") + 8
+    assert struct.unpack_from("<I", original, data_offset - 4)[0] == frames * 3
+    assert original[data_offset + frames * 3:] == b"\0"
+    metadata = _metadata(_channel_with_physical(0, 4))
+    result = append(path, metadata)
+    assert result.appended, result.primary_error
+    raw = path.read_bytes()
+    assert raw[8:len(original)] == original[8:]
+    assert struct.unpack_from("<I", raw, 4)[0] + 8 == len(raw)
+    np.testing.assert_array_equal(sf.read(path, dtype="float32")[0], np.full(frames, .5))
+    assert module.read_wav_calibration_metadata(path) == metadata

@@ -401,7 +401,7 @@ def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_progress_cu
     # This is the specified preview-consumer pause, not a timing guess for work.
     assert not threading.Event().wait(pause_seconds)
     assert events.preview.empty()
-    assert (tmp_path / "recording.wav").stat().st_size >= 7 * 2 * 4
+    assert (tmp_path / "recording.wav").stat().st_size >= 7 * 2 * 3
     session.release_preview(first.sequence)
     second = events.preview.get(timeout=5)
     assert second.sequence == first.sequence + 1 and second.sample_stop >= 7
@@ -412,7 +412,7 @@ def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_progress_cu
     (tmp_path / "feed-2").touch()
     result = events.results.get(timeout=5)  # No acknowledgement for second preview.
     expected = (known_audio(110) % .5).astype(np.float32)
-    expected[5, 0] = .95
+    expected[5, 0] = 7969177 / 8388608
     expected = expected[:100, (0, 2)]
     np.testing.assert_array_equal(result.multi, expected)
     np.testing.assert_array_equal(result.mono, expected.mean(axis=1))
@@ -445,7 +445,7 @@ def test_spawn_cumulative_request_publishes_cumulative_preview_and_exact_complet
     (tmp_path / "feed-2").touch()
     result = events.results.get(timeout=5)
     expected = (known_audio(110) % .5).astype(np.float32)
-    expected[5, 0] = .95
+    expected[5, 0] = 7969177 / 8388608
     expected = expected[:9, (0, 2)]
     np.testing.assert_array_equal(result.multi, expected)
     np.testing.assert_array_equal(result.mono, expected.mean(axis=1))
@@ -475,7 +475,7 @@ def test_spawn_preview_fault_does_not_change_progress_completion_or_success(
     result = events.results.get(timeout=5)
 
     expected = (known_audio(110) % .5).astype(np.float32)
-    expected[5, 0] = .95
+    expected[5, 0] = 7969177 / 8388608
     expected = expected[:9, (0, 2)]
     trace = eventually(lambda: read_trace(tmp_path).get("written_frames") == 9 and read_trace(tmp_path))
     assert trace["preview_session_constructions"] == 1
@@ -1524,7 +1524,7 @@ def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_cumulative(
     # This is the specified preview-consumer pause, not a timing guess for work.
     assert not threading.Event().wait(pause_seconds)
     assert events.preview.empty()
-    assert (tmp_path / "recording.wav").stat().st_size >= 7 * 2 * 4
+    assert (tmp_path / "recording.wav").stat().st_size >= 7 * 2 * 3
     session.release_preview(first.sequence)
     second = events.preview.get(timeout=5)
     assert second.sequence == first.sequence + 1 and second.sample_stop >= 7
@@ -1533,7 +1533,7 @@ def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_cumulative(
     (tmp_path / "feed-2").touch()
     result = events.results.get(timeout=5)  # No acknowledgement for second preview.
     expected = (known_audio(110) % .5).astype(np.float32)
-    expected[5, 0] = .95
+    expected[5, 0] = 7969177 / 8388608
     expected = expected[:100, (0, 2)]
     np.testing.assert_array_equal(result.multi, expected)
     np.testing.assert_array_equal(result.mono, expected.mean(axis=1))
@@ -1549,9 +1549,32 @@ def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_cumulative(
 
 
 @pytest.mark.parametrize("failure_at", ["reader_construct", "reader_start", "ipc_control", "ipc_preview"])
+@pytest.mark.parametrize("log_observation_delay", [0, .3], ids=["normal-drain", "delayed-drain"])
 def test_thread_start_ownership_failure_releases_lease_and_reclaims_worker(
-    tmp_path, services, monkeypatch, failure_at,
+    tmp_path, services, monkeypatch, failure_at, log_observation_delay,
 ):
+    from base.log_exit import ProcessLogDrain
+    from consts.running_consts import LOG_SHUTDOWN_TIMEOUT
+
+    original_poll = ProcessLogDrain.poll
+    first_poll_at = None
+    delayed_poll_observed = threading.Event()
+
+    def delayed_poll(drain, *, already_dead=False):
+        nonlocal first_poll_at
+        result = original_poll(drain, already_dead=already_dead)
+        if already_dead:
+            return result
+        if first_poll_at is None:
+            first_poll_at = time.monotonic()
+        # Keep consuming the real child's drain protocol while delaying the
+        # parent's observation, without blocking its release-deadline checks.
+        if time.monotonic() - first_poll_at < log_observation_delay:
+            delayed_poll_observed.set()
+            return None
+        return result
+
+    monkeypatch.setattr(ProcessLogDrain, "poll", delayed_poll)
     message = f"injected {failure_at}: can't start new thread"
     if failure_at == "reader_construct":
         def reader_factory(descriptor, completed, *, request):
@@ -1570,24 +1593,27 @@ def test_thread_start_ownership_failure_releases_lease_and_reclaims_worker(
                 raise RuntimeError(message)
             original_start(thread)
         monkeypatch.setattr(threading.Thread, "start", fail_ipc_start)
-    # IPC startup failure can retire a child before it has imported its target.
-    # Give that case's session release deadline the new two-second log grace;
-    # keep the reader cases and all failure/ownership assertions unchanged.
-    cancel_timeout = 2.2 if failure_at.startswith("ipc_") else .2
-    service = services(reader_factory=reader_factory, cancel_timeout=cancel_timeout, terminate_timeout=.2)
+    # Every startup failure retires through log drain before termination. Allow
+    # its full grace, the terminate/kill interval, and one second for scheduling.
+    terminate_timeout = .2
+    cancel_timeout = LOG_SHUTDOWN_TIMEOUT + terminate_timeout + 1.0
+    service = services(reader_factory=reader_factory, cancel_timeout=cancel_timeout,
+                       terminate_timeout=terminate_timeout)
     events = Events()
     session = service.start(request(tmp_path, purpose="calibration", channels=(0,)), events.callbacks)
     failure = events.failed.get(timeout=10)
     assert failure.stage == "service" and failure.message == message
     assert session.generation == 1 and session.worker_pid is not None
-    assert session.released.wait(3), "no reader started, so no parent file ownership can remain"
-    eventually(lambda: service.worker_pid is None, timeout=3)
+    assert session.released.wait(cancel_timeout + 1), "no reader started, so no parent file ownership can remain"
+    eventually(lambda: service.worker_pid is None, timeout=cancel_timeout + 1)
     assert not service.is_path_leased(session.request.path)
     assert not Path(session.request.path).parent.exists()
     callback = threading.Event()
     service.shutdown(callback.set)
     assert callback.wait(3) and service.closed.wait(3)
     assert events.failed.empty() and events.results.empty() and events.accepted.empty()
+    if log_observation_delay:
+        assert delayed_poll_observed.is_set()
     assert service.diagnostics == [message]
     assert all(thread.ident is not None for thread in service.threads)
 

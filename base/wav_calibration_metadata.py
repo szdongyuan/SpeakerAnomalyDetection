@@ -234,8 +234,8 @@ def append_owned_recording_calibration_metadata_result(
 ) -> WavCalibrationMetadataAppendResult:
     """Append without audio copying to a caller-owned, unpublished new recording.
 
-    The caller must own the path exclusively and have closed its WAV/FLOAT writer.
-    Only its 16-byte IEEE float32 fmt header is eligible for this fast path.
+    The caller must own the path exclusively and have closed its WAV/PCM24 writer.
+    Only its 16-byte integer PCM24 fmt header is eligible for this fast path.
     Existing/imported WAV editing must use append_wav_calibration_metadata_result.
     No file is deleted here. Uncertain rollback or close requires the owner to
     retire this recording, even when calibration metadata is otherwise optional.
@@ -335,7 +335,7 @@ def _validate_owned_recording_metadata(wav_file, expected_size, expected_metadat
         raise ValueError("invalid owned recording RIFF/INFO structure")
     # The generic scanner permits RIFF containers without audio. A newly owned
     # recording must also have one complete, frame-aligned data chunk and a
-    # coherent WAV/FLOAT fmt header as emitted by the capture writer. Only chunk
+    # coherent WAV/PCM24 fmt header as emitted by the capture writer. Only chunk
     # headers/fmt bytes are read; other formats use the generic append API.
     wav_file.seek(RIFF_HEADER_SIZE)
     data_sizes = []
@@ -345,12 +345,12 @@ def _validate_owned_recording_metadata(wav_file, expected_size, expected_metadat
         chunk_end = wav_file.tell() + chunk_size + chunk_size % 2
         if chunk_id == b"fmt ":
             if chunk_size != 16:
-                raise ValueError("owned recording requires the capture WAV/FLOAT fmt header")
+                raise ValueError("owned recording requires the capture WAV/PCM24 fmt header")
             format_tag, channels, rate, byte_rate, block_align, bits = struct.unpack(
                 "<HHIIHH", wav_file.read(16),
             )
-            if (format_tag != 3 or bits != 32 or not channels or not rate
-                    or block_align != channels * 4
+            if (format_tag != 1 or bits != 24 or not channels or not rate
+                    or block_align != channels * 3
                     or byte_rate != rate * block_align):
                 raise ValueError("invalid owned recording audio format")
         elif chunk_id == b"data":

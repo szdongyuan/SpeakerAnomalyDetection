@@ -54,7 +54,7 @@ def test_writer_only_receives_retained_samples(tmp_path, trim, channels):
     class Writer(StreamingWavWriter):
         def write_chunk(self, chunk):
             written.append(chunk.copy())
-            super().write_chunk(chunk)
+            return super().write_chunk(chunk)
 
     req = request(tmp_path, trim_samples=trim, channels=channels)
     capture, result = capture_audio(req, writer_factory=Writer)
@@ -108,7 +108,7 @@ def test_invalid_disk_or_evidence_never_delivers_audio(tmp_path, damage):
             audio[0, 0] += 1
         else:
             audio = audio[:-1]
-        sf.write(req.path, audio, req.sample_rate, subtype="FLOAT")
+        sf.write(req.path, audio, req.sample_rate, subtype="PCM_24")
     elif damage == "missing_digest":
         result = replace(result, sample_digest=None)
     else:
@@ -188,7 +188,8 @@ def prepared_ve_result(tmp_path, thresholds, *, limit=.02):
     req = replace(seed, target_samples=257, trim_samples=0, device=device,
                   calibration_metadata=metadata, validation_thresholds=thresholds)
     multi = np.random.default_rng(97).normal(0, .005, (257, 2)).astype(np.float32)
-    sf.write(req.path, multi, req.sample_rate, subtype="FLOAT")
+    multi = (np.floor(multi * 8388608) / 8388608).astype(np.float32)
+    sf.write(req.path, multi, req.sample_rate, subtype="PCM_24")
     assert append_owned_recording_calibration_metadata_result(req.path, metadata).appended
     descriptor = RecordingResult(req.request_id, req.purpose, req.path, req.sample_rate,
                                  req.channels, 257, 257, True,
@@ -243,7 +244,7 @@ def test_disabled_quality_never_allocates_scaled_voltage_array(tmp_path, monkeyp
 @pytest.mark.parametrize("damage", ["missing", "changed"])
 def test_parent_revalidates_required_metadata(tmp_path, damage):
     req, descriptor, multi, _ = prepared_ve_result(tmp_path, {"enabled": False})
-    sf.write(req.path, multi, req.sample_rate, subtype="FLOAT")
+    sf.write(req.path, multi, req.sample_rate, subtype="PCM_24")
     if damage == "changed":
         from base.wav_calibration_metadata import append_owned_recording_calibration_metadata_result
         metadata = req.calibration_metadata.to_dict()
@@ -340,3 +341,38 @@ def test_paced_process_consumes_fully_trimmed_blocks_without_waiting_for_write(t
     np.testing.assert_array_equal(result.multi, generated_audio(4, 5)[:, (0, 2)])
     session.accept_result()
     assert session.released.wait(5)
+
+
+@pytest.mark.parametrize("purpose", ["main", "calibration"])
+def test_capture_digest_proves_clipped_quantized_audio_and_detects_pcm_tamper(tmp_path, purpose):
+    req = request(tmp_path, purpose=purpose, channels=(0,), trim_samples=0)
+    source = np.array([.5, 2, -3, 1, -.5, 2 ** -24, -2 ** -24, 0, .25], dtype=np.float32).reshape(-1, 1)
+    original = source.copy()
+    expected = np.array([.5, 8388607 / 8388608, -1, 8388607 / 8388608,
+                         -.5, 0, -1 / 8388608, 0, .25], dtype=np.float32).reshape(-1, 1)
+    _, descriptor = capture_audio(req, data=source)
+    assert isinstance(descriptor, RecordingResult), descriptor
+    assert descriptor.sample_digest == hashlib.sha256(expected.astype("<f4").tobytes()).hexdigest()
+    outcome = read_result(descriptor, req)
+    assert outcome.error is None
+    np.testing.assert_array_equal(outcome.audio.multi, expected)
+    np.testing.assert_array_equal(source, original)
+    with sf.SoundFile(req.path, "r+") as wav:
+        wav.seek(0)
+        wav.write(np.array([[.25]], dtype=np.float32))
+    damaged = read_result(descriptor, req)
+    assert damaged.audio is None and "digest" in damaged.error
+
+
+@pytest.mark.parametrize("invalid", [None, np.zeros((7, 2), dtype=np.float64), np.zeros((7, 1), dtype=np.float32)])
+def test_capture_rejects_writer_without_saved_sample_contract(tmp_path, invalid):
+    from base.recording_process_protocol import RecordingFailure
+    class InvalidWriter(StreamingWavWriter):
+        def write_chunk(self, chunk):
+            super().write_chunk(chunk)
+            return invalid
+    capture, result = capture_audio(request(tmp_path), writer_factory=InvalidWriter)
+    assert isinstance(result, RecordingFailure)
+    assert "writer must return saved float32 samples" in result.message
+    assert result.handles_released
+    assert capture.written_frames == sf.info(result.path).frames > 0

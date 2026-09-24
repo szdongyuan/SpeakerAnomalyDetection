@@ -68,7 +68,7 @@ def test_closed_writer_publishes_slot_before_blocked_success_log(tmp_path, log_f
         assert entered.wait(3)
         assert writers[0].sf_file.closed
         saved, rate = sf.read(capture.request.path, dtype="float32", always_2d=True)
-        np.testing.assert_array_equal(saved, np.tile([8.25, 2.5], (7, 1)))
+        np.testing.assert_array_equal(saved, np.full((7, 2), 8388607 / 8388608))
         assert not unblock.wait(.65)
         assert capture.capture_slot_released.is_set(), "closed WAV proof is waiting for logging"
         slot = capture.capture_slot
@@ -182,7 +182,7 @@ def test_capture_owns_input_and_trims_once(tmp_path, captures, streaming, channe
     assert (result.raw_frames, result.final_frames, rate) == (9, 9 - trim_samples, 100)
     assert result.channels == channels
     assert result.handles_released and backend.stream.closed and writer.closed
-    assert sf.info(result.path).subtype == "FLOAT"
+    assert sf.info(result.path).subtype == "PCM_24"
     assert sf.info(result.path).frames == 9 - trim_samples
     assert backend.stream.capture_pid == writer.writer_pid == os.getpid()
 
@@ -487,7 +487,7 @@ def test_preview_selects_one_owned_bounded_reducer_and_is_nonblocking(
     np.testing.assert_array_equal(preview.waveforms[0].amplitude, saved)
     saved_audio, sample_rate = sf.read(outcome.path, dtype="float32", always_2d=True)
     assert sample_rate == 1000 and len(saved_audio) == outcome.final_frames == 11998
-    np.testing.assert_array_equal(saved_audio, data[:12000, (0, 2)][2:])
+    np.testing.assert_array_equal(saved_audio, np.minimum(data[:12000, (0, 2)][2:], 8388607 / 8388608))
     # The sender never waits for the consumer's accumulator mutation lock.
     with capture._waveform_lock:
         assert capture.snapshot(generation=2, sequence=3) is None
