@@ -665,7 +665,6 @@ def test_invalid_math_never_saves_or_emits_success(setup, raw_level, factor, mon
 def test_main_dialog_handoff_reaches_input_child_before_initialization(setup, monkeypatch, queue_detail, rate, limit):
     from unit_test.test_input_calibration_runtime import ROOT, _load_method
 
-    monkeypatch.setattr(calibration, "OutputCalibration", QWidget)
     opened = []
     def execute(dialog):
         child = dialog.input_cal_wnd
@@ -725,13 +724,11 @@ def test_missing_or_replaced_current_identity_is_a_failed_measurement(setup, dev
     assert setup.calibrations.path.read_bytes() == before
 
 
-def test_dialog_input_actions_are_disabled_when_shared_service_becomes_busy(setup, monkeypatch):
-    monkeypatch.setattr(calibration, "OutputCalibration", QWidget)
+def test_dialog_input_actions_are_disabled_when_shared_service_becomes_busy(setup):
     dialog = calibration.CalibrationWindow(
         device_info(), [7], recording_bridge=setup.bridge,
         ve_profile_store=setup.profiles, ve_calibration_store=setup.calibrations)
     try:
-        dialog.tabwidget.setCurrentIndex(1)
         assert dialog.cal_btn.isEnabled() and dialog.reset_btn.isEnabled()
         setup.bridge.service.busy = True
         dialog._sync_calibration_button_state()
@@ -741,13 +738,11 @@ def test_dialog_input_actions_are_disabled_when_shared_service_becomes_busy(setu
 
 
 @pytest.mark.parametrize("terminal", ["failure", "cancel"])
-def test_dialog_controls_wait_for_owned_release_after_unsuccessful_capture(setup, monkeypatch, terminal):
-    monkeypatch.setattr(calibration, "OutputCalibration", QWidget)
+def test_dialog_controls_wait_for_owned_release_after_unsuccessful_capture(setup, terminal):
     dialog = calibration.CalibrationWindow(
         device_info(), [7], recording_bridge=setup.bridge,
         ve_profile_store=setup.profiles, ve_calibration_store=setup.calibrations)
     widget = dialog.input_cal_wnd
-    dialog.tabwidget.setCurrentIndex(1)
     finished = []
     widget.calibration_finished.connect(finished.append)
     try:
@@ -805,10 +800,9 @@ def test_reset_atomic_failure_preserves_valid_record_and_display(setup, monkeypa
     assert widget.v2pa_factor_lineedit.text() == "73.0"
 
 
-def test_queued_events_after_dialog_close_done_and_reject_cannot_save(setup, ui_qapp, monkeypatch):
+def test_queued_events_after_dialog_close_done_and_reject_cannot_save(setup, ui_qapp):
     from PyQt5.QtCore import QTimer
 
-    monkeypatch.setattr(calibration, "OutputCalibration", QWidget)
     dialog = calibration.CalibrationWindow(
         device_info(), [7], recording_bridge=setup.bridge,
         ve_profile_store=setup.profiles, ve_calibration_store=setup.calibrations)

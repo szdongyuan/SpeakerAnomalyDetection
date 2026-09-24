@@ -7,7 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtWidgets import QApplication, QRadioButton
+from PyQt5.QtWidgets import QApplication, QGroupBox, QRadioButton, QTabBar, QTabWidget
 
 from base.soundcard_calibration_manager import (
     MicCalibrationFormatError,
@@ -300,7 +300,7 @@ def test_all_calibrated_starts_on_first_channel(qapp):
     "error",
     [MicCalibrationFormatError("bad"), MicCalibrationIOError("denied")],
 )
-def test_registry_error_disables_only_input_calibration(qapp, error):
+def test_registry_error_disables_calibration_dialog_actions(qapp, error):
     logger = SimpleNamespace(error=mock.Mock(), info=mock.Mock(), warning=mock.Mock())
     with mock.patch(
         "ui.calibration_window.load_mic_channel_v2pa_factors",
@@ -317,7 +317,6 @@ def test_registry_error_disables_only_input_calibration(qapp, error):
     assert dialog.input_cal_wnd.current_channel is None
     assert dialog.input_cal_wnd.channel_combo_box.isEnabled() is False
     assert dialog.input_cal_wnd.channel_status_label.text() == "状态: 输入校准文件错误"
-    dialog.tabwidget.setCurrentIndex(1)
     dialog._sync_calibration_button_state()
     assert dialog.cal_btn.isEnabled() is False
     assert dialog.reset_btn.isEnabled() is False
@@ -333,10 +332,6 @@ def test_registry_error_disables_only_input_calibration(qapp, error):
     assert critical.call_count == 1
     assert critical.call_args.args[2] == "输入校准文件错误，无法进行输入校准"
     assert str(error) in logger.error.call_args.args[0]
-    dialog.tabwidget.setCurrentIndex(0)
-    assert dialog.output_cal_wnd.isEnabled() is True
-    assert dialog.cal_btn.isEnabled() is True
-    assert dialog.reset_btn.isEnabled() is True
     dialog.show()
     qapp.processEvents()
     assert dialog.isVisible() is True
@@ -344,9 +339,43 @@ def test_registry_error_disables_only_input_calibration(qapp, error):
     assert dialog.isVisible() is False
 
 
+def test_calibration_dialog_embeds_input_without_tabs(qapp):
+    dialog = CalibrationWindow(input_device=DEVICE, input_channels=[0, 1])
+    try:
+        assert not dialog.findChildren(QTabWidget)
+        assert not dialog.findChildren(QTabBar)
+        panel = dialog.input_cal_wnd.parentWidget()
+        assert isinstance(panel, QGroupBox)
+        assert panel.title() == ""
+        assert panel.parentWidget() is dialog
+        assert panel.layout().indexOf(dialog.input_cal_wnd) >= 0
+        assert dialog.layout().itemAt(0).widget() is panel
+        assert not panel.isAncestorOf(dialog.cal_btn)
+        assert not panel.isAncestorOf(dialog.reset_btn)
+    finally:
+        dialog.reject()
+
+
+@pytest.mark.parametrize(
+    "button_name, child_method",
+    [("cal_btn", "clicked_calibration"), ("reset_btn", "reset_btn_clicked")],
+)
+def test_calibration_dialog_default_actions_reach_input(qapp, button_name, child_method):
+    dialog = CalibrationWindow(input_device=DEVICE, input_channels=[0, 1])
+    try:
+        with mock.patch.object(dialog.input_cal_wnd, child_method) as action, mock.patch(
+            "ui.calibration_window.QMessageBox.exec_", return_value=0
+        ):
+            button = getattr(dialog, button_name)
+            assert button.isEnabled()
+            button.click()
+        action.assert_called_once_with()
+    finally:
+        dialog.reject()
+
+
 def test_input_actions_disable_while_recording(qapp):
     dialog = CalibrationWindow(input_device=DEVICE, input_channels=[0, 1])
-    dialog.tabwidget.setCurrentIndex(1)
     processor = _FakeProcessor()
 
     def start_calibration():
