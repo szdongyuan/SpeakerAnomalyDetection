@@ -1,6 +1,5 @@
 import os
 import sys
-import threading
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -13,7 +12,6 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
-    QDoubleSpinBox,
     QComboBox,
     QGroupBox,
     QGridLayout,
@@ -21,12 +19,11 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QLabel,
 )
-from PyQt5.QtWidgets import QMessageBox, QTabWidget, QVBoxLayout, QPushButton, QSpacerItem
-from PyQt5.QtWidgets import QSizePolicy, QSpinBox, QWidget, QRadioButton
+from PyQt5.QtWidgets import QMessageBox, QVBoxLayout, QPushButton, QSpacerItem
+from PyQt5.QtWidgets import QSizePolicy, QWidget, QRadioButton
 
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
-from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.recording_process_protocol import RecordingRequest
 from base.recording_service import RecordingCallbacks, RecordingService
 from base.ve3668n_calibration import verify_ve_calibration_result
@@ -37,7 +34,6 @@ from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import (
     MicCalibrationFormatError,
     MicCalibrationIOError,
-    SoundcardCalibrationManager,
     clear_mic_channel_calibrations,
     load_mic_channel_v2pa_factors,
     save_mic_channel_calibration,
@@ -66,7 +62,7 @@ class CalibrationWindow(QDialog):
         """
         Initialize the user interface for the calibration window.
         This function sets up the window icon, title, size, and layout,
-        and creates tabs for output and input calibration.
+        and creates the embedded input calibration panel.
         """
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
         self.setWindowTitle("校准窗口")
@@ -78,8 +74,6 @@ class CalibrationWindow(QDialog):
 
         self.input_calibration_flag = False
 
-        self.tabwidget = QTabWidget()
-        self.output_cal_wnd = OutputCalibration()
         self.input_cal_wnd = InputCalibration(
             input_device=self.input_device,
             input_channels=self.input_channels,
@@ -88,6 +82,10 @@ class CalibrationWindow(QDialog):
             ve_calibration_store=self.ve_calibration_store,
             ve_queue_config_provider=self.ve_queue_config_provider,
         )
+        input_panel = QGroupBox(self)
+        panel_layout = QVBoxLayout(input_panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.addWidget(self.input_cal_wnd)
         self.input_cal_wnd.calibration_finished.connect(
             self._on_input_calibration_finished
         )
@@ -95,17 +93,14 @@ class CalibrationWindow(QDialog):
             self._on_input_calibration_state_changed
         )
         self.input_cal_wnd.calibration_availability_changed.connect(self._sync_calibration_button_state)
-        self.tabwidget.addTab(self.output_cal_wnd, "输出校准")
-        self.tabwidget.addTab(self.input_cal_wnd, "输入校准")
 
         btn_layout = self.create_btn_box()
-        self.tabwidget.currentChanged.connect(self._sync_calibration_button_state)
         self._sync_calibration_button_state()
 
-        cal_wnd_layout.addWidget(self.tabwidget)
+        cal_wnd_layout.addWidget(input_panel)
         cal_wnd_layout.addLayout(btn_layout)
         self.setLayout(cal_wnd_layout)
-        self.setStyleSheet(ui_style_const.qpushbutton_style + ui_style_const.qtabwidget_style)
+        self.setStyleSheet(ui_style_const.qpushbutton_style + ui_style_const.qgroupbox_style)
 
     def create_btn_box(self):
         """
@@ -131,25 +126,13 @@ class CalibrationWindow(QDialog):
         return btn_layout
 
     def clicked_calibration_button(self):
-        """
-            Handles the event when the calibration button is clicked.
-
-            This function first determines which tab is currently active, and then performs the corresponding
-        calibration operation based on the active tab.
-            If the first tab is active, it calls the calibration method of the output_cal_wnd object.
-            If the second tab is active, it first disables the calibration button to prevent multiple calibrations,
-         then calls the clicked_calibration method of the input_cal_wnd object.
-        """
-        current_tab_index = self.tabwidget.currentIndex()
-        if current_tab_index == 0:
-            self.output_cal_wnd.calibration()
-        elif current_tab_index == 1:
-            if not self._input_calibration_controls_available():
-                self._sync_calibration_button_state()
-                return
-            self.cal_btn.setDisabled(True)
-            self.input_cal_wnd.clicked_calibration()
+        """Start input calibration when its controls are available."""
+        if not self._input_calibration_controls_available():
             self._sync_calibration_button_state()
+            return
+        self.cal_btn.setDisabled(True)
+        self.input_cal_wnd.clicked_calibration()
+        self._sync_calibration_button_state()
 
     def _on_input_calibration_finished(self, _success):
         self._sync_calibration_button_state()
@@ -171,49 +154,24 @@ class CalibrationWindow(QDialog):
         )
 
     def _sync_calibration_button_state(self, _index=None):
-        if self.tabwidget.currentIndex() == 1:
-            enabled = self._input_calibration_controls_available()
-            self.cal_btn.setEnabled(enabled)
-            self.reset_btn.setEnabled(enabled)
-            if self.input_cal_wnd._ve_input:
-                self.input_cal_wnd.channel_combo_box.setEnabled(enabled)
-                self.input_cal_wnd.standard_spl_i.setEnabled(enabled)
-                self.input_cal_wnd.standard_spl_ii.setEnabled(enabled)
-            return
-        self.cal_btn.setEnabled(True)
-        self.reset_btn.setEnabled(True)
+        enabled = self._input_calibration_controls_available()
+        self.cal_btn.setEnabled(enabled)
+        self.reset_btn.setEnabled(enabled)
+        if self.input_cal_wnd._ve_input:
+            self.input_cal_wnd.channel_combo_box.setEnabled(enabled)
+            self.input_cal_wnd.standard_spl_i.setEnabled(enabled)
+            self.input_cal_wnd.standard_spl_ii.setEnabled(enabled)
 
     def clicked_reset_button(self):
-        """
-            Handles the event when the reset button is clicked.
-
-            This function first determines which tab is currently active, and then performs the reset operation
-        according to the index of the active tab.
-            If the first tab is active, it calls the reset_btn_clicked method of the output_cal_wnd object to perform
-        the reset operation.
-            If the second tab is active, it calls the reset_btn_clicked method of the input_cal_wnd object to perform
-        the reset operation,
-            and enables the cal_btn button at the same time to allow the user to perform calculation operations again.
-        """
-        current_tab_index = self.tabwidget.currentIndex()
-        if current_tab_index == 0:
-            self.output_cal_wnd.reset_btn_clicked()
-        elif current_tab_index == 1:
-            if not self._input_calibration_controls_available():
-                self._sync_calibration_button_state()
-                return
-            self.input_cal_wnd.reset_btn_clicked()
+        """Reset input calibration when its controls are available."""
+        if not self._input_calibration_controls_available():
             self._sync_calibration_button_state()
+            return
+        self.input_cal_wnd.reset_btn_clicked()
+        self._sync_calibration_button_state()
 
     def clicked_close_button(self):
-        """
-            Handles the event when the close button is clicked.
-
-            This function checks which tab is currently active in the tab widget, and then performs the corresponding
-        operation to close the window.
-            If the first tab is active, it directly closes the window; if the second tab is active, it first stops the
-        timer, and then closes the window.
-        """
+        """Close the window and release input recording resources."""
         self.reject()
 
     def reject(self):
@@ -227,423 +185,6 @@ class CalibrationWindow(QDialog):
     def done(self, result):
         self.input_cal_wnd.close_recording()
         super().done(result)
-
-
-class OutputCalibration(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.default_calibration_nums = 1
-        self.output_voltage_value = []
-        self.default_logger = LogManager.set_log_handler("core")
-        self.calibration_param = {"calibration_nums": self.default_calibration_nums}
-        self.current_count = 1
-        self.countdown = 10
-        self.play_flag = False
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_countdown)
-        self.init_ui()
-        self.get_calibration_param()
-
-    def init_ui(self):
-        """
-        Initialize the CalibrationWindow class instance.
-
-        This function initializes various attributes of the class, including the output voltage value list,
-        default logger, calibration parameters, current count, countdown timer, play flag, and a QTimer.
-        It also connects the QTimer's timeout signal to the update_countdown method and calls methods
-        to initialize the user interface and retrieve calibration parameters.
-        """
-        self.setMinimumSize(305, 373)
-        self.setMaximumSize(520, 500)
-
-        calibration_param_box = self.create_calibration_param_box()
-        output_box = self.create_output_voltage_box()
-        test_box = self.create_test_box()
-
-        v_spacer_1 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        v_spacer_2 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
-        v_spacer_3 = QSpacerItem(30, 30, QSizePolicy.Minimum, QSizePolicy.Expanding)
-
-        layout = QVBoxLayout()
-        layout.addWidget(calibration_param_box)
-        layout.addItem(v_spacer_1)
-        layout.addWidget(output_box)
-        layout.addItem(v_spacer_2)
-        layout.addWidget(test_box)
-        layout.addItem(v_spacer_3)
-        layout.setContentsMargins(12, 20, 12, 25)
-        self.setLayout(layout)
-        self.setStyleSheet(
-            ui_style_const.qcombobox_style
-            + ui_style_const.qpushbutton_style
-            + ui_style_const.qspinbox_style
-            + ui_style_const.qdoublespinbox_style
-            + ui_style_const.qgroupbox_style
-            + ui_style_const.qlabel_style
-        )
-
-    def create_calibration_param_box(self):
-        """
-            Create calibration parameter box
-
-            This method creates a QGroupBox containing calibration parameter settings, allowing the user to set the
-        number of calibrations.
-            It includes a label, a spin box, and layout management.
-            Return:
-                the created calibration parameter box
-        """
-        calibration_param_box = QGroupBox("校准参数")
-        calibration_nums_label = QLabel("校准次数")
-        self.calibration_nums_box = QSpinBox()
-        self.calibration_nums_box.setSuffix(" 次")
-        self.calibration_nums_box.setRange(1, 20)
-        self.calibration_nums_box.setValue(1)
-        self.calibration_nums_box.setFixedSize(90, 30)
-        self.calibration_nums_box.editingFinished.connect(self.get_calibration_param)
-        h_spacer_1 = QSpacerItem(20, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        param_layout = QHBoxLayout()
-        param_layout.addWidget(calibration_nums_label)
-        param_layout.addItem(h_spacer_1)
-        param_layout.addWidget(self.calibration_nums_box)
-        param_layout.setContentsMargins(9, 10, 10, 10)
-        calibration_param_box.setLayout(param_layout)
-        return calibration_param_box
-
-    def create_output_voltage_box(self):
-        """
-        Create the output voltage settings box.
-
-        This function is responsible for generating a group box containing controls related to output voltage settings.
-        It includes a play button, countdown display, output voltage adjustment spin box, and save button.
-        Return:
-            the created output voltage group box
-        """
-        output_box = QGroupBox("输出电压")
-        output_layout = QGridLayout()
-        self.play_label = QLabel(f"第 {self.current_count} 次 ")
-        self.play_btn = QPushButton(" 播  放 ")
-        self.play_btn.clicked.connect(self.play_btn_clicked)
-        self.countdown_label = QLabel(
-            f"<span style='color: black;'>倒计时：</span>"
-            f"<span style='color: red;'>{self.countdown} </span>"
-            f"<span style='color: black;'>s</span>"
-        )
-        self.countdown_label.setStyleSheet(
-            "background-color: white;" "border: 1px solid rgb(122, 122, 122);" "border-radius: 3px;"
-        )
-        h_spacer_play_label_left = QSpacerItem(0, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        h_spacer_play_label_right = QSpacerItem(0, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        output_layout.addWidget(self.play_label, 0, 0)
-        output_layout.addItem(h_spacer_play_label_left, 0, 1)
-        output_layout.addWidget(self.countdown_label, 0, 2)
-        output_layout.addItem(h_spacer_play_label_right, 0, 3)
-        output_layout.addWidget(self.play_btn, 0, 4)
-
-        output_voltage_label = QLabel("输出电压")
-        self.output_voltage_box = QDoubleSpinBox()
-        self.output_voltage_box.setSuffix(" V")
-        self.output_voltage_box.setFixedSize(135, 29)
-        self.output_voltage_box.setRange(0, 100)
-        self.output_voltage_box.setSingleStep(0.1)
-        self.save_btn = QPushButton(" 保  存 ")
-        self.save_btn.clicked.connect(self.save_btn_clicked)
-        self.save_btn.setDisabled(True)
-        output_layout.addWidget(output_voltage_label, 1, 0)
-        output_layout.addWidget(self.output_voltage_box, 1, 2)
-        output_layout.addWidget(self.save_btn, 1, 4)
-
-        output_layout.setVerticalSpacing(10)
-        output_layout.setAlignment(Qt.AlignCenter)
-        output_box.setLayout(output_layout)
-        return output_box
-
-    def create_test_box(self):
-        """
-            Create a test QGroupBox with the necessary widgets and layout.
-
-            This function constructs a QGroupBox intended for testing purposes. It includes a label for the target
-        voltage, a double spin box to set the target voltage, and a test button to initiate the calibration test. The
-        layout is managed using a horizontal box layout, with spacers added to maintain appropriate spacing between the
-        widgets.
-            Returns:
-                QGroupBox: A QGroupBox containing the test widgets and layout.
-        """
-        test_box = QGroupBox("测    试")
-        target_V_label = QLabel("目标电压")
-        self.target_voltage_box = QDoubleSpinBox()
-        self.target_voltage_box.setFixedSize(135, 29)
-        self.target_voltage_box.setSuffix(" V")
-        h_spacer_voltage_box_right = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        h_spacer_voltage_box_left = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        test_btn = QPushButton(" 测  试 ")
-        test_btn.clicked.connect(self.test_calibration)
-        test_layout = QHBoxLayout()
-        test_layout.addWidget(target_V_label)
-        test_layout.addItem(h_spacer_voltage_box_left)
-        test_layout.addWidget(self.target_voltage_box)
-        test_layout.addItem(h_spacer_voltage_box_right)
-        test_layout.addWidget(test_btn)
-        test_box.setLayout(test_layout)
-        return test_box
-
-    def save_btn_clicked(self):
-        """
-        This function is triggered when the save button is clicked.
-
-        It performs the following actions:
-        1. Appends the current output voltage value to the output voltage value list.
-        2. Resets the value of the output voltage input box to 0.
-        3. Updates the current count.
-        4. Updates the text of the play label and countdown label to reflect the current count and countdown.
-        """
-        self.output_voltage_value.append(self.output_voltage_box.value())
-        self.output_voltage_box.setValue(0)
-        self.create_current_count()
-        self.play_label.setText(f"第 {self.current_count} 次 ")
-        self.countdown_label.setText(
-            f"<span style='color: black;'>倒计时：</span>"
-            f"<span style='color: red;'>{self.countdown} </span>"
-            f"<span style='color: black;'>s</span>"
-        )
-
-    def update_countdown(self):
-        """
-            Update the countdown status.
-
-            If the countdown is greater than 0, decrement the countdown value and update the countdown display on the
-        interface.
-            If the countdown ends, stop the timer, update the button states to prepare for saving, and reset the
-        countdown to 10 seconds.
-        """
-        if self.countdown > 0:
-            self.countdown -= 1
-            self.countdown_label.setText(
-                f"<span style='color: black;'>倒计时：</span>"
-                f"<span style='color: red;'>{self.countdown} </span>"
-                f"<span style='color: black;'>s</span>"
-            )
-        else:
-            self.timer.stop()
-            self.play_btn.setText(" 停  止 ")
-            self.play_btn.setEnabled(False)
-            self.save_btn.setEnabled(True)
-            self.play_flag = False
-            self.countdown = 10
-
-    def play_btn_clicked(self):
-        """
-        Handle the play button click event.
-
-        This function controls the audio playback and stop based on the current playback state,
-        and updates the countdown display during playback.
-        """
-        stimulus_dict = self.create_signal()
-        sap = SoundcardAudioProcessor()
-        if not self.play_flag:
-            self.play_flag = True
-            self.play_btn.setDisabled(True)
-            self.save_btn.setDisabled(True)
-            self.countdown_label.setText(
-                f"<span style='color: black;'>倒计时：</span>"
-                f"<span style='color: red;'>{self.countdown} </span>"
-                f"<span style='color: black;'>s</span>"
-            )
-            self.timer.start(1000)
-            threading.Thread(target=sap.sd_play, args=(stimulus_dict,)).start()
-        else:
-            self.play_flag = False
-            self.timer.stop()
-            self.play_btn.setText(" 播  放 ")
-            if self.current_count >= self.calibration_param["calibration_nums"]:
-                self.save_btn.setDisabled(True)
-
-    def create_current_count(self):
-        """
-        Update the UI state based on the current count.
-
-        This method checks if the current count has reached the calibration number.
-        If it has, it disables the play and save buttons and updates the save button text to " 完  成 ".
-        If the current count has not reached the calibration number, it increments the current count,
-        updates the play button text to " 播  放 ", enables the play button, and disables the save button.
-        """
-        if self.current_count >= self.calibration_param["calibration_nums"]:
-            self.save_btn.setText(" 完  成 ")
-            self.save_btn.setDisabled(True)
-            self.play_btn.setDisabled(True)
-        else:
-            self.current_count += 1
-            self.play_btn.setText(" 播  放 ")
-            self.play_btn.setEnabled(True)
-            self.save_btn.setDisabled(True)
-
-    def get_calibration_param(self):
-        """
-        Retrieve calibration parameters.
-
-        This method fetches the number of calibrations from the calibration numbers box
-        and combines it with the output voltage value to generate a dictionary of calibration parameters.
-        The calibration parameters include the number of calibrations, output voltage, and a list of amplitudes.
-
-        Returns:
-            None. Updates the instance variable self.calibration_param with a dictionary containing the calibration parameters.
-        """
-        calibration_nums = self.calibration_nums_box.value()
-        output_voltage = self.output_voltage_value
-        if calibration_nums == 1:
-            amplitude_list = np.array([0.95])
-        else:
-            amplitude_list = np.linspace(0.05, 0.95, calibration_nums)
-        self.calibration_param = {
-            "calibration_nums": calibration_nums,
-            "output_voltage": output_voltage,
-            "amplitude_list": amplitude_list,
-        }
-
-    def create_signal(self):
-        data, sr = StimulusSignal().generate_chirps(
-            start_freq=800, stop_freq=800, total_time=10, sample_rate=44100, stimulus_type="linear"
-        )
-        stimulus_dict = {
-            "data": data,
-            "sr": sr,
-            "amplitude": self.calibration_param["amplitude_list"][self.current_count - 1],
-        }
-        return stimulus_dict
-
-    def test_calibration(self):
-        """
-            Create a stimulus signal.
-
-            This function generates a stimulus signal by calling the generate_chirps method of the StimulusSignal class
-        with specific parameters.
-            It then encapsulates the generated signal data and sampling rate into a dictionary, along with the current
-        stimulus amplitude for further processing or storage.
-
-            Parameters:
-            - self: The instance of the class itself.
-
-            Returns:
-            - stimulus_dict: A dictionary containing the generated stimulus signal data, sampling rate, and current
-        stimulus amplitude.
-        """
-        target_voltage = self.target_voltage_box.value()
-        scm = SoundcardCalibrationManager()
-        calibrate_code, calibrate_result = scm.calibrate_amplitude(target_voltage)
-        if calibrate_code != error_code.OK:
-            self.default_logger.error(f"Failed to calculate the amplitude. {calibrate_result}")
-        amplitude, max_voltage = calibrate_result
-        if target_voltage > max_voltage:
-            if self.test_calibration_popup():
-                return
-        data, sr = StimulusSignal().generate_chirps(
-            start_freq=800, stop_freq=800, total_time=10, sample_rate=44100, stimulus_type="linear"
-        )
-        test_stimulus_dict = {"data": data, "sr": sr, "amplitude": amplitude}
-        sap = SoundcardAudioProcessor()
-        speaker_code, msg = sap.sd_play(test_stimulus_dict)
-        if speaker_code != error_code.OK:
-            self.default_logger.error(f"Failed to play the audio. {msg}")
-
-    def test_calibration_popup(self):
-        """
-        Display a calibration test popup message.
-
-        This function creates a QMessageBox instance, sets its icon, text, title, and buttons,
-        then displays the message box and waits for user interaction.
-        It returns whether the user clicked the OK button.
-
-        Returns:
-            bool: True if the user clicked OK, False otherwise.
-        """
-        test_msg = QMessageBox(self)
-        test_msg.setIcon(QMessageBox.Warning)
-        test_msg.setText("目标电压过大，请重新输入!")
-        test_msg.setWindowTitle("测试失败")
-        test_msg.setStandardButtons(QMessageBox.Ok)
-        button = test_msg.exec_()
-        return button == QMessageBox.Ok
-
-    def reset_btn_clicked(self):
-        """
-        Handles the reset button click event.
-
-        This function resets various settings and displays in the user interface to their default or initial states.
-        It clears output voltage values, resets voltage settings, restores calibration counts, stops the timer, etc.
-        """
-        self.output_voltage_value.clear()
-        self.output_voltage_box.setValue(0)
-        self.target_voltage_box.setValue(0)
-        self.calibration_nums_box.setValue(self.default_calibration_nums)
-        self.timer.stop()
-        self.current_count = 1
-        self.countdown = 10
-        self.play_label.setText(f"第 {self.current_count} 次 ")
-        self.countdown_label.setText(
-            f"<span style='color: black;'>倒计时：</span>"
-            f"<span style='color: red;'>{self.countdown} </span>"
-            f"<span style='color: black;'>s</span>"
-        )
-        self.save_btn.setText(" 保  存 ")
-        self.play_btn.setText(" 播  放 ")
-        self.play_flag = False
-        self.play_btn.setEnabled(True)
-        self.save_btn.setDisabled(True)
-
-    def calibration(self):
-        """
-            Performs the soundcard calibration process.
-
-            This method first checks if the number of saved voltage values meets the required calibration times.
-            If not, it logs an error and prompts the user through a popup window.
-            If the conditions are met, it adds the amplitude and voltage data to the SoundcardCalibrationManager for
-        calibration.
-            After calibration, it handles the results based on the fit_code: logs and prompts success or failure.
-        """
-        scm = SoundcardCalibrationManager()
-        if len(self.output_voltage_value) != self.calibration_param["calibration_nums"]:
-            self.calibration_popup(success_flag=False)
-            self.default_logger.error("The saved voltage does not meet the requirement of calibration times.")
-        else:
-            if self.calibration_param["calibration_nums"] == 1:
-                scm.add_data(0, 0, validation=False)
-            for amplitude, voltage in zip(self.calibration_param["amplitude_list"], self.output_voltage_value):
-                scm.add_data(amplitude, voltage)
-            fit_code, msg = scm.fit()
-            if fit_code == error_code.OK:
-                self.default_logger.info("Calibration success.")
-                self.calibration_popup(success_flag=True)
-            else:
-                self.default_logger.error(f"Failed to calibrate. {msg}")
-                self.calibration_popup(success_flag=False)
-
-    def calibration_popup(self, success_flag=True):
-        """
-        Displays a calibration result popup.
-
-        Depending on whether the calibration was successful, it shows different icons and message texts.
-        If the calibration is successful, it displays an information icon and a success message;
-        if the calibration fails, it displays a critical icon and a failure message.
-
-        Parameters:
-        - success_flag: Boolean indicating whether the calibration was successful. Default value is True.
-        """
-        cal_msg = QMessageBox(self)
-        if success_flag:
-            cal_msg.setIcon(QMessageBox.Information)
-            cal_msg.setText("校准成功")
-            cal_msg.setWindowTitle("校准成功")
-        else:
-            cal_msg.setIcon(QMessageBox.Critical)
-            cal_msg.setText("校准失败，请重试")
-            cal_msg.setWindowTitle("校准失败")
-        cal_msg.setStandardButtons(QMessageBox.Ok)
-        cal_msg.exec_()
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
-            event.ignore()
-        else:
-            super().keyPressEvent(event)
 
 
 @dataclass(frozen=True)

@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
 
 from base.video.config import VideoConfig
 from ui.acquisition_config_window import BaseConfigWindow, RecordConfigWindow
-from ui.calibration_window import CalibrationWindow, OutputCalibration
+from ui.calibration_window import CalibrationWindow
 from ui.hardware_window import HardwareSelectionView
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.serial_discrete_input_config_dialog import SerialDiscreteInputConfigDialog
@@ -199,30 +199,21 @@ def test_system_auxiliary_focus_clicks_only_confirm(system_dialog, enter):
         assert len(callbacks) == 1
 
 
-@pytest.mark.parametrize("tab_index", [0, 1], ids=["output", "input"])
-def test_calibration_enter_never_clicks_buttons(opened, monkeypatch, enter, tab_index, ui_qapp):
+def test_calibration_enter_never_clicks_buttons(opened, monkeypatch, enter, ui_qapp):
     callbacks = []
-    for cls, methods in (
-        (CalibrationWindow, ["clicked_calibration_button", "clicked_reset_button", "clicked_close_button"]),
-        (OutputCalibration, ["play_btn_clicked", "save_btn_clicked", "test_calibration"]),
-    ):
-        for method in methods:
-            monkeypatch.setattr(cls, method, lambda *args, method=method: callbacks.append(method))
+    for method in ("clicked_calibration_button", "clicked_reset_button", "clicked_close_button"):
+        monkeypatch.setattr(CalibrationWindow, method, lambda *args, method=method: callbacks.append(method))
     monkeypatch.setattr("ui.calibration_window.load_mic_channel_v2pa_factors", lambda device: {})
     window = opened(CalibrationWindow(
         input_device={"index": 7, "name": "Test Microphone", "hostapi": 3, "max_input_channels": 2},
         input_channels=[0, 1]))
-    window.tabwidget.setCurrentIndex(tab_index)
-    # Include the output Save button's enabled state without starting playback.
-    window.output_cal_wnd.save_btn.setEnabled(True)
     ui_qapp.processEvents()
     clicks = watch_buttons(window)
-    editors = (list(window.output_cal_wnd.findChildren(QLineEdit)) if tab_index == 0 else
-               [window.input_cal_wnd.channel_combo_box, window.input_cal_wnd.v2pa_factor_lineedit])
+    editors = [window.input_cal_wnd.channel_combo_box, window.input_cal_wnd.v2pa_factor_lineedit]
     buttons = [button for button in window.findChildren(QAbstractButton)
                if button.isVisible() and button.isEnabled()]
     assert buttons and editors
-    for widget in editors + buttons + [window.tabwidget.tabBar()]:
+    for widget in editors + buttons:
         for _ in range(3):
             enter(widget)
             assert clicks == []
