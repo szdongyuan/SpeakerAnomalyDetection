@@ -109,6 +109,7 @@ class AnalysisModelSelect(ConfigDialogBase):
         self.parent_draft_provider = parent_draft_provider
         self.confirm_shared_save = confirm_shared_save or self._confirm_shared_save
         self.last_persisted_payload = None
+        self._last_recording_only_notice = None
         self.dirty = False
         self._allow_close = False
         self._saving = False
@@ -192,9 +193,24 @@ class AnalysisModelSelect(ConfigDialogBase):
             return "deferred"
         self._saving = True
         try:
-            return self._save_queue_once(
+            result = self._save_queue_once(
                 target_path, explicit=explicit, activate_default=activate_default
             )
+            if explicit and result in {"saved", "unchanged"}:
+                sequence = next(iter(self.last_persisted_payload[0].values()))
+                notice_key = (
+                    os.path.normcase(os.path.abspath(target_path)),
+                    self.last_persisted_payload,
+                )
+                if (not sequence["analysis_list"]["display_sequence"]
+                        and notice_key != self._last_recording_only_notice):
+                    QMessageBox.information(
+                        self,
+                        "提示",
+                        "测试队列已保存。当前未配置分析项，添加分析项后，才会显示在产品测试配置中。",
+                    )
+                    self._last_recording_only_notice = notice_key
+            return result
         finally:
             self._saving = False
 

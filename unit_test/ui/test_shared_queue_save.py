@@ -19,6 +19,13 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def recording_only_notices(monkeypatch):
+    notices = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: notices.append(args[2]))
+    return notices
+
+
 @pytest.fixture
 def editor(app, tmp_path, monkeypatch):
     products = tmp_path / "products"
@@ -50,6 +57,97 @@ def editor(app, tmp_path, monkeypatch):
 def change(window):
     window.select_list.config[0].detail["sample_rate"] = 48000
     window.select_list._notify_config_changed()
+
+
+@pytest.mark.parametrize("action", ["save", "save_as"])
+@pytest.mark.parametrize("has_analysis", [False, True])
+def test_explicit_save_explains_recording_only_product_queue_limit(
+    editor, monkeypatch, recording_only_notices, action, has_analysis
+):
+    window, target, *_ = editor
+    config = window.select_list.config[0]
+    config.detail["sample_rate"] = 48000
+    if has_analysis:
+        config.analysis_list["spl"] = {"type": "SPL", "limit_checked": True}
+        config.display_sequence = ["spl"]
+    window.confirm_shared_save = lambda *args: True
+    if action == "save_as":
+        target = target.with_name("copy.json")
+        monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), ""))
+        window.save_btn_clicked()
+    else:
+        window.ok_btn_clicked()
+
+    saved = json.loads(target.read_text(encoding="utf-8"))[0]["seq1"]
+    assert saved["acq"]["detail"]["sample_rate"] == 48000
+    assert bool(saved["analysis_list"]["display_sequence"]) is has_analysis
+    if has_analysis:
+        assert not recording_only_notices
+    else:
+        assert len(recording_only_notices) == 1
+        assert "未配置分析项" in recording_only_notices[0]
+        assert "添加分析项后，才会显示在产品测试配置中" in recording_only_notices[0]
+
+
+def test_explicit_save_still_explains_already_autosaved_recording_only_queue(
+    editor, recording_only_notices
+):
+    window, target, _, products, _ = editor
+    write_json(products / "one.json", project("Q"))
+    change(window)
+    assert not window.dirty
+    assert not recording_only_notices
+    before = target.read_bytes()
+
+    window.ok_btn_clicked()
+
+    assert target.read_bytes() == before
+    assert len(recording_only_notices) == 1
+
+
+@pytest.mark.parametrize("next_action,notice_count", [
+    ("save", 1), ("edit_then_save", 2), ("save_as", 2),
+])
+def test_recording_only_notice_is_not_repeated_for_same_saved_queue(
+    editor, monkeypatch, recording_only_notices, next_action, notice_count
+):
+    window, target, *_ = editor
+    copy_path = target.with_name("copy.json")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(copy_path), ""))
+    window.save_btn_clicked()
+    assert len(recording_only_notices) == 1
+    saved = copy_path.read_bytes()
+
+    if next_action == "save_as":
+        other_path = target.with_name("other.json")
+        monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(other_path), ""))
+        window.save_btn_clicked()
+        assert other_path.read_bytes() == saved
+    else:
+        if next_action == "edit_then_save":
+            change(window)
+        window.ok_btn_clicked()
+        assert not window.isVisible()
+
+    assert len(recording_only_notices) == notice_count
+    if next_action == "save":
+        assert copy_path.read_bytes() == saved
+
+
+@pytest.mark.parametrize("outcome", ["cancelled", "failed", "deferred"])
+def test_unsuccessful_save_does_not_report_recording_only_queue_saved(
+    editor, monkeypatch, recording_only_notices, outcome
+):
+    window, target, *_ = editor
+    window.select_list.config[0].detail["sample_rate"] = 48000
+    window.confirm_shared_save = lambda *args: outcome != "cancelled"
+    if outcome == "failed":
+        monkeypatch.setattr(LoadUiConfig, "save_sequence_config_to_json", lambda *args: False)
+
+    result = window._save_queue(str(target), explicit=outcome != "deferred")
+
+    assert result == outcome
+    assert not recording_only_notices
 
 
 @pytest.fixture
