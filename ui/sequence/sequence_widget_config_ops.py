@@ -20,6 +20,46 @@ from consts.running_consts import DEFAULT_DIR
 
 class SequenceWidgetConfigOpsMixin:
 
+    def synchronize_hardware_analysis_channels(self):
+        from base.hardware_analysis_channel_sync import (
+            synchronize_product_analysis_channels,
+            update_sequence_analysis_channels,
+        )
+        from base.recording_channel_selection import canonicalize_recording_input_channels
+
+        manager = self._get_product_program_manager()
+        try:
+            channels = canonicalize_recording_input_channels(self.mic_channels)
+            snapshot = synchronize_product_analysis_channels(
+                manager, manager.load_registry().get("active_file"), channels
+            )
+            # Hardware changes affect future recordings, not the active round or
+            # the immutable configuration saved with existing recording tasks.
+            for queue in self._product_queue_catalog.values():
+                update_sequence_analysis_channels(queue["data"], channels)
+            if self.sequence_config:
+                update_sequence_analysis_channels(self.sequence_config, channels)
+                self.analysis_config = self.sequence_config[0]["seq1"].get("analysis_list", {})
+                self.count_board.analysis_config = self.analysis_config
+            if not self.left_panel.refresh_condition_configs(
+                self.product_test_condition_configs,
+                queue_catalog=self._product_queue_catalog, preserve_results=True,
+            ):
+                raise ValueError("当前档位列表已变化，分析通道未能同步到界面")
+            if getattr(self, "_manual_product_condition_group_id", ""):
+                self._product_progress_round_signature = self._product_progress_config_signature()
+        except (OSError, ValueError) as error:
+            self._product_configuration_apply_failed(
+                f"{error}\n请重新确认硬件选择以重试分析通道同步。"
+            )
+            return False
+        self._applied_product_snapshot = snapshot
+        self._product_config_refresh_error = ""
+        self._product_config_refresh_state = "ready" if snapshot.active_file else "empty"
+        self._refresh_test_mode_availability()
+        self.update_player_btn_is_paused()
+        return True
+
     def _prepare_initial_product_configuration(self):
         """Prepare startup data before widgets exist; do not reset a restored round."""
         manager = self._get_product_program_manager()

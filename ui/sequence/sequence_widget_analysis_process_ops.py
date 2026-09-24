@@ -754,9 +754,6 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         channel_results = self._build_process_channel_results(result)
         left_panel = getattr(self, "left_panel", None)
         if left_panel is not None:
-            set_channels = getattr(left_panel, "set_channels", None)
-            if callable(set_channels):
-                set_channels(sorted({item["raw_channel"] for item in channel_results}))
             set_channel_results = getattr(
                 left_panel,
                 "set_condition_channel_results",

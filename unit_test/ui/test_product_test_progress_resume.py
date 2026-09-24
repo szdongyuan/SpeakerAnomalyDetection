@@ -150,6 +150,374 @@ def save_partial(factory):
     return original
 
 
+@pytest.mark.parametrize("successful_verdict", ["OK", "NG"])
+def test_incomplete_analysis_progress_preserves_failure_and_can_continue(factory, successful_verdict):
+    original = factory()
+    configured = [dict(c, analysis_list={
+        "display_sequence": ["SPL"],
+        "SPL": {"type": "SPL", "analysis_channels": [0, 1, 2, 3, 4]},
+    }) for c in original.product_test_condition_configs]
+    original.left_panel.set_condition_configs(configured, queue_catalog={})
+    assert original._offer_product_test_resume()
+    assert original._prepare_next_manual_product_condition_recording()
+    original._reserve_recorded_count_for_run()
+    complete_condition(original, "a", "not_labeled")
+    task = SimpleNamespace(segments=(), instance_results=tuple(
+        SimpleNamespace(raw_channel=ch, analysis_type="SPL", contributes_to_final=True,
+                        execution_status="分析失败" if ch == 4 else "分析完成",
+                        judgement=None if ch == 4 else successful_verdict)
+        for ch in range(5)
+    ))
+    results = SequenceWidgetAnalysisProcessOpsMixin._build_process_channel_results(task)
+    original.left_panel.set_condition_channel_results("a", results)
+    original.left_panel.set_condition_result("a", "结果不完整")
+    original._advance_manual_product_condition_cycle_after_recording()
+    original._save_product_test_progress_before_exit()
+    state = original._product_progress_store.load()
+    assert state is not None
+    saved = state["completed_conditions"]["a"]
+    assert saved["result"] == "not_labeled"
+    assert saved["analysis_status"] == "结果不完整"
+    assert saved["analysis_channels"] == [0, 1, 2, 3, 4]
+    assert saved["channel_results"][-1] == {"raw_channel": 4, "result": "结果不完整"}
+    assert original.left_panel.result_panel.rows["a"]["result"] == "结果不完整"
+    assert original.left_panel.result_panel.rows["a"]["channel_results"][-1]["result"] == "结果不完整"
+    assert (original.directory / "a.wav").read_bytes() == b"test file reference"
+
+    reopened = factory()
+    reopened.left_panel.set_condition_configs(configured, queue_catalog={})
+    assert reopened._offer_product_test_resume()
+    row = reopened.left_panel.result_panel.rows["a"]
+    assert row["result"] == "结果不完整"
+    assert row["labels"]["progress"].text() == "通道判定：4/5"
+    assert row["channel_results"] == saved["channel_results"]
+    reopened.left_panel.result_panel.select_condition("a", show_detail=True)
+    assert reopened.left_panel.result_panel.channel_detail_labels[-1]["result"].text() == "结果不完整"
+    group_id = reopened._manual_product_condition_group_id
+    assert reopened._manual_product_condition_results["a"] == "not_labeled"
+    assert reopened._refresh_manual_product_condition_results_from_group(group_id)
+    assert row["result"] == "结果不完整"
+    assert reopened._prepare_next_manual_product_condition_recording()
+    assert reopened._get_active_product_condition_key() == "b"
+    reopened._save_product_test_progress_before_exit()
+    assert reopened._product_progress_store.load()["completed_conditions"]["a"] == saved
+    reopened.left_panel.result_panel.reset()
+    assert row["channel_results"] == []
+    assert row["result"] == "待检测"
+
+
+@pytest.mark.parametrize("status,channel_results", [
+    ("分析失败", []),
+    ("分析失败", [{"raw_channel": 0, "result": "结果不完整"}]),
+    ("结果不完整", []),
+    ("结果不完整", [{"raw_channel": 0, "result": "OK"}]),
+])
+@pytest.mark.parametrize("mode", ["mark", "test"])
+def test_task_failure_survives_recording_completion_and_resume(factory, status, channel_results, mode):
+    original = factory()
+    original.count_board.mode = mode
+    assert original._offer_product_test_resume()
+    assert original._prepare_next_manual_product_condition_recording()
+    original._reserve_recorded_count_for_run()
+    complete_condition(original, "a", "not_labeled")
+    original.left_panel.set_condition_channel_results("a", channel_results)
+    original.left_panel.set_condition_result("a", status, tone="ng")
+    original._mark_manual_product_condition_recording_completed()
+    original._advance_manual_product_condition_cycle_after_recording()
+    assert original.left_panel.result_panel.rows["a"]["result"] == status
+    original._save_product_test_progress_before_exit()
+    saved = original._product_progress_store.load()["completed_conditions"]["a"]
+    assert saved["analysis_status"] == status
+    assert saved["result"] == "not_labeled"
+    assert saved["channel_results"] == channel_results
+
+    for _ in range(2):
+        reopened = factory()
+        reopened.count_board.mode = mode
+        assert reopened._offer_product_test_resume()
+        assert reopened._manual_product_condition_completed_keys == {"a"}
+        assert reopened._manual_product_condition_index == 1
+        assert reopened._manual_product_condition_results["a"] == "not_labeled"
+        reopened._refresh_manual_product_condition_results_from_group(
+            reopened._manual_product_condition_group_id,
+        )
+        assert reopened.left_panel.result_panel.rows["a"]["result"] == status
+        reopened._save_product_test_progress_before_exit()
+        assert reopened._product_progress_store.load()["completed_conditions"]["a"] == saved
+
+    assert reopened._prepare_next_manual_product_condition_recording()
+    assert reopened._get_active_product_condition_key() == "b"
+    reopened.left_panel.result_panel.reset()
+    assert reopened.left_panel.result_panel.rows["a"]["result"] == "待检测"
+    assert reopened.left_panel.result_panel.rows["a"]["channel_results"] == []
+
+
+@pytest.mark.parametrize("status", [None, "OK", "分析中", {}])
+def test_invalid_saved_analysis_status_cannot_partially_restore(factory, status):
+    original = save_partial(factory)
+    state = original._product_progress_store.load()
+    assert "analysis_status" not in state["completed_conditions"]["a"]
+    state["completed_conditions"]["a"]["analysis_status"] = status
+    original._product_progress_store.save(state)
+    reopened = factory()
+    reopened._ask_product_test_resume.return_value = None
+    assert not reopened._offer_product_test_resume()
+    assert "分析状态" in reopened._ask_product_test_resume.call_args.args[1]
+    assert not reopened._manual_product_condition_completed_keys
+
+
+@pytest.mark.parametrize("field", ["result", "counted_result"])
+def test_channel_failure_status_cannot_be_used_as_a_stored_product_verdict(factory, field):
+    original = save_partial(factory)
+    state = original._product_progress_store.load()
+    if field == "result":
+        state["completed_conditions"]["a"][field] = "结果不完整"
+    else:
+        state[field] = "结果不完整"
+    with pytest.raises(ValueError):
+        original._validate_product_test_progress(state)
+
+
+@pytest.mark.parametrize("legacy_names", [False, True])
+def test_saved_progress_uses_descriptive_channel_field_names(factory, legacy_names):
+    host = factory()
+    configured = [dict(c, analysis_list={
+        "display_sequence": ["SPL"], "SPL": {"type": "SPL", "analysis_channels": [0]},
+    }) for c in host.product_test_condition_configs]
+    host.left_panel.set_condition_configs(configured, queue_catalog={})
+    begin_partial_round(host)
+    host._save_product_test_progress_before_exit()
+    saved = json.loads(host._product_progress_store.path.read_text(encoding="utf-8"))["progress"]
+    assert saved["completed_conditions"]["a"] == {
+        "port_name": "USB-A", "condition_name": "低档", "result": "OK",
+        "analysis_channels": [0],
+        "channel_results": [{"raw_channel": 0, "result": "OK"}],
+        "analysis_column_channels": {"SPL": [0]},
+    }
+    assert saved["channels"] == [0]
+    if legacy_names:
+        condition = saved["completed_conditions"]["a"]
+        condition["channels"] = condition.pop("channel_results")
+        condition["column_channels"] = condition.pop("analysis_column_channels")
+        host._product_progress_store.save(saved)
+    reopened = factory()
+    reopened.left_panel.set_condition_configs(configured, queue_catalog={})
+    assert reopened._offer_product_test_resume()
+    row = reopened.left_panel.result_panel.rows["a"]
+    assert row["analysis_column_channels"] == {"SPL": [0]}
+    assert row["channel_results"] == [{"raw_channel": 0, "result": "OK"}]
+    reopened._save_product_test_progress_before_exit()
+    rewritten = json.loads(reopened._product_progress_store.path.read_text(encoding="utf-8"))
+    assert "channels" not in rewritten["progress"]["completed_conditions"]["a"]
+    assert "column_channels" not in rewritten["progress"]["completed_conditions"]["a"]
+
+
+@pytest.mark.parametrize("legacy_progress", [False, True])
+def test_resume_keeps_old_channel_results_after_hardware_channel_reduction(factory, legacy_progress):
+    original = factory()
+    configured = [dict(c, analysis_list={"display_sequence": ["SPL"],
+        "SPL": {"type": "SPL", "analysis_channels": [0, 4]}})
+        for c in original.product_test_condition_configs]
+    original.left_panel.set_condition_configs(configured, queue_catalog={})
+    begin_partial_round(original)
+    panel = original.left_panel.result_panel
+    panel.set_channels([0, 4])
+    panel.set_condition_channel_results("a", [
+        {"raw_channel": 0, "result": "OK"}, {"raw_channel": 4, "result": "NG"}])
+    panel.set_condition_result("a", "NG")
+    original._manual_product_condition_results["a"] = "NG"
+    original.recent_test_session_by_id["a"]["recorded_signal_info"]["labels"] = "NG"
+    updated = [dict(c, analysis_list={"display_sequence": ["SPL"],
+        "SPL": {"type": "SPL", "analysis_channels": [1]}})
+        for c in original.product_test_condition_configs]
+    assert panel.refresh_condition_configs(updated, queue_catalog={}, preserve_results=True)
+    panel.set_channels([1])
+    state = original._build_product_test_progress()
+    assert state["channels"] == [0, 1, 4]
+    assert len(state["completed_conditions"]["a"]["channel_results"]) == 2
+    if legacy_progress:
+        state["completed_conditions"]["a"].pop("analysis_channels", None)
+    original._product_progress_store.save(state)
+    reopened = factory()
+    reopened.left_panel.set_condition_configs(updated, queue_catalog={})
+    assert reopened._offer_product_test_resume()
+    restored = reopened.left_panel.result_panel.rows["a"]
+    assert restored["analysis_channels"] == [0, 4]
+    assert restored["labels"]["progress"].text() == "通道判定：2/2"
+    assert restored["channel_results"] == state["completed_conditions"]["a"]["channel_results"]
+
+
+@pytest.mark.parametrize("analysis_type,old_channels,verdict_channels", [
+    ("SPL", [0, 1, 2, 3, 4], []),
+    ("SPL", [0, 1, 2, 3, 4], [0, 4]),
+    ("SPL", [0, 1, 2, 3, 4], [0, 1, 2, 3, 4]),
+    ("LP", [0, 4], []),
+    ("SPL", [], []),
+])
+def test_saved_analysis_channels_restore_independently_of_verdicts(
+    factory, analysis_type, old_channels, verdict_channels,
+):
+    original = factory()
+    analysis = {"auto_analysis": False, "display_sequence": ["item"] if old_channels else []}
+    if old_channels:
+        analysis["item"] = {"type": analysis_type, "analysis_channels": old_channels}
+    configured = [dict(c, analysis_list=analysis) for c in original.product_test_condition_configs]
+    original.left_panel.set_condition_configs(configured, queue_catalog={})
+    begin_partial_round(original)
+    panel = original.left_panel.result_panel
+    panel.set_channels([0, 1, 2, 3, 4])
+    panel.set_condition_channel_results("a", [
+        {"raw_channel": ch, "result": "OK"} for ch in verdict_channels
+    ])
+    panel.set_condition_result("a", "待判定", tone="pending")
+    latest = [dict(c, analysis_list={
+        "display_sequence": ["item"],
+        "item": {"type": analysis_type, "analysis_channels": [1]},
+    }) for c in original.product_test_condition_configs]
+    assert panel.refresh_condition_configs(latest, queue_catalog={}, preserve_results=True)
+    panel.set_channels([1])
+    expected = f"通道判定：{len(verdict_channels)}/{len(old_channels)}"
+    assert panel.rows["a"]["labels"]["progress"].text() == expected
+    original._save_product_test_progress_before_exit()
+
+    # Continue, save, and continue again without reverting to the current hardware.
+    for _ in range(2):
+        reopened = factory()
+        reopened.left_panel.set_condition_configs(latest, queue_catalog={})
+        assert reopened._offer_product_test_resume()
+        restored = reopened.left_panel.result_panel
+        restored.select_condition("a", show_detail=True)
+        assert restored.rows["a"]["labels"]["progress"].text() == expected
+        assert restored.rows["a"]["analysis_channels"] == old_channels
+        assert len(restored.channel_detail_labels) == len(old_channels)
+        reopened._save_product_test_progress_before_exit()
+        state = reopened._product_progress_store.load()
+        assert state["completed_conditions"]["a"]["analysis_channels"] == old_channels
+
+    restored.set_condition_result("a", "准备采集", tone="running")
+    assert restored.rows["a"]["labels"]["progress"].text() == "通道判定：0/1"
+    restored.reset()
+    assert restored.rows["a"]["analysis_channels"] == [1]
+
+
+@pytest.mark.parametrize("saved_channels", [None, "0", [-1], [True], [0, 0], [99], []])
+def test_invalid_saved_analysis_channels_do_not_partially_restore(factory, saved_channels):
+    original = save_partial(factory)
+    state = original._product_progress_store.load()
+    state["completed_conditions"]["a"]["analysis_channels"] = saved_channels
+    original._product_progress_store.save(state)
+    reopened = factory()
+    reopened._ask_product_test_resume.return_value = None
+    assert not reopened._offer_product_test_resume()
+    assert reopened._ask_product_test_resume.call_args.args[1]
+    assert reopened._manual_product_condition_group_id == ""
+    assert not reopened.toolsbar.current_round_spinbox.isReadOnly()
+
+
+@pytest.mark.parametrize("results", [[], [{"raw_channel": 0, "result": "OK"}]])
+def test_legacy_progress_without_full_analysis_channels_can_be_resaved(factory, results):
+    original = factory()
+    configured = [dict(c, analysis_list={
+        "display_sequence": ["SPL"], "SPL": {"type": "SPL", "analysis_channels": [0, 4]},
+    }) for c in original.product_test_condition_configs]
+    original.left_panel.set_condition_configs(configured, queue_catalog={})
+    begin_partial_round(original)
+    original.left_panel.set_condition_channel_results("a", results)
+    state = original._build_product_test_progress()
+    state["completed_conditions"]["a"].pop("analysis_channels")
+    original._product_progress_store.save(state)
+    current = [dict(c, analysis_list={
+        "display_sequence": ["SPL"], "SPL": {"type": "SPL", "analysis_channels": [1]},
+    }) for c in original.product_test_condition_configs]
+    for _ in range(2):
+        reopened = factory()
+        reopened.left_panel.set_condition_configs(current, queue_catalog={})
+        assert reopened._offer_product_test_resume()
+        assert reopened.left_panel.result_panel.rows["a"]["channel_results"] == results
+        reopened._save_product_test_progress_before_exit()
+
+
+@pytest.mark.parametrize("hardware_changed", [False, True])
+def test_resume_preserves_analysis_column_channels_and_retest_uses_current_config(factory, hardware_changed):
+    original = factory()
+    analysis = {
+        "display_sequence": ["SPL", "FBA"],
+        "SPL": {"type": "SPL", "analysis_channels": [0, 1]},
+        "FBA": {"type": "FBA", "analysis_channels": [0, 1, 2, 3, 4]},
+    }
+    configured = [dict(c, analysis_list=analysis) for c in original.product_test_condition_configs]
+    original.left_panel.set_condition_configs(configured, queue_catalog={})
+    begin_partial_round(original)
+    panel = original.left_panel.result_panel
+    panel.set_channels([0, 1, 2, 3, 4])
+    panel.set_condition_channel_results("a", [
+        {"raw_channel": ch, "result": "OK", "FBA": "OK",
+         **({"SPL": "OK"} if ch < 2 else {})} for ch in range(5)
+    ])
+    if hardware_changed:
+        configured = [dict(c, analysis_list={
+            "display_sequence": ["SPL", "FBA"],
+            "SPL": {"type": "SPL", "analysis_channels": [1]},
+            "FBA": {"type": "FBA", "analysis_channels": [1]},
+        }) for c in original.product_test_condition_configs]
+        assert panel.refresh_condition_configs(configured, queue_catalog={}, preserve_results=True)
+        panel.set_channels([1])
+    original._save_product_test_progress_before_exit()
+
+    reopened = factory()
+    reopened.left_panel.set_condition_configs(configured, queue_catalog={})
+    assert reopened._offer_product_test_resume()
+    restored = reopened.left_panel.result_panel
+    restored.select_condition("a", show_detail=True)
+    assert restored.rows["a"]["labels"]["progress"].text() == "通道判定：5/5"
+    assert [labels["SPL"].text() for labels in restored.channel_detail_labels][2:] == ["—"] * 3
+    assert [labels["result"].text() for labels in restored.channel_detail_labels] == ["OK"] * 5
+    reopened._save_product_test_progress_before_exit()
+    assert reopened._product_progress_store.load()["completed_conditions"]["a"]["analysis_column_channels"] == {
+        "SPL": [0, 1], "FBA": [0, 1, 2, 3, 4],
+    }
+
+    restored.set_condition_result("a", "准备采集", tone="running")
+    assert restored.rows["a"]["analysis_channels"] == ([1] if hardware_changed else list(range(5)))
+    assert restored.rows["a"]["analysis_column_channels"]["SPL"] == ([1] if hardware_changed else [0, 1])
+    restored.reset()
+    assert restored.rows["a"]["analysis_column_channels"]["FBA"] == ([1] if hardware_changed else list(range(5)))
+
+
+@pytest.mark.parametrize("analysis_column_channels", [
+    None, [], {"SPL": "0"}, {"SPL": [-1]}, {"SPL": [True]}, {"SPL": [0, 0]}, {"": [0]},
+])
+def test_invalid_saved_column_channels_cannot_partially_restore(factory, analysis_column_channels):
+    original = save_partial(factory)
+    state = original._product_progress_store.load()
+    state["completed_conditions"]["a"]["analysis_column_channels"] = analysis_column_channels
+    original._product_progress_store.save(state)
+    reopened = factory()
+    reopened._ask_product_test_resume.return_value = None
+    assert not reopened._offer_product_test_resume()
+    assert "分析项通道" in reopened._ask_product_test_resume.call_args.args[1]
+    assert reopened._manual_product_condition_group_id == ""
+    assert not reopened.toolsbar.current_round_spinbox.isReadOnly()
+
+
+def test_legacy_progress_without_column_channels_keeps_verdicts_without_inventing_selection(factory):
+    original = save_partial(factory)
+    state = original._product_progress_store.load()
+    state["completed_conditions"]["a"].pop("analysis_column_channels", None)
+    original._product_progress_store.save(state)
+    reopened = factory()
+    configured = [dict(c, analysis_list={
+        "display_sequence": ["SPL"], "SPL": {"type": "SPL", "analysis_channels": [0]},
+    }) for c in reopened.product_test_condition_configs]
+    reopened.left_panel.set_condition_configs(configured, queue_catalog={})
+    assert reopened.left_panel.result_panel.rows["a"]["analysis_column_channels"] == {"SPL": [0]}
+    assert reopened._offer_product_test_resume()
+    row = reopened.left_panel.result_panel.rows["a"]
+    assert row["result"] == "OK"
+    assert row["channel_results"] == [{"raw_channel": 0, "result": "OK"}]
+    assert row["analysis_column_channels"] == {}
+
+
 def test_continue_restores_next_port_results_identity_and_owned_files(factory):
     original = save_partial(factory)
     reopened = factory()
@@ -200,7 +568,8 @@ def test_compact_snapshot_excludes_analysis_blobs_and_fake_history(factory):
     assert state["next_condition"] == {"port_name": "USB-C", "condition_name": "低档"}
     assert state["completed_conditions"] == {
         "a": {"port_name": "USB-A", "condition_name": "低档",
-              "result": "OK", "channels": [{"raw_channel": 0, "result": "OK"}]},
+              "result": "OK", "analysis_channels": [0],
+              "channel_results": [{"raw_channel": 0, "result": "OK"}]},
     }
     assert "large_detail" not in host._product_progress_store.path.read_text(encoding="utf-8")
     reopened = factory()
@@ -232,7 +601,7 @@ def test_condition_and_channel_verdicts_are_independent(factory, label, text):
     reopened._save_product_test_progress_before_exit()
     assert reopened._product_progress_store.load()["completed_conditions"]["a"] == {
         "port_name": "USB-A", "condition_name": "低档",
-        "result": label, "channels": channel_results,
+        "result": label, "analysis_channels": [0, 1, 2], "channel_results": channel_results,
     }
 
 
@@ -361,6 +730,46 @@ def test_v1_resume_does_not_rewrite_until_exit_and_then_writes_readable_format(f
     again = factory()
     assert again._offer_product_test_resume()
     assert again._manual_product_condition_index == 1
+
+
+def test_v1_failed_channel_restores_failure_without_rewriting_on_read(factory):
+    original = factory()
+    begin_partial_round(original)
+    path = write_legacy_snapshot(original)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["progress"]["results"]["a"] = "not_labeled"
+    payload["progress"]["rows"]["a"]["channel_results"][0]["result"] = "结果不完整"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    original_bytes = path.read_bytes()
+
+    reopened = factory()
+    assert reopened._offer_product_test_resume()
+    assert path.read_bytes() == original_bytes
+    row = reopened.left_panel.result_panel.rows["a"]
+    assert row["result"] == "结果不完整"
+    assert row["channel_results"] == [{"raw_channel": 0, "result": "结果不完整"}]
+    assert reopened._manual_product_condition_results["a"] == "not_labeled"
+    reopened._save_product_test_progress_before_exit()
+    saved = reopened._product_progress_store.load()["completed_conditions"]["a"]
+    assert saved["channel_results"] == row["channel_results"]
+
+
+@pytest.mark.parametrize("status", ["分析失败", "结果不完整"])
+def test_v1_task_failure_status_migrates_without_channel_results(factory, status):
+    original = factory()
+    begin_partial_round(original)
+    path = write_legacy_snapshot(original)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["progress"]["results"]["a"] = "not_labeled"
+    payload["progress"]["rows"]["a"].update(result=status, channel_results=[])
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    before = path.read_bytes()
+    reopened = factory()
+    assert reopened._offer_product_test_resume()
+    assert path.read_bytes() == before
+    assert reopened.left_panel.result_panel.rows["a"]["result"] == status
+    reopened._save_product_test_progress_before_exit()
+    assert reopened._product_progress_store.load()["completed_conditions"]["a"]["analysis_status"] == status
 
 
 @pytest.mark.parametrize("corruption", ["missing_row", "duplicate_key", "label", "config"])
@@ -1170,11 +1579,11 @@ def test_invalid_snapshot_never_partially_restores(factory, corruption):
             if corruption == "condition_result":
                 condition["result"] = "broken"
             elif corruption == "channel_result":
-                condition["channels"][0]["result"] = "broken"
+                condition["channel_results"][0]["result"] = "broken"
             elif corruption == "unknown_channel":
-                condition["channels"][0]["raw_channel"] = 99
+                condition["channel_results"][0]["raw_channel"] = 99
             else:
-                condition["channels"].append(dict(condition["channels"][0]))
+                condition["channel_results"].append(dict(condition["channel_results"][0]))
         elif corruption == "database":
             data["progress"]["owned_files"]["a"]["audio_data_id"] = "missing-path"
         else:

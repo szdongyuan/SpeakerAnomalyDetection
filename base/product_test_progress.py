@@ -12,6 +12,8 @@ from consts.running_consts import DEFAULT_DIR
 
 
 PROGRESS_RESULTS = ("OK", "NG", "not_labeled")
+PROGRESS_CHANNEL_RESULTS = PROGRESS_RESULTS + ("结果不完整",)
+PROGRESS_ANALYSIS_FAILURES = ("分析失败", "结果不完整")
 
 
 def group_progress_analysis_files(audio_path, files, raw_csv_files):
@@ -75,8 +77,15 @@ def compact_progress_result(value):
 def compact_progress_channels(items):
     if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
         raise ValueError("通道判定格式错误")
+    # Preserve channel failures separately from the product's OK/NG verdict.
     return [
-        {"raw_channel": item["raw_channel"], "result": compact_progress_result(item["result"])}
+        {
+            "raw_channel": item["raw_channel"],
+            "result": (
+                "结果不完整" if item["result"] == "结果不完整"
+                else compact_progress_result(item["result"])
+            ),
+        }
         for item in items
     ]
 
@@ -105,8 +114,10 @@ def _migrate_v1_progress(state):
                  or record.get("result_label") or row.get("result"))
         conditions[key] = {
             "result": compact_progress_result(label),
-            "channels": compact_progress_channels(row["channel_results"]),
+            "channel_results": compact_progress_channels(row["channel_results"]),
         }
+        if row.get("result") in PROGRESS_ANALYSIS_FAILURES:
+            conditions[key]["analysis_status"] = row["result"]
     result = {key: state[key] for key in (
         "signature", "identity", "group_id", "next_key", "selected_key", "channels",
         "serial_port_index", "waiting_port_idle", "owned_files",
@@ -158,6 +169,21 @@ class ProductTestProgressStore:
             raise ValueError("测试进度内容格式错误")
         if progress is not None and version == 1:
             progress = _migrate_v1_progress(progress)
+        # Normalize legacy names once at the file boundary; runtime uses only
+        # the descriptive names. Reading does not rewrite the saved file.
+        completed = progress.get("completed_conditions", {}) if progress is not None else {}
+        if isinstance(completed, dict):
+            for condition in completed.values():
+                if not isinstance(condition, dict):
+                    continue  # The resume validator reports malformed conditions.
+                for old, new in (
+                    ("channels", "channel_results"),
+                    ("column_channels", "analysis_column_channels"),
+                ):
+                    if old in condition:
+                        if new in condition and condition[new] != condition[old]:
+                            raise ValueError(f"测试进度通道新旧字段不一致：{old}/{new}")
+                        condition[new] = condition.pop(old)
         self.loaded_version = version
         return progress
 

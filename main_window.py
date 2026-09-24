@@ -66,6 +66,7 @@ class MainWindow(QMainWindow):
         self.ve_calibration_store = ve_calibration_store if ve_calibration_store is not None else VECalibrationStore()
         self.ve_discovery_factory = discovery_factory
         self.hardware_selection_path = hardware_selection_path
+        self._hardware_analysis_sync_pending = False
         self.ve_discovery = None
         QApplication.instance().aboutToQuit.connect(self.recording_bridge.shutdown)
         # set up statusbar object data
@@ -786,10 +787,13 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def on_hardware_window_init(self):
+        from base.hardware_analysis_channel_sync import recording_input_selection_key
+
         # Prevent hardware changes during playback/recording
         if not self._hardware_selection_admission_available():
             QMessageBox.warning(self, "提示", "播放或录音进行中，请等待完成后再修改硬件设置")
             return
+        previous_input = recording_input_selection_key(self.mic, self.mic_channels)
         old_was_ve = (self.mic or {}).get("backend") == "vkinging"
         old_ve_machine_id = (self.mic or {}).get("machine_id") if old_was_ve else None
         old_ve_signature = self._ve_signature(self.mic, self.mic_channels)
@@ -841,6 +845,11 @@ class MainWindow(QMainWindow):
         if (self.mic or {}).get("backend") != "vkinging":
             self.sequence_window.update_v2pa_factor()
         self.sequence_window.refresh_channel_windows()
+        if (previous_input != recording_input_selection_key(mic, mic_channels)
+                or self._hardware_analysis_sync_pending):
+            self._hardware_analysis_sync_pending = (
+                not self.sequence_window.synchronize_hardware_analysis_channels()
+            )
         new_ve_signature = self._ve_signature(self.mic, self.mic_channels)
         prewarm_owns_transition = False
         if (self.mic or {}).get("backend") == "vkinging":

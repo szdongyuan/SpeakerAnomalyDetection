@@ -7,6 +7,34 @@ import pytest
 from base import product_test_progress as progress
 
 
+def test_incomplete_channel_status_is_preserved_without_changing_live_result():
+    results = [
+        {"raw_channel": 0, "result": "OK"},
+        {"raw_channel": 1, "result": "结果不完整", "SPL": "分析失败"},
+        {"raw_channel": 2, "result": "NG"},
+        {"raw_channel": 3, "result": "待判定"},
+    ]
+    assert progress.compact_progress_channels(results) == [
+        {"raw_channel": 0, "result": "OK"},
+        {"raw_channel": 1, "result": "结果不完整"},
+        {"raw_channel": 2, "result": "NG"},
+        {"raw_channel": 3, "result": "not_labeled"},
+    ]
+    assert results[1] == {"raw_channel": 1, "result": "结果不完整", "SPL": "分析失败"}
+    assert progress.compact_progress_channels([]) == []
+
+
+def test_incomplete_channel_status_is_not_a_product_verdict():
+    with pytest.raises(ValueError, match="判定无效"):
+        progress.compact_progress_result("结果不完整")
+
+
+@pytest.mark.parametrize("result", ["unknown", None, 123])
+def test_unknown_channel_result_is_still_rejected(result):
+    with pytest.raises(ValueError, match="判定无效"):
+        progress.compact_progress_channels([{"raw_channel": 0, "result": result}])
+
+
 def test_analysis_groups_round_trip_preserves_exact_registered_paths(tmp_path):
     wav = (tmp_path / "audio.wav").as_posix()
     raw = (tmp_path / "raw.csv").as_posix()
@@ -82,6 +110,40 @@ def test_store_round_trip_and_clear(tmp_path):
     assert store.load() is None
     assert json.loads(store.path.read_text(encoding="utf-8")) == {"progress": None}
     assert store.path.exists()
+
+
+@pytest.mark.parametrize("version", [None, 2, 3])
+def test_legacy_channel_field_names_load_without_rewriting_and_save_with_new_names(tmp_path, version):
+    store = progress.ProductTestProgressStore(tmp_path / "progress.json")
+    results = [{"raw_channel": 0, "result": "OK"}]
+    columns = {"SPL": [0, 1]}
+    payload = {"progress": {"channels": [0, 1], "completed_conditions": {
+        "a": {"channels": results, "column_channels": columns},
+    }}}
+    if version is not None:
+        payload["version"] = version
+    content = json.dumps(payload)
+    store.path.write_text(content, encoding="utf-8")
+
+    loaded = store.load()
+
+    assert loaded["completed_conditions"]["a"] == {
+        "channel_results": results, "analysis_column_channels": columns,
+    }
+    assert loaded["channels"] == [0, 1]
+    assert store.path.read_text(encoding="utf-8") == content
+    store.save(loaded)
+    assert json.loads(store.path.read_text(encoding="utf-8"))["progress"] == loaded
+
+
+@pytest.mark.parametrize("old,new", [
+    ("channels", "channel_results"), ("column_channels", "analysis_column_channels"),
+])
+def test_conflicting_old_and_new_channel_fields_are_rejected(tmp_path, old, new):
+    store = progress.ProductTestProgressStore(tmp_path / "progress.json")
+    store.save({"completed_conditions": {"a": {old: [], new: [0]}}})
+    with pytest.raises(ValueError, match="新旧字段不一致"):
+        store.load()
 
 
 def test_failed_replace_keeps_previous_snapshot_and_cleans_temporary(tmp_path, monkeypatch):

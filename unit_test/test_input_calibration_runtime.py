@@ -431,6 +431,7 @@ def test_hardware_change_refreshes_factor_after_new_input_is_installed():
         speaker_channels=[],
         update_v2pa_factor=refresh_factor,
         refresh_channel_windows=mock.Mock(),
+        synchronize_hardware_analysis_channels=mock.Mock(return_value=True),
     )
     window = SimpleNamespace(
         _hardware_selection_admission_available=lambda: True,
@@ -504,6 +505,7 @@ def test_hardware_change_contains_scalar_refresh_errors(error_type):
         v2pa_factor=9.0,
         default_logger=default_logger,
         refresh_channel_windows=mock.Mock(),
+        synchronize_hardware_analysis_channels=mock.Mock(return_value=True),
     )
     sequence.update_v2pa_factor = MethodType(update_factor, sequence)
     speaker = {"index": 2, "name": "Speaker", "hostapi": 3}

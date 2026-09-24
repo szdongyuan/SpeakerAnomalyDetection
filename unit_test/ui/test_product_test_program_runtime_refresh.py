@@ -123,6 +123,113 @@ def save_b(host, project):
     return b
 
 
+def test_hardware_channels_refresh_saved_queue_and_live_product_without_opening_editor(refresh_host):
+    host, _, path, warnings = refresh_host
+    host.mic_channels = [0, 1, 2, 3, 4]
+    host.channel_workspace.set_channels(host.mic_channels)
+
+    assert host.synchronize_hardware_analysis_channels() is True
+
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved[0]["seq1"]["analysis_list"]["SPL"]["analysis_channels"] == host.mic_channels
+    assert host.analysis_config["SPL"]["analysis_channels"] == host.mic_channels
+    assert host.count_board.analysis_config is host.analysis_config
+    assert host._product_queue_catalog["test"]["data"] == saved
+    assert host._applied_product_snapshot.queue_catalog["test"]["data"] == saved
+    assert warnings == []
+
+    # A later explicit item edit stays in force on ordinary configuration reloads.
+    saved[0]["seq1"]["analysis_list"]["SPL"]["analysis_channels"] = [0, 2]
+    LoadUiConfig.save_sequence_config_to_json(saved, str(path))
+    host.on_sequence_config_updated()
+    assert host.analysis_config["SPL"]["analysis_channels"] == [0, 2]
+    for row in host.left_panel.result_panel.rows.values():
+        assert row["labels"]["progress"].text() == "通道判定：0/2"
+    assert host.channel_workspace._channel_indices == [0, 1, 2, 3, 4]
+
+
+def test_hardware_channel_save_failure_blocks_stale_runtime_and_retry_recovers(refresh_host, monkeypatch):
+    host, _, path, warnings = refresh_host
+    host.mic_channels = [0, 2, 4]
+    previous = path.read_bytes()
+    save = LoadUiConfig.save_sequence_config_to_json
+    monkeypatch.setattr(LoadUiConfig, "save_sequence_config_to_json", lambda *_: False)
+
+    assert host.synchronize_hardware_analysis_channels() is False
+    assert host._product_config_refresh_state == "failed"
+    assert not host.player_btn.isEnabled()
+    assert path.read_bytes() == previous
+    assert "分析通道同步失败" in warnings[-1][1]
+
+    monkeypatch.setattr(LoadUiConfig, "save_sequence_config_to_json", save)
+    assert host.synchronize_hardware_analysis_channels() is True
+    assert host.analysis_config["SPL"]["analysis_channels"] == [0, 2, 4]
+    assert host._product_config_refresh_state == "ready"
+
+
+def test_hardware_sync_preserves_active_round_results_and_pending_task(refresh_host):
+    host, _, _, warnings = refresh_host
+    host.mic_channels = [0, 2, 4]
+    host._analysis_round_config_locked = True
+    host._manual_product_condition_group_id = "current-round"
+    host._manual_product_condition_index = 1
+    first = host.product_test_condition_configs[0]["key"]
+    host._manual_product_condition_completed_keys = {first}
+    request = SimpleNamespace(analysis_config_snapshot=deepcopy(host.analysis_config))
+    host._analysis_active_request = request
+    host._analysis_has_pending_tasks = lambda: True
+    host._product_progress_config_signature = Mock(return_value="new-channel-signature")
+    rows = host.left_panel.result_panel.rows
+    host.left_panel.set_condition_channel_results(first, [{"raw_channel": 0, "SPL": "NG", "result": "NG"}])
+    wave = host.data_struct.store_wave_data
+    cache = host._condition_record_cache
+    host._reset_product_pdf_report_tracking.reset_mock()
+    host._apply_product_test_snapshot = Mock(side_effect=AssertionError("must not reload product"))
+
+    assert host.synchronize_hardware_analysis_channels() is True
+
+    assert warnings == []
+    assert host._manual_product_condition_group_id == "current-round"
+    assert host._manual_product_condition_index == 1
+    assert host._manual_product_condition_completed_keys == {first}
+    assert host._analysis_round_config_locked is True
+    assert host._analysis_active_request is request
+    assert "analysis_channels" not in request.analysis_config_snapshot["SPL"]
+    assert host._condition_record_cache is cache
+    assert host.data_struct.store_wave_data is wave
+    assert host.recent_test_sessions == ["old-session"]
+    assert host.left_panel.result_panel.rows is rows
+    assert rows[first]["labels"]["progress"].text() == "通道判定：1/1"
+    assert rows[host.product_test_condition_configs[1]["key"]]["channel_count"] == 3
+    assert host._product_progress_round_signature == "new-channel-signature"
+    host._reset_product_pdf_report_tracking.assert_not_called()
+
+
+def test_hardware_sync_keeps_loaded_queue_parameters_and_identity(refresh_host):
+    host, _, _, _ = refresh_host
+    host.mic_channels = [4, 1]
+    host.using_config_path = "currently-loaded-queue.json"
+    host.sequence_config[0]["seq1"]["analysis_list"]["SPL"]["custom_threshold"] = 72
+    current = host.sequence_config
+    analysis = host.analysis_config
+    assert host.synchronize_hardware_analysis_channels()
+    assert host.using_config_path == "currently-loaded-queue.json"
+    assert host.sequence_config is current
+    assert host.analysis_config is analysis
+    assert analysis["SPL"]["analysis_channels"] == [1, 4]
+    assert analysis["SPL"]["custom_threshold"] == 72
+
+
+def test_hardware_sync_does_not_claim_success_when_panel_refresh_fails(refresh_host, monkeypatch):
+    host, _, _, warnings = refresh_host
+    host.mic_channels = [1, 4]
+    monkeypatch.setattr(host.left_panel, "refresh_condition_configs", lambda *args, **kwargs: False)
+    assert host._product_config_refresh_state == "ready"
+    assert host.synchronize_hardware_analysis_channels() is False
+    assert host._product_config_refresh_state == "failed"
+    assert "分析通道未能同步到界面" in warnings[-1][1]
+
+
 def assert_old_result(host, old_snapshot, old_rows, old_wave):
     assert host._applied_product_snapshot is old_snapshot
     assert host.left_panel.result_panel.rows is old_rows

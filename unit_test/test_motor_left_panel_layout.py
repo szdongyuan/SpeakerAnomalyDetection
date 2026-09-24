@@ -92,8 +92,8 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
             "display_sequence": ["SPL"], "SPL": {"type": "SPL", "limit_checked": True},
         }}}
         with patch.object(LoadUiConfig, "load_data_from_json") as read, \
-                patch.object(MotorResultPanel, "_build_condition_analysis_details",
-                             wraps=MotorResultPanel._build_condition_analysis_details) as details:
+                patch.object(MotorResultPanel, "_build_condition_analysis_layout",
+                             wraps=MotorResultPanel._build_condition_analysis_layout) as details:
             panel = MotorResultPanel(condition_configs=conditions, queue_catalog=catalog)
         read.assert_not_called()
         details.assert_called_once()
@@ -265,8 +265,8 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
                             "声压级 (SPL) 1",
                             "快速傅里叶变换 (FFT) 1",
                         ],
-                        "声压级 (SPL) 1": {"type": "SPL"},
-                        "快速傅里叶变换 (FFT) 1": {"type": "FFT"},
+                        "声压级 (SPL) 1": {"type": "SPL", "analysis_channels": list(range(5))},
+                        "快速傅里叶变换 (FFT) 1": {"type": "FFT", "analysis_channels": list(range(5))},
                     },
                 }
             ]
@@ -512,7 +512,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
     def test_running_next_condition_moves_detail_without_clearing_previous_results(self):
         analysis_list = {
             "display_sequence": ["声压级 (SPL) 1"],
-            "声压级 (SPL) 1": {"type": "SPL"},
+            "声压级 (SPL) 1": {"type": "SPL", "analysis_channels": [0, 1]},
         }
         panel = MotorResultPanel(
             condition_configs=[
