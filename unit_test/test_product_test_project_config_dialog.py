@@ -161,6 +161,50 @@ def close_dialog(dialog):
     dialog.close()
 
 
+@pytest.mark.parametrize("save_path", ["validation", "write", "save_as"])
+def test_many_save_errors_show_one_problem_without_writing(app, tmp_path, monkeypatch, save_path):
+    manager = make_manager(tmp_path)
+    register_queue(manager, duration=100)
+    conditions = [
+        {
+            "condition_name": f"档位{index + 1}",
+            "trigger_state": "",
+            "test_queue": "低噪声基础测试",
+            "segmented_analysis": {
+                "mode": "time", "interval_seconds": 60,
+                "analysis_seconds": 60, "display_time_unit": "s",
+            },
+        }
+        for index in range(200)
+    ]
+    dialog = ProductTestProjectConfigDialog(manager)
+    dialog._show_project(project_data(tmp_path, conditions), None)
+    if save_path == "write":
+        # An editor can hold an older catalog; the write boundary reloads it.
+        dialog.queue_catalog["低噪声基础测试"]["duration"] = 120
+    observed = []
+
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        lambda parent, title, message: observed.append((title, message)),
+    )
+    monkeypatch.setattr(
+        QInputDialog, "getText", lambda *args, **kwargs: ("另存配置", True)
+    )
+    try:
+        if save_path == "save_as":
+            dialog._save_project_as()
+        else:
+            assert dialog._save_project(close_dialog=False) is False
+        assert observed == [(
+            {"validation": "无法保存", "write": "保存失败", "save_as": "另存为失败"}[save_path],
+            "录音时长必须是分段间隔的整数倍，请调整分段间隔",
+        )]
+        assert not list(Path(manager.program_dir).glob("*.json"))
+    finally:
+        close_dialog(dialog)
+
+
 @pytest.mark.parametrize("action", ["discard", "decline", "overwrite", "save-as", "rename", "save-failure"])
 def test_import_external_duplicate_stays_draft_until_save(app, tmp_path, monkeypatch, action):
     manager = make_manager(tmp_path)

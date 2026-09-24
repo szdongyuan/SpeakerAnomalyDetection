@@ -307,6 +307,58 @@ def test_manual_switch_loads_b_and_blocks_invalid_target_before_mutation(refresh
     assert host.data_struct.store_wave_data is None
 
 
+@pytest.mark.parametrize("action", ["switch", "refresh"])
+def test_many_configuration_errors_show_only_first_problem(refresh_host, action):
+    host, project, queue_path, warnings = refresh_host
+    manager = host.product_program_manager
+    target = deepcopy(project)
+    target["project_name"] = "B" if action == "switch" else "A"
+    target["test_groups"] = [
+        {"group_name": f"端口{port}", "test_conditions": [
+            {
+                "condition_name": f"档位{index}", "trigger_state": "", "test_queue": "test",
+                "segmented_analysis": {
+                    "mode": "time", "interval_seconds": 5,
+                    "analysis_seconds": 1, "display_time_unit": "s",
+                },
+            }
+            for index in range(20)
+        ]}
+        for port in range(10)
+    ]
+    target_file = f"{target['project_name']}.json"
+    assert manager.save_project(None if action == "switch" else target_file, target)[0]
+    host.update_using_file_combobox()
+    # Simulate an existing product becoming invalid after its shared queue changes.
+    queue = json.loads(queue_path.read_text(encoding="utf-8"))
+    queue[0]["seq1"]["acq"]["detail"]["total_time"] = 11
+    assert LoadUiConfig.save_sequence_config_to_json(queue, str(queue_path))
+    assert len(manager.validate_project(target, target_file)["use_errors"]) == 200
+    registry_before = Path(manager.registry_path).read_bytes()
+    snapshot = host._applied_product_snapshot
+    rows = host.left_panel.result_panel.rows
+    wave = host.data_struct.store_wave_data
+
+    if action == "switch":
+        host.using_file_combobox.setCurrentIndex(host.using_file_combobox.findData(target_file))
+    else:
+        host.on_product_test_program_updated()
+
+    first_error = "录音时长必须是分段间隔的整数倍，请调整分段间隔"
+    expected = (
+        ("产品配置不可用", first_error) if action == "switch" else
+        ("配置无法应用", first_error + "\n请修正配置并保存，再开始新测试。")
+    )
+    assert warnings == [expected]
+    assert host.using_file_combobox.currentData() == "A.json"
+    assert host.active_product_program_file == "A.json"
+    assert Path(manager.registry_path).read_bytes() == registry_before
+    assert_old_result(host, snapshot, rows, wave)
+    if action == "refresh":
+        assert len(host._product_config_refresh_error.splitlines()) == 200
+        assert not host.player_btn.isEnabled()
+
+
 def test_registry_failure_does_not_change_running_a(refresh_host, monkeypatch):
     host, project, _, warnings = refresh_host
     save_b(host, project)
