@@ -106,11 +106,13 @@ class SequenceWidgetConfigOpsMixin:
         self.default_logger.error("Product configuration apply failed: %s", error)
         self._refresh_test_mode_availability()
         self.update_player_btn_is_paused()
-        QMessageBox.warning(
-            self, "配置应用失败",
-            f"当前使用配置未能应用，新测试已暂停。\n{error}\n"
-            "可以修正并保存产品测试配置，或切换到其他有效配置。",
+        dialog = QMessageBox(
+            QMessageBox.Warning, "配置无法应用",
+            f"{error}\n请修正配置并保存，再开始新测试。",
+            QMessageBox.Ok, self,
         )
+        dialog.button(QMessageBox.Ok).setText("确定")
+        dialog.exec_()
 
     def _refresh_active_product_configuration(self):
         """Compare before changing any runtime parameters, results or waveform state."""

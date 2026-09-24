@@ -110,6 +110,8 @@ def refresh_host(tmp_path, monkeypatch):
     warnings = []
     monkeypatch.setattr(config_ops_module.QMessageBox, "warning",
                         lambda _parent, title, message: warnings.append((title, message)))
+    monkeypatch.setattr(config_ops_module.QMessageBox, "exec_",
+                        lambda dialog: warnings.append((dialog.windowTitle(), dialog.text())))
     host = ProductRefreshHost(manager)
     yield host, project, queue_path, warnings
     host.close()
@@ -364,7 +366,7 @@ def test_apply_failure_blocks_tests_and_recovers_by_switch(refresh_host, failure
     assert not host.player_btn.isEnabled()
     assert host.using_file_combobox.isEnabled()
     assert host._can_start_calibration_workflow()
-    assert warnings[0][0] == "配置应用失败"
+    assert warnings[0][0] == "配置无法应用"
     if failure == "ui":
         monkeypatch.setattr(host.left_panel, "set_condition_configs", original)
     host.refresh_serial_product_trigger_runtime.return_value = {"ok": True}
