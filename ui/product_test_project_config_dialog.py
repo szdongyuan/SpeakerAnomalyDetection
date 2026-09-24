@@ -1394,7 +1394,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             return
         success, message = self.manager.save_as(project_data, new_name)
         if not success:
-            QMessageBox.warning(self, "另存为失败", message)
+            self._show_save_error("另存为失败", message)
             return
         self._load_project(message)
         self._emit_projects_changed()
@@ -1422,6 +1422,9 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self._emit_projects_changed()
         self._show_project(self.manager.default_project(), None)
 
+    def _show_save_error(self, title, message):
+        QMessageBox.warning(self, title, message.split("\n", 1)[0])
+
     def _save_project(self, close_dialog=True):
         project_data = self.collect_project()
         save_file = self.current_file
@@ -1435,8 +1438,8 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             project_data, save_file, self.queue_catalog
         )
         if not validation["can_save"]:
-            QMessageBox.warning(
-                self, "无法保存", "\n".join(validation["save_errors"])
+            self._show_save_error(
+                "无法保存", "\n".join(validation["save_errors"])
             )
             return False
         if overwrite_file:
@@ -1452,7 +1455,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
                 return False
         success, message = self.manager.save_project(save_file, project_data)
         if not success:
-            QMessageBox.warning(self, "保存失败", message)
+            self._show_save_error("保存失败", message)
             return False
         self.current_file = message
         self._imported_draft = False

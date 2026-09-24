@@ -155,7 +155,7 @@ class ProductTestProjectValidator(object):
                 try:
                     segment_count(normalize_segmented_analysis(condition), queue_info.get("duration"))
                 except ValueError as error:
-                    errors.append(f"{location}：{error}")
+                    errors.append(str(error))
         return errors
 
     @staticmethod
@@ -256,7 +256,7 @@ class ProductTestProjectValidator(object):
                 try:
                     segment_condition_fields(condition)
                 except ValueError as error:
-                    errors.append(f"{location}：{error}")
+                    errors.append(str(error))
 
                 if OUTPUT_LOAD_KEY in condition:
                     load = condition[OUTPUT_LOAD_KEY]

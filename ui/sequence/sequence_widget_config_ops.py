@@ -106,9 +106,10 @@ class SequenceWidgetConfigOpsMixin:
         self.default_logger.error("Product configuration apply failed: %s", error)
         self._refresh_test_mode_availability()
         self.update_player_btn_is_paused()
+        first_error = str(error).split("\n", 1)[0]
         dialog = QMessageBox(
             QMessageBox.Warning, "配置无法应用",
-            f"{error}\n请修正配置并保存，再开始新测试。",
+            f"{first_error}\n请修正配置并保存，再开始新测试。",
             QMessageBox.Ok, self,
         )
         dialog.button(QMessageBox.Ok).setText("确定")
@@ -762,7 +763,7 @@ class SequenceWidgetConfigOpsMixin:
                 snapshot = build_product_test_refresh_snapshot(manager, str(product_file))
             except Exception as error:
                 self.restore_previous_configuration()
-                QMessageBox.warning(self, "产品配置不可用", str(error))
+                QMessageBox.warning(self, "产品配置不可用", str(error).split("\n", 1)[0])
                 return
             registry = manager.load_registry()
             registry["active_file"] = str(product_file)
