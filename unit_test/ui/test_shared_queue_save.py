@@ -30,7 +30,7 @@ def editor(app, tmp_path, monkeypatch):
                                            "use_streaming_recording": False,
                                            "recording_preview_time_mode": "relative_latest",
                                            "recording_root": ""}},
-                         "analysis_list": {"display_sequence": [], "default_ai": None,
+                         "analysis_list": {"display_sequence": [],
                                            "auto_analysis": True}}}]
     write_json(target, payload)
     write_json(queues, {"Q": str(target), "using_config_path": str(target)})
@@ -50,6 +50,331 @@ def editor(app, tmp_path, monkeypatch):
 def change(window):
     window.select_list.config[0].detail["sample_rate"] = 48000
     window.select_list._notify_config_changed()
+
+
+@pytest.fixture
+def save_selection(monkeypatch):
+    calls = []
+
+    def select(path):
+        def execute(dialog):
+            calls.append(dialog.windowTitle())
+            return QDialog.Accepted if path is not None else QDialog.Rejected
+        monkeypatch.setattr(QFileDialog, "exec_", execute)
+        monkeypatch.setattr(QFileDialog, "selectedFiles", lambda dialog: [str(path)] if path else [])
+        return calls
+
+    return select
+
+
+def test_first_save_writes_selected_file(editor, monkeypatch, tmp_path, save_selection):
+    window, original, registry, _, _ = editor
+    placeholder = tmp_path / "ui" / "ui_config" / "none_path.json"
+    selected = tmp_path / "queues" / "Chosen.json"
+    before = original.read_bytes()
+    window.using_config_path = str(placeholder)
+    change(window)
+    monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", tmp_path.as_posix() + "/")
+    calls = save_selection(selected)
+    window.show()
+    window.ok_btn_clicked()
+    assert selected.exists()
+    assert calls == ["保存测试队列"]
+    assert not placeholder.with_name("sequence_config.json").exists()
+    assert original.read_bytes() == before
+    assert json.loads(selected.read_text(encoding="utf-8"))[0]["seq1"]["acq"]["detail"]["sample_rate"] == 48000
+    assert json.loads(registry.read_text(encoding="utf-8"))["using_config_path"] == str(selected)
+    assert window.using_config_path == str(selected)
+    assert not window.isVisible()
+
+
+@pytest.mark.parametrize("operation", ["ok_btn_clicked", "save_btn_clicked"])
+def test_save_dialog_default_directory_is_canonical(editor, monkeypatch, tmp_path, save_selection, operation):
+    window, *_ = editor
+    (tmp_path / "consts").mkdir()
+    monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", tmp_path.as_posix() + "/consts/../")
+    expected_dir = tmp_path / "ui" / "ui_config" / "analysis_sequence_config"
+    window.using_config_path = None
+    change(window)
+    draft = window.format_config_data(window.select_list.config)
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    directories = []
+    real_set_directory = QFileDialog.setDirectory
+
+    def set_directory(dialog, directory):
+        # Capture the exact native-dialog input: directory() normalizes it in Qt.
+        directories.append(directory)
+        real_set_directory(dialog, directory)
+
+    def save_as_dialog(parent, title, directory, **kwargs):
+        directories.append(directory)
+        return "", ""
+
+    monkeypatch.setattr(QFileDialog, "setDirectory", set_directory)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", save_as_dialog)
+    save_selection(None)
+    window.show()
+    getattr(window, operation)()
+
+    assert directories == [str(expected_dir)]
+    assert window.isVisible() and window.dirty
+    assert window.using_config_path is None
+    assert window.format_config_data(window.select_list.config) == draft
+    assert {path: path.read_bytes() for path in tmp_path.rglob("*.json")} == before
+
+
+def test_first_save_directory_failure_retains_draft(editor, monkeypatch, tmp_path, save_selection):
+    window, original, registry, _, warnings = editor
+    before = original.read_bytes(), registry.read_bytes()
+    window.using_config_path = None
+    change(window)
+    calls = save_selection(tmp_path / "Chosen.json")
+    # A file in place of the default directory produces a real filesystem error.
+    write_json(tmp_path / "ui", {})
+    monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", tmp_path.as_posix() + "/")
+    window.show()
+    window.ok_btn_clicked()
+    assert warnings and not calls
+    assert window.using_config_path is None
+    assert window.dirty and window.isVisible()
+    assert (original.read_bytes(), registry.read_bytes()) == before
+
+
+@pytest.mark.parametrize("path", [None, "", "none_path.json", "ui/ui_config/none_path.json", r"ui\ui_config\none_path.json"])
+def test_first_save_path_states_and_second_save(editor, monkeypatch, tmp_path, save_selection, path):
+    window, original, registry, _, _ = editor
+    before = original.read_bytes()
+    window.using_config_path = path
+    window.select_list.config[0].detail["sample_rate"] = 48000
+    window.dirty = True
+    selected = tmp_path / "Chosen.json"
+    monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", tmp_path.as_posix() + "/")
+    calls = save_selection(selected)
+    window.ok_btn_clicked()
+    window.select_list.config[0].detail["sample_rate"] = 96000
+    window.ok_btn_clicked()
+    assert calls == ["保存测试队列"]
+    assert window.using_config_path == str(selected)
+    assert original.read_bytes() == before
+    assert json.loads(selected.read_text(encoding="utf-8"))[0]["seq1"]["acq"]["detail"]["sample_rate"] == 96000
+    assert json.loads(registry.read_text(encoding="utf-8"))["using_config_path"] == str(selected)
+    assert "Chosen" in window.current_config_label.text()
+
+
+@pytest.mark.parametrize("dirty", [False, True])
+def test_first_save_cancel_preserves_state(editor, monkeypatch, tmp_path, save_selection, dirty):
+    window, original, registry, _, _ = editor
+    window.using_config_path = None
+    window.dirty = dirty
+    draft = window.format_config_data(window.select_list.config)
+    before = original.read_bytes(), registry.read_bytes()
+    monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", tmp_path.as_posix() + "/")
+    calls = save_selection(None)
+    window.show()
+    window.ok_btn_clicked()
+    assert calls == ["保存测试队列"]
+    assert window.isVisible() and window.dirty is dirty
+    assert window.using_config_path is None
+    assert window.format_config_data(window.select_list.config) == draft
+    assert (original.read_bytes(), registry.read_bytes()) == before
+    assert not (tmp_path / "ui/ui_config/sequence_config.json").exists()
+
+
+@pytest.mark.parametrize("invalid", ["empty", "rate"])
+@pytest.mark.parametrize("prompt", [False, True])
+def test_first_save_validates_before_selection(editor, monkeypatch, save_selection, invalid, prompt):
+    window, original, registry, _, warnings = editor
+    window.using_config_path = None
+    window.dirty = True
+    before = original.read_bytes(), registry.read_bytes()
+    if invalid == "empty":
+        window.select_list.clear_option_list()
+    else:
+        window.select_list.config[0].detail["sample_rate"] = "invalid"
+    calls = save_selection(None)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.Save)
+    window.show()
+    if prompt:
+        window.close()
+    else:
+        window.ok_btn_clicked()
+    assert warnings and not calls
+    assert window.isVisible() and window.dirty
+    assert window.using_config_path is None
+    assert (original.read_bytes(), registry.read_bytes()) == before
+
+
+@pytest.mark.parametrize("preselected", [False, True])
+def test_first_save_formal_target_never_prompts(editor, save_selection, preselected):
+    window, original, registry, _, _ = editor
+    target = original.with_name("New.json") if preselected else original
+    window.using_config_path = str(target)
+    window._new_target_path_selected = preselected
+    window.confirm_shared_save = lambda *a: True
+    before = json.loads(registry.read_text(encoding="utf-8"))
+    calls = save_selection(None)
+    window.select_list.config[0].detail["sample_rate"] = 48000
+    window.ok_btn_clicked()
+    assert not calls and target.exists()
+    assert window.using_config_path == str(target)
+    assert json.loads(registry.read_text(encoding="utf-8"))["using_config_path"] == before["using_config_path"]
+    assert json.loads(target.read_text(encoding="utf-8"))[0]["seq1"]["acq"]["detail"]["sample_rate"] == 48000
+    persisted = target.read_bytes()
+    window.select_list.config[0].detail["sample_rate"] = 96000
+    window.select_list._notify_config_changed()
+    # Shared files and preselected new targets retain their deferred autosave policy.
+    assert target.read_bytes() == persisted
+    assert window.dirty
+
+
+@pytest.mark.parametrize("outcome", ["saved", "selection_cancel", "shared_cancel", "write_failure"])
+@pytest.mark.parametrize("operation", ["ok_btn_clicked", "close", "load_btn_clicked", "new_btn_clicked"])
+def test_first_save_transition_guards(editor, monkeypatch, tmp_path, operation, outcome):
+    window, original, registry, _, warnings = editor
+    window.using_config_path = None
+    change(window)
+    before = original.read_bytes(), registry.read_bytes()
+    selected = original if outcome == "shared_cancel" else tmp_path / "Chosen.json"
+    calls, imports, confirmations = [], [], []
+    monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", tmp_path.as_posix() + "/")
+    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.Save)
+    def execute(dialog):
+        calls.append(dialog.windowTitle())
+        if dialog.windowTitle() == "新建配置文件" or outcome == "selection_cancel":
+            return QDialog.Rejected
+        return QDialog.Accepted
+    monkeypatch.setattr(QFileDialog, "exec_", execute)
+    monkeypatch.setattr(QFileDialog, "selectedFiles", lambda *a: [str(selected)])
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: imports.append(True) or ("", ""))
+    window.confirm_shared_save = lambda path, result: confirmations.append(path) or False
+    if outcome == "write_failure":
+        monkeypatch.setattr(LoadUiConfig, "save_sequence_config_to_json", lambda *a: False)
+    window.show()
+    getattr(window, operation)()
+    assert calls[0] == "保存测试队列"
+    assert bool(imports) is (operation == "load_btn_clicked" and outcome == "saved")
+    assert ("新建配置文件" in calls) is (operation == "new_btn_clicked" and outcome == "saved")
+    assert confirmations == ([str(original)] if outcome == "shared_cancel" else [])
+    assert window.select_list.config[0].detail["sample_rate"] == 48000
+    if outcome == "saved":
+        assert selected.exists() and not window.dirty
+        assert window.using_config_path == str(selected)
+        assert window.isVisible() is (operation in {"load_btn_clicked", "new_btn_clicked"})
+    else:
+        assert window.isVisible() and window.dirty
+        assert window.using_config_path is None
+        assert (original.read_bytes(), registry.read_bytes()) == before
+        assert warnings if outcome == "write_failure" else not warnings
+
+
+def test_first_save_registration_retry_does_not_rewrite(editor, monkeypatch, tmp_path, save_selection):
+    window, original, registry, _, warnings = editor
+    window.using_config_path = None
+    change(window)
+    selected = tmp_path / "Chosen.json"
+    monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", tmp_path.as_posix() + "/")
+    calls = save_selection(selected)
+    before = registry.read_bytes()
+    real_register = LoadUiConfig.save_data_to_json
+    real_save = LoadUiConfig.save_sequence_config_to_json
+    writes = []
+    def save(payload, path):
+        writes.append(path)
+        return real_save(payload, path)
+    monkeypatch.setattr(LoadUiConfig, "save_sequence_config_to_json", save)
+    monkeypatch.setattr(LoadUiConfig, "save_data_to_json", lambda data, path, *a: False if str(path) == str(registry) else real_register(data, path, *a))
+    window.show()
+    window.ok_btn_clicked()
+    assert warnings and window.dirty and window.isVisible()
+    assert window.using_config_path is None
+    assert selected.exists() and str(selected) in window._pending_registration
+    assert registry.read_bytes() == before
+    monkeypatch.setattr(LoadUiConfig, "save_data_to_json", real_register)
+    window.ok_btn_clicked()
+    assert len(calls) == 2 and writes == [str(selected)]
+    assert not window.dirty and not window.isVisible() and not window._pending_registration
+    assert window.using_config_path == str(selected)
+    registered = json.loads(registry.read_text(encoding="utf-8"))
+    assert registered["using_config_path"] == registered["默认配置"] == str(selected)
+
+
+def test_first_save_missing_template_can_add_recording(editor, monkeypatch, tmp_path, save_selection):
+    _, original, registry, _, warnings = editor
+    monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", tmp_path.as_posix() + "/")
+    window = AnalysisModelSelect(None, reference_scanner=editor[0].reference_scanner)
+    selected = tmp_path / "Chosen.json"
+    calls = save_selection(selected)
+    before = original.read_bytes(), registry.read_bytes()
+    try:
+        window.show()
+        assert window.select_list.config == []
+        window.ok_btn_clicked()
+        assert warnings == ["没有配置测试内容"] and not calls
+        assert window.isVisible()
+        assert (original.read_bytes(), registry.read_bytes()) == before
+        window.select_list.set_sound_item("录制音频")
+        window.ok_btn_clicked()
+        assert calls == ["保存测试队列"]
+        assert selected.exists() and window.using_config_path == str(selected)
+        assert not window.isVisible()
+    finally:
+        window._allow_close = True
+        window.close()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_first_save_qt_suffix_and_overwrite_cancel(editor, monkeypatch, tmp_path, existing):
+    window, original, registry, _, _ = editor
+    window.using_config_path = None
+    change(window)
+    monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", tmp_path.as_posix() + "/")
+    selected = tmp_path / "Chosen.json"
+    if existing:
+        write_json(selected, [{"untouched": True}])
+    before = original.read_bytes(), registry.read_bytes()
+    selected_before = selected.read_bytes() if existing else None
+    real_exec = QFileDialog.exec_
+    observations = []
+
+    def execute(dialog):
+        dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+        dialog.setDirectory(str(tmp_path))
+        dialog.selectFile("Chosen")
+        observations.append((dialog.acceptMode(), dialog.fileMode(), dialog.defaultSuffix(),
+                             dialog.testOption(QFileDialog.DontConfirmOverwrite)))
+        timer = QTimer(dialog)
+        timer.setSingleShot(True)
+        timer.timeout.connect(dialog.reject)
+        timer.start(3000)
+        watcher = QTimer(dialog)
+        def decline_overwrite():
+            modal = QApplication.activeModalWidget()
+            if isinstance(modal, QMessageBox):
+                observations.append("overwrite")
+                modal.done(QMessageBox.No)
+                QTimer.singleShot(0, dialog.reject)
+        watcher.timeout.connect(decline_overwrite)
+        watcher.start(10)
+        QTimer.singleShot(0, dialog.accept)
+        result = real_exec(dialog)
+        timer.stop()
+        watcher.stop()
+        return result
+
+    monkeypatch.setattr(QFileDialog, "exec_", execute)
+    window.show()
+    window.ok_btn_clicked()
+    assert observations[0] == (QFileDialog.AcceptSave, QFileDialog.AnyFile, "json", False)
+    assert not (tmp_path / "Chosen").exists()
+    assert original.read_bytes() == before[0]
+    if existing:
+        assert observations[1:] == ["overwrite"]
+        assert selected.read_bytes() == selected_before
+        assert registry.read_bytes() == before[1]
+        assert window.isVisible() and window.dirty and window.using_config_path is None
+    else:
+        assert selected.exists() and not window.isVisible()
+        assert window.using_config_path.replace("\\", "/") == selected.as_posix()
 
 
 @pytest.fixture
@@ -441,7 +766,7 @@ def test_registry_failure_retains_draft_and_retry_finishes_registration(editor, 
     assert not window.dirty
 
 
-def test_default_queue_registration_happens_only_after_success(editor, monkeypatch, tmp_path):
+def test_default_queue_registration_happens_only_after_success(editor, monkeypatch, tmp_path, save_selection):
     window, target, registry, products, _ = editor
     default = tmp_path / "ui" / "ui_config" / "sequence_config.json"
     write_json(default, [])
@@ -449,6 +774,7 @@ def test_default_queue_registration_happens_only_after_success(editor, monkeypat
     write_json(products / "one.json", project("default", "default"))
     monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", str(tmp_path).replace("\\", "/") + "/")
     window.using_config_path = str(tmp_path / "ui" / "ui_config" / "none_path.json")
+    save_selection(default.as_posix())
     before = default.read_bytes(), registry.read_bytes()
     window.ok_btn_clicked()
     assert (default.read_bytes(), registry.read_bytes()) == before
@@ -719,11 +1045,12 @@ def test_save_as_or_import_builtin_file_does_not_activate_default(editor, monkey
 
 
 @pytest.mark.parametrize("identical", [False, True])
-def test_ok_builtin_default_activation_survives_registration_retry(editor, monkeypatch, identical):
+def test_ok_builtin_default_activation_survives_registration_retry(editor, monkeypatch, identical, save_selection):
     window, target, registry_path, _, errors = editor
     default = target.parent / "ui" / "ui_config" / "sequence_config.json"
     monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", str(target.parent).replace("\\", "/") + "/")
     window.using_config_path = str(default.with_name("none_path.json"))
+    save_selection(default.as_posix())
     if identical:
         write_json(default, window.format_config_data(window.select_list.config))
     original_registry = {"Q": str(target), "using_config_path": None}

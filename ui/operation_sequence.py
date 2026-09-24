@@ -287,17 +287,54 @@ class AnalysisModelSelect(ConfigDialogBase):
         if choice == QMessageBox.Cancel:
             return False
         if choice == QMessageBox.Save:
-            target_path = self._explicit_target_path()
-            return self._save_queue(
-                target_path, explicit=True,
-                activate_default=(not self._new_target_path_selected and target_path != self.using_config_path),
-            ) in {"saved", "unchanged"}
+            return self._save_current_config_explicitly()
         return True
 
     def _explicit_target_path(self):
-        if str(self.using_config_path).replace("\\", "/").endswith("/none_path.json"):
-            return DEFAULT_DIR + "ui/ui_config/sequence_config.json"
-        return self.using_config_path
+        current_path = str(self.using_config_path or "").replace("\\", "/")
+        if current_path and current_path.rsplit("/", 1)[-1] != "none_path.json":
+            return self.using_config_path
+        default_dir = os.path.normpath(
+            os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
+        )
+        try:
+            os.makedirs(default_dir, exist_ok=True)
+        except OSError as error:
+            self.default_logger.error(f"Failed to prepare queue save directory {default_dir}: {error}")
+            QMessageBox.warning(self, "保存失败", str(error))
+            return None
+        dialog = QFileDialog(self, "保存测试队列")
+        dialog.setAcceptMode(QFileDialog.AcceptSave)
+        dialog.setFileMode(QFileDialog.AnyFile)
+        dialog.setNameFilter("JSON Files (*.json)")
+        dialog.setDefaultSuffix("json")
+        dialog.setDirectory(default_dir)
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+        selected = dialog.selectedFiles()
+        return selected[0] if selected else None
+
+    def _save_current_config_explicitly(self):
+        validation_error = _recording_preview_validation_error(self.select_list.config)
+        if validation_error:
+            QMessageBox.warning(self, "警告", validation_error)
+            return False
+        if not self.format_config_data(self.select_list.config):
+            QMessageBox.warning(self, "警告", "没有配置测试内容")
+            return False
+        target_path = self._explicit_target_path()
+        if not target_path:
+            return False
+        if self._save_queue(
+            target_path, explicit=True,
+            activate_default=(not self._new_target_path_selected and target_path != self.using_config_path),
+        ) not in {"saved", "unchanged"}:
+            return False
+        if target_path != self.using_config_path:
+            self._new_target_path_selected = False
+        self.using_config_path = target_path
+        self._update_current_config_label()
+        return True
 
     def closeEvent(self, event):
         if self._allow_close or self._resolve_unsaved_changes():
@@ -656,17 +693,8 @@ class AnalysisModelSelect(ConfigDialogBase):
                 self._update_current_config_label()
 
     def ok_btn_clicked(self):
-        validation_error = _recording_preview_validation_error(self.select_list.config)
-        if validation_error:
-            QMessageBox.warning(self, "警告", validation_error)
+        if not self._save_current_config_explicitly():
             return
-        target_path = self._explicit_target_path()
-        if self._save_queue(
-            target_path, explicit=True,
-            activate_default=(not self._new_target_path_selected and target_path != self.using_config_path),
-        ) not in {"saved", "unchanged"}:
-            return
-        self.using_config_path = target_path
         self._allow_close = True
         self.close()
         self._allow_close = False
