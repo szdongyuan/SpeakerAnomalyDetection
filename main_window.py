@@ -114,6 +114,7 @@ class MainWindow(QMainWindow):
         # set the operator and engineer and admin power
         self.widget_list_operator = [
             self.user_action_change_pwd,
+            self.function_audio_manager,
             self.function_action_report_export,
         ]
         self.widget_list_engineer = self.widget_list_operator + [
