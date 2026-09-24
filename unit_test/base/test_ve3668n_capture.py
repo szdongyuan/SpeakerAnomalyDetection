@@ -491,7 +491,7 @@ def test_ve_adapter_release_uncertainty_keeps_capture_slot_closed(tmp_path):
     PREVIEW_TIME_MODE_RELATIVE_LATEST,
     PREVIEW_TIME_MODE_CUMULATIVE,
 ])
-def test_shared_capture_exact_trim_float_voltage_with_no_portaudio(
+def test_shared_capture_exact_trim_pcm24_voltage_with_no_portaudio(
         tmp_path, monkeypatch, rate, streaming, preview_time_mode):
     from base import recording_capture
     def forbidden(*args, **kwargs):
@@ -508,8 +508,8 @@ def test_shared_capture_exact_trim_float_voltage_with_no_portaudio(
     assert isinstance(outcome, RecordingResult), outcome
     audio, actual = sf.read(outcome.path, dtype="float32", always_2d=True)
     assert (actual, outcome.raw_frames, outcome.final_frames) == (rate, raw, raw - trim)
-    np.testing.assert_array_equal(audio, np.tile([8.25, 2.5], (raw - trim, 1)))
-    assert sf.info(outcome.path).subtype == "FLOAT"
+    np.testing.assert_array_equal(audio, np.full((raw - trim, 2), 8388607 / 8388608))
+    assert sf.info(outcome.path).subtype == "PCM_24"
     assert outcome.metadata_appended and outcome.handles_released
     assert inspect_wav_calibration_metadata(outcome.path).metadata == capture.request.calibration_metadata.to_dict()
     assert capture.started.is_set() and streams[0].handles_released
@@ -749,7 +749,7 @@ def test_main_metadata_is_required_and_cannot_damage_raw_audio(tmp_path, mode):
                 rate = 48000
             elif mode == "channels":
                 audio = audio[:, :1]
-            sf.write(path, audio, rate, subtype="PCM_16" if mode == "subtype" else "FLOAT")
+            sf.write(path, audio, rate, subtype="PCM_16" if mode == "subtype" else "PCM_24")
         return append_wav_calibration_metadata_result(path, metadata, **kwargs)
     capture, _, _, _ = start_capture(tmp_path, metadata_appender=appender)
     outcome = capture.wait(3)
@@ -784,7 +784,7 @@ def test_quality_gate_uses_only_temporary_full_scale_and_leaves_raw_voltage(tmp_
     })
     outcome = capture.wait(3)
     assert isinstance(outcome, RecordingResult)
-    expected = np.tile(np.array([8.25, 2.5], dtype=np.float32), (7, 1))
+    expected = np.full((7, 2), 8388607 / 8388608, dtype=np.float32)
     assert read_result(outcome, capture.request).error is None
     assert len(inspected) == 1
     np.testing.assert_array_equal(inspected[0], expected / limit)
@@ -826,10 +826,8 @@ def test_readback_nonfinite_fails_even_without_product_quality_gate(tmp_path, pu
         options.update(purpose=purpose, channels=(7,), target_samples=512000, calibration_metadata=None)
     capture, _, _, _ = start_capture(tmp_path, request_options=options, writer_factory=writer, queue_seconds=11)
     outcome = capture.wait(4)
-    from unit_test.base.test_recording_finalization import read_result
-    assert isinstance(outcome, RecordingResult), outcome
-    validated = read_result(outcome, capture.request)
-    assert validated.audio is None and "non-finite" in validated.error
+    assert isinstance(outcome, RecordingFailure), outcome
+    assert outcome.stage == "read_wav" and "format" in outcome.message
 
 
 def test_queue_overflow_wakes_capture_and_never_publishes_success(tmp_path):
@@ -947,8 +945,8 @@ def test_calibration_captures_exact_ten_seconds_raw_voltage_without_metadata(tmp
     assert outcome.raw_frames == outcome.final_frames == rate * 10
     audio, actual = sf.read(outcome.path, dtype="float32")
     assert actual == rate and len(audio) == rate * 10
-    np.testing.assert_array_equal(audio, np.full(rate * 10, 8.25, dtype=np.float32))
-    assert sf.info(outcome.path).subtype == "FLOAT"
+    np.testing.assert_array_equal(audio, np.full(rate * 10, 8388607 / 8388608, dtype=np.float32))
+    assert sf.info(outcome.path).subtype == "PCM_24"
     assert not outcome.metadata_appended and capture.snapshot(generation=1, sequence=1) is None
 
 
@@ -1027,7 +1025,7 @@ def test_measured_snapshot_never_applies_pa_gain_to_capture_or_preview(tmp_path)
         sample_rate=44100, streaming=True, calibration_metadata=metadata))
     outcome = capture.wait(3)
     assert isinstance(outcome, RecordingResult), outcome
-    np.testing.assert_array_equal(sf.read(outcome.path, dtype="float32")[0], np.tile([8.25, 2.5], (7, 1)))
+    np.testing.assert_array_equal(sf.read(outcome.path, dtype="float32")[0], np.full((7, 2), 8388607 / 8388608))
     preview = capture.snapshot(generation=1, sequence=1)
     assert preview.time_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
     assert preview.waveforms[0].time[-1] == 0.0
@@ -1223,8 +1221,7 @@ def test_uncalibrated_main_capture_preserves_voltage_and_cumulative_preview(tmp_
     assert outcome.final_frames == request.target_samples - request.trim_samples
     audio, rate = sf.read(request.path, dtype="float32", always_2d=True)
     assert rate == request.sample_rate
-    np.testing.assert_array_equal(audio, np.tile(np.array(sdk.values, dtype=np.float32),
-                                                (outcome.final_frames, 1)))
+    np.testing.assert_array_equal(audio, np.full((outcome.final_frames, 2), 8388607 / 8388608, dtype=np.float32))
     preview = capture.snapshot(generation=1, sequence=1)
     if streaming:
         assert preview is not None
@@ -1238,3 +1235,22 @@ def test_uncalibrated_main_capture_preserves_voltage_and_cumulative_preview(tmp_
     else:
         assert preview is None
     assert [row["operation"] for row in sdk.trace][-3:] == ["stop_task", "clear_task", "close"]
+
+
+@pytest.mark.parametrize("purpose", ["main", "calibration"])
+def test_reader_rejects_nonfinite_decoding_even_with_quality_disabled(tmp_path, purpose):
+    from unit_test.base.test_recording_finalization import read_result
+    options = {"trim_samples": 0, "validation_thresholds": {"enabled": False}}
+    if purpose == "calibration":
+        options.update(purpose=purpose, channels=(7,), target_samples=512000, calibration_metadata=None)
+    capture, _, _, _ = start_capture(tmp_path, request_options=options, queue_seconds=11)
+    outcome = capture.wait(4)
+    assert isinstance(outcome, RecordingResult), outcome
+    class NonfiniteDecoder(sf.SoundFile):
+        def read(self, *args, **kwargs):
+            block = super().read(*args, **kwargs)
+            block[0, 0] = np.nan
+            return block
+    result = read_result(outcome, capture.request, opener=NonfiniteDecoder)
+    assert result.audio is None and "non-finite" in result.error
+    assert result.handles_released

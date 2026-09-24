@@ -92,3 +92,56 @@ def test_destructor_swallows_first_close_failure_and_does_not_retry():
     assert writer._terminal_attempted is True
     assert writer.is_open is False
     writer.sf_file.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("frames", [1, 3, 5])
+@pytest.mark.parametrize("channels", [1, 2, 3])
+def test_pcm24_writer_returns_saved_samples_and_pads_odd_data(tmp_path, monkeypatch, fallback, frames, channels):
+    import struct
+    import sys
+    if fallback:
+        monkeypatch.setitem(sys.modules, "soundfile", None)
+    path = tmp_path / "nested" / "stream.wav"
+    source = np.resize(np.array([.5, 2, -3, 1, -.5], dtype=np.float32), (frames, channels))
+    expected = np.resize(np.array([.5, 8388607 / 8388608, -1,
+                                   8388607 / 8388608, -.5], dtype=np.float32), source.shape)
+    original = source.copy()
+    with StreamingWavWriter(str(path), 32000, channels) as writer:
+        written = [writer.write_chunk(source[index:index + 1]) for index in range(frames)]
+    assert sf.info(path).subtype == "PCM_24"
+    actual, rate = sf.read(path, dtype="float32", always_2d=True)
+    assert rate == 32000
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(np.concatenate(written), expected)
+    np.testing.assert_array_equal(source, original)
+    raw = path.read_bytes()
+    assert struct.unpack_from("<I", raw, 4)[0] + 8 == len(raw)
+    offset = raw.index(b"data") + 8
+    size = struct.unpack_from("<I", raw, offset - 4)[0]
+    assert size == frames * channels * 3
+    assert len(raw) == offset + size + size % 2
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("source", [np.array([np.nan]), np.array([np.inf]), np.array([-np.inf])])
+def test_pcm24_writer_rejects_nonfinite_before_writing(tmp_path, monkeypatch, fallback, source):
+    import sys
+    if fallback:
+        monkeypatch.setitem(sys.modules, "soundfile", None)
+    with StreamingWavWriter(str(tmp_path / "bad.wav"), channels=1) as writer:
+        with pytest.raises(ValueError, match="finite"):
+            writer.write_chunk(source)
+        assert writer.total_frames == 0
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("shape", [(3,), (3, 1), (2, 2, 2)])
+def test_pcm24_writer_rejects_channel_shape_mismatch(tmp_path, monkeypatch, fallback, shape):
+    import sys
+    if fallback:
+        monkeypatch.setitem(sys.modules, "soundfile", None)
+    with StreamingWavWriter(str(tmp_path / "bad.wav"), channels=2) as writer:
+        with pytest.raises(ValueError, match="shape"):
+            writer.write_chunk(np.zeros(shape, dtype=np.float32))
+        assert writer.total_frames == 0

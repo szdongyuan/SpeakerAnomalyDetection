@@ -5,10 +5,12 @@ from types import SimpleNamespace
 
 import numpy as np
 import soundfile as sf
+import pytest
 
 from base.analysis_artifact_paths import AnalysisStorageContext
 from base.analysis_service import AnalysisProcessService
 from base.analysis_worker import _extract_output
+from base.save_data import save_audio_simple
 from base.wav_calibration_metadata import append_wav_calibration_metadata
 from ui.sequence.analysis_task_builder import build_analysis_task_request
 
@@ -54,7 +56,8 @@ def test_spawn_worker_runs_real_spl_and_writes_atomic_artifacts(tmp_path):
     wav_path = tmp_path / "source.wav"
     time_axis = np.arange(12_000, dtype=np.float32) / 48_000.0
     audio = (0.01 * np.sin(2.0 * np.pi * 1000.0 * time_axis)).reshape(-1, 1)
-    sf.write(wav_path, audio, 48_000, subtype="FLOAT")
+    save_audio_simple(str(wav_path), audio, 48_000)
+    assert sf.info(wav_path).subtype == "PCM_24"
     assert append_wav_calibration_metadata(
         wav_path,
         {
@@ -153,3 +156,38 @@ def test_spawn_worker_runs_real_spl_and_writes_atomic_artifacts(tmp_path):
     assert item_logs[0]["analysis_type"] == "SPL"
     assert item_logs[0]["channel_count"] == 1
     assert item_logs[0]["duration_seconds"] >= instance_logs[0]["duration_seconds"]
+
+
+def test_pcm24_worker_load_preserves_raw_voltage_and_calibration_at_algorithm_entry(tmp_path, monkeypatch):
+    from base import analysis_worker
+    from base.save_data import save_audio_with_calibration_metadata
+    from unit_test.base.ve3668n_fakes import wav_metadata
+    source = np.array([[0.5, 8.25], [2**-25, -2**-25],
+                       [0.001953125, -3]], dtype=np.float32)
+    expected = np.array([[0.5, 8388607 / 8388608], [0, -1 / 8388608],
+                         [0.001953125, -1]], dtype=np.float32)
+    path = tmp_path / "ve.wav"
+    metadata = wav_metadata(("measured", "measured"), sample_rate=51200)
+    assert save_audio_with_calibration_metadata(str(path), source, 51200, metadata)
+    request = build_analysis_task_request(
+        task_id="pcm24-entry", condition_key="condition", wav_path=str(path), source="手动查看",
+        sequence_config=[{"seq1": {"acq": {"mode": "RECORD_ONLY"}}}],
+        analysis_config={"display_sequence": ["SPL"], "SPL": {
+            "type": "SPL", "analysis_channels": [7, 1], "limit_checked": False}},
+    )
+    audio, rate = analysis_worker._load_wav_once(request)
+    np.testing.assert_array_equal(audio, expected)
+    seen = []
+    class AtAlgorithmEntry(Exception):
+        pass
+    def inspect_entry(kind, signal, sample_rate, config, factor, **kwargs):
+        seen.append((signal.copy(), sample_rate, factor))
+        raise AtAlgorithmEntry
+    monkeypatch.setattr(analysis_worker, "calculate_analysis_instance", inspect_entry)
+    for instance in request.instances:
+        column = instance.source_wav_column
+        with pytest.raises(AtAlgorithmEntry):
+            analysis_worker._execute_instance(request, instance, audio[:, column], rate,
+                                              request.sequence_config_snapshot.to_dict())
+        np.testing.assert_array_equal(seen[-1][0], expected[:, column])
+        assert seen[-1][1:] == (51200, 10.0)

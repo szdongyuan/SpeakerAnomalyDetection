@@ -30,6 +30,7 @@ from base.load_config import LoadUiConfig
 from base.playback_controller import PlaybackController
 from base.recording_management import RecordingManager
 from base.save_data import ensure_test_result_file, save_audio_simple
+from base.wav_pcm24 import quantize_pcm24
 from base.soundcard_calibration_manager import (
     MicCalibrationFormatError,
     MicCalibrationIOError,
@@ -2082,9 +2083,9 @@ class SequenceWidgetStreamingOpsMixin:
                 # plotting / DB. Configs can explicitly set
                 # ``startup_trim_ms`` to 0 when verbatim capture is required.
                 trim_samples = resolve_startup_trim_samples(acq_detail, sample_rate)
-                if 0 < trim_samples < recorded_multi.shape[0]:
+                rewrite_required = 0 < trim_samples < recorded_multi.shape[0]
+                if rewrite_required:
                     recorded_multi = recorded_multi[trim_samples:]
-                    self._rewrite_recorded_wav(recorded_multi, sample_rate)
                     self.default_logger.info(
                         f"startup_trim_applied samples={trim_samples} "
                         f"ms={trim_samples * 1000.0 / sample_rate:.1f}"
@@ -2097,6 +2098,10 @@ class SequenceWidgetStreamingOpsMixin:
                         f"startup_trim_skipped_too_large samples={trim_samples} "
                         f"recording_samples={recorded_multi.shape[0]}"
                     )
+
+                recorded_multi = quantize_pcm24(recorded_multi)
+                if rewrite_required:
+                    self._rewrite_recorded_wav(recorded_multi, sample_rate)
 
                 # Audio quality gate: reject silent / flat recordings before they
                 # reach analysis. A device that is not powered on, an unplugged
@@ -2415,29 +2420,11 @@ class SequenceWidgetStreamingOpsMixin:
         return appended
 
     def _rewrite_recorded_wav(self, samples, sample_rate) -> None:
-        """Overwrite the just-finalized WAV file with trimmed ``samples``.
-
-        Called after :meth:`_on_streaming_complete` drops the leading
-        startup transient so the file on disk matches the in-memory buffer
-        used by analysis / plotting / DB. Any failure is logged but
-        not raised: the in-memory data is still the source of truth for
-        analysis and DB, and the untrimmed-but-otherwise-valid WAV on disk
-        can be retrimmed later if needed.
-        """
+        """Save trimmed PCM24 samples; let completion handle write failures."""
         wav_path = str(getattr(self, "recorded_path", "") or "")
         if not wav_path:
             return
-        try:
-            import soundfile as sf
-
-            data = np.asarray(samples, dtype=np.float32)
-            if data.ndim == 2 and data.shape[1] == 1:
-                data = data.reshape(-1)
-            sf.write(wav_path, data, int(sample_rate), subtype="FLOAT")
-        except Exception as e:
-            self.default_logger.warning(
-                f"startup_trim_rewrite_wav_failed path={wav_path} err={e}"
-            )
+        save_audio_simple(wav_path, samples, int(sample_rate))
 
     def _handle_invalid_recording(self, reason: str) -> None:
         """Abort the current recording cycle when the captured audio is invalid.

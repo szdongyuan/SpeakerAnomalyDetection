@@ -5,6 +5,7 @@ import uuid
 
 from base.db_manager import DataSave
 from base.save_data import save_audio_simple
+from base.wav_pcm24 import quantize_pcm24
 from consts import error_code, model_consts, running_consts
 
 
@@ -28,7 +29,9 @@ class RecordingManager(object):
                 audio_info["file_path"] = dir_path + "/" + filename
             if filename in os.listdir(dir_path):
                 return error_code.INVALID_PATH, "The file already exists."
-            save_audio_simple(audio_info["file_path"], audio_info["recorded_signal"], audio_info["sample_rate"])
+            saved_signal = quantize_pcm24(audio_info["recorded_signal"])
+            save_audio_simple(audio_info["file_path"], saved_signal, audio_info["sample_rate"])
+            audio_info["recorded_signal"] = saved_signal
             save_code, save_message = self.save_signal_info_to_db(
                 audio_info,
                 stimulus_parameter,

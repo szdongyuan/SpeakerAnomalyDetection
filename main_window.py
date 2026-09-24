@@ -1139,6 +1139,18 @@ class MainWindow(QMainWindow):
             self.updata_cursor_base_direction(left, top, right, bottom)
         event.accept()
 
+    def nativeEvent(self, eventType, message):
+        if (sys.platform == "win32"
+                and eventType == b"windows_generic_MSG"
+                and self.windowFlags() & Qt.FramelessWindowHint):
+            from ctypes.wintypes import MSG
+
+            native_message = MSG.from_address(int(message))
+            # WM_NCCALCSIZE: keep the frameless window's supplied client rectangle.
+            if native_message.message == 0x0083:
+                return True, 0
+        return super().nativeEvent(eventType, message)
+
     def paintEvent(self, event):
         # Set the window Background-color
         painter = QPainter(self)

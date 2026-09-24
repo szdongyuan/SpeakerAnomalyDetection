@@ -18,6 +18,7 @@ from base.wav_calibration_metadata import (
     normalize_wav_calibration_metadata,
 )
 from consts.recording_result_consts import RECORDING_SAMPLE_DIGEST_ALGORITHM
+from consts.wav_format_consts import WAV_PCM24_SUBTYPE
 from consts.ve3668n_consts import VE_BACKEND
 
 
@@ -151,9 +152,9 @@ class ResultReader:
             descriptor = self.descriptor
             self._validate_request()
             source = self._opener(descriptor.path, mode="r")
-            if (source.subtype != "FLOAT" or source.samplerate != descriptor.sample_rate
+            if (source.subtype != WAV_PCM24_SUBTYPE or source.samplerate != descriptor.sample_rate
                     or source.channels != len(descriptor.channels) or len(source) != descriptor.final_frames):
-                raise ValueError("final WAV frame/channel/rate/float32 contract mismatch")
+                raise ValueError("final WAV frame/channel/rate/PCM24 contract mismatch")
             multi = np.empty((descriptor.final_frames, len(descriptor.channels)), dtype=np.float32)
             offset = 0
             digest = hashlib.sha256() if self.request is not None else None

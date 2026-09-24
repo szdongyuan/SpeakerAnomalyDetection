@@ -12,6 +12,7 @@ import pyqtgraph as pg
 
 from base.file_ops import FileOps
 from base.save_data import save_audio_simple
+from base.wav_pcm24 import quantize_pcm24
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.graph_widget import DraggablePlotWidget
@@ -196,6 +197,8 @@ class AudioClipExtractionDialog(QDialog):
                     self.save_clip_path, _ = QFileDialog.getSaveFileName(self, "保存片段", "", "WAV 文件 (*.wav)")
 
                 relative_path = FileOps.get_relative_path(self.save_clip_path, DEFAULT_DIR)
+                if self.save_clip_path:
+                    clip_data = quantize_pcm24(clip_data)
                 save_audio_simple(self.save_clip_path, clip_data, self.sample_rate)
 
             self.accept()

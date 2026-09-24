@@ -335,3 +335,35 @@ def test_terminal_reports_actual_artifact_and_stage_once(tmp_path, monkeypatch, 
             assert req.csv_path in messages[0][1]
     if stage in ('warning', 'success'):
         assert req.csv_path + '.zip' in host.default_logger.info.call_args.args[0]
+
+
+def test_scheduled_pcm24_csv_child_keeps_saved_samples_and_channel_labels(tmp_path):
+    from base.save_data import save_audio_simple
+    from zipfile import ZipFile
+    import csv
+    import io
+    service = RawAudioCsvService()
+    events = []
+    service.subscribe(events.append)
+    try:
+        host = Host(tmp_path, service)
+        source = np.array([[0.5, 2.5], [2**-25, -2**-25],
+                           [0.001953125, -3]], dtype=np.float32)
+        save_audio_simple(host.recorded_path, source, 8000)
+        assert host._schedule_raw_audio_csv_export((7, 1))
+        service.begin_shutdown()
+        assert service.closed.wait(15)
+        terminal = [event for event in events if event.kind == 'terminal']
+        assert len(terminal) == 1
+        assert terminal[0].result.frames == 3
+        archive_path = host.registrations[1][1]
+        with ZipFile(archive_path) as archive:
+            rows = list(csv.reader(io.StringIO(archive.read('recording.csv').decode('utf-8-sig'))))
+        assert rows[0] == ['time_s', 'CH8', 'CH2']
+        assert [row[1:] for row in rows[1:]] == [
+            ['0.5', '0.999999881'], ['0', '-1.1920929e-07'], ['0.001953125', '-1']]
+        saved, _ = sf.read(host.recorded_path, dtype='float32', always_2d=True)
+        np.testing.assert_array_equal(np.array([row[1:] for row in rows[1:]], dtype=np.float32), saved)
+    finally:
+        service.begin_shutdown()
+        assert service.closed.wait(15)

@@ -2,6 +2,7 @@ import numpy as np
 
 from base.log_manager import LogManager
 from base.save_data import save_audio_simple
+from base.wav_pcm24 import quantize_pcm24
 from base.sound_device_manager import sd
 from consts import error_code
 
@@ -54,14 +55,11 @@ class SoundcardAudioProcessor(object):
                 [aligned_multi, np.zeros((shortfall, aligned_multi.shape[1]), dtype=np.float32)], axis=0
             )
 
-        aligned_mono = aligned_multi.mean(axis=1).astype(np.float32, copy=False)
-
         # Save multi-channel aligned data. keep mono return for compatibility.
-        try:
-            record_dict["_recorded_multi"] = aligned_multi
-        except Exception:
-            pass
+        aligned_multi = quantize_pcm24(aligned_multi)
         save_audio_simple(recording_path, aligned_multi, sr)
+        record_dict["_recorded_multi"] = aligned_multi
+        aligned_mono = aligned_multi.mean(axis=1).astype(np.float32, copy=False)
         return error_code.OK, aligned_mono
 
     @staticmethod

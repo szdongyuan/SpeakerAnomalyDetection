@@ -924,7 +924,9 @@ def test_save_audio_with_metadata_append_failure_preserves_audio(tmp_path):
     assert save_audio_with_calibration_metadata(path, audio, 8000, invalid_metadata, logger) is False
     sample_rate, actual_audio = wavfile.read(path)
     assert sample_rate == 8000
-    np.testing.assert_array_equal(actual_audio, audio)
+    assert actual_audio.dtype == np.int32
+    expected_codes = np.floor(audio * 8388608).astype(np.int32)
+    np.testing.assert_array_equal(actual_audio, expected_codes << 8)
     logger.warning.assert_called()
 
 
@@ -938,5 +940,7 @@ def test_save_audio_with_falsey_invalid_metadata_returns_false(tmp_path, invalid
 
     assert save_audio_with_calibration_metadata(path, audio, 8000, invalid_metadata, logger) is False
     _, actual_audio = wavfile.read(path)
-    np.testing.assert_array_equal(actual_audio, audio)
+    assert actual_audio.dtype == np.int32
+    expected_codes = np.floor(audio * 8388608).astype(np.int32)
+    np.testing.assert_array_equal(actual_audio, expected_codes << 8)
     logger.warning.assert_called()

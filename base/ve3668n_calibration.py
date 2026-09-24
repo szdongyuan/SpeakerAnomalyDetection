@@ -35,7 +35,7 @@ def require_ac_signal(volts):
 def verify_ve_calibration_result(request, descriptor, volts):
     """Validate a frozen ten-second request and its reader-owned raw V.
 
-    Capture and ResultReader independently verify the WAV's FLOAT format before
+    Capture and ResultReader independently verify the WAV's PCM24 format before
     publishing. RecordingResult has no subtype field; do not reopen its path,
     which the service may already have deleted. ``handles_released`` attests to
     capture handles only: the UI must ALSO await accepted + session.released.

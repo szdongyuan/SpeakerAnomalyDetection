@@ -80,7 +80,7 @@ def test_blocked_finalizing_log_does_not_delay_slot_or_shutdown(tmp_path):
         assert proof.raw_frames == req.target_samples
         assert received_at - proof.target_reached_at < .5
         saved, _ = sf.read(req.path, dtype="float32", always_2d=True)
-        np.testing.assert_array_equal(saved, np.tile([8.25, 2.5], (8190, 1)))
+        np.testing.assert_array_equal(saved, np.full((8190, 2), 8388607 / 8388608))
         # The external handler remains blocked for longer than the real deadline.
         assert not unblock.wait(.65)
         assert completed.wait(2), "supervisor is still waiting for logging I/O"
@@ -89,7 +89,7 @@ def test_blocked_finalizing_log_does_not_delay_slot_or_shutdown(tmp_path):
         assert observations[0][0] - session._target_reached_at < .5
         assert session.released.wait(5)
         saved, _ = sf.read(req.path, dtype="float32", always_2d=True)
-        np.testing.assert_array_equal(saved, np.tile([8.25, 2.5], (8190, 1)))
+        np.testing.assert_array_equal(saved, np.full((8190, 2), 8388607 / 8388608))
         service.shutdown()
         assert service.closed.wait(5), "logging consumer holds shutdown open"
         assert not service.is_path_leased(req.path)

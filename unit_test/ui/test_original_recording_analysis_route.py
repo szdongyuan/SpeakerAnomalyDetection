@@ -58,7 +58,9 @@ def queue_host(ui_qapp, tmp_path, monkeypatch, types=("SPL",), auto=True):
     request = SimpleNamespace(request_id="queue-capture", channels=(0, 2), path=str(tmp_path / "queue.wav"), sample_rate=48000, device={}, calibration_metadata=None)
     t = np.arange(12000, dtype=np.float32) / request.sample_rate
     multi = np.column_stack((.01*np.sin(2*np.pi*1000*t), .02*np.sin(2*np.pi*1000*t))).astype(np.float32)
-    sf.write(request.path, multi, request.sample_rate, subtype="FLOAT")
+    from base.save_data import save_audio_simple
+    save_audio_simple(request.path, multi, request.sample_rate)
+    multi, _ = sf.read(request.path, dtype="float32", always_2d=True)
     assert append_wav_calibration_metadata(request.path, {"recorded_channels": [dict(wav_channel_index=i, physical_input_channel=channel, v2pa_factor=2.0+i, standard_spl=94., calibrated=True) for i,channel in enumerate(request.channels)]})
     host.analysis_config = {"auto_analysis": auto, "display_sequence": list(types), **{kind: {"type": kind, "analysis_channels": [0, 2], "limit_checked": False, "weighting": "Z", "show_overall_spl": True} for kind in types}}
     host._should_run_silent_analysis_after_recording = streaming.SequenceWidgetStreamingOpsMixin._should_run_silent_analysis_after_recording.__get__(host)

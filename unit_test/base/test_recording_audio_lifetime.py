@@ -130,7 +130,7 @@ class Harness:
         def hard_exit(code):
             raise HardExit(code)
 
-        monkeypatch.setattr(recording_worker.os, "_exit", hard_exit)
+        monkeypatch.setattr(recording_worker, "exit_with_log_drain", hard_exit)
         factory = None
         if injected:
             factory = "lifetime_test:dependencies"

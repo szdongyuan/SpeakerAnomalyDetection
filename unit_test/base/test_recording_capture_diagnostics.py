@@ -13,6 +13,7 @@ from base.recording_capture import RecordingCapture
 from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_process_protocol import RecordingFailure, RecordingResult
 from base.streaming_file_writer import StreamingWavWriter
+from base.wav_pcm24 import quantize_pcm24
 from unit_test.base.test_ve3668n_capture import start_persistent_capture
 from unit_test.base.ve3668n_fakes import capture_request
 
@@ -110,7 +111,7 @@ def test_snapshot_and_consumer_lock_wait_report_before_lock_released(tmp_path, m
             pass
 
     capture._waveforms = Waveforms()
-    capture._writer = SimpleNamespace(write_chunk=lambda block: None)
+    capture._writer = SimpleNamespace(write_chunk=quantize_pcm24)
     capture._diagnostic_blocks = 1  # This next block must not be a detailed sample.
     diag.start_sampler()
     try:
@@ -146,7 +147,7 @@ def test_tail_summary_is_request_local_and_callback_does_not_log(tmp_path, monke
     diag.observe("consume", 3_000_000_000, request="old-request", started_ns=10)
     capture = RecordingCapture(capture_request(tmp_path / "tail.wav"), diagnostics=diag)
     capture._thread = threading.current_thread()
-    capture._writer = SimpleNamespace(write_chunk=lambda block: None)
+    capture._writer = SimpleNamespace(write_chunk=quantize_pcm24)
     capture._input_callback(np.ones((9, 8), dtype=np.float32), 9, None, None)
     assert records == []
     capture._tail_started_ns = time.perf_counter_ns()
@@ -177,7 +178,7 @@ def test_cancel_records_close_proof_without_publishing_incomplete_capture(tmp_pa
 def test_normal_blocks_count_consumes_but_label_write_detail_as_sampled(tmp_path, monkeypatch):
     diag, records = diagnostics(monkeypatch)
     capture = RecordingCapture(capture_request(tmp_path / "sampled.wav"), diagnostics=diag)
-    capture._writer = SimpleNamespace(write_chunk=lambda block: None)
+    capture._writer = SimpleNamespace(write_chunk=quantize_pcm24)
     for _ in range(6):
         capture._consume(np.ones((4, 2), dtype=np.float32))
     stats = diag.snapshot()["categories"]
@@ -193,7 +194,7 @@ def test_unmeasured_write_keeps_slow_interval_without_sampler(tmp_path, monkeypa
     clock = Clock()
     diag, records = diagnostics(monkeypatch, perf_ns=clock.perf, monotonic=clock.monotonic)
     capture = RecordingCapture(capture_request(tmp_path / "slow.wav"), diagnostics=diag)
-    capture._writer = SimpleNamespace(write_chunk=lambda block: clock.advance(110_000_000))
+    capture._writer = SimpleNamespace(write_chunk=lambda block: (clock.advance(110_000_000), quantize_pcm24(block))[1])
     capture._diagnostic_blocks = 1  # Not one of the detailed samples.
     capture._consume(np.ones((4, 2), dtype=np.float32))
     write, = events(records, "write")

@@ -2,10 +2,10 @@ import json
 import os
 
 from datetime import datetime
-from scipy.io import wavfile
 import numpy as np
 
 from consts.running_consts import DEFAULT_DIR
+from base.streaming_file_writer import StreamingWavWriter
 from base.wav_calibration_metadata import append_wav_calibration_metadata
 
 
@@ -17,7 +17,7 @@ def save_audio_simple(save_path, audio, sr=44100):
     - mono: shape (frames,)
     - multi-channel: shape (frames, channels)
 
-    Data is written as float32.
+    Data is clipped and quantized to 24-bit integer PCM.
     """
     if not save_path:
         return
@@ -30,7 +30,10 @@ def save_audio_simple(save_path, audio, sr=44100):
     if audio_arr.ndim not in (1, 2):
         raise ValueError(f"Unsupported audio shape: {audio_arr.shape}")
 
-    wavfile.write(save_path, int(sr), audio_arr)
+    channels = 1 if audio_arr.ndim == 1 else audio_arr.shape[1]
+    with StreamingWavWriter(save_path, sample_rate=int(sr), channels=channels) as writer:
+        for start in range(0, len(audio_arr), 65536):
+            writer.write_chunk(audio_arr[start:start + 65536])
 
 
 def save_audio_with_calibration_metadata(

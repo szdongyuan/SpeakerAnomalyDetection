@@ -311,8 +311,10 @@ def test_real_maths_replace_old_k_only_after_accepted_and_released(setup, rate, 
     old_bytes = setup.calibrations.path.read_bytes()
     widget.standard_spl_flag = standard == 94
     session, generated = offered(widget, sine_volts(rate, standard))
-    # Exercise the real FLOAT reader. No GUI method is responsible for decoding.
-    sf.write(session.request.path, generated.mono, rate, subtype="FLOAT")
+    # Exercise the real PCM24 reader. No GUI method is responsible for decoding.
+    from base.save_data import save_audio_simple
+    save_audio_simple(session.request.path, generated.mono, rate)
+    saved_mono, _ = sf.read(session.request.path, dtype="float32")
     wav_bytes = setup.tmp_path.joinpath(f"{session.request.request_id}.wav").read_bytes()
     outcomes = []
     reader = ResultReader(generated.descriptor, outcomes.append)
@@ -325,7 +327,7 @@ def test_real_maths_replace_old_k_only_after_accepted_and_released(setup, rate, 
     calculate = widget._calculate_spl_from_data
     def inspect_raw(volts):
         assert volts is audio.mono
-        np.testing.assert_array_equal(volts, generated.mono)
+        np.testing.assert_array_equal(volts, saved_mono)
         seen.append(volts.copy())
         return calculate(volts)
     monkeypatch.setattr(widget, "_calculate_spl_from_data", inspect_raw)
@@ -349,8 +351,9 @@ def test_real_maths_replace_old_k_only_after_accepted_and_released(setup, rate, 
     widget.standard_spl_flag = standard != 94
     release(widget, session)
     record = setup.calibrations.get_record(widget.input_device, 7)
-    assert record["v2pa_factor"] == pytest.approx(10.0, rel=2e-3)
-    assert abs(calculate(generated.mono * record["v2pa_factor"]) - standard) <= .02
+    expected_factor = (20e-6 * 10 ** (standard / 20)) / np.sqrt(np.mean(saved_mono.astype(np.float64) ** 2))
+    assert record["v2pa_factor"] == pytest.approx(expected_factor, rel=2e-3)
+    assert abs(calculate(saved_mono * record["v2pa_factor"]) - standard) <= .02
     assert record["standard_spl"] == standard
     assert record["calibration_sample_rate"] == rate
     assert record["calibration_duration_seconds"] == 10.0
@@ -358,7 +361,7 @@ def test_real_maths_replace_old_k_only_after_accepted_and_released(setup, rate, 
     assert setup.calibrations.get_record(widget.input_device, 1) == other
     assert events == ["saved", "changed", True]
     assert len(seen) == 1
-    np.testing.assert_array_equal(audio.mono, generated.mono)
+    np.testing.assert_array_equal(audio.mono, saved_mono)
     assert widget.saved_v2pa_factors[7] == record["v2pa_factor"]
     widget._on_calibration_accepted(session, audio)
     widget._on_calibration_released(session)
@@ -873,7 +876,7 @@ def test_production_service_bridge_replaces_private_path_then_releases_before_sa
     def check_released_memory(volts):
         assert session.released.is_set()
         assert not Path(session.request.path).exists()
-        np.testing.assert_array_equal(volts, sine_volts(48000, 114))
+        np.testing.assert_array_equal(volts, saved_mono)
         calculated.append(True)
         return calculate(volts)
     monkeypatch.setattr(widget, "_calculate_spl_from_data", check_released_memory)
@@ -899,6 +902,8 @@ def test_production_service_bridge_replaces_private_path_then_releases_before_sa
         assert not finished and not calculated
         assert setup.calibrations.path.read_bytes() == before
         assert service.is_path_leased(session.request.path)
+        saved_mono, _ = sf.read(session.request.path, dtype="float32")
+        assert sf.info(session.request.path).subtype == "PCM_24"
         release_gate.set()
         pump(ui_qapp, lambda: bool(finished))
         if cleanup_denied:
@@ -910,7 +915,8 @@ def test_production_service_bridge_replaces_private_path_then_releases_before_sa
         else:
             assert finished == [True] and calculated == [True]
             record = setup.calibrations.get_record(device, 7)
-            assert record["v2pa_factor"] == pytest.approx(10., rel=2e-3)
+            expected_factor = (20e-6 * 10 ** (114 / 20)) / np.sqrt(np.mean(saved_mono.astype(np.float64) ** 2))
+            assert record["v2pa_factor"] == pytest.approx(expected_factor, rel=2e-3)
             assert record["standard_spl"] == 114
             assert record["calibration_sample_rate"] == 48000
             assert not service.is_path_leased(session.request.path)
