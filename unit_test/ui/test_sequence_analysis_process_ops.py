@@ -413,6 +413,53 @@ def test_finished_analysis_does_not_overwrite_active_recording_stage():
     assert host.left_panel.stage_clears == 1
 
 
+@pytest.mark.parametrize("segment_count, expected_total", [(0, 4), (1, 8), (10, 44)])
+def test_manual_progress_total_stays_consistent_from_start(segment_count, expected_total):
+    request = SimpleNamespace(
+        task_id="manual-progress",
+        condition_key="condition-1",
+        source="手动查看",
+        wav_path="record.wav",
+        instances=(object(),) * 4,
+        segment_plan=(object(),) * segment_count,
+    )
+    progress = SimpleNamespace(completed_instances=1, total_instances=expected_total)
+    button_updates = []
+    host = SequenceWidgetAnalysisProcessOpsMixin()
+    host._analysis_process_service = SimpleNamespace(
+        active=True,
+        start=lambda task: 123,
+        poll=lambda: ([("progress", progress)], []),
+    )
+    host._analysis_task_records = {}
+    host._analysis_manual_requested_at = {}
+    host._analysis_manual_source_labels = {}
+    host._analysis_has_pending_tasks = lambda: False
+    host._show_pending_manual_analysis_view = lambda: False
+    host._selected_analysis_condition_key = lambda: request.condition_key
+    host._resolve_condition_record = lambda key: {}
+    host._analysis_record_wav_path = lambda record: request.wav_path
+    host._manual_analysis_target_is_recording = lambda key, path: False
+    host._analysis_condition_display_name = lambda key, record: "A口 / 档位2"
+    host._build_process_analysis_request = lambda *args: request
+    host._refresh_analysis_action_state = lambda: None
+    host.default_logger = _Logger()
+    host.data_btn = SimpleNamespace(
+        set_analyzing=lambda completed, total, label: button_updates.append(
+            (completed, total, label)
+        )
+    )
+
+    assert host._start_selected_condition_manual_analysis() is True
+    assert button_updates == [(0, expected_total, "A口 / 档位2")]
+
+    host._poll_analysis_process_runtime()
+    assert button_updates == [
+        (0, expected_total, "A口 / 档位2"),
+        (1, expected_total, "A口 / 档位2"),
+    ]
+
+
 def test_manual_terminal_waits_for_click_without_updating_official_state(monkeypatch):
     class Host(SequenceWidgetAnalysisProcessOpsMixin):
         def __init__(self):
@@ -859,6 +906,71 @@ def test_worker_log_routes_successful_instance_detail_to_debug_only():
     assert host.default_logger.messages == []
     assert len(host._analysis_debug_logger.messages) == 1
     assert "analysis_instance_finished" in host._analysis_debug_logger.messages[0][1]
+
+
+@pytest.mark.parametrize("segmented", [True, False])
+def test_manual_analysis_opens_only_owned_plot_windows(ui_qapp, tmp_path, segmented):
+    from dataclasses import replace
+    import sys
+
+    from PyQt5.QtCore import QCoreApplication, QEvent
+    from PyQt5.QtWidgets import QMainWindow, QWidget
+
+    from base.analysis_process_protocol import AnalysisSegmentResult, AnalysisTaskResult
+    from base.analysis_segments import AnalysisSegment
+    from ui.analysis_multichannel_result_window import AnalysisMultichannelResultWindow
+    from unit_test.ui.test_analysis_multichannel_result_window import _result
+
+    class Host(SequenceWidgetAnalysisProcessOpsMixin, QWidget):
+        pass
+
+    first = _result(0, "OK")
+    second = replace(first, config_key="第二个分析项", runtime_key="第二个分析项--通道1")
+    items = (first, second)
+    segments = (
+        AnalysisSegmentResult(
+            AnalysisSegment(0, "时间1s", "time", 1, "s", 0, 100, 0, 100, 100),
+            items, "分析完成", "已判定", "OK",
+        ),
+    ) if segmented else ()
+    result = AnalysisTaskResult(
+        "manual-task", "condition", str(tmp_path / "unused.wav"), "手动查看",
+        "分析完成", "已判定", "OK", items, segments=segments,
+        channel_labels={"CH1": "前"},
+    )
+    host = Host()
+    host.analysis_config = {}
+    host._analysis_active_request = None
+    main = QMainWindow()
+    main.setCentralWidget(host)
+    main.resize(1100, 720)
+    main.show()
+    assert host._show_manual_analysis_result_windows(result) == 2
+    ui_qapp.processEvents()
+    plots = host.analysis_window[:]
+    assert all(isinstance(plot, AnalysisMultichannelResultWindow) for plot in plots)
+    for plot in plots:
+        assert plot.parentWidget() is host
+        assert plot.isWindow() and plot.isVisible() and not plot.isMinimized()
+        assert plot.windowHandle().transientParent() is main.windowHandle()
+    if sys.platform == "win32":
+        import ctypes
+
+        get_window = ctypes.windll.user32.GetWindow
+        get_window.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        get_window.restype = ctypes.c_void_p
+        for plot in plots:
+            previous = get_window(int(plot.winId()), 3)  # GW_HWNDPREV
+            above = []
+            while previous:
+                above.append(previous)
+                previous = get_window(previous, 3)
+            assert int(main.winId()) not in above
+    for plot in plots:
+        plot.close()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert not host.analysis_window
+    main.close()
 
 
 def test_worker_log_keeps_compact_task_completion_in_main():

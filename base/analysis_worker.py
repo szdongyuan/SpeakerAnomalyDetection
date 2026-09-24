@@ -427,7 +427,6 @@ def _execute_instance(
         )
         if request.segment_plan and instance_request.analysis_type == "SPL" and request.source == "手动查看":
             normalized["display_payload"].update(
-                segment_boundaries=calculation["plot"]["segment_boundaries"],
                 recording_time_range=calculation["plot"]["recording_time_range"],
             )
         normalized.update(
@@ -469,8 +468,9 @@ def _extract_output(instance_request, calculation, judgement, source, image_payl
                 "lower": display_lower,
                 "upper": display_upper,
                 "x_label": "Time (s)",
-                "y_label": "SPL (dB)",
+                "y_label": f"SPL ({metrics.get('unit') or 'dB'})",
                 "overall_spl": metrics.get("overall_spl"),
+                "unit": metrics.get("unit") or "dB",
             }
             if source == "手动查看"
             else {},

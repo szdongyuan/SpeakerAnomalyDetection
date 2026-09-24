@@ -82,7 +82,7 @@ class AnalysisMultichannelResultWindow(QWidget):
         source_label="",
         parent=None,
     ):
-        super().__init__(parent)
+        super().__init__(parent, Qt.Window)
         self._config_key = str(config_key or "分析结果")
         self._source_label = str(source_label or "").strip()
         self._results = tuple(
@@ -239,7 +239,7 @@ class AnalysisMultichannelResultWindow(QWidget):
         if overall is not None:
             try:
                 widget.setTitle(
-                    f"总体声压级：{float(overall):.2f} dB",
+                    f"总体声压级：{float(overall):.2f} {payload.get('unit') or 'dB'}",
                     color=ui_style_const.COLOR_TEXT_MUTED,
                 )
             except (TypeError, ValueError):
@@ -324,11 +324,6 @@ class AnalysisMultichannelResultWindow(QWidget):
             axis.setPen(pg.mkPen(ui_style_const.COLOR_BORDER_STRONG))
             axis.setTextPen(pg.mkPen(ui_style_const.COLOR_TEXT_MUTED))
         widget.showGrid(x=True, y=True, alpha=0.22)
-        for boundary in payload.get("segment_boundaries", ()):
-            widget.addItem(pg.InfiniteLine(
-                pos=float(boundary), angle=90, movable=False,
-                pen=pg.mkPen("#6B7280", width=1, style=Qt.DashLine),
-            ))
         if payload.get("recording_time_range"):
             widget.setXRange(*payload["recording_time_range"], padding=0)
 

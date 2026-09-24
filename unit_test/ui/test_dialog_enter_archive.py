@@ -7,9 +7,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QDialog, QFileDialog, QMessageBox, QPushButton
 
-from base.analysis_process_protocol import AnalysisSegmentResult, AnalysisTaskResult
 from base.analysis_report_source import ProjectReportIndex
-from base.analysis_segments import AnalysisSegment
 from base.audio_record_filter import parse_audio_filter_metadata
 from consts import error_code
 from ui.analysis_multichannel_result_window import AnalysisMultichannelResultWindow
@@ -20,7 +18,6 @@ from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from ui.archive_audio_filter_dialog import ArchiveAudioFilterDialog
 from ui.archive_audio_package_dialog import ArchiveAudioPackageDialog
 from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
-from ui.segmented_analysis_results_dialog import SegmentedAnalysisResultsDialog
 from unit_test.base.test_audio_record_filter import audio_row
 from unit_test.ui.test_analysis_report_export_dialog import _index, FFT_IDENTITY, SPL_IDENTITY
 
@@ -264,23 +261,6 @@ def test_archive_result_enter_never_clicks_viewer_buttons(dialogs, monkeypatch, 
         button.show()
         button.setEnabled(True)
         press(button, enter, ui_qapp)
-    assert recorded == []
-    assert dialog.isVisible()
-
-
-def test_segmented_results_explicitly_have_no_enter_target(dialogs, tmp_path, enter, ui_qapp):
-    segment = AnalysisSegment(0, "时间1s", "time", 1, "s", 0, 100, 0, 100, 100)
-    result = AnalysisTaskResult("task", "condition", str(tmp_path / "audio.wav"), "手动查看", "分析完成",
-                                "未产生判定", None, (),
-                                segments=(AnalysisSegmentResult(segment, (), "分析完成", "未产生判定", None),))
-    dialog = dialogs(SegmentedAnalysisResultsDialog(result, {}))
-    # A later viewer action must also remain protected by the explicit no-target policy.
-    button = QPushButton("Viewer action", dialog)
-    dialog.layout().addWidget(button)
-    button.show()
-    recorded = clicks(dialog)
-    press(dialog.segment_selector, enter, ui_qapp)
-    press(button, enter, ui_qapp)
     assert recorded == []
     assert dialog.isVisible()
 
