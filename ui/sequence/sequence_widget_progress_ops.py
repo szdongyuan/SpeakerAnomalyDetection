@@ -11,8 +11,9 @@ from PyQt5.QtWidgets import QDialogButtonBox, QMessageBox, QSizePolicy, QSpacerI
 
 from base.load_config import LoadUiConfig
 from base.product_test_progress import (
-    PROGRESS_RESULTS, ProductTestProgressStore, compact_progress_channels,
-    compact_progress_result,
+    PROGRESS_ANALYSIS_FAILURES, PROGRESS_CHANNEL_RESULTS, PROGRESS_RESULTS,
+    ProductTestProgressStore,
+    compact_progress_channels, compact_progress_result,
     expand_progress_analysis_files, group_progress_analysis_files,
 )
 from base.test_round_data import RoundDataRecord
@@ -94,8 +95,17 @@ class SequenceWidgetProgressOpsMixin:
             completed_conditions[key] = {
                 **condition_names[key],
                 "result": compact_progress_result((group.get("results") or {}).get(key, "not_labeled")),
-                "channels": compact_progress_channels(panel.rows[key]["channel_results"]),
+                "analysis_channels": list(panel._condition_channels(panel.rows[key])),
+                "channel_results": compact_progress_channels(panel.rows[key]["channel_results"]),
             }
+            analysis_status = panel.rows[key]["result"]
+            if analysis_status in PROGRESS_ANALYSIS_FAILURES:
+                completed_conditions[key]["analysis_status"] = analysis_status
+            analysis_column_channels = panel.rows[key]["analysis_column_channels"]
+            if analysis_column_channels:
+                completed_conditions[key]["analysis_column_channels"] = {
+                    column: list(selected) for column, selected in analysis_column_channels.items()
+                }
         round_records = self._round_data_records.get(group_id, {})
         database_paths = {
             _progress_file_path(record.database_path)
@@ -129,7 +139,10 @@ class SequenceWidgetProgressOpsMixin:
             "next_condition": condition_names.get(next_key),
             "selected_key": panel.selected_key,
             "completed_conditions": completed_conditions,
-            "channels": list(panel.channel_indices),
+            "channels": sorted(set(panel.channel_indices) | {
+                channel for result in completed_conditions.values()
+                for channel in result["analysis_channels"]
+            }),
             "counted_result": self._manual_product_condition_counted_group_labels.get(group_id),
             "serial_port_index": getattr(self, "_serial_product_port_index", 0),
             "waiting_port_idle": getattr(self, "_serial_product_waiting_port_idle", False),
@@ -215,17 +228,36 @@ class SequenceWidgetProgressOpsMixin:
         for result in completed.values():
             if not isinstance(result, dict) or result["result"] not in PROGRESS_RESULTS:
                 raise ValueError("工况结果格式错误")
-            if not isinstance(result["channels"], list):
+            if "analysis_status" in result and result["analysis_status"] not in PROGRESS_ANALYSIS_FAILURES:
+                raise ValueError("档位分析状态无效")
+            analysis_channels = result.get("analysis_channels")
+            if "analysis_channels" in result and (
+                not isinstance(analysis_channels, list)
+                or not all(type(channel) is int and channel in channels for channel in analysis_channels)
+                or len(set(analysis_channels)) != len(analysis_channels)
+            ):
+                raise ValueError("档位分析通道格式错误")
+            if not isinstance(result["channel_results"], list):
                 raise ValueError("通道判定格式错误")
             seen = set()
-            for item in result["channels"]:
+            for item in result["channel_results"]:
                 if not isinstance(item, dict):
                     raise ValueError("通道判定格式错误")
                 channel = item["raw_channel"]
                 if (type(channel) is not int or channel not in channels or channel in seen
-                        or item["result"] not in PROGRESS_RESULTS):
+                        or (analysis_channels is not None and channel not in analysis_channels)
+                        or item["result"] not in PROGRESS_CHANNEL_RESULTS):
                     raise ValueError("通道判定与结果通道不匹配")
                 seen.add(channel)
+            analysis_column_channels = result.get("analysis_column_channels", {})
+            if not isinstance(analysis_column_channels, dict):
+                raise ValueError("分析项通道对应关系格式错误")
+            for column, selected in analysis_column_channels.items():
+                if (not isinstance(column, str) or not column.strip()
+                        or not isinstance(selected, list)
+                        or not all(type(channel) is int and channel >= 0 for channel in selected)
+                        or len(set(selected)) != len(selected)):
+                    raise ValueError("分析项通道对应关系格式错误")
         if state["counted_result"] is not None and state["counted_result"] not in PROGRESS_RESULTS:
             raise ValueError("本轮已计数判定无效")
         if not isinstance(state["owned_files"], dict):
@@ -423,8 +455,16 @@ class SequenceWidgetProgressOpsMixin:
                 "group_id": group_id, "condition_key": key,
                 "result_label": result["result"], "source_type": "restored",
             }
-            self.left_panel.set_condition_channel_results(key, result["channels"])
+            self.left_panel.set_condition_channel_results(
+                key, result["channel_results"], restore_channels=True,
+                restored_analysis_channels=result.get("analysis_channels"),
+                restored_analysis_column_channels=result.get("analysis_column_channels"),
+            )
             text, tone = self._manual_product_condition_display_state(result["result"])
+            if "analysis_status" in result:
+                text, tone = result["analysis_status"], "ng"
+            elif any(item["result"] == "结果不完整" for item in result["channel_results"]):
+                text, tone = "结果不完整", "ng"
             self.left_panel.set_condition_result(key, text, tone=tone)
         keys = self._manual_product_condition_keys()
         next_key = state["next_key"]

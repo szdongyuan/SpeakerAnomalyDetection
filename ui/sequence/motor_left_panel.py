@@ -126,8 +126,15 @@ class MotorDetectionLeftPanel(QWidget):
     def set_condition_analysis_details(self, condition, detail_values):
         return self.result_panel.set_condition_analysis_details(condition, detail_values)
 
-    def set_condition_channel_results(self, condition, channel_results):
-        return self.result_panel.set_condition_channel_results(condition, channel_results)
+    def set_condition_channel_results(
+        self, condition, channel_results, *, restore_channels=False,
+        restored_analysis_channels=None, restored_analysis_column_channels=None,
+    ):
+        return self.result_panel.set_condition_channel_results(
+            condition, channel_results, restore_channels=restore_channels,
+            restored_analysis_channels=restored_analysis_channels,
+            restored_analysis_column_channels=restored_analysis_column_channels,
+        )
 
     def set_channels(self, channels):
         self.result_panel.set_channels(channels)
@@ -138,5 +145,6 @@ class MotorDetectionLeftPanel(QWidget):
     def set_condition_configs(self, condition_configs, *, queue_catalog=None):
         self.result_panel.set_condition_configs(condition_configs, queue_catalog=queue_catalog)
 
-    def refresh_condition_configs(self, condition_configs):
-        return self.result_panel.refresh_condition_configs(condition_configs)
+    def refresh_condition_configs(self, condition_configs, *, queue_catalog=None, preserve_results=False):
+        return self.result_panel.refresh_condition_configs(
+            condition_configs, queue_catalog=queue_catalog, preserve_results=preserve_results)

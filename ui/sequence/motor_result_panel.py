@@ -17,6 +17,8 @@ from base.product_test_project_config import ProductTestProjectConfigManager
 from consts import error_code
 from consts import ui_style_const
 from ui.sequence.motor_panel_common import MotorSectionCard
+from ui.sequence.analysis_channel_preflight import MULTI_CHANNEL_ANALYSIS_TYPES
+from ui.ui_analysis_config.config_normalization import normalize_analysis_channels
 
 
 class MotorResultPanel(QWidget):
@@ -83,6 +85,7 @@ class MotorResultPanel(QWidget):
         self.channel_labels = ["CH1"]
         self.channel_analysis_columns = []
         self.channel_detail_labels = []
+        self._channel_table_channels = []
         self._channel_table_signature = None
         self._detail_owner_key = ""
         self._init_ui()
@@ -286,6 +289,7 @@ class MotorResultPanel(QWidget):
         except Exception:
             pass
         for item in self.conditions:
+            condition_channels = self._condition_channels(item)
             button = QPushButton()
             button.setObjectName("testTaskConditionButton")
             button.setMinimumHeight(40)
@@ -295,9 +299,9 @@ class MotorResultPanel(QWidget):
             button_layout.setContentsMargins(8, 0, 8, 0)
             button_layout.setSpacing(8)
             name_label = QLabel(item.get("short_name", item["name"]))
-            progress_label = QLabel(f"通道判定：0/{len(self.channel_labels)}")
+            progress_label = QLabel(f"通道判定：0/{len(condition_channels)}")
             progress_label.setFixedWidth(100)
-            progress_label.setToolTip("已获得 OK/NG 结果的实际输入通道数，不表示依次录音。")
+            progress_label.setToolTip("本档位分析通道中已获得 OK/NG 判定的数量，不表示依次录音。")
             result_label = QLabel("待检测")
             result_label.setFixedWidth(60)
             for label in (name_label, progress_label, result_label):
@@ -322,7 +326,9 @@ class MotorResultPanel(QWidget):
                 "tone": "pending",
                 "group": item.get("group", ""),
                 "short_name": item.get("short_name", item["name"]),
-                "channel_count": len(self.channel_labels),
+                "analysis_channels": item["analysis_channels"],
+                "analysis_column_channels": item["analysis_column_channels"],
+                "channel_count": len(condition_channels),
                 "completed_channels": 0,
                 "analysis_completed": False,
                 "channel_results": [],
@@ -343,7 +349,7 @@ class MotorResultPanel(QWidget):
             self._rebuild_channel_table("")
         self._refresh_port_view()
 
-    def refresh_condition_configs(self, condition_configs) -> bool:
+    def refresh_condition_configs(self, condition_configs, *, queue_catalog=None, preserve_results=False) -> bool:
         """
         Update per-condition configuration details without resetting current results.
 
@@ -351,7 +357,7 @@ class MotorResultPanel(QWidget):
         the same, while the queue analysis settings behind them were edited. In that case the
         operator's in-progress result state and waveform data must stay visible.
         """
-        updated_conditions = self._normalize_conditions(condition_configs)
+        updated_conditions = self._normalize_conditions(condition_configs, queue_catalog)
         current_keys = [item["key"] for item in self.conditions]
         updated_keys = [item["key"] for item in updated_conditions]
         if current_keys != updated_keys:
@@ -361,11 +367,20 @@ class MotorResultPanel(QWidget):
         for item in updated_conditions:
             row = self.rows.get(item["key"])
             if row is not None:
-                row["analysis_columns"] = list(item.get("analysis_columns") or [])
+                if preserve_results and (row["result"] != "待检测" or row["channel_results"]):
+                    continue
+                self._set_row_analysis_layout(row, item)
         if self.selected_key in self.rows:
             self._rebuild_channel_table(self.selected_key)
-            self._render_channel_results(self.selected_key)
+        for key, row in self.rows.items():
+            self.set_condition_channel_results(key, row["channel_results"])
         return True
+
+    def _set_row_analysis_layout(self, row, config):
+        row["analysis_columns"] = list(config.get("analysis_columns") or [])
+        row["analysis_channels"] = config["analysis_channels"]
+        row["analysis_column_channels"] = config["analysis_column_channels"]
+        row["channel_count"] = len(self._condition_channels(row))
 
     def reset(self):
         self._set_default_condition_results()
@@ -478,13 +493,18 @@ class MotorResultPanel(QWidget):
         previous_result = str(row.get("result") or "")
         auto_select_stage = result in ("准备采集", "采集中")
         should_auto_select = auto_select_stage and result != previous_result
-        if result in ("待判定", "未标记") and row.get("analysis_completed"):
+        # A recording-completion placeholder must not erase an analysis failure.
+        if result in ("待判定", "未标记") and previous_result in ("分析失败", "结果不完整"):
+            result, tone = previous_result, "ng"
+        elif result in ("待判定", "未标记") and row.get("analysis_completed"):
             result, tone = self._summarize_channel_results(row.get("channel_results"))
         elif result == "未标记":
             result, tone = "待判定", "pending"
         row["result"] = result
         row["tone"] = tone
         if self._is_pending_result(result, tone) or result in ("准备采集", "采集中"):
+            config = next(item for item in self.conditions if item["key"] == key)
+            self._set_row_analysis_layout(row, config)
             row["runtime_details"] = {}
             row["completed_channels"] = 0
             row["analysis_completed"] = False
@@ -510,6 +530,7 @@ class MotorResultPanel(QWidget):
         self._update_row_button(key)
         self._refresh_row_styles()
         if key == self.selected_key:
+            self._rebuild_channel_table(key)
             self._render_channel_results(key)
         self._update_task_meta()
         self._update_port_summary()
@@ -536,6 +557,10 @@ class MotorResultPanel(QWidget):
         row["runtime_details"] = runtime_details
         return True
 
+    def _condition_channels(self, row):
+        configured = row.get("analysis_channels")
+        return self.channel_indices if configured is None else configured
+
     def set_channels(self, channels):
         channels = list(channels)
         if channels == self.channel_indices:
@@ -545,24 +570,44 @@ class MotorResultPanel(QWidget):
         self._channel_table_signature = None
         self._rebuild_channel_table(self.selected_key)
         for key, row in self.rows.items():
-            row["channel_count"] = len(channels)
+            row["channel_count"] = len(self._condition_channels(row))
             self.set_condition_channel_results(key, row["channel_results"])
         self._render_channel_results(self.selected_key)
 
-    def set_condition_channel_results(self, condition, channel_results):
+    def set_condition_channel_results(
+        self, condition, channel_results, *, restore_channels=False,
+        restored_analysis_channels=None, restored_analysis_column_channels=None,
+    ):
         key = self._resolve_key(condition)
         if not key or key not in self.rows:
             return False
+        row = self.rows[key]
+        if restore_channels:
+            # Legacy progress lacks this mapping; do not infer historical
+            # selections from a configuration changed after recording.
+            row["analysis_column_channels"] = {
+                column: list(selected)
+                for column, selected in (restored_analysis_column_channels or {}).items()
+            }
+            # The historical layout exists even when automatic analysis was off.
+            if restored_analysis_channels is not None:
+                row["analysis_channels"] = list(restored_analysis_channels)
+            elif channel_results:
+                # Older progress only retained channels with results.
+                row["analysis_channels"] = sorted({item["raw_channel"] for item in channel_results})
+            row["channel_count"] = len(self._condition_channels(row))
+            if key == self.selected_key:
+                self._rebuild_channel_table(key)
+        channels = self._condition_channels(row)
         normalized = {}
         for index, item in enumerate(channel_results or []):
             if isinstance(item, dict):
                 value = dict(item)
-                if "raw_channel" not in value and index < len(self.channel_indices):
-                    value["raw_channel"] = self.channel_indices[index]
+                if "raw_channel" not in value and index < len(channels):
+                    value["raw_channel"] = channels[index]
                 raw_channel = value.get("raw_channel")
-                if raw_channel in self.channel_indices:
+                if raw_channel in channels:
                     normalized[raw_channel] = value
-        row = self.rows[key]
         row["channel_results"] = list(normalized.values())
         row["completed_channels"] = sum(
             str(item.get("result") or "").strip().upper() in ("OK", "NG")
@@ -763,13 +808,19 @@ class MotorResultPanel(QWidget):
             for item in row.get("channel_results") or []
         }
         for index, label_map in enumerate(self.channel_detail_labels):
-            channel_result = values.get(self.channel_indices[index], {})
+            raw_channel = self._channel_table_channels[index]
+            channel_result = values.get(raw_channel, {})
             for item_key, label in label_map.items():
-                value = str(channel_result.get(item_key) or "待检测")
+                selected = row.get("analysis_column_channels", {}).get(item_key)
+                unselected = selected is not None and raw_channel not in selected
+                value = "—" if unselected else str(channel_result.get(item_key) or "待检测")
                 tone = self._guess_tone(value)
                 label.setText(value)
                 label.setStyleSheet(self._channel_value_style(tone))
-                label.setToolTip(str((channel_result.get("details") or {}).get(item_key) or ""))
+                label.setToolTip(
+                    "该通道未配置此分析项" if unselected
+                    else str((channel_result.get("details") or {}).get(item_key) or "")
+                )
 
     def _rebuild_channel_table(self, key):
         row = self.rows.get(key, {})
@@ -779,11 +830,13 @@ class MotorResultPanel(QWidget):
             for item in analysis_columns
             if isinstance(item, dict)
         )
-        table_signature = (tuple(self.channel_indices), signature)
+        channels = self._condition_channels(row)
+        table_signature = (tuple(channels), signature)
         if table_signature == self._channel_table_signature and self.channel_detail_labels:
             return
 
         self._channel_table_signature = table_signature
+        self._channel_table_channels = list(channels)
         self.channel_analysis_columns = [
             {"key": column_key, "header": header}
             for column_key, header in signature
@@ -801,9 +854,9 @@ class MotorResultPanel(QWidget):
             self.channel_grid.addWidget(header_label, 0, column)
 
         result_keys = [column_key for column_key, _ in signature] + ["result"]
-        for row_index, channel_name in enumerate(self.channel_labels, start=1):
+        for row_index, channel in enumerate(channels, start=1):
             row_labels = {}
-            channel_label = QLabel(channel_name)
+            channel_label = QLabel(f"CH{channel + 1}")
             channel_label.setAlignment(Qt.AlignCenter)
             channel_label.setStyleSheet(self._small_text_style("#1F2937"))
             self.channel_grid.addWidget(channel_label, row_index, 0)
@@ -817,6 +870,8 @@ class MotorResultPanel(QWidget):
 
     def _set_default_condition_results(self):
         # Reset row data first; repaint and aggregate only after every row is ready.
+        for item in self.conditions:
+            self._set_row_analysis_layout(self.rows[item["key"]], item)
         for key, row in self.rows.items():
             row.update(
                 result="待检测", tone="pending", runtime_details={},
@@ -826,6 +881,7 @@ class MotorResultPanel(QWidget):
         self._refresh_row_styles()
         self.set_final_result("待判定", "pending")
         if self.selected_key in self.rows:
+            self._rebuild_channel_table(self.selected_key)
             self._render_channel_results(self.selected_key)
         self._update_task_meta()
         self._update_port_summary()
@@ -893,22 +949,20 @@ class MotorResultPanel(QWidget):
             used_keys.add(key)
             queue_name = str(item.get("test_queue") or "").strip()
             if isinstance(item.get("analysis_list"), dict):
-                analysis_details = cls._build_condition_analysis_details(item, queue_catalog)
+                analysis_layout = cls._build_condition_analysis_layout(item, queue_catalog)
             else:
                 if queue_name not in analysis_by_queue:
-                    analysis_by_queue[queue_name] = cls._build_condition_analysis_details(
+                    analysis_by_queue[queue_name] = cls._build_condition_analysis_layout(
                         item, queue_catalog
                     )
-                analysis_details = analysis_by_queue[queue_name]
+                analysis_layout = analysis_by_queue[queue_name]
             rows.append(
                 {
                     "key": key,
                     "name": name,
                     "group": group_name,
                     "short_name": short_name or name,
-                    "analysis_columns": cls._analysis_columns_from_details(
-                        analysis_details
-                    ),
+                    **analysis_layout,
                 }
             )
         return rows
@@ -933,34 +987,67 @@ class MotorResultPanel(QWidget):
             return {}
 
     @classmethod
-    def _build_condition_analysis_details(cls, condition_config, queue_catalog=None):
+    def _build_condition_analysis_layout(cls, condition_config, queue_catalog=None):
+        analysis = cls._load_condition_analysis_config(condition_config, queue_catalog)
+        channels = set()
+        analysis_column_channels = {}
+        display_sequence = (analysis or {}).get("display_sequence", [])
+        if not isinstance(display_sequence, list):
+            display_sequence = []
+        for raw_name in display_sequence:
+            name = str(raw_name or "").strip()
+            config = analysis.get(name)
+            if not isinstance(config, dict):
+                continue
+            analysis_type = str(config.get("type") or "").strip()
+            column = cls._fixed_detail_label_for_analysis(analysis_type, str(name))
+            if (analysis_type not in MULTI_CHANNEL_ANALYSIS_TYPES
+                    and column not in cls.DETAIL_LABEL_ORDER):
+                continue
+            selected = normalize_analysis_channels(config)
+            channels.update(selected)
+            if column in cls.DETAIL_LABEL_ORDER:
+                analysis_column_channels.setdefault(column, set()).update(selected)
+        return {
+            "analysis_columns": cls._analysis_columns_from_details(
+                cls._analysis_details_from_analysis_list(analysis)
+            ),
+            # Only unavailable configuration falls back to hardware channels.
+            # A valid empty queue has no channels awaiting analysis.
+            "analysis_channels": sorted(channels) if analysis is not None else None,
+            "analysis_column_channels": {key: sorted(value) for key, value in analysis_column_channels.items()},
+        }
+
+    @classmethod
+    def _load_condition_analysis_config(cls, condition_config, queue_catalog=None):
         if not isinstance(condition_config, dict):
-            return []
+            return None
 
         embedded_analysis = condition_config.get("analysis_list")
         if isinstance(embedded_analysis, dict):
-            return cls._analysis_details_from_analysis_list(embedded_analysis)
+            return embedded_analysis
 
         queue_name = str(condition_config.get("test_queue") or "").strip()
         if not queue_name:
-            return []
+            return None
 
         queue_catalog = queue_catalog or {}
         queue_info = queue_catalog.get(queue_name)
         if isinstance(queue_info, dict) and "analysis_list" in queue_info:
-            return cls._analysis_details_from_analysis_list(queue_info["analysis_list"])
+            analysis = queue_info["analysis_list"]
+            return analysis if isinstance(analysis, dict) else None
         queue_path = queue_info.get("path") if isinstance(queue_info, dict) else None
         if not queue_path:
-            return []
+            return None
 
         load_code, queue_data = LoadUiConfig.load_data_from_json(queue_path)
         if load_code != error_code.OK:
-            return []
+            return None
 
         analysis_list = cls._extract_analysis_list(queue_data)
         if not isinstance(analysis_list, dict):
-            return []
-        return cls._analysis_details_from_analysis_list(analysis_list)
+            return None
+        return analysis_list
 
     @staticmethod
     def _extract_analysis_list(queue_data):
@@ -1082,6 +1169,8 @@ class MotorResultPanel(QWidget):
             for item in channel_results or []
             if isinstance(item, dict)
         ]
+        if "结果不完整" in verdicts:
+            return "结果不完整", "ng"
         if "NG" in verdicts:
             return "NG", "ng"
         if verdicts and all(verdict == "OK" for verdict in verdicts):

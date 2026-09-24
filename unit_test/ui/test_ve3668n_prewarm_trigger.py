@@ -3,6 +3,7 @@
 from copy import deepcopy
 import logging
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -76,6 +77,8 @@ class _WindowHarness:
             speaker_channels=[],
             update_v2pa_factor=lambda: None,
             refresh_channel_windows=lambda: None,
+            _product_configuration_refresh_busy=lambda: False,
+            synchronize_hardware_analysis_channels=Mock(return_value=True),
         )
         self.mic = None
         self.speaker = None
@@ -89,6 +92,7 @@ class _WindowHarness:
         self.sequence_window.ve_calibration_store = self.ve_calibration_store
         self.ve_discovery_factory = None
         self.hardware_selection_path = None
+        self._hardware_analysis_sync_pending = False
         self._status = _StatusBar()
         self.status_updates = 0
 
@@ -320,6 +324,56 @@ def test_first_ve_confirmation_lets_prewarm_own_incompatible_release(monkeypatch
     assert len(window.recording_bridge.calls) == 1
     assert window.recording_bridge.calls[0].signature[3] == 44100
     assert window.recording_bridge.release_calls == []
+    window.sequence_window.synchronize_hardware_analysis_channels.assert_called_once()
+
+
+def test_unchanged_hardware_confirmation_preserves_manual_analysis_subset(monkeypatch):
+    window = _WindowHarness()
+    window.mic, window.mic_channels = device_info(), [1, 7]
+    monkeypatch.setattr("main_window.open_hardware_selection_window",
+                        lambda **kwargs: (True, None, [], window.mic, [7, 1]))
+
+    window.on_hardware_window_init()
+
+    window.sequence_window.synchronize_hardware_analysis_channels.assert_not_called()
+
+
+def test_changed_channels_sync_immediately_and_failed_sync_can_retry(monkeypatch):
+    window = _WindowHarness(bridge=_SynchronousBridge())
+    window.mic, window.mic_channels = device_info(), [1]
+    window.sequence_window.synchronize_hardware_analysis_channels.side_effect = [False, True]
+    monkeypatch.setattr("main_window.open_hardware_selection_window",
+                        lambda **kwargs: (True, None, [], window.mic, [1, 7]))
+
+    window.on_hardware_window_init()
+    assert window.sequence_window.mic_channels == [1, 7]
+    assert window._hardware_analysis_sync_pending is True
+    window.on_hardware_window_init()
+    assert window.sequence_window.synchronize_hardware_analysis_channels.call_count == 2
+    assert window._hardware_analysis_sync_pending is False
+
+
+def test_waiting_product_round_keeps_original_hardware_admission(monkeypatch, ui_qapp):
+    from PyQt5.QtWidgets import QAction
+
+    window = _WindowHarness()
+    window.sequence_window._product_configuration_refresh_busy = lambda: True
+    window.access_lvl = "Engineer"
+    window.hardware_action_selection = QAction("Hardware")
+    window.hardware_action_calibration = QAction("Calibration")
+    window._calibration_admission_available = lambda: True
+    MainWindow._update_hardware_busy_state(window)
+    assert window.hardware_action_selection.isEnabled()
+    warnings = []
+    monkeypatch.setattr("main_window.QMessageBox.warning", lambda *args: warnings.append(args))
+    dialog = Mock(return_value=(False, None, [], None, []))
+    monkeypatch.setattr("main_window.open_hardware_selection_window", dialog)
+
+    window.on_hardware_window_init()
+
+    assert warnings == []
+    dialog.assert_called_once()
+    window.sequence_window.synchronize_hardware_analysis_channels.assert_not_called()
 
 
 def test_cancel_does_not_consume_and_consumed_or_ordinary_switch_keeps_release(monkeypatch):
@@ -332,6 +386,7 @@ def test_cancel_does_not_consume_and_consumed_or_ordinary_switch_keeps_release(m
                         lambda **kwargs: (False, None, [], None, []))
     window.on_hardware_window_init()
     assert lifetime.snapshot().state == "available"
+    window.sequence_window.synchronize_hardware_analysis_channels.assert_not_called()
 
     selected_signature = window._ve_prewarm_signature(old, [7, 1])
     assert lifetime.claim("already-used", selected_signature)

@@ -588,7 +588,9 @@ def main_window_harness(controls, monkeypatch):
         window.sequence_window = SimpleNamespace(player_status_flag=False, mic=window.mic,
             speaker=window.speaker, mic_channels=list(window.mic_channels), speaker_channels=[],
             update_v2pa_factor=lambda: events.append("legacy calibration refresh"),
-            refresh_channel_windows=lambda: events.append("channels refreshed"))
+            refresh_channel_windows=lambda: events.append("channels refreshed"),
+            _product_configuration_refresh_busy=lambda: False,
+            synchronize_hardware_analysis_channels=lambda: True)
         window.device_label, window.user_label = QLabel(window), QLabel(window)
     monkeypatch.setattr(MainWindow, "init_ui", init_ui)
     monkeypatch.setattr(MainWindow, "closeEvent", lambda window, event: event.accept())
