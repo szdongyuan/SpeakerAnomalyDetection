@@ -124,20 +124,20 @@ def test_startup_delay_edit_preserves_other_fields_and_live_toggle(windows, vk, 
     assert raw == original
 
 
-@pytest.mark.parametrize("rate", [8000, 32000, 44100, 48000, 51200, 96000, 102400])
+@pytest.mark.parametrize("rate", [4000, 4001, 7999, 8000, 32000, 44100, 48000, 51200, 96000, 102400])
 def test_vk_rate_editable_and_queue_value_wins(windows, rate):
     window = windows({"sample_rate": rate})
     assert window.samplerate_combo.isEditable() and window.samplerate_combo.isEnabled()
     validator = window.samplerate_combo.lineEdit().validator()
     assert isinstance(validator, QIntValidator)
-    assert (validator.bottom(), validator.top()) == (8000, 102400)
+    assert (validator.bottom(), validator.top()) == (4000, 102400)
     assert window.samplerate_combo.currentText() == str(rate)
     window.on_click_ok_btn()
     assert window.final_data["sample_rate"] == rate
     assert window.final_data["ve_range_index"] == 0
 
 
-@pytest.mark.parametrize("bad", [7999, 102401, 48000.5, 48000.0, True, False, None, "48000", "broken"])
+@pytest.mark.parametrize("bad", [3999, 102401, 48000.5, 48000.0, True, False, None, "48000", "broken"])
 def test_invalid_loaded_vk_rate_is_visible_and_requires_explicit_repair(windows, bad):
     raw = {"sample_rate": bad}
     window = windows(raw)
@@ -150,12 +150,32 @@ def test_invalid_loaded_vk_rate_is_visible_and_requires_explicit_repair(windows,
     assert raw == {"sample_rate": bad}
 
 
-@pytest.mark.parametrize("bad", ["7999", "102401", "48000.5", "True", "", "4.8e4"])
+@pytest.mark.parametrize("bad", ["3999", "102401", "48000.5", "True", "", "4.8e4"])
 def test_vk_submit_independently_rejects_invalid_text(windows, bad):
     window = windows({"sample_rate": 48000})
     window.samplerate_combo.setEditText(bad)
     window.on_click_ok_btn()
     assert window.final_data is None and windows.warnings
+
+
+@pytest.mark.parametrize("rate", [4000, 4001, 7999])
+def test_vk_typed_lower_rate_saves_without_changing_suggestions(windows, rate):
+    window = windows()
+    assert window.samplerate_combo.currentText() == "51200"
+    assert [window.samplerate_combo.itemText(i)
+            for i in range(window.samplerate_combo.count())] == ["44100", "48000", "51200"]
+    window.samplerate_combo.setEditText(str(rate))
+    window.on_click_ok_btn()
+    assert window.final_data["sample_rate"] == rate
+    assert not windows.warnings
+
+
+def test_vk_invalid_text_diagnostic_shows_current_rate_bounds(windows):
+    window = windows()
+    window.samplerate_combo.setEditText("broken")
+    window.on_click_ok_btn()
+    assert window.final_data is None
+    assert windows.warnings == ["sample_rate 必须为整数，范围 4000–102400 Hz。"]
 
 
 @pytest.mark.parametrize("profile, expected", [({"sample_rate": 32000}, 32000), (None, 51200)])
@@ -242,9 +262,10 @@ def test_cancel_preserves_input_and_returns_no_result(windows):
     assert raw == original
 
 
-def test_soundcard_unsupported_loaded_rate_remains_visible_until_repaired(windows):
-    window = windows({"sample_rate": 96000, "ve_range_index": "irrelevant"}, vk=False)
-    assert window.samplerate_combo.currentText() == "96000"
+@pytest.mark.parametrize("rate", [4000, 4001, 7999, 96000])
+def test_soundcard_unsupported_loaded_rate_remains_visible_until_repaired(windows, rate):
+    window = windows({"sample_rate": rate, "ve_range_index": "irrelevant"}, vk=False)
+    assert window.samplerate_combo.currentText() == str(rate)
     assert not window.samplerate_combo.isEditable()
     window.on_click_ok_btn()
     assert window.final_data is None and windows.warnings

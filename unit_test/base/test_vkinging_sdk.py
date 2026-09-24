@@ -492,7 +492,7 @@ def test_empty_lists_and_trimmed_utf8_entries_are_unambiguous():
     assert client.get_channels("Dev1") == ("Dev1/AIN8", "Dev1/AIN2")
 
 
-@pytest.mark.parametrize("rate", [44100, 48000, 51200])
+@pytest.mark.parametrize("rate", [4000, 4001, 7999, 44100, 48000, 51200])
 def test_clock_configuration_uses_continuous_vendor_arguments_without_readback(rate):
     from base.vkinging_sdk import VkDaqClient
 
@@ -509,7 +509,7 @@ def test_clock_configuration_uses_continuous_vendor_arguments_without_readback(r
     ("verify_actual_sample_rate", ("Dev1",)),
 ])
 @pytest.mark.parametrize("rate", [
-    None, True, False, 44100.0, "48000", 1, 7999, 102401,
+    None, True, False, 44100.0, "48000", 1, 3999, 102401,
 ])
 def test_rate_inputs_use_strict_integer_interval_before_io(method, args, rate):
     from base.vkinging_sdk import VkDaqClient
@@ -520,7 +520,7 @@ def test_rate_inputs_use_strict_integer_interval_before_io(method, args, rate):
     assert fake.trace == []
 
 
-@pytest.mark.parametrize("rate", [44100, 48000, 51200])
+@pytest.mark.parametrize("rate", [4000, 4001, 7999, 44100, 48000, 51200])
 def test_actual_sampling_frequency_must_be_verified(rate):
     from base.vkinging_sdk import VkDaqClient
 
