@@ -58,7 +58,7 @@ def test_name_without_machine_id_keeps_sdk_name():
         ("hardware_save", "VE 硬件设置未保存，请检查设备和通道后重试。"),
         ("configuration", "VE 采集配置不可用，请检查采样率和量程。"),
         ("prewarm", "VE 设备初始化失败。"),
-        ("recording", "VE 录音失败，请检查设备和采集配置。"),
+        ("recording", "VE 录音失败，"),
         ("release", "VE 录音资源未释放，未发布结果；请等待资源释放后重试。"),
         ("calibration", "VE 输入校准失败，未保存校准；请检查设备和配置后重试。"),
         ("calibration_start", "VE 输入校准录音启动失败，请检查设备和配置。"),
@@ -85,10 +85,11 @@ def test_unknown_operation_cannot_become_visible(operation):
     assert operation == before
 
 
+@pytest.mark.parametrize("operation,summary", [("prewarm", "VE 设备初始化失败。"), ("recording", "VE 录音失败，")])
 @pytest.mark.parametrize("code", [-9, 0, 17])
-def test_actual_integer_error_codes_are_retained(code):
-    text = ve_failure_text("prewarm", code=code)
-    assert "VE 设备初始化失败。" in text
+def test_actual_integer_error_codes_are_retained(code, operation, summary):
+    text = ve_failure_text(operation, code=code)
+    assert summary in text
     assert f"(code={code})" in text
     assert text.endswith("详细原因请查看日志。")
 

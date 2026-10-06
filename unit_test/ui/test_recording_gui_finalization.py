@@ -496,3 +496,51 @@ def test_cancel_during_metadata_skips_optional_success_timing_io(tmp_path, monke
         release.set()
         capture.cancel()
         assert capture.join(3)
+
+
+def test_ve_release_grace_keeps_data_saving_without_failure_dialog(ui_qapp, tmp_path, monkeypatch):
+    from PyQt5.QtWidgets import QMessageBox
+    from base.recording_service import RecordingCallbacks
+    from base.recording_process_protocol import RecordingEvent, RecordingProgress
+    from unit_test.base.test_recording_service_pipeline import ve_probe
+    from ui.sequence.recording_process_context import RecordingProcessContext
+    from ui.sequence.motor_result_panel import MotorResultPanel
+    from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
+
+    probe = ve_probe(monkeypatch, tmp_path)
+    host = main_host(probe.service, tmp_path)
+    panel = MotorResultPanel(condition_configs=[{"key": "forward", "name": "正转"}])
+    workspace = AnalysisWaveformPanel(condition_configs=[{"key": "forward", "name": "正转"}])
+    host.left_panel, host.channel_workspace = panel, workspace
+    host._get_active_product_condition_key = lambda: "forward"
+    session, req = probe.session, probe.session.request
+    context = RecordingProcessContext(req, "forward", False, session=session)
+    host._recording_process_contexts = {req.request_id: context}
+    host._recording_process_session = session
+    host._active_recording_process_id = req.request_id
+    failed = mock.Mock(wraps=host._on_process_recording_failed)
+    dialog = mock.Mock()
+    monkeypatch.setattr(QMessageBox, "warning", dialog)
+    session.callbacks = RecordingCallbacks(finalizing=host._on_process_recording_finalizing, failed=failed)
+    try:
+        probe.clock.advance(.1)
+        probe.service._event(probe.worker, RecordingEvent(1, req.request_id, "progress",
+            RecordingProgress(req.request_id, 1, req.target_samples, 100.1)))
+        probe.service._event(probe.worker, RecordingEvent(1, req.request_id, "finalizing"))
+        assert panel.stage_label.text() == workspace.status_label.text() == "数据保存中"
+        for delay in (1.0, 18.99):
+            probe.clock.advance(delay)
+            probe.service._tick()
+            assert panel.stage_label.text() == workspace.status_label.text() == "数据保存中"
+            failed.assert_not_called()
+            dialog.assert_not_called()
+        assert session._slot_release_warning_sent
+        assert session.failure is None and not probe.service.can_start_recording
+        probe.clock.advance(120.1 - probe.clock())
+        probe.service._tick()
+        failed.assert_called_once()
+        assert session.failure.stage == "capture_release_timeout"
+        assert panel.stage_label.text() == workspace.status_label.text() == "测试异常"
+    finally:
+        panel.close()
+        workspace.close()

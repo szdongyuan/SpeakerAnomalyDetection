@@ -284,9 +284,9 @@ class RecordingDiagnostics:
                                active_request=phase.active_request),
                           sequence=sequence)
 
-    def milestone(self, stage, *, request=None, generation=None, **fields):
-        """Submit a low-frequency INFO boundary and request a non-wait flush."""
-        return self._emit(stage, logging.INFO,
+    def milestone(self, stage, *, request=None, generation=None, level=logging.INFO, **fields):
+        """Submit a low-frequency boundary and request a non-wait flush."""
+        return self._emit(stage, level,
                           self.request if request is None else _primitive(request),
                           self.generation if generation is None else _primitive(generation),
                           threading.get_ident(), self._perf_ns(), self._monotonic(), fields)
