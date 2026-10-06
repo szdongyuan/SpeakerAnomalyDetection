@@ -3,7 +3,8 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PyQt5.QtCore import QRect, Qt
+from PyQt5.QtCore import QPoint, QPointF, QRect, Qt
+from PyQt5.QtGui import QWheelEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication,
@@ -34,6 +35,7 @@ from ui.ui_analysis_config.common_widgets import (
     TimeSmoothingWidget,
     WeightingSelectorWidget,
 )
+from ui.custom_ui_widget.widgets import ComboBox, DoubleSpinBox, SpinBox
 
 
 class _ScreenStub:
@@ -673,6 +675,192 @@ def test_semantic_dialog_scroll_sync_updates_active_group(qapp):
 
     assert dialog.current_semantic_group_key() == "judgment"
     assert dialog._semantic_nav_buttons["judgment"].isChecked() is True
+
+
+@pytest.fixture
+def short_section_dialog(qapp):
+    dialog = SemanticAnalysisConfigDialogBase()
+    for key in ("input", "preprocess", "compute", "display", "judgment"):
+        dialog.add_semantic_section(key, widget=_filler_widget(100))
+    dialog.resize(630, 480)
+    dialog.show()
+    qapp.processEvents()
+    yield dialog
+    dialog.close()
+
+
+def test_semantic_dialog_scroll_bottom_selects_short_last_section(short_section_dialog, qapp):
+    dialog = short_section_dialog
+    scrollbar = dialog.section_scroll_area.verticalScrollBar()
+    assert scrollbar.maximum() >= dialog._semantic_sections["judgment"].y() > 0
+
+    scrollbar.setValue(scrollbar.maximum())
+    qapp.processEvents()
+    assert dialog.current_semantic_group_key() == "judgment"
+    assert dialog._semantic_nav_buttons["judgment"].isChecked()
+
+    scrollbar.setValue(dialog._semantic_sections["preprocess"].y())
+    qapp.processEvents()
+    assert dialog.current_semantic_group_key() == "preprocess"
+
+    scrollbar.setValue(0)
+    qapp.processEvents()
+    assert dialog.current_semantic_group_key() == "input"
+
+
+@pytest.mark.parametrize("group_key", ["input", "preprocess", "compute", "display", "judgment"])
+@pytest.mark.parametrize("start_at_bottom", [False, True])
+def test_semantic_dialog_nav_click_keeps_requested_group(short_section_dialog, qapp, group_key, start_at_bottom):
+    dialog = short_section_dialog
+    scrollbar = dialog.section_scroll_area.verticalScrollBar()
+    scrollbar.setValue(scrollbar.maximum() if start_at_bottom else 0)
+
+    dialog._semantic_nav_buttons[group_key].click()
+    qapp.processEvents()
+
+    assert dialog.current_semantic_group_key() == group_key
+    assert dialog._semantic_nav_buttons[group_key].isChecked()
+    assert sum(button.isChecked() for button in dialog._semantic_nav_buttons.values()) == 1
+    assert scrollbar.value() == dialog._semantic_sections[group_key].y()
+
+
+@pytest.mark.parametrize("height", [480, 700])
+@pytest.mark.parametrize("last_collapsed", [False, True])
+def test_semantic_dialog_scroll_visits_every_group_in_order(
+    short_section_dialog, qapp, height, last_collapsed
+):
+    dialog = short_section_dialog
+    dialog.resize(630, height)
+    dialog.set_semantic_section_collapsed("judgment", last_collapsed)
+    QTest.qWait(20)
+    scrollbar = dialog.section_scroll_area.verticalScrollBar()
+    positions = list(range(0, scrollbar.maximum(), 8)) + [scrollbar.maximum()]
+
+    for values, expected in (
+        (positions, dialog.semantic_group_keys()),
+        (reversed(positions), list(reversed(dialog.semantic_group_keys()))),
+    ):
+        visited = []
+        for value in values:
+            scrollbar.setValue(value)
+            qapp.processEvents()
+            active = dialog.current_semantic_group_key()
+            if not visited or visited[-1] != active:
+                visited.append(active)
+        assert visited == expected
+
+    dialog._semantic_nav_buttons["judgment"].click()
+    qapp.processEvents()
+    assert scrollbar.value() == dialog._semantic_sections["judgment"].y()
+
+
+def _send_wheel(widget, delta):
+    position = widget.rect().center()
+    event = QWheelEvent(
+        QPointF(position), QPointF(widget.mapToGlobal(position)),
+        QPoint(), QPoint(0, delta), Qt.NoButton, Qt.NoModifier,
+        Qt.NoScrollPhase, False,
+    )
+    QApplication.sendEvent(widget, event)
+
+
+@pytest.fixture(params=[SpinBox, DoubleSpinBox, ComboBox])
+def scroll_parameter(request, short_section_dialog, qapp):
+    dialog = short_section_dialog
+    # Add after showing the dialog, as dynamic parameter panels do.
+    control = request.param()
+    if isinstance(control, ComboBox):
+        control.addItems([str(index) for index in range(20)])
+        control.setCurrentIndex(5)
+    else:
+        control.setRange(-100, 100)
+        control.setValue(15)
+    dialog.add_or_append_semantic_widget("compute", control)
+    QTest.qWait(20)
+    dialog.scroll_to_semantic_section("compute")
+    qapp.processEvents()
+    return dialog, control
+
+
+@pytest.mark.parametrize("focused", [False, True])
+@pytest.mark.parametrize("delta", [-120, 120])
+def test_parameter_wheel_scrolls_page_without_editing(scroll_parameter, qapp, focused, delta):
+    dialog, control = scroll_parameter
+    (control if focused else dialog.semantic_cancel_btn).setFocus()
+    qapp.processEvents()
+    scrollbar = dialog.section_scroll_area.verticalScrollBar()
+    before_scroll = scrollbar.value()
+    before = control.currentIndex() if isinstance(control, ComboBox) else control.value()
+
+    _send_wheel(control, delta)
+    qapp.processEvents()
+
+    after = control.currentIndex() if isinstance(control, ComboBox) else control.value()
+    assert after == before
+    assert (scrollbar.value() - before_scroll) * delta < 0
+
+
+def test_parameter_editor_wheel_and_scroll_boundary_preserve_value(scroll_parameter, qapp):
+    dialog, control = scroll_parameter
+    if isinstance(control, ComboBox):
+        control.setEditable(True)
+    editor = control.lineEdit()
+    editor.setFocus()
+    qapp.processEvents()
+    scrollbar = dialog.section_scroll_area.verticalScrollBar()
+    before = control.currentIndex() if isinstance(control, ComboBox) else control.value()
+    before_scroll = scrollbar.value()
+
+    _send_wheel(editor, -120)
+    assert scrollbar.value() > before_scroll
+    for value, delta in [(0, 120), (scrollbar.maximum(), -120)]:
+        scrollbar.setValue(value)
+        _send_wheel(editor, delta)
+        assert scrollbar.value() == value
+        after = control.currentIndex() if isinstance(control, ComboBox) else control.value()
+        assert after == before
+
+
+def test_parameter_keyboard_and_mouse_editing_still_work(scroll_parameter, qapp):
+    dialog, control = scroll_parameter
+    control.setFocus()
+    qapp.processEvents()
+    if isinstance(control, ComboBox):
+        QTest.keyClick(control, Qt.Key_Down)
+        assert control.currentIndex() == 6
+        control.showPopup()
+        QTest.qWait(QApplication.doubleClickInterval())
+        view = control.view()
+        before_scroll = dialog.section_scroll_area.verticalScrollBar().value()
+        _send_wheel(view.viewport(), -120)
+        assert dialog.section_scroll_area.verticalScrollBar().value() == before_scroll
+        index = control.model().index(8, 0)
+        view.scrollTo(index)
+        qapp.processEvents()
+        QTest.mouseClick(view.viewport(), Qt.LeftButton, pos=view.visualRect(index).center())
+        assert control.currentIndex() == 8
+    else:
+        control.lineEdit().selectAll()
+        QTest.keyClicks(control.lineEdit(), "25")
+        QTest.keyClick(control, Qt.Key_Tab)
+        assert control.value() == 25
+        option = QStyleOptionSpinBox()
+        control.initStyleOption(option)
+        up_rect = control.style().subControlRect(
+            QStyle.CC_SpinBox, option, QStyle.SC_SpinBoxUp, control
+        )
+        QTest.mouseClick(control, Qt.LeftButton, pos=up_rect.center())
+        assert control.value() == 25 + control.singleStep()
+
+
+def test_wheel_editing_outside_parameter_page_is_unchanged(qapp):
+    control = DoubleSpinBox()
+    control.setValue(15)
+    control.show()
+    qapp.processEvents()
+    _send_wheel(control, 120)
+    assert control.value() == 15 + control.singleStep()
+    control.close()
 
 
 def test_semantic_dialog_footer_buttons_call_callbacks(qapp):
