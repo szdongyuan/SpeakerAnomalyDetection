@@ -80,8 +80,6 @@ class ConfigDeletionService:
         self.protected_paths = {
             queue_path_key(path, DEFAULT_DIR) for path in (
                 self.manager.registry_path, self.manager.queue_registry_path,
-                os.path.join(DEFAULT_DIR, "ui/ui_config/none_path.json"),
-                os.path.join(DEFAULT_DIR, "ui/ui_config/sequence_config.json"),
             )
         }
 
