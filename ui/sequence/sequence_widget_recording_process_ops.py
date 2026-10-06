@@ -2,6 +2,7 @@
 from ui.sequence.sequence_widget_raw_csv_ops import record_gui_stage
 import os
 import copy
+from dataclasses import dataclass
 from base.analysis_segments import normalize_segmented_analysis, recording_duration, segment_count
 import time
 from uuid import uuid4
@@ -22,6 +23,14 @@ from consts.ve3668n_consts import VE_BACKEND
 from ui.recording_service_bridge import RecordingProcessorFacade, RecordingServiceBridge
 from ui.sequence.recording_process_context import RecordingProcessContext
 from ui.vkinging_presentation import ve_failure_text
+
+
+@dataclass
+class _RecordingFailureRecovery:
+    context: RecordingProcessContext
+    alias_session: object
+    modal_pending: bool = True
+    terminal_received: bool = False
 
 
 
@@ -329,6 +338,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
             self._pending_raw_audio_csv_recording = None
             csv_admission.csv_reservation = None
         self._recording_contexts()[request.request_id] = context
+        self._recording_failure_recovery = None
         self._active_recording_process_id = request.request_id
         callbacks = RecordingCallbacks(
             started=self._on_process_recording_started,
@@ -597,10 +607,12 @@ class SequenceWidgetRecordingProcessOpsMixin:
                 self._drop_recording_context(context)
             else:
                 self._publish_recording_context(context)
+        self._refresh_recording_failure_recovery(session, terminal=True)
 
     def _on_process_recording_release_failed(self, session, error):
         context = self._recording_context_for_session(session)
         if context is None:
+            self._refresh_recording_failure_recovery(session, terminal=True)
             return
         if context.cleanup_owned or context.cancelled:
             self._drop_recording_context(context)
@@ -706,6 +718,42 @@ class SequenceWidgetRecordingProcessOpsMixin:
         if callable(drain):
             drain()
 
+    def _ordinary_recording_failure_owns_controls(self, context):
+        bridge = getattr(self, "recording_bridge", None)
+        return (
+            not context.cleanup_owned and not context.cancelled
+            and getattr(self, "_recording_workflow_token", None) is context.workflow_token
+            and not getattr(bridge, "_shutdown_requested", False)
+            and not any(bool(getattr(self, name, False)) for name in (
+                "_recording_closed", "_closing", "_shutdown_started", "_close_in_progress",
+                "_recording_cleanup_in_progress", "_streaming_cleanup_in_progress",
+                "_serial_product_condition_executing", "_serial_product_session_started",
+                "_serial_product_error_dialog_open"))
+        )
+
+    def _refresh_recording_failure_recovery(self, session, *, terminal=False):
+        recovery = getattr(self, "_recording_failure_recovery", None)
+        if recovery is None or recovery.context.session is not session:
+            return
+        if (not self._ordinary_recording_failure_owns_controls(recovery.context)
+                or getattr(self, "_recording_process_session", None) is not recovery.alias_session
+                or getattr(self, "_active_recording_process_id", None) is not None
+                or self._recording_contexts()):
+            self._recording_failure_recovery = None
+            return
+        if terminal:
+            if recovery.terminal_received:
+                return
+            recovery.terminal_received = True
+        # Keep the same owner through a nested modal event loop so the return
+        # path can recheck admission even after an early terminal notification.
+        # Consume before calling UI code, which may start another recording.
+        if recovery.terminal_received and not recovery.modal_pending:
+            self._recording_failure_recovery = None
+        refresh = getattr(self, "update_player_btn_is_paused", None)
+        if callable(refresh):
+            refresh()
+
     def _on_process_recording_failed(self, session, failure):
         context = self._recording_context_for_session(session)
         if context is None:
@@ -732,6 +780,14 @@ class SequenceWidgetRecordingProcessOpsMixin:
             return
         context.final = True
         context.accepted_audio = None
+        recovery = None
+        if active and self._ordinary_recording_failure_owns_controls(context):
+            # The exact context establishes ownership before aliases exist on
+            # synchronous start failures. Preserve the alias snapshot solely
+            # to detect replacement while the warning dispatches GUI events.
+            recovery = _RecordingFailureRecovery(
+                context, getattr(self, "_recording_process_session", None))
+            self._recording_failure_recovery = recovery
         self._drop_recording_context(context)
         if active:
             self.streaming_processor = None
@@ -739,6 +795,9 @@ class SequenceWidgetRecordingProcessOpsMixin:
                       if session.request.device.get("backend") == VE_BACKEND
                       else f"录音失败 ({failure.stage}): {failure.message}")
             self._handle_invalid_recording(reason)
+            if recovery is not None and getattr(self, "_recording_failure_recovery", None) is recovery:
+                recovery.modal_pending = False
+                self._refresh_recording_failure_recovery(session)
 
     def _on_process_recording_cancelled(self, session, descriptor):
         context = self._recording_context_for_session(session)
@@ -766,6 +825,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
             discard()
 
     def _cancel_process_recording(self):
+        self._recording_failure_recovery = None
         session = getattr(self, "_recording_process_session", None)
         if session is None:
             return

@@ -1658,6 +1658,269 @@ def controls_host(service, tmp_path, *, serial=False):
     return host
 
 
+def failure_recovery_host(tmp_path):
+    from PyQt5.QtWidgets import QPushButton
+    from base.recording_service import RecordingSession
+    from ui.sequence.recording_process_context import RecordingProcessContext
+    from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
+    from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
+
+    service = SimpleNamespace(can_start_recording=False)
+    host = controls_host(service, tmp_path)
+    host.player_btn = QPushButton()
+    host._handle_invalid_recording = SequenceWidgetStreamingOpsMixin._handle_invalid_recording.__get__(host)
+    host.update_player_btn_is_paused = SequenceWidgetUiOpsMixin.update_player_btn_is_paused.__get__(host)
+    host._on_streaming_complete = mock.Mock()
+    host.clear_all_direction_waveforms = mock.Mock()
+    host.left_panel = mock.Mock()
+    request = RecordingRequest("failure-recovery", "main", 100, 9, (0, 2),
+        device_info(), host.recorded_path, False, 0, {}, None, {"enabled": False})
+    session = RecordingSession(service, request, RecordingCallbacks())
+    session.state = "failed"
+    host._recording_workflow_token = object()
+    context = RecordingProcessContext(request, "", False, session=session,
+        workflow_token=host._recording_workflow_token)
+    host._recording_contexts()[request.request_id] = context
+    host._active_recording_process_id = host._recording_process_id = request.request_id
+    host._recording_process_session = session
+    host._record_workflow_busy = host.player_status_flag = True
+    host.update_player_btn_is_paused()
+    return host, service, context, session
+
+
+def deliver_failure_recovery_terminal(host, session, terminal):
+    if terminal == "released":
+        session.released.set()
+        host._on_process_recording_released(session)
+    else:
+        session.release_error = "retained lease"
+        host._on_process_recording_release_failed(session, session.release_error)
+
+
+@pytest.mark.parametrize("terminal", ["released", "release_failed"])
+@pytest.mark.parametrize("timing", ["before", "inside", "after", "inside_without_event", "inside_busy_then_ready"])
+def test_failure_recovery_refreshes_real_button_after_context_removal(
+        ui_qapp, tmp_path, monkeypatch, terminal, timing):
+    from PyQt5.QtWidgets import QMessageBox
+    host, service, context, session = failure_recovery_host(tmp_path)
+    popups = []
+    modal_states = []
+
+    def warning(*args):
+        popups.append(args[1:])
+        modal_states.append(("contexts", bool(host._recording_contexts())))
+        if timing in ("inside", "inside_without_event"):
+            service.can_start_recording = True
+        if timing in ("inside", "inside_busy_then_ready"):
+            deliver_failure_recovery_terminal(host, session, terminal)
+            modal_states.append(("enabled", host.player_btn.isEnabled()))
+        if timing == "inside_busy_then_ready":
+            service.can_start_recording = True
+
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+    if timing == "before":
+        service.can_start_recording = True
+    host._on_process_recording_failed(session, RecordingFailure(
+        session.request.request_id, "capture", session.request.path, "capture failed"))
+    assert context.failed and not host._recording_contexts()
+    if timing == "after":
+        assert not host.player_btn.isEnabled()
+        service.can_start_recording = True
+    if timing in ("before", "after"):
+        deliver_failure_recovery_terminal(host, session, terminal)
+    assert host.player_btn.isEnabled()
+    assert modal_states[0] == ("contexts", False)
+    if timing in ("inside", "inside_busy_then_ready"):
+        assert modal_states[1] == ("enabled", timing == "inside")
+    history_calls = list(host._discard_current_recent_session.mock_calls)
+    stage_calls = list(host.left_panel.mock_calls)
+    deliver_failure_recovery_terminal(host, session, terminal)
+    host._on_process_recording_failed(session, RecordingFailure(
+        session.request.request_id, "capture", session.request.path, "duplicate"))
+    assert len(popups) == 1
+    assert host._discard_current_recent_session.mock_calls == history_calls
+    assert host.left_panel.mock_calls == stage_calls
+    assert host.data_struct.store_wave_data_multi is None
+    host._on_streaming_complete.assert_not_called()
+    host._advance_manual_product_condition_cycle_after_recording.assert_not_called()
+    assert not host.events
+
+
+@pytest.mark.parametrize("terminal", ["released", "release_failed"])
+@pytest.mark.parametrize("blocker", ["backend", "analysis", "configuration"])
+def test_failure_recovery_preserves_complete_button_admission(
+        ui_qapp, tmp_path, monkeypatch, terminal, blocker):
+    from PyQt5.QtWidgets import QMessageBox
+    host, service, context, session = failure_recovery_host(tmp_path)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: None)
+    host._on_process_recording_failed(session, RecordingFailure(
+        session.request.request_id, "capture", session.request.path, "failed"))
+    service.can_start_recording = blocker != "backend"
+    host._analysis_round_completion_pending = blocker == "analysis"
+    if blocker == "configuration":
+        host._product_config_refresh_state = "empty"
+    deliver_failure_recovery_terminal(host, session, terminal)
+    assert not host.player_btn.isEnabled()
+    # A consumed notification cannot later refresh unrelated UI state.
+    service.can_start_recording = True
+    host._analysis_round_completion_pending = False
+    host._product_config_refresh_state = "ready"
+    deliver_failure_recovery_terminal(host, session, terminal)
+    assert not host.player_btn.isEnabled()
+
+
+@pytest.mark.parametrize("timing", ["inside", "after"])
+@pytest.mark.parametrize("owner", ["token", "session", "close", "shutdown", "cancel", "serial"])
+def test_failure_recovery_does_not_refresh_replaced_owner(
+        ui_qapp, tmp_path, monkeypatch, owner, timing):
+    from PyQt5.QtWidgets import QMessageBox
+    from base.recording_service import RecordingSession
+    host, service, context, session = failure_recovery_host(tmp_path)
+
+    def replace_owner():
+        if owner == "token":
+            host._recording_workflow_token = object()
+        elif owner == "session":
+            host._recording_process_session = RecordingSession(
+                service, session.request, RecordingCallbacks())
+        elif owner == "close":
+            host._close_in_progress = True
+        elif owner == "shutdown":
+            host.recording_bridge._shutdown_requested = True
+        elif owner == "cancel":
+            host._cancel_process_recording()
+        else:
+            host._serial_product_condition_executing = True
+        service.can_start_recording = True
+        host.player_btn.setDisabled(True)
+        host.player_btn.setToolTip("owned elsewhere")
+
+    monkeypatch.setattr(QMessageBox, "warning",
+        lambda *args: replace_owner() if timing == "inside" else None)
+    host._on_process_recording_failed(session, RecordingFailure(
+        session.request.request_id, "capture", session.request.path, "failed"))
+    if timing == "after":
+        replace_owner()
+    deliver_failure_recovery_terminal(host, session, "released")
+    assert not host.player_btn.isEnabled()
+    assert host.player_btn.toolTip() == "owned elsewhere"
+    host._on_streaming_complete.assert_not_called()
+
+
+@pytest.mark.parametrize("owner", ["cleanup", "cancelled", "serial_abort"])
+def test_failure_recovery_excludes_cleanup_owned_failure(
+        ui_qapp, tmp_path, monkeypatch, owner):
+    from PyQt5.QtWidgets import QMessageBox
+    host, service, context, session = failure_recovery_host(tmp_path)
+    popup = mock.Mock()
+    monkeypatch.setattr(QMessageBox, "warning", popup)
+    if owner == "cleanup":
+        context.cleanup_owned = True
+    elif owner == "cancelled":
+        context.cancelled = True
+    else:
+        service.cancel = mock.Mock()
+        host._serial_product_condition_executing = True
+        host._abort_serial_product_round("serial abort", show_warning=False)
+    host._on_process_recording_failed(session, RecordingFailure(
+        session.request.request_id, "capture", session.request.path, "failed"))
+    host.player_btn.setDisabled(True)
+    host.player_btn.setToolTip("cleanup owns controls")
+    service.can_start_recording = True
+    deliver_failure_recovery_terminal(host, session, "released")
+    assert not host.player_btn.isEnabled()
+    assert host.player_btn.toolTip() == "cleanup owns controls"
+    host._on_streaming_complete.assert_not_called()
+
+
+def test_failure_recovery_same_id_impostor_cannot_consume_pending_owner(
+        ui_qapp, tmp_path, monkeypatch):
+    from PyQt5.QtWidgets import QMessageBox
+    from base.recording_service import RecordingSession
+    host, service, context, session = failure_recovery_host(tmp_path)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: None)
+    host._on_process_recording_failed(session, RecordingFailure(
+        session.request.request_id, "capture", session.request.path, "failed"))
+    service.can_start_recording = True
+    impostor = RecordingSession(service, session.request, RecordingCallbacks())
+    deliver_failure_recovery_terminal(host, impostor, "released")
+    assert not host.player_btn.isEnabled()
+    deliver_failure_recovery_terminal(host, session, "released")
+    assert host.player_btn.isEnabled()
+
+
+@pytest.mark.parametrize("prior_alias", [False, True])
+def test_failure_recovery_synchronous_failure_before_alias_installation(
+        ui_qapp, tmp_path, monkeypatch, prior_alias):
+    from PyQt5.QtWidgets import QMessageBox
+    from base.recording_service import RecordingSession
+    host, service, context, old_session = failure_recovery_host(tmp_path)
+    host._recording_contexts().clear()
+    host._active_recording_process_id = None
+    if not prior_alias:
+        host._recording_process_session = None
+        host._recording_process_id = None
+    sessions = []
+
+    def start(request, callbacks):
+        session = RecordingSession(service, request, callbacks)
+        sessions.append(session)
+        callbacks.failed(session, RecordingFailure(
+            request.request_id, "capture", request.path, "early failure"))
+        return session
+
+    monkeypatch.setattr(host.recording_bridge, "start", start)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: None)
+    recorded, rate = host.reset_work_pram()
+    host._start_process_recording(recorded, rate)
+    assert not host._recording_contexts()
+    assert host._recording_process_session is (old_session if prior_alias else None)
+    assert not host.player_btn.isEnabled()
+    service.can_start_recording = True
+    deliver_failure_recovery_terminal(host, old_session, "released")
+    assert not host.player_btn.isEnabled()
+    deliver_failure_recovery_terminal(host, sessions[0], "released")
+    assert host.player_btn.isEnabled()
+    host._on_streaming_complete.assert_not_called()
+
+
+def test_failure_recovery_modal_new_failure_keeps_new_owner_on_old_release(
+        ui_qapp, tmp_path, monkeypatch):
+    from PyQt5.QtWidgets import QMessageBox
+    from base.recording_service import RecordingSession
+    host, service, context, old_session = failure_recovery_host(tmp_path)
+    new_sessions = []
+    popups = []
+
+    def start(request, callbacks):
+        session = RecordingSession(service, request, callbacks)
+        new_sessions.append(session)
+        callbacks.failed(session, RecordingFailure(
+            request.request_id, "capture", request.path, "new failure"))
+        return session
+
+    def warning(*args):
+        popups.append(args[1:])
+        if len(popups) == 1:
+            host._recording_workflow_token = object()
+            recorded, rate = host.reset_work_pram()
+            host._start_process_recording(recorded, rate)
+
+    monkeypatch.setattr(host.recording_bridge, "start", start)
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+    host._on_process_recording_failed(old_session, RecordingFailure(
+        old_session.request.request_id, "capture", old_session.request.path, "old failure"))
+    assert len(popups) == 2
+    assert len(new_sessions) == 1
+    assert not host.player_btn.isEnabled()
+    service.can_start_recording = True
+    deliver_failure_recovery_terminal(host, old_session, "released")
+    assert not host.player_btn.isEnabled()
+    deliver_failure_recovery_terminal(host, new_sessions[0], "released")
+    assert host.player_btn.isEnabled()
+    host._on_streaming_complete.assert_not_called()
+
+
 def workflow_host(service, tmp_path, monkeypatch, *, manual=False):
     from ui.sequence import sequence_widget_streaming_ops as stream
     host = main_host(service, tmp_path, streaming=False)
