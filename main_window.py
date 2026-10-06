@@ -489,6 +489,8 @@ class MainWindow(QMainWindow):
         self.max_btn.clicked.connect(self.show_window_size)
         self.max_btn.setStyleSheet(ui_style_const.main_window_title_button_style)
         self.close_btn = QPushButton()
+        # Closing must not commit/validate the field that currently has focus.
+        self.close_btn.setFocusPolicy(Qt.NoFocus)
         self.close_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/main_window_pic/close.svg"))
         self.close_btn.setStyleSheet(ui_style_const.main_window_close_button_style)
         self.close_btn.clicked.connect(self.close)

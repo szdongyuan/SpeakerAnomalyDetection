@@ -422,16 +422,12 @@ class SequenceWidgetUiOpsMixin:
             lineedit.setText("")
 
     def lineedit_type_lose_focus(self, lineedit):
+        self._clear_product_model_error()
+        if not self._validate_product_model():
+            return
         self._persist_sequence_page_state()
-        # 退出编辑态：回到只读
-        try:
-            lineedit.setReadOnly(True)
-        except Exception:
-            pass
+        lineedit.setReadOnly(True)
         lineedit.clearFocus()
-        if lineedit.text() == "":
-            last_recorded_info = LoadUiConfig().load_last_recorded_info(self.default_logger)
-            lineedit.setText(str(last_recorded_info.get("product_model", "S004-1")))
 
     def validate_count(self, lineedit, is_s_or_n: bool):
         """

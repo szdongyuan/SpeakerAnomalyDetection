@@ -11,6 +11,8 @@ class _MetadataStateHost(metadata_ops.SequenceWidgetTestMetadataOpsMixin, QWidge
     def __init__(self):
         QWidget.__init__(self)
         self.toolsbar = SequenceToolsBar()
+        self.lineedit_type = self.toolsbar.lineedit_type
+        self.lineedit_type.setText("MODEL-1")
         self.left_panel = Mock()
         self.default_logger = Mock()
         self._init_test_round_metadata()
