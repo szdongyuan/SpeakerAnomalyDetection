@@ -1,3 +1,4 @@
+import math
 import sys
 from collections.abc import Mapping
 from copy import deepcopy
@@ -11,6 +12,7 @@ from PyQt5.QtWidgets import QSpinBox, QWidget
 from base.log_manager import LogManager
 from base.sound_device_manager import SoundDeviceManager
 from base.config_number_format import config_number_decimals
+from base.recording_defaults import RecordingDefaultsStore, recording_profile_key
 from base.recording_settings import resolve_startup_trim_ms
 from base.ve3668n_input import validate_range_index
 from base.ve3668n_recording_config import resolve_ve_recording_config
@@ -96,6 +98,13 @@ class RecordConfigWindow(BaseConfigWindow):
     def init_ui(self):
         in_group_box = self.create_in_group()
         btn_layout = self.create_cancel_ok_buttons()
+        self.default_btn = QPushButton(" 设为默认 ")
+        self.default_btn.setAutoDefault(False)
+        self.default_btn.setDefault(False)
+        self.default_btn.clicked.connect(self.on_click_default_btn)
+        cancel_btn = btn_layout.takeAt(0).widget()
+        btn_layout.insertWidget(0, self.default_btn)
+        btn_layout.insertWidget(btn_layout.count() - 1, cancel_btn)
         self.main_layout.addWidget(in_group_box)
         # Capture child-layout defaults only after the group joins the dialog.
         self._input_group_margins = in_group_box.layout().contentsMargins()
@@ -272,7 +281,17 @@ class RecordConfigWindow(BaseConfigWindow):
         in_group_box.setLayout(grid_layout)
         return in_group_box
 
-    def on_click_ok_btn(self):
+    def _collect_validated_values(self):
+        total_time = self.time_input.value()
+        if type(total_time) not in (int, float) or not math.isfinite(total_time) or total_time <= 0:
+            self.time_input.setFocus()
+            QMessageBox.warning(self, "设置警告", "音频时长必须为有限正数。")
+            return
+        startup_trim_ms = self.startup_trim_input.value()
+        if type(startup_trim_ms) is not int or startup_trim_ms < 0:
+            self._focus_advanced_field(self.startup_trim_input)
+            QMessageBox.warning(self, "设置警告", "延迟启动必须为非负整数。")
+            return
         try:
             if self._sample_rate_load_error:
                 raise ValueError(self._sample_rate_load_error)
@@ -304,7 +323,6 @@ class RecordConfigWindow(BaseConfigWindow):
                 self.preview_time_mode_combo.currentData()
             )
         except ValueError as exc:
-            self.final_data = None
             self.preview_time_mode_error_label.setText(str(exc))
             self._preview_time_mode_needs_repair = True
             self._invalid_preview_time_mode = self.input_data.get(
@@ -314,20 +332,44 @@ class RecordConfigWindow(BaseConfigWindow):
             self._focus_advanced_field(self.preview_time_mode_combo)
             QMessageBox.warning(self, "设置警告", str(exc))
             return
-        self.final_data = deepcopy(self.input_data)
-        for key in tuple(self.final_data):
-            if key.startswith("monitor_"):
-                del self.final_data[key]
-        self.final_data.update({
-            "total_time": self.time_input.value(),
+        values = {
+            "total_time": total_time,
             "sample_rate": sample_rate,
-            "startup_trim_ms": self.startup_trim_input.value(),
+            "startup_trim_ms": startup_trim_ms,
             "use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked()),
             RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: preview_time_mode,
-        })
+        }
         if self._is_vk:
-            self.final_data[VE_RANGE_INDEX_CONFIG_KEY] = range_index
+            values[VE_RANGE_INDEX_CONFIG_KEY] = range_index
+        return values
+
+    def on_click_ok_btn(self):
+        values = self._collect_validated_values()
+        if values is None:
+            return
+        result = deepcopy(self.input_data)
+        for key in tuple(result):
+            if key.startswith("monitor_"):
+                del result[key]
+        result.update(values)
+        self.final_data = result
         self.accept()
+
+    def on_click_default_btn(self):
+        values = self._collect_validated_values()
+        if values is None:
+            return
+        profile_key = recording_profile_key(self.mic)
+        if profile_key is None:
+            QMessageBox.warning(self, "设置警告", "无法保存当前设备默认配置，请先连接输入设备。")
+            return
+        try:
+            RecordingDefaultsStore().save(profile_key, values)
+        except (OSError, UnicodeError, ValueError) as exc:
+            self.default_logger.warning("Failed to save recording defaults for %s: %s", profile_key, exc)
+            QMessageBox.warning(self, "设置警告", "默认配置保存失败，请查看日志。")
+            return
+        QMessageBox.information(self, "设置提示", "默认配置已保存，仅用于新建录音项")
 
     def _on_sample_rate_edited(self, _value):
         self._sample_rate_load_error = None

@@ -318,6 +318,9 @@ def test_operation_sequence_persistence_boundaries_reject_invalid_record_mode(
         format_config_data=lambda _config: calls.append("format") or [{"saved": True}],
         default_logger=SimpleNamespace(warning=lambda message: warnings.append(message)),
     )
+    host._save_current_config_explicitly = (
+        AnalysisModelSelect._save_current_config_explicitly.__get__(host)
+    )
     monkeypatch.setattr(LoadUiConfig, "save_sequence_config_to_json", lambda *_: calls.append("save") or True)
     monkeypatch.setattr("ui.operation_sequence.QMessageBox.warning", lambda *args: warnings.append(args[-1]))
     monkeypatch.setattr(
