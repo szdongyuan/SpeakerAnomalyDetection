@@ -54,12 +54,13 @@ class _HeldEnterGuard(QObject):
 
 
 class DialogEnterPolicy(QObject):
-    """Keep the native first Enter and confirm subsequent unchanged input."""
+    """Use two-stage Enter, optionally confirming standalone inputs immediately."""
 
-    def __init__(self, dialog, confirm_button=None):
+    def __init__(self, dialog, confirm_button=None, *, confirm_on_first_enter=False):
         super().__init__(dialog)
         self._dialog = dialog
         self._confirm_button = confirm_button
+        self._confirm_on_first_enter = confirm_on_first_enter
         self._dispatching_input = False
         self._preedit_widget = None
         self._ready_input = None
@@ -68,6 +69,11 @@ class DialogEnterPolicy(QObject):
         self._input_connections = []
         self._held_enter = _HeldEnterGuard(dialog)
         self._watch(dialog)
+
+    def set_confirm_on_first_enter(self, enabled):
+        if enabled != self._confirm_on_first_enter:
+            self._reset_input()
+        self._confirm_on_first_enter = enabled
 
     def set_confirm_button(self, button_or_none):
         if button_or_none is not self._confirm_button:
@@ -231,6 +237,15 @@ class DialogEnterPolicy(QObject):
             self._track_input(single_line)
             if event.isAutoRepeat():
                 return True
+        if (
+            self._confirm_on_first_enter
+            and single_line is not None
+            and single_line[0] is single_line[1]
+            and self._preedit_widget is None
+        ):
+            if single_line[1].hasAcceptableInput():
+                self._click_confirm()
+            return True
         if single_line is not None and single_line == self._ready_input:
             self._click_confirm()
             return True
@@ -266,12 +281,15 @@ class DialogEnterPolicy(QObject):
             button.click()
 
 
-def install_dialog_enter_policy(dialog, confirm_button=None):
-    """Install once on *dialog*, or update its explicit confirmation target."""
+def install_dialog_enter_policy(dialog, confirm_button=None, *, confirm_on_first_enter=False):
+    """Install/update two-stage Enter, with optional first-Enter standalone input confirmation."""
     policy = getattr(dialog, "_enter_policy", None)
     if policy is None:
-        policy = DialogEnterPolicy(dialog, confirm_button)
+        policy = DialogEnterPolicy(
+            dialog, confirm_button, confirm_on_first_enter=confirm_on_first_enter,
+        )
         dialog._enter_policy = policy
     else:
+        policy.set_confirm_on_first_enter(confirm_on_first_enter)
         policy.set_confirm_button(confirm_button)
     return policy

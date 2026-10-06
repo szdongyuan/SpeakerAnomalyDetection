@@ -99,7 +99,7 @@ class LoginWindow(QDialog):
 
         self.setLayout(layout)
         self.login_button.setDefault(True)
-        install_dialog_enter_policy(self, self.login_button)
+        install_dialog_enter_policy(self, self.login_button, confirm_on_first_enter=True)
 
         self.setStyleSheet(
             ui_style_const.qcombobox_style
