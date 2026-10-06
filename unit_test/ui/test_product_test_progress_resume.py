@@ -150,6 +150,40 @@ def save_partial(factory):
     return original
 
 
+@pytest.mark.parametrize("model", ["test_prodect", "ABC.1", "ABC（旧版）"])
+def test_legacy_model_continues_only_the_saved_round(factory, model):
+    original = save_partial(factory)
+    state = original._product_progress_store.load()
+    state["identity"]["product_model"] = model
+    original._product_progress_store.save(state)
+    reopened = factory()
+    assert reopened._offer_product_test_resume()
+    assert reopened.lineedit_type.text() == model
+    assert reopened.lineedit_type.isReadOnly()
+    assert reopened._analysis_round_config_locked
+    assert reopened._validate_test_round_metadata()
+    assert reopened._prepare_next_manual_product_condition_recording()
+    assert reopened._build_product_test_progress()["identity"]["product_model"] == model
+    reopened._reset_manual_product_condition_cycle(clear_waveforms=False)
+    assert reopened._test_round_product_model is None
+    assert not reopened._validate_test_round_metadata()
+    assert reopened.lineedit_type.text() == model
+
+
+@pytest.mark.parametrize("model", ["CON.1", "A/B", "A."])
+def test_unsafe_legacy_model_cannot_restore_round(factory, model):
+    original = save_partial(factory)
+    state = original._product_progress_store.load()
+    state["identity"]["product_model"] = model
+    original._product_progress_store.save(state)
+    reopened = factory()
+    reopened._ask_product_test_resume.return_value = None
+    assert not reopened._offer_product_test_resume()
+    assert reopened._ask_product_test_resume.call_args.args[1]
+    assert reopened._test_round_product_model is None
+    assert reopened._manual_product_condition_group_id == ""
+
+
 @pytest.mark.parametrize("successful_verdict", ["OK", "NG"])
 def test_incomplete_analysis_progress_preserves_failure_and_can_continue(factory, successful_verdict):
     original = factory()

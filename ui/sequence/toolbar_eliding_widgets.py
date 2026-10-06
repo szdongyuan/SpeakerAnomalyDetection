@@ -185,6 +185,24 @@ class ElidingLineEdit(_FullTextPresentation, QLineEdit):
         )
 
 
+class ModelLineEdit(ElidingLineEdit):
+    """Confirm explicit focus changes even after an unchanged, rejected edit."""
+
+    def focusOutEvent(self, event):
+        # QLineEdit may skip editingFinished after Enter or a modal warning.
+        # It may also emit while closing/disabling the window. Confirm only
+        # explicit editor navigation, independently of its native emission.
+        was_blocked = self.blockSignals(True)
+        try:
+            super().focusOutEvent(event)
+        finally:
+            self.blockSignals(was_blocked)
+        if not self.isReadOnly() and event.reason() in (
+            Qt.MouseFocusReason, Qt.TabFocusReason, Qt.BacktabFocusReason,
+        ):
+            self.editingFinished.emit()
+
+
 class _FullTextItemDelegate(QStyledItemDelegate):
     def helpEvent(self, event, view, option, index):
         if event.type() == QEvent.ToolTip and index.isValid():

@@ -2,9 +2,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QWidget
+from PyQt5.QtWidgets import QApplication, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
@@ -12,6 +12,7 @@ from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixi
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
 from ui.sequence import sequence_widget_test_metadata_ops as test_metadata_ops
 from ui.sequence.sequence_widget_test_metadata_ops import SequenceWidgetTestMetadataOpsMixin
+from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
 
 
 class _MetadataHost(
@@ -27,6 +28,7 @@ class _MetadataHost(
         self.left_panel = Mock()
         self.lineedit_s_or_n = self.toolsbar.lineedit_s_or_n
         self.lineedit_type = self.toolsbar.lineedit_type
+        self.lineedit_type.setText("MODEL-1")
         self.barcode_scanner_box = self.toolsbar.barcode_scanner_box
         self.replayer_btn = self.toolsbar.replayer_btn
         self.data_btn = self.toolsbar.data_btn
@@ -103,6 +105,198 @@ def test_empty_sample_blocks_before_preparing_a_condition(host, text):
     host._load_sequence_config_for_product_condition.assert_not_called()
     assert host._manual_product_condition_group_id == ""
     assert host._test_round_metadata is None
+
+
+@pytest.mark.parametrize("entry", ["manual", "serial", "preflight"])
+@pytest.mark.parametrize("model", ["", "test_prodect", "A.1", "A()", "COM1", "A" * 81])
+def test_invalid_model_blocks_all_start_entries(host, entry, model):
+    host.lineedit_type.setText(model)
+    with patch.object(test_metadata_ops.QMessageBox, "warning") as warning:
+        if entry == "manual":
+            assert host._prepare_next_manual_product_condition_recording() is None
+        elif entry == "serial":
+            assert not host._start_serial_product_condition("01 04")
+        else:
+            assert host.checked_work_status_message()
+    warning.assert_called_once()
+    assert host.lineedit_type.text() == model
+    host._load_sequence_config_for_product_condition.assert_not_called()
+    assert host._test_round_metadata is None
+    assert not host._serial_product_condition_executing
+
+
+def test_model_warning_is_deduplicated_and_reentry_is_blocked(host):
+    host.lineedit_type.setText("bad_model")
+    with patch.object(
+        test_metadata_ops.QMessageBox, "warning",
+        side_effect=lambda *_: host._validate_test_round_metadata(),
+    ) as warning:
+        for _ in range(3):
+            assert not host._validate_test_round_metadata()
+        warning.assert_called_once()
+        host.lineedit_type.setText("MODEL-1")
+        assert host._validate_test_round_metadata()
+        host.lineedit_type.setText("bad_model")
+        assert not host._validate_test_round_metadata()
+        assert warning.call_count == 2
+
+
+def test_edit_finish_preserves_invalid_text_and_persists_only_valid_model(host):
+    host._persist_sequence_page_state = Mock()
+    editor = host.lineedit_type
+    editor.setText("ABC_01")
+    with patch.object(test_metadata_ops.QMessageBox, "warning") as warning:
+        SequenceWidgetUiOpsMixin.lineedit_type_lose_focus(host, editor)
+    warning.assert_called_once()
+    assert editor.text() == "ABC_01"
+    assert not editor.isReadOnly()
+    host._persist_sequence_page_state.assert_not_called()
+    editor.setText("  ABC-01(V2)  ")
+    SequenceWidgetUiOpsMixin.lineedit_type_lose_focus(host, editor)
+    assert editor.text() == "ABC-01(V2)"
+    assert editor.isReadOnly()
+    host._persist_sequence_page_state.assert_called_once()
+
+
+def test_round_model_is_locked_and_programmatic_change_blocks_next_condition(host):
+    host.lineedit_type.setText("  MODEL-1  ")
+    assert host._prepare_next_manual_product_condition_recording()
+    assert host.lineedit_type.text() == "MODEL-1"
+    assert host.lineedit_type.isReadOnly()
+    QTest.keyClicks(host.lineedit_type, "changed")
+    assert host.lineedit_type.text() == "MODEL-1"
+    host.lineedit_type.setText("MODEL-2")
+    with patch.object(test_metadata_ops.QMessageBox, "warning"):
+        assert not host._validate_test_round_metadata()
+    host._end_test_round_metadata()
+    assert host._validate_test_round_metadata()
+
+
+@pytest.mark.parametrize("key", [Qt.Key_Return, Qt.Key_Enter])
+def test_each_model_enter_warns_but_repeated_start_checks_stay_deduplicated(host, key):
+    editor = host.lineedit_type
+    editor.setText("d_e")
+    host._persist_sequence_page_state = Mock()
+    finish = lambda: SequenceWidgetUiOpsMixin.lineedit_type_lose_focus(host, editor)
+    editor.editingFinished.connect(finish)
+    try:
+        with patch.object(test_metadata_ops.QMessageBox, "warning") as warning:
+            for count in range(1, 4):
+                QTest.keyClick(editor, key)
+                assert warning.call_count == count
+                assert not host._validate_test_round_metadata()
+                assert warning.call_count == count
+            assert editor.text() == "d_e"
+            host._persist_sequence_page_state.assert_not_called()
+    finally:
+        editor.editingFinished.disconnect(finish)
+
+
+@pytest.mark.parametrize("target_type", [QLineEdit, QPushButton])
+@pytest.mark.parametrize("leave_key", [None, Qt.Key_Tab, Qt.Key_Backtab])
+def test_leaving_model_repeats_warning_after_enter(host, target_type, leave_key):
+    editor = host.lineedit_type
+    host._persist_sequence_page_state = Mock()
+    window = QWidget()
+    layout = QVBoxLayout(window)
+    target = target_type()
+    layout.addWidget(editor)
+    layout.addWidget(target)
+    finish = lambda: SequenceWidgetUiOpsMixin.lineedit_type_lose_focus(host, editor)
+    editor.editingFinished.connect(finish)
+    real_warning = test_metadata_ops.QMessageBox.warning
+
+    def show_warning(_parent, title, message):
+        QTimer.singleShot(0, lambda: QApplication.activeModalWidget().accept())
+        return real_warning(window, title, message)
+
+    try:
+        window.show()
+        window.activateWindow()
+        QTest.qWait(100)
+        editor.setReadOnly(False)
+        editor.setFocus()
+        editor.clear()
+        with patch.object(test_metadata_ops.QMessageBox, "warning", side_effect=show_warning) as warning:
+            QTest.keyClicks(editor, "d_e")
+            QTest.mouseMove(target)
+            assert warning.call_count == 0
+            QTest.keyClick(editor, Qt.Key_Return)
+            assert warning.call_count == 1
+            QTest.qWait(50)
+            for count in (2, 3):
+                assert editor.hasFocus()
+                if leave_key is None:
+                    QTest.mouseClick(target, Qt.LeftButton)
+                else:
+                    QTest.keyClick(editor, leave_key)
+                QTest.qWait(50)
+                assert warning.call_count == count
+                assert not host._validate_test_round_metadata()
+                assert warning.call_count == count
+            assert editor.text() == "d_e"
+            host._persist_sequence_page_state.assert_not_called()
+    finally:
+        editor.editingFinished.disconnect(finish)
+        editor.setParent(host.toolsbar)
+        window.close()
+
+
+@pytest.mark.parametrize("action", ["close", "disable"])
+def test_model_does_not_warn_during_window_shutdown(host, action):
+    editor = host.lineedit_type
+    host._persist_sequence_page_state = Mock()
+    window = QWidget()
+    layout = QVBoxLayout(window)
+    layout.addWidget(editor)
+    finish = lambda: SequenceWidgetUiOpsMixin.lineedit_type_lose_focus(host, editor)
+    editor.editingFinished.connect(finish)
+    try:
+        window.show()
+        window.activateWindow()
+        QTest.qWait(100)
+        editor.setReadOnly(False)
+        editor.setFocus()
+        editor.clear()
+        with patch.object(test_metadata_ops.QMessageBox, "warning") as warning:
+            QTest.keyClicks(editor, "d_e")
+            if action == "close":
+                assert window.close()
+                assert not window.isVisible()
+            else:
+                window.setEnabled(False)
+                assert not window.isEnabled()
+            QApplication.processEvents()
+            warning.assert_not_called()
+            assert editor.text() == "d_e"
+            host._persist_sequence_page_state.assert_not_called()
+    finally:
+        editor.editingFinished.disconnect(finish)
+        editor.setParent(host.toolsbar)
+        window.close()
+
+
+def test_model_can_be_typed_in_stages_and_is_checked_on_editing_finished(host):
+    editor = host.lineedit_type
+    host._persist_sequence_page_state = Mock()
+    finish = lambda: SequenceWidgetUiOpsMixin.lineedit_type_lose_focus(host, editor)
+    editor.editingFinished.connect(finish)
+    editor.setReadOnly(False)
+    editor.clear()
+    with patch.object(test_metadata_ops.QMessageBox, "warning") as warning:
+        QTest.keyClicks(editor, "ABC(V2")
+        warning.assert_not_called()
+        QTest.keyClick(editor, Qt.Key_Return)
+        warning.assert_called_once()
+        assert editor.text() == "ABC(V2"
+        editor.deselect()
+        editor.setCursorPosition(len(editor.text()))
+        QTest.keyClicks(editor, ")")
+        QTest.keyClick(editor, Qt.Key_Return)
+        assert editor.text() == "ABC(V2)"
+        assert editor.isReadOnly()
+        assert host._persist_sequence_page_state.called
+    editor.editingFinished.disconnect(finish)
 
 
 @pytest.mark.parametrize("text", ["", "0", "-1", "1.5", "10000", "abc"])
