@@ -10,6 +10,7 @@ from PyQt5.QtCore import QSignalBlocker, Qt
 from PyQt5.QtWidgets import QDialogButtonBox, QMessageBox, QSizePolicy, QSpacerItem
 
 from base.load_config import LoadUiConfig
+from base.product_model_validation import validate_product_model
 from base.product_test_progress import (
     PROGRESS_ANALYSIS_FAILURES, PROGRESS_CHANNEL_RESULTS, PROGRESS_RESULTS,
     ProductTestProgressStore,
@@ -182,6 +183,7 @@ class SequenceWidgetProgressOpsMixin:
             for key in ("product_model", "sample_number")
         ):
             raise ValueError("型号或样本编号无效")
+        validate_product_model(identity["product_model"], allow_legacy=True)
         number = identity.get("test_round")
         if type(number) is not int or not 1 <= number <= 9999:
             raise ValueError("测试轮次无效")
@@ -424,6 +426,7 @@ class SequenceWidgetProgressOpsMixin:
         identity = state["identity"]
         self._restore_product_test_identity(identity)
         self._test_round_metadata = {key: identity[key] for key in ("sample_number", "test_round")}
+        self._test_round_product_model = identity["product_model"]
         self.toolsbar.sample_number_lineedit.setReadOnly(True)
         self.toolsbar.current_round_spinbox.setReadOnly(True)
         self._lock_analysis_round_config()

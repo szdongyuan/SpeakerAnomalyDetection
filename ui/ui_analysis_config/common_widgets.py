@@ -6,10 +6,12 @@ from functools import partial
 from string import Template
 from typing import Any, Callable
 
-from PyQt5.QtCore import QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
+    QAbstractSpinBox,
     QApplication,
     QButtonGroup,
+    QComboBox,
     QGridLayout,
     QHBoxLayout,
     QLayout,
@@ -230,6 +232,37 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self._content_layout.addWidget(self.section_scroll_area, 1)
         self._root_layout.addLayout(self._content_layout, 1)
         self._root_layout.addLayout(self._create_semantic_footer_layout())
+        self.section_scroll_area.viewport().installEventFilter(self)
+        self._watch_parameter_widgets(self.section_container)
+
+    def _watch_parameter_widgets(self, widget):
+        if not isinstance(widget, QWidget):
+            return
+        widget.installEventFilter(self)
+        for child in widget.children():
+            self._watch_parameter_widgets(child)
+
+    def eventFilter(self, watched, event):
+        event_type = event.type()
+        if event_type in (QEvent.ChildAdded, QEvent.ChildPolished):
+            self._watch_parameter_widgets(event.child())
+        elif watched is self.section_scroll_area.viewport() and event_type == QEvent.Resize:
+            QTimer.singleShot(0, self._refresh_section_container_minimum_height)
+        elif (
+            event_type == QEvent.Wheel
+            and isinstance(watched, QWidget)
+            and watched.window() is self
+            and self.section_container.isAncestorOf(watched)
+        ):
+            control = watched
+            while control is not self.section_container:
+                if isinstance(control, (QAbstractSpinBox, QComboBox)):
+                    # Include inner editors, but leave popup lists independent.
+                    QApplication.sendEvent(self.section_scroll_area.viewport(), event)
+                    event.accept()
+                    return True
+                control = control.parentWidget()
+        return super().eventFilter(watched, event)
 
     def apply_semantic_dialog_size(
         self,
@@ -546,8 +579,18 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         spacing = self.section_layout.spacing()
         height = sum(section.sizeHint().height() for section in visible_sections)
         height += spacing * max(0, len(visible_sections) - 1)
+        # Leave enough trailing space for the last heading to reach the top,
+        # so every navigation group has its own reachable scroll position.
+        bottom_padding = 0
+        if visible_sections:
+            bottom_padding = max(
+                0,
+                self.section_scroll_area.viewport().height()
+                - visible_sections[-1].sizeHint().height(),
+            )
+        self.section_layout.setContentsMargins(0, 0, 0, bottom_padding)
         self.section_container.setMinimumWidth(0)
-        self.section_container.setMinimumHeight(max(0, height))
+        self.section_container.setMinimumHeight(max(0, height + bottom_padding))
         self.section_container.updateGeometry()
         self.section_container.adjustSize()
 
@@ -752,13 +795,14 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         section = self._semantic_sections.get(group_key)
         if section is None:
             return
+        self.section_scroll_area.verticalScrollBar().setValue(section.y())
         self._set_active_semantic_group(group_key)
-        self.section_scroll_area.ensureWidgetVisible(section, 0, 0)
 
     def _sync_active_section_from_scroll(self) -> None:
         if self._syncing_scroll or not self._semantic_sections:
             return
-        scroll_value = self.section_scroll_area.verticalScrollBar().value()
+        scrollbar = self.section_scroll_area.verticalScrollBar()
+        scroll_value = scrollbar.value()
         current_key = self._active_semantic_group_key
         for group_key, section in self._semantic_sections.items():
             if section.y() <= scroll_value + 12:

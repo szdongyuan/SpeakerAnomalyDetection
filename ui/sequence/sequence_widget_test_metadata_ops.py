@@ -2,6 +2,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QMessageBox
 
 from base.load_config import LoadUiConfig
+from base.product_model_validation import validate_product_model
 from base.save_data import save_recorded_data_to_json
 
 
@@ -10,6 +11,7 @@ class SequenceWidgetTestMetadataOpsMixin:
 
     def _init_test_round_metadata(self):
         self._test_round_metadata = None
+        self._test_round_product_model = None
         self._test_metadata_validation_open = False
         self._test_metadata_last_error = None
         self._restore_test_metadata_ui_state()
@@ -54,8 +56,34 @@ class SequenceWidgetTestMetadataOpsMixin:
         )
         self.left_panel.set_current_round(round_number)
 
-    def _validate_test_round_metadata(self):
+    def _validate_product_model(self):
         if self._test_metadata_validation_open:
+            return False
+        editor = self.lineedit_type
+        locked_model = self._test_round_product_model
+        if locked_model is not None:
+            if editor.text() != locked_model:
+                return self._show_test_metadata_error(editor, "本轮型号已锁定，不能在测试中途修改。")
+            return True
+        try:
+            model = validate_product_model(editor.text())
+        except ValueError as error:
+            return self._show_test_metadata_error(editor, str(error))
+        editor.setText(model)
+        self._clear_product_model_error()
+        return True
+
+    def _clear_product_model_error(self):
+        # Finishing an edit retries the warning; automatic triggers still deduplicate.
+        if (
+            not self._test_metadata_validation_open
+            and self._test_metadata_last_error is not None
+            and self._test_metadata_last_error[0] == self.lineedit_type.objectName()
+        ):
+            self._test_metadata_last_error = None
+
+    def _validate_test_round_metadata(self):
+        if not self._validate_product_model():
             return False
         if self._test_round_metadata is not None:
             return True
@@ -72,6 +100,9 @@ class SequenceWidgetTestMetadataOpsMixin:
             self._test_metadata_last_error = None
             return True
 
+        return self._show_test_metadata_error(invalid_field, message)
+
+    def _show_test_metadata_error(self, invalid_field, message):
         # Serial frames can arrive while QMessageBox runs its nested event loop.
         error_key = (invalid_field.objectName(), invalid_field.text())
         if self._test_metadata_last_error == error_key:
@@ -100,6 +131,8 @@ class SequenceWidgetTestMetadataOpsMixin:
             "sample_number": sample_edit.text().strip(),
             "test_round": round_edit.value(),
         }
+        self._test_round_product_model = self.lineedit_type.text()
+        self.lineedit_type.setReadOnly(True)
         sample_edit.setText(self._test_round_metadata["sample_number"])
         self._persist_test_metadata_ui_state()
         sample_edit.setReadOnly(True)
@@ -109,6 +142,7 @@ class SequenceWidgetTestMetadataOpsMixin:
 
     def _end_test_round_metadata(self):
         self._test_round_metadata = None
+        self._test_round_product_model = None
         self.toolsbar.sample_number_lineedit.setReadOnly(False)
         self.toolsbar.current_round_spinbox.setReadOnly(False)
         self._sync_test_round_label()

@@ -16,7 +16,7 @@ from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
 from ui.sequence.toolbar_eliding_widgets import (
     ElidingCheckBox, ElidingComboBox, ElidingLabel, ElidingLineEdit, ElidingSpinBox,
-    ToolbarFieldLabel,
+    ModelLineEdit, ToolbarFieldLabel,
 )
 from ui.sequence.toolbar_row_layout import ToolbarRowLayout
 from ui.sequence.toolbar_serial_button import ToolbarSerialButton
@@ -153,7 +153,7 @@ class SequenceToolsBar(QWidget):
         self.condition_mode_combobox = QComboBox(self)
         self.condition_mode_combobox.addItems(["测试", "标记"])
         self.condition_mode_combobox.hide()
-        self.lineedit_type = ElidingLineEdit()
+        self.lineedit_type = ModelLineEdit()
         self.lineedit_count = QLineEdit()
         self.lineedit_s_or_n = ElidingLineEdit()
         self.barcode_scanner_box = ElidingCheckBox("S/N：")
