@@ -4,11 +4,12 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QEvent, Qt, QTimer
+from PyQt5.QtGui import QInputMethodEvent, QKeyEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QAbstractButton, QAbstractSpinBox, QComboBox, QDialogButtonBox, QLineEdit,
-    QPushButton,
+    QApplication, QMessageBox, QPushButton,
 )
 
 from base.video.config import VideoConfig
@@ -123,6 +124,8 @@ def system_dialog(request, opened, monkeypatch):
 
 def test_system_editors_preserve_values_without_clicking(system_dialog, enter):
     window, target, auxiliary, editors, callbacks = system_dialog
+    if isinstance(window, LoginWindow):
+        editors = [editor for editor in editors if isinstance(editor, QComboBox)]
     clicks = watch_buttons(window)
     for editor in editors:
         before = editor.currentText() if isinstance(editor, QComboBox) else editor.text()
@@ -139,7 +142,7 @@ def test_system_editors_preserve_values_without_clicking(system_dialog, enter):
     assert window.isVisible()
 
 
-@pytest.mark.parametrize("system_dialog", ["record", "serial", "video", "login",
+@pytest.mark.parametrize("system_dialog", ["record", "serial", "video",
                                            "add-account", "change-password"], indirect=True)
 @pytest.mark.parametrize("reset", ["edit", "focus"])
 def test_system_second_enter_confirms_and_reset_restarts_native(
@@ -185,6 +188,186 @@ def test_system_second_enter_confirms_and_reset_restarts_native(
                     assert window.focusWidget() is auxiliary
                     editor.setFocus()
                     ui_qapp.processEvents()
+
+
+def test_login_inputs_confirm_on_first_enter_after_every_reset(opened, monkeypatch, enter, ui_qapp):
+    callbacks = []
+    monkeypatch.setattr(LoginWindow, "login_click", lambda self: callbacks.append("login"))
+    window = opened(LoginWindow())
+    clicks = watch_buttons(window)
+    native_returns = []
+    editors = [window.username_input, window.password_input]
+    for editor in editors:
+        editor.setText("initial-value")
+        editor.returnPressed.connect(lambda: native_returns.append(True))
+
+    for reset in ("initial", "edit", "focus", "show"):
+        if reset == "edit":
+            for editor in editors:
+                editor.setText("changed-value")
+        elif reset == "show":
+            window.hide()
+            window.show()
+            window.activateWindow()
+            ui_qapp.processEvents()
+        for editor in editors:
+            before = editor.text()
+            prior = len(callbacks)
+            enter(editor)
+            ui_qapp.processEvents()
+            assert len(callbacks) == prior + 1
+            assert clicks == [window.login_button] * len(callbacks)
+            assert editor.text() == before
+            assert native_returns == []
+            assert window.isVisible()
+
+
+@pytest.mark.parametrize("editor_name", ["username_input", "password_input"])
+@pytest.mark.parametrize("empty", [False, True], ids=["filled", "empty"])
+def test_login_first_enter_uses_current_credentials_and_existing_result(
+        opened, monkeypatch, enter, editor_name, empty):
+    checks, warnings = [], []
+
+    def check(window):
+        checks.append((window.username_input.text(), window.password_input.text()))
+        return len(checks) == 2
+
+    monkeypatch.setattr(LoginWindow, "check_credentials", check)
+    monkeypatch.setattr("ui.login_window.QMessageBox.warning", lambda *args: warnings.append(args))
+    window = opened(LoginWindow())
+    initial = ("", "") if empty else ("first-user", "first-password")
+    window.username_input.setText(initial[0])
+    window.password_input.setText(initial[1])
+    clicks = watch_buttons(window)
+    enter(getattr(window, editor_name))
+    assert checks == [initial]
+    assert len(warnings) == 1
+    assert warnings[0][1:] == ("Error", "Username or Password is incorrect")
+    assert not window.pwd_checked
+    assert window.isVisible()
+    window.username_input.setText("updated-user")
+    window.password_input.setText("updated-password")
+    enter(getattr(window, editor_name))
+    assert checks == [initial, ("updated-user", "updated-password")]
+    assert len(warnings) == 1
+    assert clicks == [window.login_button, window.login_button]
+    assert window.pwd_checked
+    assert not window.isVisible()
+
+
+def test_login_mouse_uses_existing_credentials_path(opened, monkeypatch):
+    checks = []
+
+    def check(window):
+        checks.append((window.username_input.text(), window.password_input.text()))
+        return True
+
+    monkeypatch.setattr(LoginWindow, "check_credentials", check)
+    window = opened(LoginWindow())
+    window.username_input.setText("mouse-user")
+    window.password_input.setText("mouse-password")
+    QTest.mouseClick(window.login_button, Qt.LeftButton)
+    assert checks == [("mouse-user", "mouse-password")]
+    assert window.pwd_checked
+    assert not window.isVisible()
+
+
+@pytest.mark.parametrize("editor_name", ["username_input", "password_input"])
+def test_login_preedit_enter_waits_for_commit(opened, monkeypatch, enter, ui_qapp, editor_name):
+    callbacks = []
+    monkeypatch.setattr(LoginWindow, "login_click", lambda self: callbacks.append("login"))
+    window = opened(LoginWindow())
+    editor = getattr(window, editor_name)
+    editor.setFocus()
+    ui_qapp.processEvents()
+    ui_qapp.sendEvent(editor, QInputMethodEvent("candidate", []))
+    enter(editor)
+    assert callbacks == []
+    commit = QInputMethodEvent()
+    commit.setCommitString("committed")
+    ui_qapp.sendEvent(editor, commit)
+    assert editor.text() == "committed"
+    assert callbacks == []
+    enter(editor)
+    assert callbacks == ["login"]
+
+
+@pytest.mark.parametrize("editor_name", ["username_input", "password_input"])
+def test_login_permission_popup_does_not_submit(opened, monkeypatch, enter, ui_qapp, editor_name):
+    callbacks = []
+    monkeypatch.setattr(LoginWindow, "login_click", lambda self: callbacks.append("login"))
+    window = opened(LoginWindow())
+    combo = window.access_selection
+    combo.setFocus()
+    ui_qapp.processEvents()
+    combo.showPopup()
+    assert QTest.qWaitForWindowExposed(combo.view().window(), 1000)
+    ui_qapp.processEvents()
+    assert combo.view().isVisible()
+    assert QApplication.activePopupWidget() is not None
+    QTest.keyClick(combo.view(), Qt.Key_Down)
+    enter(combo.view())
+    assert combo.currentText() == "工程师"
+    assert not combo.view().isVisible()
+    assert callbacks == []
+    window.activateWindow()
+    getattr(window, editor_name).setFocus()
+    ui_qapp.processEvents()
+    enter(getattr(window, editor_name))
+    assert callbacks == ["login"]
+
+
+@pytest.mark.parametrize("key, modifiers", [
+    (Qt.Key_Return, Qt.NoModifier), (Qt.Key_Enter, Qt.KeypadModifier),
+], ids=["return", "keypad-enter"])
+@pytest.mark.parametrize("editor_name", ["username_input", "password_input"])
+def test_login_warning_blocks_held_enter_then_allows_retry(
+        opened, monkeypatch, ui_qapp, key, modifiers, editor_name):
+    checks, warnings, observations = [], [], []
+
+    def check(window):
+        checks.append((window.username_input.text(), window.password_input.text()))
+        return False
+
+    def warning(parent, title, message):
+        child = QMessageBox(QMessageBox.Warning, title, message, QMessageBox.Ok, parent)
+        child.setDefaultButton(QMessageBox.Ok)
+        clicks = []
+        child.buttonClicked.connect(lambda button: clicks.append(button))
+        fallback = QTimer(child)
+        fallback.setSingleShot(True)
+        fallback.timeout.connect(child.reject)
+
+        def exercise_child():
+            ui_qapp.sendEvent(child, QKeyEvent(QEvent.KeyPress, key, modifiers, "\r", True, 1))
+            observations.append((len(clicks), child.isVisible()))
+            ui_qapp.sendEvent(child, QKeyEvent(QEvent.KeyRelease, key, modifiers))
+            QTest.keyClick(child, key, modifiers)
+
+        warnings.append((title, message))
+        fallback.start(2000)
+        QTimer.singleShot(0, exercise_child)
+        child.exec()
+        fallback.stop()
+        observations.append((clicks == [child.button(QMessageBox.Ok)], child.isVisible()))
+        child.deleteLater()
+
+    monkeypatch.setattr(LoginWindow, "check_credentials", check)
+    monkeypatch.setattr("ui.login_window.QMessageBox.warning", warning)
+    window = opened(LoginWindow())
+    window.username_input.setText("test-user")
+    window.password_input.setText("test-password")
+    editor = getattr(window, editor_name)
+    for attempt in (1, 2):
+        window.activateWindow()
+        editor.setFocus()
+        ui_qapp.processEvents()
+        QTest.keyClick(editor, key, modifiers)
+        assert checks == [("test-user", "test-password")] * attempt
+        assert warnings == [("Error", "Username or Password is incorrect")] * attempt
+        assert observations == [(0, True), (True, False)] * attempt
+        assert window.isVisible()
+        assert not window.pwd_checked
 
 
 def test_system_auxiliary_focus_clicks_only_confirm(system_dialog, enter):
