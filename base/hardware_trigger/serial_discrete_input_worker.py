@@ -190,6 +190,7 @@ class SerialDiscreteInputWorker(QThread):
                                 "value": frame_hex,
                                 "raw_hex": frame_hex,
                                 "product_full_frame": True,
+                                "received_monotonic": now,
                             }
                         )
                     continue

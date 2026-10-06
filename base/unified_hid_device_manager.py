@@ -875,6 +875,7 @@ class UnifiedHardwareManager(QObject):
                 "value": state_code,
                 "raw_hex": raw_hex,
                 "product_full_frame": True,
+                "received_monotonic": payload.get("received_monotonic"),
             }
             self.sig_serial_full_frame.emit(event)
             self._emit_serial_status(

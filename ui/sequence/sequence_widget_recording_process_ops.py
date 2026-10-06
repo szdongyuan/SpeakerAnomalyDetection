@@ -22,6 +22,7 @@ from base.ve3668n_wav_metadata import validate_ve_wav_metadata
 from consts.ve3668n_consts import VE_BACKEND
 from ui.recording_service_bridge import RecordingProcessorFacade, RecordingServiceBridge
 from ui.sequence.recording_process_context import RecordingProcessContext
+from ui.sequence.sequence_widget_recording_retry_ops import SequenceWidgetRecordingRetryOpsMixin
 from ui.vkinging_presentation import ve_failure_text
 
 
@@ -34,7 +35,7 @@ class _RecordingFailureRecovery:
 
 
 
-class SequenceWidgetRecordingProcessOpsMixin:
+class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixin):
     def _recording_contexts(self):
         contexts = getattr(self, "_recording_process_contexts", None)
         if not isinstance(contexts, dict):
@@ -720,18 +721,22 @@ class SequenceWidgetRecordingProcessOpsMixin:
 
     def _ordinary_recording_failure_owns_controls(self, context):
         bridge = getattr(self, "recording_bridge", None)
+        retry = self._current_product_recording_retry()
+        product_owned = retry is not None and retry.context is context
         return (
             not context.cleanup_owned and not context.cancelled
             and getattr(self, "_recording_workflow_token", None) is context.workflow_token
             and not getattr(bridge, "_shutdown_requested", False)
             and not any(bool(getattr(self, name, False)) for name in (
                 "_recording_closed", "_closing", "_shutdown_started", "_close_in_progress",
-                "_recording_cleanup_in_progress", "_streaming_cleanup_in_progress",
+                "_recording_cleanup_in_progress", "_streaming_cleanup_in_progress"))
+            and (product_owned or not any(bool(getattr(self, name, False)) for name in (
                 "_serial_product_condition_executing", "_serial_product_session_started",
-                "_serial_product_error_dialog_open"))
+                "_serial_product_error_dialog_open")))
         )
 
     def _refresh_recording_failure_recovery(self, session, *, terminal=False):
+        self._observe_product_retry_readiness(session)
         recovery = getattr(self, "_recording_failure_recovery", None)
         if recovery is None or recovery.context.session is not session:
             return
@@ -773,13 +778,15 @@ class SequenceWidgetRecordingProcessOpsMixin:
             if getattr(session.request, "device", {}).get("backend") == VE_BACKEND:
                 self._recording_ve_device = None
                 self._recording_wav_calibration_metadata = None
-        if context.cleanup_owned:
+        if context.cleanup_owned or context.cancelled:
             # Abort/close already chose the controls, history and stage. A
             # cancellation that fails while closing still belongs to that
             # caller; diagnose it without applying ordinary failure recovery.
             return
         context.final = True
         context.accepted_audio = None
+        if active:
+            self._capture_product_recording_retry(context)
         recovery = None
         if active and self._ordinary_recording_failure_owns_controls(context):
             # The exact context establishes ownership before aliases exist on
@@ -825,6 +832,7 @@ class SequenceWidgetRecordingProcessOpsMixin:
             discard()
 
     def _cancel_process_recording(self):
+        self._product_recording_retry = None
         self._recording_failure_recovery = None
         session = getattr(self, "_recording_process_session", None)
         if session is None:

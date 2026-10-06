@@ -1814,3 +1814,32 @@ def test_restored_panel_render(factory, tmp_path):
     assert panel.grab().save(str(tmp_path / "restored-verdict.png"))
     if font_id >= 0:
         QFontDatabase.removeApplicationFont(font_id)
+
+
+def test_progress_after_current_recording_failure_keeps_completed_and_next_condition(factory, monkeypatch):
+    from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
+    class RetryProgressHost(SequenceWidgetStreamingOpsMixin, ProgressHost):
+        pass
+    host = factory(RetryProgressHost)
+    begin_partial_round(host)
+    assert host._prepare_next_manual_product_condition_recording() is True
+    group_id = host._manual_product_condition_group_id
+    host.recording_bridge = None
+    host.recorded_path = ""
+    host._recording_workflow_token = object()
+    host._recording_input_channels = None
+    host._streaming_waveform_live_enabled = False
+    host._record_workflow_busy = host.player_status_flag = True
+    host.update_player_btn_is_paused = Mock()
+    monkeypatch.setattr("PyQt5.QtWidgets.QMessageBox.warning", lambda *args: None)
+    host._handle_invalid_recording("injected recording failure")
+    host._save_product_test_progress_before_exit()
+    state = host._product_progress_store.load()
+    assert state["group_id"] == group_id
+    assert state["next_key"] == "b"
+    assert set(state["completed_conditions"]) == {"a"}
+    assert state["identity"]["sample_number"] == "sample-7"
+    assert state["identity"]["test_round"] == 7
+    assert set(state["owned_files"]) == {"a"}
+    assert (host.directory / "a.wav").read_bytes() == b"test file reference"
+    assert host._analysis_round_config_locked

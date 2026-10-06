@@ -345,6 +345,10 @@ class SequenceWidgetSerialTriggerOpsMixin:
             self.default_logger.warning(f"serial_product_frame_rejected frame={raw_hex} error={error}")
             return
 
+        accepts_retry = getattr(self, "_product_retry_accepts_frame", None)
+        if callable(accepts_retry) and not accepts_retry(payload, received_frame):
+            return
+
         if close_frame and received_frame == close_frame:
             self._serial_product_latched_frame = close_frame
             self._handle_serial_product_close_frame(close_frame)
@@ -751,10 +755,18 @@ class SequenceWidgetSerialTriggerOpsMixin:
 
     def _abort_serial_product_round(self, reason, *, show_warning=True):
         if getattr(self, "_serial_product_error_dialog_open", False):
-            self.default_logger.warning(
-                f"serial_product_duplicate_error_suppressed reason={reason}"
-            )
-            return
+            retry = getattr(self, "_current_product_recording_retry", lambda: None)()
+            if retry is None or not retry.modal_pending:
+                self.default_logger.warning(
+                    f"serial_product_duplicate_error_suppressed reason={reason}"
+                )
+                return
+            # A retry warning blocks triggers, not explicit abort/disconnect.
+            # Claim cleanup before deletion can dispatch nested callbacks. Keep
+            # the dialog guard set so this abort runs once without another popup.
+            self._product_recording_retry = None
+            self._recording_failure_recovery = None
+            show_warning = False
 
         session_started = bool(getattr(self, "_serial_product_session_started", False))
         group_id = str(getattr(self, "_manual_product_condition_group_id", "") or "").strip()

@@ -208,6 +208,9 @@ class SequenceWidgetRawCsvOpsMixin:
                 getattr(self, "_raw_audio_csv_recording_paths", set()).discard(path)
 
     def _refresh_raw_audio_csv_admission(self):
+        observe_retry = getattr(self, "_observe_product_retry_readiness", None)
+        if callable(observe_retry):
+            observe_retry()
         if getattr(self, "_close_in_progress", False):
             return
         if getattr(self, "player_status_flag", False) or getattr(self, "_record_workflow_busy", False):
