@@ -93,7 +93,7 @@ class SequenceQueueReferenceScanner:
         self.product_registry_path = os.path.abspath(product_registry_path)
         self.queue_registry_path = os.path.abspath(queue_registry_path)
 
-    def find_references(self, target_path, *, drafts=()):
+    def find_references(self, target_path, *, drafts=(), aliases=()):
         """Return immutable positional references and diagnostics, without writes.
 
         Sources are ``saved`` and/or ``draft``. ``display_names`` preserves each
@@ -101,6 +101,8 @@ class SequenceQueueReferenceScanner:
         Any issue means the result may be incomplete. Missing registries are
         empty on first use; missing registered files and unresolved nonempty
         aliases are issues. Each call reads the current disk versions again.
+        ``aliases`` also matches raw names when deletion must protect a missing
+        registered path whose loading fallback resolves to a different file.
         """
         registry_dir = os.path.dirname(self.queue_registry_path)
         target_key = queue_path_key(target_path, registry_dir)
@@ -153,7 +155,7 @@ class SequenceQueueReferenceScanner:
                     if data is not None:
                         self._collect(data, path, queue_path_key(path, self.product_dir),
                                       name, "saved", catalog, target_key,
-                                      references, issues)
+                                      references, issues, aliases)
 
         for draft in drafts:
             if not isinstance(draft, QueueReferenceDraft):
@@ -163,7 +165,7 @@ class SequenceQueueReferenceScanner:
             identity = (queue_path_key(path, self.product_dir)
                         if path else f"draft:{id(draft)}")
             self._collect(draft.data, path, identity, "", "draft", catalog,
-                          target_key, references, issues)
+                          target_key, references, issues, aliases)
         return QueueReferenceResult(tuple(references.values()), tuple(issues))
 
     @staticmethod
@@ -193,7 +195,7 @@ class SequenceQueueReferenceScanner:
         return queue_path_key(resolved, registry_dir)
 
     def _collect(self, data, path, identity, registered_name, source, catalog,
-                 target_key, references, issues):
+                 target_key, references, issues, aliases=()):
         name = registered_name or (os.path.basename(path) if path else "Unsaved product")
         if not isinstance(data, dict):
             self._issue(issues, path, name, source, "Product must be an object")
@@ -225,7 +227,7 @@ class SequenceQueueReferenceScanner:
                 self._issue(issues, path, name, source,
                             f"{location}: unresolved queue alias {queue!r}")
                 continue
-            if key != target_key:
+            if key != target_key and queue not in aliases:
                 continue
             position = (identity, group_index, condition_index)
             names = QueueReferenceNames(source, name, group_name, condition_name)

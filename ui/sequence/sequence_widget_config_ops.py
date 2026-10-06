@@ -21,6 +21,8 @@ from consts.running_consts import DEFAULT_DIR
 class SequenceWidgetConfigOpsMixin:
 
     def synchronize_hardware_analysis_channels(self):
+        if getattr(self, "_configuration_deletion_error", ""):
+            return False
         from base.hardware_analysis_channel_sync import (
             synchronize_product_analysis_channels,
             update_sequence_analysis_channels,
@@ -97,6 +99,7 @@ class SequenceWidgetConfigOpsMixin:
             self.sequence_config = deepcopy(queue["data"])
             self.analysis_config = self.sequence_config[0]["seq1"].get("analysis_list", {})
         else:
+            self.using_config_path = None
             self.sequence_config = []
             self.analysis_config = {}
 
@@ -117,6 +120,8 @@ class SequenceWidgetConfigOpsMixin:
 
     def _refresh_active_product_configuration(self):
         """Compare before changing any runtime parameters, results or waveform state."""
+        if getattr(self, "_configuration_deletion_error", ""):
+            return False
         manager = self._get_product_program_manager()
         registry = manager.load_registry()
         try:
@@ -127,6 +132,8 @@ class SequenceWidgetConfigOpsMixin:
         return self._apply_product_test_snapshot(snapshot)
 
     def _apply_product_test_snapshot(self, snapshot):
+        if getattr(self, "_configuration_deletion_error", ""):
+            return False
         applied = self._applied_product_snapshot
         if (self._product_config_refresh_state in ("ready", "empty")
                 and applied is not None and applied.signature == snapshot.signature):
@@ -197,6 +204,30 @@ class SequenceWidgetConfigOpsMixin:
             return True
         pending_analysis = getattr(self, "_analysis_has_pending_tasks", None)
         return bool(pending_analysis()) if callable(pending_analysis) else False
+
+    def _configuration_deletion_busy(self):
+        return bool(getattr(self, "_configuration_deletion_error", "")) or self._product_configuration_refresh_busy()
+
+    def _configuration_deletion_failed(self, message):
+        # Do not let the editor-close refresh hide a partially committed deletion.
+        self._configuration_deletion_error = str(message)
+        self._product_config_refresh_state = "failed"
+        self._product_config_refresh_error = str(message)
+        self._refresh_test_mode_availability()
+        self.update_player_btn_is_paused()
+
+    def _configuration_deleted(self, target):
+        from base.sequence_queue_references import queue_path_key
+
+        if (target.kind == "queue" and getattr(self, "using_config_path", None)
+                and queue_path_key(self.using_config_path, os.path.dirname(target.path))
+                == queue_path_key(target.path, os.path.dirname(target.path))):
+            self.using_config_path = None
+            self.sequence_config = []
+            self.analysis_config = {}
+        self.on_product_test_program_updated()
+        if self._product_config_refresh_state == "failed":
+            raise RuntimeError(self._product_config_refresh_error)
 
     def _current_ve_recording_device(self, device):
         """Resolve the loaded queue, reading the injected profile only for a missing rate."""
@@ -273,6 +304,8 @@ class SequenceWidgetConfigOpsMixin:
         }
 
     def _active_product_program_test_mode_availability(self):
+        if getattr(self, "_configuration_deletion_error", ""):
+            return False, self._configuration_deletion_error
         if hasattr(self, "_product_config_refresh_state"):
             state = self._product_config_refresh_state
             snapshot = (self._pending_initial_product_snapshot if state == "initializing"
@@ -653,6 +686,8 @@ class SequenceWidgetConfigOpsMixin:
         Retrieves the sequence configuration from the registry.
         """
         registry = LoadUiConfig._load_sequence_config_registry()
+        if "using_config_path" in registry and registry["using_config_path"] is None:
+            return None, registry
         # IMPORTANT: Do not auto-add "默认配置" into registry.
         # The combobox should either never show it, or always show it if it already exists in registry.
         user_keys = [k for k in (registry or {}).keys() if k not in ("using_config_path", "默认配置")]

@@ -567,6 +567,7 @@ def test_deleting_active_a_does_not_silently_select_remaining_b(refresh_host):
     host.on_product_test_program_updated()
     assert host._product_config_refresh_state == "empty"
     assert host.using_file_combobox.currentData() is None
+    assert host.using_config_path is None
     assert host.using_file_combobox.currentText() == "无配置"
     assert host.left_panel.result_panel.rows == {}
     assert host.left_panel.result_panel.selected_key == ""
@@ -577,6 +578,91 @@ def test_deleting_active_a_does_not_silently_select_remaining_b(refresh_host):
     assert host._product_config_refresh_state == "ready"
     assert host._applied_product_snapshot.active_file == "B.json"
     assert not warnings
+
+
+@pytest.mark.parametrize("flag", ["_analysis_round_config_locked", "player_status_flag",
+                                  "_record_workflow_busy", "_recording_process_contexts"])
+def test_deletion_busy_covers_runtime_boundaries(refresh_host, flag):
+    host, *_ = refresh_host
+    assert not host._configuration_deletion_busy()
+    setattr(host, flag, {"recording": 1} if flag == "_recording_process_contexts" else True)
+    assert host._configuration_deletion_busy()
+
+
+def test_deletion_busy_covers_pending_analysis(refresh_host):
+    host, *_ = refresh_host
+    host._analysis_has_pending_tasks = lambda: True
+    assert host._configuration_deletion_busy()
+
+
+def test_deletion_partial_failure_stays_blocked_after_close_refresh(refresh_host):
+    host, *_ = refresh_host
+    host._configuration_deletion_failed("配置列表未恢复")
+    host.on_sequence_config_updated()
+    assert host._product_config_refresh_state == "failed"
+    assert not host.player_btn.isEnabled()
+    assert not host._can_prepare_recording_workflow()
+    assert host._configuration_deletion_busy()
+
+
+def test_deletion_failure_survives_hardware_refresh_without_writing(refresh_host):
+    host, _, path, _ = refresh_host
+    before = path.read_bytes()
+    host._configuration_deletion_failed("配置列表未恢复")
+    host.mic_channels = [0, 1]
+    assert host.synchronize_hardware_analysis_channels() is False
+    assert host._product_config_refresh_state == "failed"
+    assert not host.player_btn.isEnabled()
+    assert not host._can_prepare_recording_workflow()
+    assert path.read_bytes() == before
+
+
+def test_main_window_reopens_queue_with_deletion_write_lock(refresh_host, monkeypatch):
+    from base.sequence_queue_references import SequenceQueueReferenceScanner
+    from ui.operation_sequence import AnalysisModelSelect
+
+    host, _, existing_queue, _ = refresh_host
+    manager = host.product_program_manager
+    target = existing_queue.with_name("unused.json")
+    payload = json.loads(existing_queue.read_text(encoding="utf-8"))
+    payload[0]["seq1"]["acq"]["name"] = "录制音频"
+    payload[0]["seq1"]["acq"]["detail"]["recording_preview_time_mode"] = "relative_latest"
+    assert LoadUiConfig.save_data_to_json(payload, str(target))
+    registry_path = Path(manager.queue_registry_path)
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["unused"] = str(target)
+    assert LoadUiConfig.save_data_to_json(registry, str(registry_path))
+    before = target.read_bytes(), registry_path.read_bytes()
+    host._configuration_deletion_failed("配置列表未恢复")
+    scanner = SequenceQueueReferenceScanner(
+        manager.program_dir, manager.registry_path, manager.queue_registry_path,
+    )
+    opened = []
+
+    def make_editor(path, **context):
+        return AnalysisModelSelect(path, reference_scanner=scanner, **context)
+
+    def interact(editor):
+        opened.append(True)
+        try:
+            assert all(not button.isEnabled() for button in editor._queue_action_buttons)
+            editor.select_list.config[0].detail["total_time"] = 9.0
+            editor._persist_current_config_silently()
+            assert editor._save_queue(str(target), explicit=True) == "failed"
+            assert before == (target.read_bytes(), registry_path.read_bytes())
+            assert editor._resolve_unsaved_changes()
+        finally:
+            editor._allow_close = True
+            editor.close()
+            editor.deleteLater()
+
+    monkeypatch.setattr(AnalysisModelSelect, "exec", interact)
+    callback = _load_main_window_method("_open_analysis_model_select", {"AnalysisModelSelect": make_editor})
+    main = SimpleNamespace(sequence_window=host, mic=None, speaker=None, mic_channels=[], speaker_channels=[])
+    callback(main, str(target))
+    assert opened == [True]
+    assert not host.player_btn.isEnabled()
+    assert not host._can_prepare_recording_workflow()
 
 
 def test_rename_active_configuration_applies_new_identity(refresh_host):
@@ -710,10 +796,12 @@ def test_main_window_connects_program_changes_before_opening_dialog():
             self.callback = callback
 
     class FakeDialog:
-        def __init__(self, manager, queue_editor, parent, *, contextual_queue_editor_callback):
+        def __init__(self, manager, queue_editor, parent, *, contextual_queue_editor_callback,
+                     deletion_busy, deletion_completed, deletion_failed, deletion_error):
             assert manager is None
             assert queue_editor is parent._open_analysis_model_select
             assert contextual_queue_editor_callback is queue_editor
+            assert all(callable(callback) for callback in (deletion_busy, deletion_completed, deletion_failed, deletion_error))
             self.queue_editor = queue_editor
             self.programs_changed = FakeSignal()
 
@@ -766,7 +854,8 @@ def test_main_window_refreshes_button_after_exceptional_dialog_exit():
             return None
 
     class FakeDialog:
-        def __init__(self, _manager, _queue_editor, _parent, *, contextual_queue_editor_callback):
+        def __init__(self, _manager, _queue_editor, _parent, *, contextual_queue_editor_callback,
+                     deletion_busy, deletion_completed, deletion_failed, deletion_error):
             assert contextual_queue_editor_callback is _queue_editor
             assert contextual_queue_editor_callback is _parent._open_analysis_model_select
             self.programs_changed = FakeSignal()
