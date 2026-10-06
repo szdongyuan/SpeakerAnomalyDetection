@@ -1369,7 +1369,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         if not self._confirm_leave_changes():
             return
         source_path, _ = QFileDialog.getOpenFileName(
-            self, "导入产品测试配置", "", "JSON 配置 (*.json)"
+            self, "导入产品测试配置", self.manager.program_dir, "JSON 配置 (*.json)"
         )
         if not source_path:
             return
