@@ -308,7 +308,7 @@ class _LogDispatcher:
             if sink is None:
                 filename, max_bytes, backups = destination
                 sink = _BatchFileHandler(filename=filename, maxBytes=max_bytes,
-                                         backupCount=backups)
+                                         backupCount=backups, encoding="utf-8")
                 self._sinks[destination] = sink
             return sink.write_batch(entries)
         except Exception as error:

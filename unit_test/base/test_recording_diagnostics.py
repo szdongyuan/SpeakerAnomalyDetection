@@ -267,7 +267,8 @@ def test_bounded_categories_active_stacks_fields_and_summary(monkeypatch):
     assert not diag.snapshot()["active"]
 
 
-def test_optional_logger_failure_disabled_level_and_forward_queue_saturation(monkeypatch):
+@pytest.mark.parametrize("level", [logging.INFO, logging.WARNING])
+def test_optional_logger_failure_disabled_level_and_forward_queue_saturation(monkeypatch, level):
     diag, clock, records, flushes = make_diagnostics(monkeypatch)
 
     class UnprintableError(Exception):
@@ -278,12 +279,12 @@ def test_optional_logger_failure_disabled_level_and_forward_queue_saturation(mon
         raise UnprintableError()
 
     monkeypatch.setattr(diag.logger, "handle", fail)
-    assert not diag.milestone("failed")
+    assert not diag.milestone("failed", level=level)
     assert diag.snapshot()["errors"] == 1
     diag.logger.setLevel(logging.ERROR)
     # This isolated Logger is not registered with logging's global manager.
     diag.logger._cache.clear()
-    assert not diag.milestone("disabled")
+    assert not diag.milestone("disabled", level=level)
     assert diag.snapshot()["errors"] == 1
     assert not flushes
 
@@ -297,10 +298,10 @@ def test_optional_logger_failure_disabled_level_and_forward_queue_saturation(mon
 
     monkeypatch.setattr(queued.logger, "handle", block)
     try:
-        assert queued.milestone("first")
+        assert queued.milestone("first", level=level)
         assert entered.wait(2)
         for _ in range(100):
-            queued.milestone("queued")
+            queued.milestone("queued", level=level)
         assert queued.snapshot()["dropped"] == 36
         assert queued.snapshot()["delivery"]["dropped"] == 36
         queued.close()
@@ -509,3 +510,13 @@ def test_summary_is_valid_bounded_evidence(monkeypatch):
     assert [item["stage"] for item in summary["recent"]] == [
         f"stage{index}" for index in range(summary["omitted_recent"], 32)]
     assert "errors" in summary and "dropped" in summary
+
+
+def test_warning_milestone_keeps_async_delivery_and_info_default(monkeypatch):
+    writer = RecordingTimingLogger(start_thread=lambda thread: None)
+    diag, _, records, flushes = make_diagnostics(monkeypatch, timing_logger=writer)
+    assert diag.milestone("default")
+    assert diag.milestone("capture_release_slow", level=logging.WARNING)
+    queued = [item[1] for item in list(writer._queue.queue)]
+    assert [record.levelno for record in queued] == [logging.INFO, logging.WARNING]
+    assert records == [] and flushes == []

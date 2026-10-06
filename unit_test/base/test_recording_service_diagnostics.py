@@ -85,14 +85,14 @@ def test_timeout_snapshot_uses_original_decision_clock(monkeypatch, tmp_path):
     calls = []
     def clock():
         calls.append(True)
-        return 101.1
+        return 120.1
     probe.service._clock = clock
     probe.service._tick()
     assert probe.session.failure.stage == "capture_release_timeout"
     assert len(calls) == 2  # Original tick + terminate deadline only.
     record = next(m for m in messages(probe.service) if "stage=parent_release_timeout" in m)
     fields = json.loads(record.split(" details=", 1)[1].split(" summary=", 1)[0])
-    assert (fields["t0"], fields["deadline"], fields["decision_now"]) == (100.1, 101.1, 101.1)
+    assert (fields["t0"], fields["deadline"], fields["decision_now"]) == (100.1, 120.1, 120.1)
     assert "log_delivery" in record and "queue_depth" in record
 
 
@@ -366,3 +366,161 @@ def test_retire_is_visible_before_pending_release_callback(monkeypatch, tmp_path
         callback=lambda *_: seen.extend(messages(probe.service)))
     probe.service._retire_generation(probe.worker, "release_ve", "blocked", probe.session)
     assert any("stage=worker_retire_requested" in m for m in seen)
+
+
+def target_probe(monkeypatch, tmp_path):
+    probe = ve_probe(monkeypatch, tmp_path)
+    probe.clock.advance(.1)
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.session.request.request_id, "progress",
+        RecordingProgress(probe.session.request.request_id, 1,
+                          probe.session.request.target_samples, 100.1)))
+    return probe
+
+
+def slow_records(service):
+    return [item[1] for item in list(service._timing_logger._queue.queue)
+            if "stage=capture_release_slow " in item[1].getMessage()]
+
+
+def release_slot(probe):
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.session.request.request_id, "capture_slot_released", slot_payload(probe)))
+
+
+@pytest.mark.parametrize("delay", [.75, 1.0, 1.03, 19.99, 20.0, 20.01])
+@pytest.mark.parametrize("tick_first", [False, True])
+def test_slow_release_warning_level_fields_and_once_only(monkeypatch, tmp_path, delay, tick_first):
+    probe = target_probe(monkeypatch, tmp_path)
+    probe.clock.advance(delay)
+    if tick_first:
+        probe.service._tick()
+        probe.service._tick()
+    release_slot(probe)
+    records = slow_records(probe.service)
+    if delay < 1:
+        assert records == []
+    else:
+        record, = records
+        assert record.levelno == logging.WARNING
+        message = record.getMessage()
+        assert f"request={probe.session.request.request_id}" in message
+        assert "generation=1" in message
+        fields = json.loads(message.split(" details=", 1)[1])
+        assert fields == dict(t0=100.1, observed_at=100.1 + delay,
+                             elapsed_seconds=pytest.approx(delay),
+                             slow_threshold_seconds=1.0, deadline=120.1)
+    if delay > 20 or (delay == 20 and tick_first):
+        assert probe.session.failure.stage == "capture_release_timeout"
+        assert probe.worker.retiring and not probe.service.can_start_recording
+    else:
+        assert probe.session.failure is None
+        assert probe.service.can_start_recording
+
+
+@pytest.mark.parametrize("condition", ["cancelled", "terminal", "retired", "invalid"])
+def test_ineligible_requests_do_not_warn(monkeypatch, tmp_path, condition):
+    probe = target_probe(monkeypatch, tmp_path)
+    probe.clock.advance(1.03)
+    if condition == "cancelled":
+        probe.session.cancel_requested = True
+    elif condition == "terminal":
+        probe.session._terminal = True
+    elif condition == "retired":
+        probe.service._retire_generation(probe.worker, "native", "failed", probe.session)
+    else:
+        probe.service._event(probe.worker, RecordingEvent(
+            1, probe.session.request.request_id, "capture_slot_released",
+            slot_payload(probe, writer_released=False)))
+        assert probe.session.failure.stage == "protocol"
+    probe.service._tick()
+    release_slot(probe)
+    assert not slow_records(probe.service)
+
+
+@pytest.mark.parametrize("event_path", [False, True])
+def test_warning_submission_uses_frozen_clock_outside_admission_lock(monkeypatch, tmp_path, event_path):
+    probe = target_probe(monkeypatch, tmp_path)
+    probe.clock.advance(19.99)
+    observed_at = probe.clock()
+    original = probe.service._diagnostic
+    seen = []
+    def advancing_diagnostic(stage, *args, **fields):
+        if stage == "capture_release_slow":
+            assert not probe.service._lock._is_owned()
+            seen.append(fields["observed_at"])
+            probe.clock.advance(1)
+        original(stage, *args, **fields)
+    monkeypatch.setattr(probe.service, "_diagnostic", advancing_diagnostic)
+    if event_path:
+        release_slot(probe)
+        assert probe.service.can_start_recording
+        assert probe.session._slot_released_at == observed_at
+    else:
+        probe.service._tick()
+        assert not probe.service.can_start_recording
+    assert seen == [observed_at]
+    assert probe.session.failure is None and not probe.worker.retiring
+    if not event_path:
+        probe.service._tick()
+        assert probe.session.failure.stage == "capture_release_timeout"
+
+
+def test_next_request_has_independent_warning_opportunity(monkeypatch, tmp_path):
+    from unit_test.base.ve3668n_fakes import capture_request
+    probe = target_probe(monkeypatch, tmp_path)
+    probe.clock.advance(1)
+    probe.service._tick()
+    release_slot(probe)
+    first = probe.session
+    second = probe.service.start(capture_request(tmp_path / "B.wav", request_id="B"))
+    probe.service._dispatch(probe.service._inbox.get_nowait())
+    probe.worker.outgoing.get_nowait()
+    probe.service._event(probe.worker, RecordingEvent(1, "B", "started", probe.clock()))
+    probe.clock.advance(.1)
+    t0 = probe.clock()
+    probe.service._event(probe.worker, RecordingEvent(1, "B", "progress",
+        RecordingProgress("B", 1, second.request.target_samples, t0)))
+    assert first._slot_release_warning_sent and not second._slot_release_warning_sent
+    probe.clock.advance(1)
+    probe.service._tick()
+    assert second._slot_release_warning_sent
+    records = slow_records(probe.service)
+    assert len(records) == 2
+    assert "request=B " in records[1].getMessage()
+    assert second.failure is None
+
+
+@pytest.mark.parametrize("delivery", ["disabled", "exception", "saturated"])
+def test_unavailable_warning_delivery_is_attempted_once_and_keeps_admission(monkeypatch, tmp_path, delivery):
+    probe = target_probe(monkeypatch, tmp_path)
+    service = probe.service
+    logger = logging.Logger("slow-warning-delivery", logging.INFO)
+    service._logger = logger
+    if delivery == "disabled":
+        logger.setLevel(logging.ERROR)
+    elif delivery == "exception":
+        def fail(*args, **kwargs):
+            raise RuntimeError("optional record factory failed")
+        monkeypatch.setattr(logger, "makeRecord", fail)
+    else:
+        while not service._timing_logger._queue.full():
+            assert service._timing_logger.info(logger, "fill")
+    attempts = []
+    original = service._diagnostic
+    def observe(stage, *args, **fields):
+        if stage == "capture_release_slow":
+            attempts.append(True)
+        return original(stage, *args, **fields)
+    monkeypatch.setattr(service, "_diagnostic", observe)
+    probe.clock.advance(1.03)
+    service._tick()
+    service._tick()
+    release_slot(probe)
+    assert attempts == [True]
+    assert not slow_records(service)
+    assert probe.session.failure is None and service.can_start_recording
+    if delivery == "exception":
+        assert service._timing_logger.errors > 0
+    elif delivery == "saturated":
+        assert service._timing_logger.dropped > 0

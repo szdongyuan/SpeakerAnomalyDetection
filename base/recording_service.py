@@ -12,6 +12,7 @@ released continuation, never a mutable current-recording path, for file actions.
 """
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, replace
+import logging
 import math
 import multiprocessing
 import os
@@ -39,6 +40,9 @@ from base.recording_result_reader import ResultReader
 from base.recording_worker import recording_worker
 from base.ve3668n_capture_timing import VeCaptureDeadline
 from base.ve3668n_input import ve_acquisition_signature
+from consts.recording_timeout_consts import (
+    VE_CAPTURE_RELEASE_SLOW_SECONDS, VE_CAPTURE_RELEASE_TIMEOUT_SECONDS,
+)
 from consts.ve3668n_consts import VE_BACKEND
 
 
@@ -160,6 +164,7 @@ class RecordingSession:
         self._capture_requested_at = None
         self._capture_deadline = None
         self._slot_release_deadline = None
+        self._slot_release_warning_sent = False
         self._critical_observations = {}
         self._finalizing_notified = False
         self._completion_observed_at = None
@@ -818,6 +823,24 @@ class RecordingService:
             "inbox_put", item.enqueue_ended_ns - item.enqueue_started_ns,
             started_ns=item.enqueue_started_ns, monotonic=item.enqueue_monotonic,
             request=request, generation=generation)
+
+    def _warn_slow_capture_release(self, session, observed_at, deadline):
+        worker = self._worker
+        t0 = session._target_reached_at
+        if (t0 is None or session._slot_release_warning_sent
+                or session._terminal or session.cancel_requested
+                or worker is None or worker.retiring
+                or worker.generation != session.generation
+                or observed_at < t0 + VE_CAPTURE_RELEASE_SLOW_SECONDS):
+            return
+        # Once per request, including filtered or dropped diagnostic attempts.
+        session._slot_release_warning_sent = True
+        self._diagnostic(
+            "capture_release_slow", session, level=logging.WARNING,
+            t0=t0, observed_at=observed_at,
+            elapsed_seconds=observed_at - t0,
+            slow_threshold_seconds=VE_CAPTURE_RELEASE_SLOW_SECONDS,
+            deadline=deadline)
 
     def _release_timeout_evidence(self, session, decision_now):
         fields = dict(t0=session._target_reached_at, deadline=session._slot_release_deadline,
@@ -1487,7 +1510,7 @@ class RecordingService:
                     and previous.frames < session.request.target_samples
                     and session._target_reached_at is None):
                 session._target_reached_at = progress.last_frame_at
-                session._slot_release_deadline = progress.last_frame_at + 1.0
+                session._slot_release_deadline = progress.last_frame_at + VE_CAPTURE_RELEASE_TIMEOUT_SECONDS
                 self._diagnostic("parent_release_deadline", session,
                                  t0=progress.last_frame_at, deadline=session._slot_release_deadline)
         elif event.kind == "capture_slot_released":
@@ -1530,13 +1553,14 @@ class RecordingService:
                     session._admission_reason = (
                         "CAPACITY_BACKPRESSURE"
                         if len(self._sessions) >= self._pipeline_capacity else None)
+            self._warn_slow_capture_release(session, admitted_at, original_deadline)
             self._diagnostic("parent_slot_outcome", session,
                              outcome="late" if late else "confirmed", admitted_at=admitted_at,
                              t0=session._target_reached_at, deadline=original_deadline)
             if late:
                 self._release_timeout_evidence(session, admitted_at)
                 self._retire_generation(worker, "capture_release_timeout",
-                                        "capture slot release exceeded target + 1.0 seconds", session)
+                                        f"capture slot release exceeded target + {VE_CAPTURE_RELEASE_TIMEOUT_SECONDS:.1f} seconds", session)
         elif event.kind == "preview":
             snapshot = event.payload
             if snapshot.sequence == session._preview_pending:
@@ -2052,10 +2076,12 @@ class RecordingService:
                 if session._sent and not session._child_released:
                     self._command("cancel", session)
         if (session is not None and session._slot_release_deadline is not None
-                and now >= session._slot_release_deadline and not session._terminal):
-            self._release_timeout_evidence(session, now)
-            self._retire_generation(worker, "capture_release_timeout",
-                                    "capture slot release exceeded target + 1.0 seconds", session)
+                and not session._terminal):
+            self._warn_slow_capture_release(session, now, session._slot_release_deadline)
+            if now >= session._slot_release_deadline:
+                self._release_timeout_evidence(session, now)
+                self._retire_generation(worker, "capture_release_timeout",
+                                        f"capture slot release exceeded target + {VE_CAPTURE_RELEASE_TIMEOUT_SECONDS:.1f} seconds", session)
         pending = self._pending_ve_release
         if pending is not None and pending.deadline is not None and now >= pending.deadline:
             preparing = pending.preparing

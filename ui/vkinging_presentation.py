@@ -21,7 +21,7 @@ def ve_failure_text(operation, *, code=None):
         "hardware_save": "VE 硬件设置未保存，请检查设备和通道后重试。",
         "configuration": "VE 采集配置不可用，请检查采样率和量程。",
         "prewarm": "VE 设备初始化失败。",
-        "recording": "VE 录音失败，请检查设备和采集配置。",
+        "recording": "VE 录音失败，",
         "release": "VE 录音资源未释放，未发布结果；请等待资源释放后重试。",
         "calibration": "VE 输入校准失败，未保存校准；请检查设备和配置后重试。",
         "calibration_start": "VE 输入校准录音启动失败，请检查设备和配置。",
