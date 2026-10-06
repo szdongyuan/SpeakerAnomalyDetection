@@ -280,6 +280,7 @@ class SequenceWidgetAnalysisOpsMixin(
     def _reset_manual_product_condition_cycle(
         self, clear_waveforms=False, *, refresh_display=True
     ) -> None:
+        self._product_recording_retry = None
         reset_serial_ports = getattr(self, "_reset_serial_product_port_state", None)
         if callable(reset_serial_ports):
             reset_serial_ports()

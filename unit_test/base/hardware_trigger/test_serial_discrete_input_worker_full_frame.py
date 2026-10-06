@@ -75,6 +75,7 @@ def test_active_report_full_frame_mode_does_not_write_query(monkeypatch):
         "serial",
         SimpleNamespace(Serial=lambda **_kwargs: port),
     )
+    monkeypatch.setattr(worker_module.time, "monotonic", lambda: 123.5)
     events = []
     worker.sig_state_changed.connect(events.append)
 
@@ -83,6 +84,7 @@ def test_active_report_full_frame_mode_does_not_write_query(monkeypatch):
     assert port.write_calls == []
     assert [event["raw_hex"] for event in events] == [FRAME]
     assert events[0]["product_full_frame"] is True
+    assert events[0]["received_monotonic"] == 123.5
 
 
 def test_active_report_logs_raw_data_and_matched_state_code_without_stdout(
@@ -200,11 +202,13 @@ def test_hardware_manager_forwards_product_full_frame_without_direction_mapping(
             "value": FRAME,
             "raw_hex": FRAME,
             "product_full_frame": True,
+            "received_monotonic": 123.5,
         }
     )
 
     assert [event["raw_hex"] for event in full_frames] == [FRAME]
     assert directions == []
+    assert full_frames[0]["received_monotonic"] == 123.5
 
 
 def test_passive_connection_test_treats_an_open_port_as_connected(monkeypatch):

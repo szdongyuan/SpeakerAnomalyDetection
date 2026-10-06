@@ -1060,6 +1060,10 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         )
 
     def _restore_waiting_stage_after_automatic_analysis(self):
+        retry = getattr(self, "_current_product_recording_retry", lambda: None)()
+        if retry is not None:
+            self._set_active_product_condition_stage("测试异常", tone="ng")
+            return True
         if self._analysis_has_pending_tasks():
             return False
         left_panel = getattr(self, "left_panel", None)
@@ -1091,7 +1095,9 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         left_panel = getattr(self, "left_panel", None)
         if left_panel is not None:
             left_panel.set_condition_result(key, text, tone=tone)
-            left_panel.set_current_stage(detail_text or text, tone=tone)
+            retry = getattr(self, "_current_product_recording_retry", lambda: None)()
+            if retry is None:
+                left_panel.set_current_stage(detail_text or text, tone=tone)
         workspace = getattr(self, "channel_workspace", None)
         set_context = getattr(workspace, "set_condition_context", None)
         if callable(set_context):

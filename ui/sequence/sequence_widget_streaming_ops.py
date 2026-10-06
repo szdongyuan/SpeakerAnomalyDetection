@@ -2449,6 +2449,9 @@ class SequenceWidgetStreamingOpsMixin:
             boundary_name="channel-selection",
         )
 
+        if self._recover_current_product_recording(reason):
+            return
+
         serial_product_condition_was_executing = bool(
             getattr(self, "_serial_product_condition_executing", False)
         )
