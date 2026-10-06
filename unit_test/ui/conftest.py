@@ -9,6 +9,15 @@ from PyQt5.QtCore import QCoreApplication, QEvent
 from PyQt5.QtWidgets import QApplication, QMenu
 
 
+@pytest.fixture(autouse=True)
+def isolate_recording_defaults(tmp_path, monkeypatch):
+    from base.recording_defaults import RecordingDefaultsStore
+
+    target = tmp_path / "recording_default_config.json"
+    monkeypatch.setattr(RecordingDefaultsStore, "default_path", staticmethod(lambda: target))
+    return target
+
+
 @pytest.fixture(scope="session", autouse=True)
 def ui_qapp():
     app = QApplication.instance() or QApplication([])

@@ -330,6 +330,7 @@ def test_queue_editor_after_startup_uses_saved_profile_for_missing_rate(
 def test_queue_profile_error_is_repairable_without_mutating_device_or_profile(
         host_factory, monkeypatch, failure):
     from unittest.mock import Mock
+    from ui.vkinging_presentation import ve_failure_text
 
     host = host_factory(48000)
     mic = device_info()
@@ -346,10 +347,10 @@ def test_queue_profile_error_is_repairable_without_mutating_device_or_profile(
                                 host.ve_profile_store.load(device, host.ve_calibration_store))
     try:
         assert dialog._sample_rate_load_error
-        assert dialog.samplerate_combo.toolTip() == dialog._sample_rate_load_error
+        assert dialog.samplerate_combo.toolTip() == ve_failure_text("configuration")
         dialog.on_click_ok_btn()
         assert dialog.final_data is None
-        assert warnings.call_args.args[-1] == dialog._sample_rate_load_error
+        assert warnings.call_args.args[-1] == ve_failure_text("configuration")
         dialog.samplerate_combo.setEditText("96000")
         dialog.on_click_ok_btn()
         assert dialog.final_data["sample_rate"] == 96000

@@ -25,6 +25,7 @@ from base.analysis_config_validation import validate_sequence_config
 from base.data_struct.sequence_data import SequenceData
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
+from base.recording_defaults import RecordingDefaultsStore, recording_profile_key
 from base.sequence_queue_references import SequenceQueueReferenceScanner, queue_path_key
 from base.ve3668n_recording_config import resolve_ve_recording_config
 from consts.ve3668n_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY
@@ -1396,6 +1397,17 @@ class OptionList(QListView):
             RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: PREVIEW_TIME_MODE_RELATIVE_LATEST,
             model_consts.RECORDING_ROOT_CONFIG_KEY: "",
         }
+        profile_key = recording_profile_key(self.mic)
+        if profile_key is not None:
+            try:
+                defaults = RecordingDefaultsStore().load(profile_key)
+            except (OSError, UnicodeError, ValueError) as exc:
+                self.default_logger.warning(
+                    f"Failed to load recording defaults for {profile_key}: {exc}"
+                )
+                QMessageBox.warning(self, "设置警告", "默认配置读取失败，已使用原有默认参数")
+            else:
+                seq_item.detail.update(defaults)
         self.signal_len = seq_item.detail.get(
             "total_time", 4.0
         ) * seq_item.detail.get("sample_rate", 44100)
