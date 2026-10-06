@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QComboBox, QFileDialog, QInputDialog, QLabel, QMessageBox
 
@@ -22,7 +22,14 @@ from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 
 @pytest.fixture(scope="module")
 def app():
-    return QApplication.instance() or QApplication([])
+    application = QApplication.instance() or QApplication([])
+    yield application
+    # Destroy deferred test dialogs before the module's QApplication is released.
+    windows = list(application.topLevelWidgets())
+    for window in windows:
+        window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    application.processEvents()
 
 
 def make_manager(tmp_path):
@@ -1103,9 +1110,15 @@ def test_delete_project_removes_registry_entry_and_configuration(
     manager = make_manager(tmp_path)
     file_name = prepare_project(manager, tmp_path)
     dialog = ProductTestProjectConfigDialog(manager)
-    monkeypatch.setattr(
-        QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes
-    )
+    from ui.config_delete_dialog import ConfigDeleteDialog
+
+    def choose_and_delete(window):
+        assert not window.checked_targets()
+        window.config_list.item(0).setCheckState(Qt.Checked)
+        window.delete_button.click()
+        return window.result()
+
+    monkeypatch.setattr(ConfigDeleteDialog, "exec_", choose_and_delete)
 
     dialog._delete_project()
 

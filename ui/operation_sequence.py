@@ -27,6 +27,8 @@ from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
 from base.recording_defaults import RecordingDefaultsStore, recording_profile_key
 from base.sequence_queue_references import SequenceQueueReferenceScanner, queue_path_key
+from base.config_deletion import ConfigDeletionService
+from base.product_test_project_config import ProductTestProjectConfigManager
 from base.ve3668n_recording_config import resolve_ve_recording_config
 from consts.ve3668n_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY
 from ui.shared_queue_save_dialog import SharedQueueSaveDialog
@@ -38,6 +40,7 @@ from consts.recording_preview_consts import (
 )
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
+from ui.config_delete_dialog import ConfigDeleteDialog
 from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.acquisition_config_window import RecordConfigWindow
 
@@ -96,13 +99,11 @@ def _recording_preview_validation_error(config_data):
 
 class AnalysisModelSelect(ConfigDialogBase):
 
-    def __init__(self, using_config_path, mic=None, speaker=None, mic_channels=None, speaker_channels=None, *, reference_scanner=None, parent_draft_provider=None, confirm_shared_save=None, ve_profile_provider=None):
+    def __init__(self, using_config_path, mic=None, speaker=None, mic_channels=None, speaker_channels=None, *, reference_scanner=None, parent_draft_provider=None, confirm_shared_save=None, ve_profile_provider=None,
+                 deletion_busy=None, deletion_completed=None, deletion_failed=None, deletion_error=None):
         super().__init__()
-        # When main window has no active config selected ("无配置"), using_config_path can be None.
-        # Fall back to the built-in default sequence config so the test-queue window can still open.
-        if not using_config_path:
-            using_config_path = DEFAULT_DIR + "ui/ui_config/none_path.json"
-        self.using_config_path = using_config_path
+        # No selection remains empty, including after deleting the current queue.
+        self.using_config_path = using_config_path or None
         # When user selects a target path via “新建”, confirm should save to that path
         # without touching main window's using_config_path registry.
         self._new_target_path_selected = False
@@ -115,6 +116,11 @@ class AnalysisModelSelect(ConfigDialogBase):
         self._allow_close = False
         self._saving = False
         self._pending_registration = set()
+        self.deletion_busy = deletion_busy
+        self.deletion_completed = deletion_completed
+        self.deletion_failed = deletion_failed
+        self.deletion_error = deletion_error
+        self._deletion_blocked = False
 
         self.analysis_list = QTreeView()
         self.analysis_list.setSelectionMode(QTreeView.SingleSelection)
@@ -135,6 +141,7 @@ class AnalysisModelSelect(ConfigDialogBase):
         self.drag_drop_function()
         self.init_ui()
         self.auto_analysis_box.toggled.connect(self._persist_current_config_silently)
+        self._deletion_is_blocked()
 
     def _get_using_config_display_name(self) -> str:
         """
@@ -155,7 +162,7 @@ class AnalysisModelSelect(ConfigDialogBase):
                 return base or using_path
         except Exception:
             pass
-        return "无配置"
+        return "未选择配置"
 
     def _update_current_config_label(self):
         if not hasattr(self, "current_config_label") or self.current_config_label is None:
@@ -164,6 +171,8 @@ class AnalysisModelSelect(ConfigDialogBase):
         self.current_config_label.setText(f"当前配置：{name}")
 
     def _can_persist_current_config(self) -> bool:
+        if self._deletion_is_blocked():
+            return False
         if self._new_target_path_selected:
             return False
         path = str(self.using_config_path or "").strip()
@@ -190,6 +199,8 @@ class AnalysisModelSelect(ConfigDialogBase):
 
     def _save_queue(self, target_path, *, explicit, activate_default=False):
         """The only queue write boundary; cancellation leaves the draft intact."""
+        if self._deletion_is_blocked():
+            return "failed"
         if self._saving:
             return "deferred"
         self._saving = True
@@ -261,6 +272,8 @@ class AnalysisModelSelect(ConfigDialogBase):
 
     def _register_saved_queue(self, target_path, *, activate_default=False):
         # Retry an incomplete registration without rewriting an unchanged queue.
+        if self._deletion_is_blocked():
+            raise ValueError("删除后的配置状态异常，请检查后重启软件")
         registry_path = self.reference_scanner.queue_registry_path
         try:
             with open(registry_path, encoding="utf-8") as stream:
@@ -294,6 +307,8 @@ class AnalysisModelSelect(ConfigDialogBase):
         self._pending_registration.discard(target_path)
 
     def _resolve_unsaved_changes(self):
+        if self._deletion_is_blocked():
+            return True
         if not self.dirty:
             return True
         choice = QMessageBox.question(
@@ -549,22 +564,78 @@ class AnalysisModelSelect(ConfigDialogBase):
         load_btn.clicked.connect(self.load_btn_clicked)
         save_btn = QPushButton("另存为")
         save_btn.clicked.connect(self.save_btn_clicked)
+        self.delete_config_btn = QPushButton("删除")
+        self.delete_config_btn.clicked.connect(self._delete_queue_config)
+        self.delete_config_btn.setMinimumWidth(100)
         ok_btn = QPushButton("保存")
         ok_btn.clicked.connect(self.ok_btn_clicked)
         install_dialog_enter_policy(self, ok_btn)
         load_btn.setMinimumWidth(100)
         save_btn.setMinimumWidth(100)
         ok_btn.setMinimumWidth(100)
+        self._queue_action_buttons = (new_btn, load_btn, save_btn, ok_btn, self.delete_config_btn)
 
         layout = QHBoxLayout()
         layout.addStretch()
         layout.addWidget(new_btn)
         layout.addWidget(load_btn)
         layout.addWidget(save_btn)
+        layout.addWidget(self.delete_config_btn)
         layout.addWidget(ok_btn)
         layout.setSpacing(20)
 
         return layout
+
+    def _deletion_targets_current_queue(self, target):
+        return bool(self.using_config_path) and queue_path_key(
+            self.using_config_path, os.path.dirname(self.reference_scanner.queue_registry_path)
+        ) == queue_path_key(target.path, os.path.dirname(self.reference_scanner.queue_registry_path))
+
+    def _delete_queue_config(self):
+        manager = ProductTestProjectConfigManager(
+            self.reference_scanner.product_dir, self.reference_scanner.product_registry_path,
+            self.reference_scanner.queue_registry_path,
+        )
+        dialog = ConfigDeleteDialog(
+            ConfigDeletionService(manager), "queue", self,
+            drafts=self.parent_draft_provider,
+            busy=lambda: self._saving or self._deletion_is_blocked() or bool(self.deletion_busy and self.deletion_busy()),
+            unsaved=lambda target: self._deletion_targets_current_queue(target) and self.dirty,
+            completed=self._queue_config_deleted,
+            failed=self._queue_deletion_failed,
+        )
+        try:
+            dialog.exec_()
+        finally:
+            dialog.deleteLater()
+
+    def _queue_config_deleted(self, target):
+        if self._deletion_targets_current_queue(target):
+            self.using_config_path = None
+            self._new_target_path_selected = False
+            self._pending_registration.clear()
+            self.last_persisted_payload = None
+            self._last_recording_only_notice = None
+            self.select_list.clear_option_list(notify=False)
+            self.dirty = False
+            self.current_config_label.setText("当前配置：未选择配置")
+        if self.deletion_completed:
+            self.deletion_completed(target)
+
+    def _deletion_is_blocked(self):
+        if not self._deletion_blocked and self.deletion_error:
+            message = self.deletion_error()
+            if message:
+                self._queue_deletion_failed(message)
+        return self._deletion_blocked
+
+    def _queue_deletion_failed(self, message):
+        self._deletion_blocked = True
+        for button in self._queue_action_buttons:
+            button.setEnabled(False)
+            button.setToolTip(message)
+        if self.deletion_failed:
+            self.deletion_failed(message)
 
 
     def load_btn_clicked(self):
@@ -1094,8 +1165,10 @@ class OptionList(QListView):
             self._notify_config_changed()
 
     def load_model_config(self, config_path):
-        if not config_path or not isinstance(config_path, (str, bytes, os.PathLike)):
-            # Keep the dialog usable even when no config is currently selected in main window.
+        if not config_path:
+            self.clear_option_list()
+            return
+        if not isinstance(config_path, (str, bytes, os.PathLike)):
             self.default_logger.warning(
                 f"Invalid config_path for OptionList.load_model_config: {config_path!r}"
             )

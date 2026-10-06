@@ -2,6 +2,7 @@ import copy
 import ntpath
 import os
 from base.sequence_queue_references import QueueReferenceDraft
+from base.config_deletion import ConfigDeletionService
 from base.config_number_format import format_config_number
 
 from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, pyqtSignal
@@ -52,6 +53,7 @@ from consts.product_test_project_consts import (
 )
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
+from ui.config_delete_dialog import ConfigDeleteDialog
 from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.output_load_config_dialog import OutputLoadConfigDialog
 from base.analysis_segments import normalize_segmented_analysis, segment_condition_fields, segment_count
@@ -381,12 +383,18 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
     projects_changed = pyqtSignal()
     programs_changed = pyqtSignal()
 
-    def __init__(self, manager=None, queue_editor_callback=None, parent=None, *, contextual_queue_editor_callback=None):
+    def __init__(self, manager=None, queue_editor_callback=None, parent=None, *, contextual_queue_editor_callback=None,
+                 deletion_busy=None, deletion_completed=None, deletion_failed=None, deletion_error=None):
         super().__init__(parent)
         self.manager = manager or ProductTestProjectConfigManager()
         self.queue_editor_callback = queue_editor_callback
         self.contextual_queue_editor_callback = contextual_queue_editor_callback
         self._queue_reference_draft = None
+        self.deletion_busy = deletion_busy
+        self.deletion_completed = deletion_completed
+        self.deletion_failed = deletion_failed
+        self.deletion_error = deletion_error
+        self._deletion_blocked = False
         self.current_file = None
         self._imported_draft = False
         self.project_data = self.manager.default_project()
@@ -424,6 +432,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self._connect_signals()
         self._load_initial_project()
         install_dialog_enter_policy(self, self.save_btn)
+        self._deletion_is_blocked()
 
     def _init_ui(self):
         self.setObjectName("productTestProjectDialog")
@@ -1303,6 +1312,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         return True
 
     def _refresh_queue_options(self):
+        self._deletion_is_blocked()
         selected_queues = [
             self._combobox_value(self._queue_controls_for_row(row)[0])
             for row in range(self.condition_table.rowCount())
@@ -1383,6 +1393,8 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self._set_dirty(True)
 
     def _save_project_as(self):
+        if self._deletion_is_blocked():
+            return
         project_data = self.collect_project()
         new_name, accepted = QInputDialog.getText(
             self,
@@ -1401,31 +1413,50 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         QMessageBox.information(self, "另存为成功", "产品测试配置已另存")
 
     def _delete_project(self):
-        if not self.current_file:
-            QMessageBox.information(self, "删除配置", "当前配置尚未保存")
-            return
-        project_name = self.project_name_input.text().strip() or self.current_file
-        result = QMessageBox.question(
-            self,
-            "删除配置",
-            f"确定删除产品测试配置“{project_name}”吗？\n"
-            "测试队列和已有测试结果不会被删除。",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+        dialog = ConfigDeleteDialog(
+            ConfigDeletionService(self.manager), "product", self,
+            busy=lambda: self._deletion_is_blocked() or bool(self.deletion_busy and self.deletion_busy()),
+            unsaved=lambda target: target.key == self.current_file and self._dirty,
+            completed=self._project_deleted,
+            failed=self._project_deletion_failed,
         )
-        if result != QMessageBox.Yes:
-            return
-        success, message = self.manager.delete_project(self.current_file)
-        if not success:
-            QMessageBox.warning(self, "删除失败", message)
-            return
-        self._emit_projects_changed()
-        self._show_project(self.manager.default_project(), None)
+        try:
+            dialog.exec_()
+        finally:
+            dialog.deleteLater()
+
+    def _project_deleted(self, target):
+        if target.key == self.current_file:
+            self._show_project(self.manager.default_project(), None)
+            self.project_name_input.setPlaceholderText("未选择配置")
+            self._queue_reference_draft = None
+        if self.deletion_completed:
+            self.deletion_completed(target)
+            self.projects_changed.emit()
+        else:
+            self._emit_projects_changed()
+
+    def _deletion_is_blocked(self):
+        if not self._deletion_blocked and self.deletion_error:
+            message = self.deletion_error()
+            if message:
+                self._project_deletion_failed(message)
+        return self._deletion_blocked
+
+    def _project_deletion_failed(self, message):
+        self._deletion_blocked = True
+        for button in (self.save_btn, self.save_as_btn, self.delete_project_btn):
+            button.setEnabled(False)
+            button.setToolTip(message)
+        if self.deletion_failed:
+            self.deletion_failed(message)
 
     def _show_save_error(self, title, message):
         QMessageBox.warning(self, title, message.split("\n", 1)[0])
 
     def _save_project(self, close_dialog=True):
+        if self._deletion_is_blocked():
+            return False
         project_data = self.collect_project()
         save_file = self.current_file
         overwrite_file = None
@@ -1481,6 +1512,8 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self._dirty = bool(dirty)
 
     def _confirm_leave_changes(self):
+        if self._deletion_is_blocked():
+            return True
         if not self._dirty:
             return True
         message_box = QMessageBox(

@@ -687,6 +687,10 @@ class MainWindow(QMainWindow):
                 speaker_channels=self.speaker_channels,
                 ve_profile_provider=lambda device: self.ve_profile_store.load(
                     device, self.ve_calibration_store),
+                deletion_busy=lambda: sequence._configuration_deletion_busy(),
+                deletion_completed=lambda target: sequence._configuration_deleted(target),
+                deletion_failed=lambda message: sequence._configuration_deletion_failed(message),
+                deletion_error=lambda: getattr(sequence, "_configuration_deletion_error", ""),
                 **context,
             )
             analysis_model_select_dialog.exec()
@@ -716,6 +720,10 @@ class MainWindow(QMainWindow):
                 self._open_analysis_model_select,
                 self,
                 contextual_queue_editor_callback=self._open_analysis_model_select,
+                deletion_busy=lambda: self.sequence_window._configuration_deletion_busy(),
+                deletion_completed=lambda target: self.sequence_window._configuration_deleted(target),
+                deletion_failed=lambda message: self.sequence_window._configuration_deletion_failed(message),
+                deletion_error=lambda: getattr(self.sequence_window, "_configuration_deletion_error", ""),
             )
             dialog.programs_changed.connect(
                 self.sequence_window.on_product_test_program_updated

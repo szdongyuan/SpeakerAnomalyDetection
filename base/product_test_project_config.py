@@ -555,27 +555,17 @@ class ProductTestProjectConfigManager(object):
         return None
 
     def delete_project(self, file_name):
-        if not self._is_safe_file_name(file_name):
-            return False, "产品测试配置文件名不合法"
-        registry = self.load_registry()
-        original_registry = self._copy_registry(registry)
-        registry[REGISTRY_CONFIGS_KEY] = [
-            item
-            for item in registry.get(REGISTRY_CONFIGS_KEY, [])
-            if item.get(REGISTRY_FILE_KEY) != file_name
-        ]
-        if registry.get(REGISTRY_ACTIVE_FILE_KEY) == file_name:
-            registry[REGISTRY_ACTIVE_FILE_KEY] = None
-        if not self.save_registry(registry):
-            return False, "删除配置失败：注册表更新失败"
+        from base.config_deletion import ConfigDeletionError, ConfigDeletionService
 
-        file_path = os.path.join(self.program_dir, file_name)
-        if os.path.isfile(file_path):
-            try:
-                os.remove(file_path)
-            except OSError as error:
-                self.save_registry(original_registry)
-                return False, f"删除产品测试配置文件失败：{error}"
+        service = ConfigDeletionService(self)
+        try:
+            target = next((item for item in service.list_targets("product")
+                           if item.key == file_name), None)
+            if target is None:
+                return False, "产品配置未登记或文件名无效"
+            service.delete(target)
+        except ConfigDeletionError as error:
+            return False, str(error)
         return True, file_name
 
     def validate_project(self, project_data, current_file, queue_catalog=None):
