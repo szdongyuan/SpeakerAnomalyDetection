@@ -753,11 +753,11 @@ class SequenceWidgetConfigOpsMixin:
                     continue
                 self.using_file_combobox.addItem(name, file_name)
                 visible_count += 1
-            if visible_count == 0 or not active_file:
-                self.using_file_combobox.addItem("无配置", None)
-            idx = self.using_file_combobox.findData(active_file or None)
-            if idx >= 0:
-                self.using_file_combobox.setCurrentIndex(idx)
+            self.using_file_combobox.setPlaceholderText(
+                "请选择配置" if visible_count else "暂无配置"
+            )
+            idx = self.using_file_combobox.findData(active_file) if active_file else -1
+            self.using_file_combobox.setCurrentIndex(idx)
         finally:
             self.using_file_combobox.blockSignals(was_blocked)
 
@@ -878,7 +878,7 @@ class SequenceWidgetConfigOpsMixin:
                 or getattr(self, "using_config_path", None)
             )
         index = self.using_file_combobox.findData(active_file)
-        if index >= 0:
+        if index >= 0 or active_file is None:
             was_blocked = self.using_file_combobox.blockSignals(True)
             self.using_file_combobox.setCurrentIndex(index)
             self.using_file_combobox.blockSignals(was_blocked)

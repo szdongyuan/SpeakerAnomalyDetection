@@ -221,7 +221,7 @@ class ElidingComboBox(_FullTextPresentation, QComboBox):
         self.currentTextChanged.connect(self._sync_full_text)
 
     def _full_text(self):
-        return self.currentText()
+        return self.currentText() if self.currentIndex() >= 0 else self.placeholderText()
 
     def minimumSizeHint(self):
         return QSize(55, super().minimumSizeHint().height())
@@ -239,7 +239,7 @@ class ElidingComboBox(_FullTextPresentation, QComboBox):
         if not option.currentIcon.isNull():
             width -= option.iconSize.width() + 4
         return self.fontMetrics().elidedText(
-            self.currentText(), Qt.ElideRight, max(0, width)
+            self._full_text(), Qt.ElideRight, max(0, width)
         )
 
     def paintEvent(self, event):
@@ -248,7 +248,20 @@ class ElidingComboBox(_FullTextPresentation, QComboBox):
         option.currentText = self._display_text()
         painter = QStylePainter(self)
         painter.drawComplexControl(QStyle.CC_ComboBox, option)
-        painter.drawControl(QStyle.CE_ComboBoxLabel, option)
+        if self.currentIndex() < 0:
+            # Some Qt 5 styles omit the combo label entirely without a selected item.
+            rect = self.style().subControlRect(
+                QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, self
+            )
+            alignment = QStyle.visualAlignment(self.layoutDirection(), Qt.AlignLeft)
+            painter.setPen(option.palette.color(QPalette.PlaceholderText))
+            painter.drawText(
+                rect.adjusted(1, 0, -1, 0),
+                int(alignment | Qt.AlignVCenter | Qt.TextSingleLine),
+                option.currentText,
+            )
+        else:
+            painter.drawControl(QStyle.CE_ComboBoxLabel, option)
 
 
 class ElidingSpinBox(_FullTextPresentation, QSpinBox):

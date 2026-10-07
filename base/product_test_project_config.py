@@ -445,7 +445,7 @@ class ProductTestProjectConfigManager(object):
             return error_code.INVALID_DATA_LOADING, data
         return error_code.OK, data
 
-    def save_project(self, current_file, project_data):
+    def save_project(self, current_file, project_data, *, update_active=True):
         if current_file and not self._is_safe_file_name(current_file):
             return False, "产品测试配置文件名不合法"
         if current_file:
@@ -499,7 +499,9 @@ class ProductTestProjectConfigManager(object):
             target_file,
             project_name,
         )
-        if not active_file_before_save or active_file_before_save == current_file:
+        if update_active and (
+            not active_file_before_save or active_file_before_save == current_file
+        ):
             registry[REGISTRY_ACTIVE_FILE_KEY] = target_file
         if not self.save_registry(registry):
             restored = self._restore_file_snapshot(target_path, target_snapshot)
@@ -525,7 +527,7 @@ class ProductTestProjectConfigManager(object):
             return False, "产品测试配置必须是 JSON 对象"
         copied_project = self._normalize_project(project_data)
         copied_project[PROJECT_NAME_KEY] = normalize_project_name(new_name)
-        return self.save_project(None, copied_project)
+        return self.save_project(None, copied_project, update_active=False)
 
     def import_project(self, source_path):
         """Read an import draft; persistence is handled only by save_project."""

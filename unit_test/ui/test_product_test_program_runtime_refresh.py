@@ -259,6 +259,61 @@ def test_save_unchanged_a_or_b_keeps_a_results_and_waveform(refresh_host, save_o
     assert not warnings
 
 
+@pytest.mark.parametrize("active", [True, False])
+def test_save_as_refreshes_choices_without_changing_runtime(refresh_host, monkeypatch, active):
+    from PyQt5.QtWidgets import QInputDialog, QMessageBox
+    from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
+
+    host, project, _, warnings = refresh_host
+    manager = host.product_program_manager
+    if not active:
+        registry = manager.load_registry()
+        registry["active_file"] = None
+        assert manager.save_registry(registry)
+        host.on_product_test_program_updated()
+    snapshot = host._applied_product_snapshot
+    rows = host.left_panel.result_panel.rows
+    wave = host.data_struct.store_wave_data
+    original_bytes = (Path(manager.program_dir) / "A.json").read_bytes()
+    dialog = ProductTestProjectConfigDialog(manager)
+    dialog.programs_changed.connect(host.on_product_test_program_updated)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+
+    def accept_name(name_dialog):
+        name_dialog.setTextValue("555")
+        return QInputDialog.Accepted
+
+    monkeypatch.setattr(QInputDialog, "exec_", accept_name)
+    try:
+        if not active:
+            dialog._show_project(project, None)
+        dialog.condition_table.item(0, 1).setText("仅副本中的工况")
+        assert dialog._dirty
+        dialog.save_as_btn.click()
+        assert dialog.current_file == ("A.json" if active else None)
+        assert dialog._dirty
+        assert manager.load_registry()["active_file"] == ("A.json" if active else None)
+        assert host.using_file_combobox.currentData() == ("A.json" if active else None)
+        assert host.using_file_combobox.count() == 2
+        assert host.using_file_combobox.findData("555.json") >= 0
+        assert host._applied_product_snapshot is snapshot
+        assert host.left_panel.result_panel.rows is rows
+        assert host.data_struct.store_wave_data is wave
+        if active:
+            assert_old_result(host, snapshot, rows, wave)
+        else:
+            assert host.using_file_combobox.currentIndex() == -1
+            assert host.using_file_combobox.placeholderText() == "请选择配置"
+            assert not host.player_btn.isEnabled()
+        assert (Path(manager.program_dir) / "A.json").read_bytes() == original_bytes
+        assert manager.load_project("555.json")[1]["test_groups"][0]["test_conditions"][0]["condition_name"] == "仅副本中的工况"
+        assert not warnings
+    finally:
+        dialog._set_dirty(False)
+        dialog.close()
+        dialog.deleteLater()
+
+
 def test_changed_a_resets_once_and_keeps_saved_files(refresh_host, tmp_path):
     host, project, _, warnings = refresh_host
     saved_file = tmp_path / "results" / "saved.wav"
@@ -568,7 +623,10 @@ def test_deleting_active_a_does_not_silently_select_remaining_b(refresh_host):
     assert host._product_config_refresh_state == "empty"
     assert host.using_file_combobox.currentData() is None
     assert host.using_config_path is None
-    assert host.using_file_combobox.currentText() == "无配置"
+    assert host.using_file_combobox.currentIndex() == -1
+    assert host.using_file_combobox.placeholderText() == "请选择配置"
+    assert host.using_file_combobox.count() == 1
+    assert host.using_file_combobox.itemData(0) == "B.json"
     assert host.left_panel.result_panel.rows == {}
     assert host.left_panel.result_panel.selected_key == ""
     assert host.data_struct.store_wave_data is None
@@ -587,6 +645,41 @@ def test_deletion_busy_covers_runtime_boundaries(refresh_host, flag):
     assert not host._configuration_deletion_busy()
     setattr(host, flag, {"recording": 1} if flag == "_recording_process_contexts" else True)
     assert host._configuration_deletion_busy()
+
+
+def test_deleting_last_product_shows_empty_placeholder(refresh_host):
+    host, _, _, warnings = refresh_host
+    assert host.product_program_manager.delete_project("A.json")[0]
+    host.on_product_test_program_updated()
+    assert host.using_file_combobox.count() == 0
+    assert host.using_file_combobox.currentIndex() == -1
+    assert host.using_file_combobox.placeholderText() == "暂无配置"
+    assert host._product_config_refresh_state == "empty"
+    assert not host.player_btn.isEnabled()
+    assert not warnings
+
+
+@pytest.mark.parametrize("failure", ["invalid", "registry", "busy"])
+def test_failed_switch_restores_unselected_placeholder(refresh_host, monkeypatch, failure):
+    host, project, _, warnings = refresh_host
+    save_b(host, project)
+    manager = host.product_program_manager
+    assert manager.delete_project("A.json")[0]
+    host.on_product_test_program_updated()
+    if failure == "invalid":
+        (Path(manager.program_dir) / "B.json").write_text("{}", encoding="utf-8")
+    elif failure == "registry":
+        monkeypatch.setattr(manager, "save_registry", lambda data: False)
+    else:
+        monkeypatch.setattr(host, "_record_workflow_busy", True, raising=False)
+    host.using_file_combobox.setCurrentIndex(0)
+    assert host.using_file_combobox.currentIndex() == -1
+    assert host.using_file_combobox.currentData() is None
+    assert host.using_file_combobox.placeholderText() == "请选择配置"
+    assert manager.load_registry()["active_file"] is None
+    assert host._product_config_refresh_state == "empty"
+    assert not host.player_btn.isEnabled()
+    assert len(warnings) == 1
 
 
 def test_deletion_busy_covers_pending_analysis(refresh_host):

@@ -1,5 +1,6 @@
 import json
 import os
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -354,6 +355,40 @@ def test_case_insensitive_lookup_preserves_unregistered_file_name(tmp_path):
     assert manager.save_project(None, project)[0]
     Path(manager.registry_path).unlink()
     assert manager.existing_project_file("DEMO") == "Demo.json"
+
+
+@pytest.mark.parametrize("selection", ["active", "unselected", "first-copy"])
+def test_save_as_preserves_active_selection_and_original_file(tmp_path, selection):
+    manager = make_manager(tmp_path)
+    original = make_project(tmp_path, project_name="xxx")
+    original[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["input_voltage"] = "10"
+    original_path = Path(manager.program_dir, "xxx.json")
+    if selection != "first-copy":
+        assert manager.save_project(None, original) == (True, "xxx.json")
+        original_bytes = original_path.read_bytes()
+        if selection == "unselected":
+            registry = manager.load_registry()
+            registry["active_file"] = None
+            assert manager.save_registry(registry)
+    active_before = manager.load_registry()["active_file"]
+    draft = deepcopy(original)
+    draft[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["input_voltage"] = "12"
+    before = deepcopy(draft)
+
+    assert manager.save_as(draft, "555") == (True, "555.json")
+
+    assert draft == before
+    assert manager.load_registry()["active_file"] == active_before
+    copied = manager.load_project("555.json")[1]
+    assert copied[PROJECT_NAME_KEY] == "555"
+    assert copied[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["input_voltage"] == "12"
+    if selection != "first-copy":
+        assert original_path.read_bytes() == original_bytes
+    else:
+        assert not original_path.exists()
+        # Ordinary Save still activates the first explicitly saved editor target.
+        assert manager.save_project(None, original) == (True, "xxx.json")
+        assert manager.load_registry()["active_file"] == "xxx.json"
 
 
 def test_registry_failure_restores_previous_project_file(tmp_path, monkeypatch):

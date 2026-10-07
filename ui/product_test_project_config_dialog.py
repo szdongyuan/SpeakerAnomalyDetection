@@ -25,6 +25,8 @@ from PyQt5.QtWidgets import (
     QRadioButton,
     QScrollArea,
     QSpinBox,
+    QStyle,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -763,6 +765,9 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
     def _show_project(self, project_data, file_name):
         self._loading = True
         self.current_file = file_name
+        self._current_project_deleted = False
+        self.save_btn.setEnabled(not self._deletion_blocked)
+        self.save_as_btn.setEnabled(not self._deletion_blocked)
         self._imported_draft = False
         self.project_data = copy.deepcopy(project_data)
         self.project_name_input.setText(
@@ -1030,6 +1035,21 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             ProductTestProjectConfigDialog.CONDITION_CONTROL_FONT_STYLE
             + f"color: {color};"
         )
+        self._expand_segment_column(cell)
+
+    def _expand_segment_column(self, cell):
+        cell.ensurePolished()
+        table = self.condition_table
+        option = QStyleOptionViewItem()
+        option.initFrom(table)
+        # Cell widgets sit inside the table item's styled padding and grid line.
+        item_padding = table.style().sizeFromContents(
+            QStyle.CT_ItemViewItem, option, QSize(0, 0), table
+        ).width()
+        required_width = cell.sizeHint().width() + item_padding + int(table.showGrid())
+        # Keep the widest summary seen, including across edits and port switches.
+        if required_width > table.columnWidth(5):
+            table.setColumnWidth(5, required_width)
 
     def _edit_output_load(self, cell):
         row = next(
@@ -1393,35 +1413,55 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self._set_dirty(True)
 
     def _save_project_as(self):
-        if self._deletion_is_blocked():
+        if self._deletion_is_blocked() or self._current_project_deleted:
             return
         project_data = self.collect_project()
-        new_name, accepted = QInputDialog.getText(
-            self,
-            "另存为配置",
-            "新项目名称：",
-            text=project_data.get(PROJECT_NAME_KEY, ""),
-        )
-        if not accepted:
+        name_dialog = QInputDialog(self)
+        name_dialog.setWindowTitle("另存为配置")
+        name_dialog.setLabelText("新项目名称：")
+        name_dialog.setTextValue(project_data.get(PROJECT_NAME_KEY, ""))
+        name_dialog.setOkButtonText("保存")
+        name_dialog.setCancelButtonText("取消")
+        button_box = name_dialog.findChild(QDialogButtonBox)
+        save_button = button_box.button(QDialogButtonBox.Ok)
+        button_box.layout().removeWidget(save_button)
+        button_box.layout().addWidget(save_button)
+        accepted = name_dialog.exec_()
+        new_name = name_dialog.textValue()
+        name_dialog.deleteLater()
+        if accepted != QInputDialog.Accepted:
             return
         success, message = self.manager.save_as(project_data, new_name)
         if not success:
             self._show_save_error("另存为失败", message)
             return
-        self._load_project(message)
+        # Saving a copy does not commit or replace the current editor's draft.
+        copied_name = os.path.splitext(message)[0]
+        if self.current_file:
+            current_name = os.path.splitext(self.current_file)[0]
+            result_text = f"已另存为“{copied_name}”，当前仍在编辑“{current_name}”。"
+        else:
+            result_text = f"已另存为“{copied_name}”，当前草稿保持不变。"
         self._emit_projects_changed()
-        QMessageBox.information(self, "另存为成功", "产品测试配置已另存")
+        QMessageBox.information(self, "另存为成功", result_text)
 
     def _delete_project(self):
+        edited_file = self.current_file
         dialog = ConfigDeleteDialog(
             ConfigDeletionService(self.manager), "product", self,
             busy=lambda: self._deletion_is_blocked() or bool(self.deletion_busy and self.deletion_busy()),
             unsaved=lambda target: target.key == self.current_file and self._dirty,
             completed=self._project_deleted,
             failed=self._project_deletion_failed,
+            current_product_file=edited_file,
         )
         try:
-            dialog.exec_()
+            result = dialog.exec_()
+            # Wait for the whole batch and its refresh callbacks to finish.
+            if result == ConfigDeleteDialog.Accepted and any(
+                target.key == edited_file for target in dialog.completed_targets
+            ):
+                self.accept()
         finally:
             dialog.deleteLater()
 
@@ -1430,6 +1470,10 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             self._show_project(self.manager.default_project(), None)
             self.project_name_input.setPlaceholderText("未选择配置")
             self._queue_reference_draft = None
+            # A later batch failure can leave this editor open without its file.
+            self._current_project_deleted = True
+            self.save_btn.setEnabled(False)
+            self.save_as_btn.setEnabled(False)
         if self.deletion_completed:
             self.deletion_completed(target)
             self.projects_changed.emit()
@@ -1455,7 +1499,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         QMessageBox.warning(self, title, message.split("\n", 1)[0])
 
     def _save_project(self, close_dialog=True):
-        if self._deletion_is_blocked():
+        if self._deletion_is_blocked() or self._current_project_deleted:
             return False
         project_data = self.collect_project()
         save_file = self.current_file
