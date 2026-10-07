@@ -218,19 +218,24 @@ def test_product_editor_keeps_other_draft_and_clears_deleted_draft(files, ui_qap
     editor = ProductTestProjectConfigDialog(service.manager)
     editor.project_name_input.setText("尚未保存的名称")
     editor._set_dirty(True)
+    editor.show()
     def execute(dialog):
         choose(dialog, "A" if delete_current else "B")
         assert ("未保存的修改" in dialog.details.toPlainText()) is delete_current
+        assert ("关闭产品测试配置窗口" in dialog.details.toPlainText()) is delete_current
         dialog.delete_button.click()
+        assert editor.isVisible()  # Close the owner only after the deletion dialog finishes.
         return dialog.result()
     monkeypatch.setattr(ConfigDeleteDialog, "exec_", execute)
     editor.delete_project_btn.click()
     assert not (products / ("A.json" if delete_current else "B.json")).exists()
     if delete_current:
+        assert not editor.isVisible() and editor.result() == QDialog.Accepted
         assert editor.current_file is None and not editor._dirty
         assert editor.project_name_input.text() == ""
         assert json.loads(registry.read_text())["active_file"] is None
     else:
+        assert editor.isVisible()
         assert editor.current_file == "A.json" and editor._dirty
         assert editor.project_name_input.text() == "尚未保存的名称"
         assert json.loads(registry.read_text())["active_file"] == "A.json"
@@ -590,6 +595,7 @@ def test_product_editor_multiselect_clears_current_only_after_success(files, ui_
     editor = ProductTestProjectConfigDialog(service.manager)
     editor.project_name_input.setText("Unsaved A")
     editor._set_dirty(True)
+    editor.show()
 
     def execute(dialog):
         choose(dialog, "A")
@@ -597,6 +603,7 @@ def test_product_editor_multiselect_clears_current_only_after_success(files, ui_
         assert "未保存的修改" in dialog.details.toPlainText()
         dialog.delete_button.click()
         assert len(dialog.completed_targets) == 2
+        assert editor.isVisible()
         return dialog.result()
 
     monkeypatch.setattr(ConfigDeleteDialog, "exec_", execute)
@@ -604,4 +611,147 @@ def test_product_editor_multiselect_clears_current_only_after_success(files, ui_
     assert editor.current_file is None and not editor._dirty
     assert not (products / "A.json").exists() and not (products / "B.json").exists()
     assert not json.loads(registry.read_text(encoding="utf-8"))["configs"]
+    assert not editor.isVisible()
+    editor.close()
+
+
+def test_product_delete_notice_follows_checked_current_config(files, ui_qapp):
+    service, _, _, _, _ = files
+    dialog = ConfigDeleteDialog(service, "product", current_product_file="A.json")
+    choose(dialog, "B")
+    assert "关闭产品测试配置窗口" not in dialog.details.toPlainText()
+    choose(dialog, "A")
+    assert "删除当前配置后，将关闭产品测试配置窗口，返回主界面。" in dialog.details.toPlainText()
+    dialog.config_list.currentItem().setCheckState(Qt.Unchecked)
+    assert "关闭产品测试配置窗口" not in dialog.details.toPlainText()
+    dialog.close()
+
+
+@pytest.mark.parametrize("target_name", ["A", "B"])
+def test_product_editor_close_depends_on_edited_file_not_active_file(
+    files, ui_qapp, monkeypatch, target_name,
+):
+    service, _, registry, _, _ = files
+    editor = ProductTestProjectConfigDialog(service.manager)
+    assert editor._load_project("B.json")
+    editor.project_name_input.setText("Unsaved B")
+    editor._set_dirty(True)
+    editor.show()
+
+    def execute(dialog):
+        choose(dialog, target_name)
+        assert ("关闭产品测试配置窗口" in dialog.details.toPlainText()) is (target_name == "B")
+        dialog.delete_button.click()
+        return dialog.result()
+
+    monkeypatch.setattr(ConfigDeleteDialog, "exec_", execute)
+    editor.delete_project_btn.click()
+    if target_name == "A":
+        assert editor.isVisible() and editor.current_file == "B.json"
+        assert editor.project_name_input.text() == "Unsaved B" and editor._dirty
+        assert json.loads(registry.read_text())["active_file"] is None
+    else:
+        assert not editor.isVisible()
+        assert json.loads(registry.read_text())["active_file"] == "A.json"
+    editor._set_dirty(False)
+    editor.close()
+
+
+def test_cancel_product_deletion_preserves_editor_and_files(files, ui_qapp, monkeypatch):
+    service, products, registry, _, _ = files
+    editor = ProductTestProjectConfigDialog(service.manager)
+    editor.project_name_input.setText("Unsaved A")
+    editor._set_dirty(True)
+    editor.show()
+    before = registry.read_bytes(), (products / "A.json").read_bytes()
+
+    def cancel(dialog):
+        choose(dialog, "A")
+        dialog.cancel_button.click()
+        return dialog.result()
+
+    monkeypatch.setattr(ConfigDeleteDialog, "exec_", cancel)
+    editor.delete_project_btn.click()
+    assert editor.isVisible() and editor.current_file == "A.json"
+    assert editor.project_name_input.text() == "Unsaved A" and editor._dirty
+    assert before == (registry.read_bytes(), (products / "A.json").read_bytes())
+    editor._set_dirty(False)
+    editor.close()
+
+
+@pytest.mark.parametrize("failure_file", ["A.json", "B.json"])
+def test_product_delete_failure_keeps_editor_open(files, ui_qapp, monkeypatch, failure_file):
+    service, products, registry, _, _ = files
+    editor = ProductTestProjectConfigDialog(service.manager)
+    editor.project_name_input.setText("Unsaved A")
+    editor._set_dirty(True)
+    editor.show()
+    real_remove = os.remove
+
+    def remove(path):
+        if Path(path).name == failure_file:
+            raise PermissionError("locked test configuration")
+        real_remove(path)
+
+    def execute(dialog):
+        choose(dialog, "A")
+        choose(dialog, "B")
+        dialog.delete_button.click()
+        assert editor.isVisible()
+        assert "文件删除失败" in dialog.details.toPlainText()
+        dialog.reject()
+        return dialog.result()
+
+    monkeypatch.setattr("base.config_deletion.os.remove", remove)
+    monkeypatch.setattr(ConfigDeleteDialog, "exec_", execute)
+    editor.delete_project_btn.click()
+    assert editor.isVisible()
+    if failure_file == "A.json":
+        assert editor.current_file == "A.json" and editor._dirty
+        assert editor.project_name_input.text() == "Unsaved A"
+        assert editor.save_btn.isEnabled() and editor.save_as_btn.isEnabled()
+        assert (products / "A.json").exists()
+    else:
+        assert editor.current_file is None and not editor._dirty
+        assert not editor.save_btn.isEnabled() and not editor.save_as_btn.isEnabled()
+        before = registry.read_bytes()
+        assert editor._save_project(close_dialog=False) is False
+        editor._save_project_as()
+        assert registry.read_bytes() == before
+        assert not (products / "A.json").exists()
+        editor.new_project_btn.click()
+        assert editor.save_btn.isEnabled() and editor.save_as_btn.isEnabled()
+    editor._set_dirty(False)
+    editor.close()
+
+
+def test_real_modal_product_delete_closes_editor_after_batch(files, ui_qapp):
+    service, products, _, _, _ = files
+    completed = []
+    editor = ProductTestProjectConfigDialog(
+        service.manager, deletion_completed=lambda target: completed.append(
+            (target.key, editor.isVisible())
+        ),
+    )
+    editor.show()
+    errors = []
+
+    def interact():
+        dialog = QApplication.activeModalWidget()
+        try:
+            assert isinstance(dialog, ConfigDeleteDialog)
+            choose(dialog, "A")
+            choose(dialog, "B")
+            QTest.mouseClick(dialog.delete_button, Qt.LeftButton)
+        except BaseException as error:
+            errors.append(error)
+            if dialog:
+                dialog.reject()
+
+    QTimer.singleShot(0, interact)
+    editor.delete_project_btn.click()
+    assert not errors
+    assert completed == [("A.json", True), ("B.json", True)]
+    assert not editor.isVisible() and editor.result() == QDialog.Accepted
+    assert not (products / "A.json").exists() and not (products / "B.json").exists()
     editor.close()

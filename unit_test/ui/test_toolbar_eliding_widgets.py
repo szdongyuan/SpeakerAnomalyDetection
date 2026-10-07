@@ -55,6 +55,23 @@ def show_unfocused(widget, host, ui_qapp, width=55):
     assert not widget.hasFocus()
 
 
+@pytest.mark.parametrize("placeholder,items", [("请选择配置", ["xxx"]), ("暂无配置", [])])
+def test_combo_paints_unselected_placeholder(host, ui_qapp, placeholder, items):
+    combo = ElidingComboBox(host[0])
+    combo.setFont(QFont(QFontDatabase().families()[0], 12))
+    combo.addItems(items)
+    combo.setPlaceholderText(placeholder)
+    combo.setCurrentIndex(-1)
+    show_unfocused(combo, host, ui_qapp, width=200)
+    with_placeholder = combo.grab().toImage()
+    combo.setPlaceholderText("")
+    combo.setCurrentIndex(-1)
+    ui_qapp.processEvents()
+    assert with_placeholder != combo.grab().toImage()
+    assert combo.currentIndex() == -1 and combo.currentText() == ""
+    assert combo.count() == len(items)
+
+
 @pytest.mark.parametrize("kind", ["label", "line", "combo", "check"])
 @pytest.mark.parametrize("width", [55, 125])
 def test_lossless_elision_paints_and_restores(kind, width, host, ui_qapp, monkeypatch):

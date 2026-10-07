@@ -195,9 +195,11 @@ def test_many_save_errors_show_one_problem_without_writing(app, tmp_path, monkey
         QMessageBox, "warning",
         lambda parent, title, message: observed.append((title, message)),
     )
-    monkeypatch.setattr(
-        QInputDialog, "getText", lambda *args, **kwargs: ("另存配置", True)
-    )
+    def accept_name(name_dialog):
+        name_dialog.setTextValue("另存配置")
+        return QInputDialog.Accepted
+
+    monkeypatch.setattr(QInputDialog, "exec_", accept_name)
     try:
         if save_path == "save_as":
             dialog._save_project_as()
@@ -253,9 +255,16 @@ def test_import_external_duplicate_stays_draft_until_save(app, tmp_path, monkeyp
             monkeypatch.setattr(QMessageBox, "exec_", lambda self: QMessageBox.Discard)
             dialog.reject()
         elif action == "save-as":
-            monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("导入副本", True))
+            def accept_name(name_dialog):
+                name_dialog.setTextValue("导入副本")
+                return QInputDialog.Accepted
+
+            monkeypatch.setattr(QInputDialog, "exec_", accept_name)
             dialog._save_project_as()
-            assert dialog.current_file == "导入副本.json"
+            assert dialog.current_file is None
+            assert dialog._imported_draft and dialog._dirty
+            assert dialog.project_name_input.text() == imported["project_name"]
+            assert manager.load_project("导入副本.json")[1][EXPORT_RAW_AUDIO_CSV_KEY] is True
         elif action == "rename":
             dialog.project_name_input.setText("导入新名称")
             assert dialog._save_project(close_dialog=False)
@@ -277,8 +286,9 @@ def test_import_external_duplicate_stays_draft_until_save(app, tmp_path, monkeyp
             assert events == []
         else:
             assert events == ["changed"]
-            assert not dialog._dirty
-            assert manager.load_project(dialog.current_file)[1][EXPORT_RAW_AUDIO_CSV_KEY] is True
+            if action != "save-as":
+                assert not dialog._dirty
+                assert manager.load_project(dialog.current_file)[1][EXPORT_RAW_AUDIO_CSV_KEY] is True
         assert source.read_bytes() == source_before
         assert bool(warnings) is (action == "save-failure")
     finally:
@@ -455,6 +465,85 @@ def test_time_segments_and_voltage_survive_save_reopen_copy_and_runtime(app, tmp
         loaded = loaded[1]
     assert loaded['test_groups'][0]['test_conditions'][0]['segmented_analysis'] == condition['segmented_analysis']
     close_dialog(dialog)
+
+
+@pytest.mark.parametrize("window_width", [1020, 1387, 1700])
+def test_segment_summary_fits_with_settings_button(app, tmp_path, window_width):
+    manager = make_manager(tmp_path)
+    register_queue(manager)
+    conditions = [
+        {
+            "condition_name": f"档位{count}",
+            "test_queue": "低噪声基础测试",
+            "segmented_analysis": {
+                "mode": "time",
+                "interval_seconds": 600 / count,
+                "display_time_unit": "s",
+                "analysis_seconds": 0.01,
+            },
+        }
+        for count in (10, 100, 10000)
+    ]
+    dialog = ProductTestProjectConfigDialog(manager)
+    try:
+        dialog._show_project(project_data(tmp_path, conditions), None)
+        dialog.resize(window_width, 747)
+        if window_width == 1020:
+            # Force overflow independently of the platform's font metrics.
+            dialog.condition_table.setMaximumWidth(900)
+        dialog.show()
+        app.processEvents()
+        table = dialog.condition_table
+        for row, count in enumerate((10, 100, 10000)):
+            cell = table.cellWidget(row, 5)
+            label = cell.status_label
+            button = cell.settings_button
+            assert label.text() == f"按时间 · {count} 段"
+            assert label.width() >= label.sizeHint().width()
+            assert label.geometry().right() < button.geometry().left()
+            assert cell.rect().contains(button.geometry())
+            assert button.height() == dialog.CONDITION_CONTROL_HEIGHT
+        if window_width == 1020:
+            assert table.horizontalScrollBar().maximum() > 0
+            table.horizontalScrollBar().setValue(table.horizontalScrollBar().maximum())
+            app.processEvents()
+            cell = table.cellWidget(2, 5)
+            assert table.viewport().rect().contains(cell.geometry())
+    finally:
+        close_dialog(dialog)
+
+
+def test_segment_column_grows_without_shrinking_after_edit_or_port_switch(app, tmp_path):
+    manager = make_manager(tmp_path)
+    register_queue(manager)
+    dialog = ProductTestProjectConfigDialog(manager)
+    try:
+        dialog._show_project(project_data(tmp_path), None)
+        dialog.show()
+        app.processEvents()
+        table = dialog.condition_table
+        original_width = table.columnWidth(5)
+        assert original_width >= 205
+        cell = table.cellWidget(0, 5)
+        cell.load_settings = {
+            "mode": "time", "interval_seconds": 0.06,
+            "display_time_unit": "s", "analysis_seconds": 0.01,
+        }
+        dialog._update_output_load_status(cell)
+        app.processEvents()
+        expanded_width = table.columnWidth(5)
+        assert expanded_width > original_width
+        assert cell.status_label.width() >= cell.status_label.sizeHint().width()
+
+        cell.load_settings = {"mode": "none"}
+        dialog._update_output_load_status(cell)
+        dialog.port_tabs.setCurrentIndex(1)
+        dialog.port_tabs.setCurrentIndex(0)
+        app.processEvents()
+        assert table.columnWidth(5) == expanded_width
+        assert table.cellWidget(0, 5).status_label.text() == "未启用"
+    finally:
+        close_dialog(dialog)
 
 
 def test_dialog_uses_project_port_condition_layout(app, tmp_path):
@@ -1076,6 +1165,140 @@ def test_save_button_closes_dialog_after_success(app, tmp_path, monkeypatch):
     app.processEvents()
 
     assert dialog.result() == dialog.Accepted
+
+
+@pytest.mark.parametrize("changed,followup", [(False, None), (True, "save"), (True, "discard")])
+def test_save_as_keeps_editor_context_and_original_save_target(
+    app, tmp_path, monkeypatch, changed, followup,
+):
+    manager = make_manager(tmp_path)
+    register_queue(manager)
+    data = project_data(tmp_path)
+    data["project_name"] = "xxx"
+    for group in data["test_groups"]:
+        group["test_conditions"][0]["input_voltage"] = "10"
+    assert manager.save_project(None, data) == (True, "xxx.json")
+    original_path = Path(manager.program_dir, "xxx.json")
+    original_bytes = original_path.read_bytes()
+    dialog = ProductTestProjectConfigDialog(manager)
+    messages = []
+    changes = []
+    dialog.projects_changed.connect(lambda: changes.append("changed"))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[2]))
+
+    def accept_name(name_dialog):
+        name_dialog.setTextValue("555")
+        return QInputDialog.Accepted
+
+    monkeypatch.setattr(QInputDialog, "exec_", accept_name)
+    try:
+        dialog.show()
+        dialog.port_tabs.setCurrentIndex(1)
+        dialog.condition_table.setCurrentCell(0, 1)
+        voltage = dialog.condition_table.cellWidget(0, 7)
+        if changed:
+            voltage.setFocus()
+            voltage.selectAll()
+            QTest.keyClicks(voltage, "12")
+        assert dialog._dirty is changed
+        contents = dialog.collect_project()
+        dialog.save_as_btn.click()
+
+        assert dialog.current_file == "xxx.json"
+        assert dialog.project_name_input.text() == "xxx"
+        assert dialog._dirty is changed and not dialog._imported_draft
+        assert dialog.collect_project() == contents
+        assert dialog.port_tabs.currentIndex() == 1
+        assert dialog.condition_table.currentRow() == 0
+        assert dialog.condition_table.cellWidget(0, 7) is voltage
+        assert original_path.read_bytes() == original_bytes
+        assert manager.load_registry()["active_file"] == "xxx.json"
+        copy_path = Path(manager.program_dir, "555.json")
+        copy_bytes = copy_path.read_bytes()
+        assert manager.load_project("555.json")[1]["test_groups"][1]["test_conditions"][0]["input_voltage"] == ("12" if changed else "10")
+        assert changes == ["changed"]
+        assert messages == ["已另存为“555”，当前仍在编辑“xxx”。"]
+
+        if followup == "save":
+            dialog.save_btn.click()
+            assert manager.load_project("xxx.json")[1]["test_groups"][1]["test_conditions"][0]["input_voltage"] == "12"
+            assert not dialog.isVisible()
+        elif followup == "discard":
+            monkeypatch.setattr(QMessageBox, "exec_", lambda _: QMessageBox.Discard)
+            dialog.cancel_btn.click()
+            assert original_path.read_bytes() == original_bytes
+            assert not dialog.isVisible()
+        assert copy_path.read_bytes() == copy_bytes
+    finally:
+        close_dialog(dialog)
+
+
+@pytest.mark.parametrize("outcome", ["cancel", "empty-name", "same-name", "file-failure", "registry-failure"])
+def test_save_as_cancel_or_failure_preserves_draft_and_files(app, tmp_path, monkeypatch, outcome):
+    manager = make_manager(tmp_path)
+    file_name = prepare_project(manager, tmp_path)
+    dialog = ProductTestProjectConfigDialog(manager)
+    messages = []
+    changes = []
+    dialog.projects_changed.connect(lambda: changes.append("changed"))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: messages.append(args[2]))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: pytest.fail("Save unexpectedly succeeded"))
+
+    def respond(name_dialog):
+        name = {"empty-name": "", "same-name": Path(file_name).stem}.get(outcome, "555")
+        name_dialog.setTextValue(name)
+        return QInputDialog.Rejected if outcome == "cancel" else QInputDialog.Accepted
+
+    monkeypatch.setattr(QInputDialog, "exec_", respond)
+    if outcome == "file-failure":
+        monkeypatch.setattr(LoadUiConfig, "save_data_to_json", lambda *args: False)
+    elif outcome == "registry-failure":
+        monkeypatch.setattr(manager, "save_registry", lambda _: False)
+    try:
+        dialog.port_tabs.setCurrentIndex(1)
+        dialog.condition_table.item(0, 1).setText("未保存的工况")
+        assert dialog._dirty
+        contents = dialog.collect_project()
+        before = {p: p.read_bytes() for p in Path(manager.program_dir).glob("*.json")}
+        dialog.save_as_btn.click()
+        assert dialog.current_file == file_name and dialog._dirty
+        assert not dialog._imported_draft
+        assert dialog.port_tabs.currentIndex() == 1
+        assert dialog.collect_project() == contents
+        assert {p: p.read_bytes() for p in Path(manager.program_dir).glob("*.json")} == before
+        assert not changes
+        assert bool(messages) is (outcome != "cancel")
+    finally:
+        close_dialog(dialog)
+
+
+def test_save_as_from_new_draft_does_not_adopt_copy(app, tmp_path, monkeypatch):
+    manager = make_manager(tmp_path)
+    register_queue(manager)
+    dialog = ProductTestProjectConfigDialog(manager)
+    data = project_data(tmp_path)
+    data["project_name"] = "未保存草稿"
+    messages = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[2]))
+
+    def accept_name(name_dialog):
+        name_dialog.setTextValue("555")
+        return QInputDialog.Accepted
+
+    monkeypatch.setattr(QInputDialog, "exec_", accept_name)
+    try:
+        dialog._show_project(data, None)
+        dialog._set_dirty(True)
+        dialog.save_as_btn.click()
+        assert dialog.current_file is None and dialog._dirty
+        assert not dialog._imported_draft
+        assert dialog.project_name_input.text() == "未保存草稿"
+        assert manager.load_registry()["active_file"] is None
+        assert manager.load_project("555.json")[1]["project_name"] == "555"
+        assert not Path(manager.program_dir, "未保存草稿.json").exists()
+        assert messages == ["已另存为“555”，当前草稿保持不变。"]
+    finally:
+        close_dialog(dialog)
 
 
 def test_unsaved_changes_dialog_uses_chinese_button_text(

@@ -64,7 +64,7 @@ class DeletionItemDelegate(QStyledItemDelegate):
 
 class ConfigDeleteDialog(ConfigDialogBase):
     def __init__(self, service, kind, parent=None, *, drafts=None, busy=None,
-                 unsaved=None, completed=None, failed=None):
+                 unsaved=None, completed=None, failed=None, current_product_file=None):
         super().__init__(parent)
         self.service = service
         self.kind = kind
@@ -73,6 +73,7 @@ class ConfigDeleteDialog(ConfigDialogBase):
         self.unsaved = unsaved or (lambda target: False)
         self.completed = completed
         self.failed = failed
+        self.current_product_file = current_product_file
         self.completed_targets = []
         self._executing = False
         self._blocked = False
@@ -205,7 +206,7 @@ class ConfigDeleteDialog(ConfigDialogBase):
             self._show_details("")
             return
         if file_count:
-            message = ("仅删除产品配置，保留队列、录音和结果。" if self.kind == "product"
+            message = ("仅删除配置，保留队列和测试数据。" if self.kind == "product"
                        else "仅删除配置，保留录音和结果。")
             if file_count < len(targets):
                 message += "\n“仅移除记录”项保留原文件。"
@@ -213,6 +214,10 @@ class ConfigDeleteDialog(ConfigDialogBase):
             message = "仅移除列表记录，保留原文件。"
         if any(self.unsaved(target) for target in targets):
             message += "\n未保存的修改将丢弃。"
+        if self.kind == "product" and any(
+            target.key == self.current_product_file for target in targets
+        ):
+            message += "\n删除当前配置后，将关闭产品测试配置窗口，返回主界面。"
         try:
             for target in targets:
                 self._check(target)
