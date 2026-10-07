@@ -2458,19 +2458,6 @@ class SequenceWidgetAnalysisOpsMixin(
         # Keep the active input channels for downstream analysis mapping.
         self._active_input_channels = list(run_channels)
 
-        in_dev = recorded_dict.get("input_device")
-        out_dev = recorded_dict.get("output_device")
-        if in_dev and out_dev:
-            if in_dev.get("hostapi") != out_dev.get("hostapi"):
-                QMessageBox.warning(
-                    self,
-                    "设备组合不支持",
-                    "播放+录制需要选择同一驱动类型（Host API）的输入/输出设备。\n"
-                    f"当前输入: {in_dev.get('name')} (hostapi={in_dev.get('hostapi')})\n"
-                    f"当前输出: {out_dev.get('name')} (hostapi={out_dev.get('hostapi')})",
-                )
-                return None, None, None
-
         return recorded_dict, sample_rate
 
     def _should_use_streaming_recording(self):

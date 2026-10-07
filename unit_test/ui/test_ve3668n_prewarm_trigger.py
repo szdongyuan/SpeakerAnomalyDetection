@@ -399,7 +399,6 @@ def test_cancel_does_not_consume_and_consumed_or_ordinary_switch_keeps_release(m
     assert len(window.recording_bridge.release_calls) == 1
 
     ordinary = {"backend": "sounddevice", "name": "mic", "hostapi": None}
-    monkeypatch.setattr("main_window.save_if_changed", lambda *args, **kwargs: False)
     monkeypatch.setattr("main_window.open_hardware_selection_window",
                         lambda **kwargs: (True, None, [], ordinary, [0]))
     window.on_hardware_window_init()

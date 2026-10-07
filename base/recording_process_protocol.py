@@ -114,6 +114,9 @@ def _device(device, channels, direction):
     _integer("device hostapi", device.get("hostapi"))
     if not isinstance(device.get("name"), str) or not device["name"]:
         raise ValueError("device name is required")
+    if direction == "input" and "hostapi_name" in device:
+        if not isinstance(device["hostapi_name"], str) or not device["hostapi_name"].strip():
+            raise ValueError("device hostapi_name must be a nonempty string")
     maximum = device.get(f"max_{direction}_channels")
     _integer(f"max_{direction}_channels", maximum, 1)
     if max(channels) >= maximum:

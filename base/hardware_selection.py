@@ -1,21 +1,8 @@
-"""Persist & restore the operator's last hardware choice.
+"""Persist input selection and restore compatible hardware tuple shapes.
 
-Stores ``(api_name, speaker_name, speaker_channels, mic_name, mic_channels)``
-in ``configs/hardware_selection.json`` and re-applies it at startup. Each
-side falls back independently when its saved device cannot be matched
-against the currently enumerated hardware:
-
-* missing mic     -> OS default mic + ``[0]`` (single-channel, safe on
-  any sound card; matches the post-PaError-9998 hand-fix in
-  ``main_window.__init__`` so a corrupt/missing JSON yields the same
-  behaviour as a fresh install).
-* missing speaker -> OS default speaker + all of its channels.
-
-Matching uses ``(api_name, device_name)`` rather than the raw
-``sounddevice`` index, because indices shuffle whenever the user
-plugs/unplugs anything. Legacy JSON remains opportunistic. Explicit VE input
-records instead retain their stable identity and ordered routes as unavailable
-until discovery confirms them. Recording parameters belong to test queues.
+Legacy output names/channels are ignored. Output slots expose only a current
+system-default snapshot and empty channels; playback resolves its own output.
+Ordinary inputs match (API, name), while VE retains stable identity/routes.
 """
 
 import json
@@ -193,27 +180,14 @@ def _max_channels(device: Optional[Dict[str, Any]], kind: str) -> int:
 def _apply_default_device(
     mic: Optional[Dict[str, Any]], speaker: Optional[Dict[str, Any]]
 ) -> None:
-    """Sync ``sd.default.device`` with the resolved indices (best-effort)."""
+    """Apply only ordinary input; speaker is an inert compatibility argument."""
+    if not mic or is_ve_input(mic):
+        return
     try:
-        if not mic or not speaker:
-            return
-        spk_idx = int(speaker.get("index"))
-        if not is_ve_input(mic):
-            mic_idx = int(mic.get("index"))
+        mic_idx = int(mic.get("index"))
     except (TypeError, ValueError):
         return
-    if is_ve_input(mic):
-        # This only assigns the ordinary output slot; it cannot resolve or
-        # replace the input default and needs no PortAudio exception wrapper.
-        SoundDeviceManager.change_default_output_device(spk_idx)
-        return
-    try:
-        SoundDeviceManager.change_default_device(mic_idx, spk_idx)
-    except Exception:
-        # PortAudio occasionally rejects the assignment; the dialog can
-        # still recover via on_hardware_window_init when the user opens
-        # the hardware menu.
-        pass
+    SoundDeviceManager.change_default_input_device(mic_idx)
 
 
 def _resolve_api_name(
@@ -298,22 +272,11 @@ def restore_or_default(*, path=None, soundcard_only=False, apply_defaults=True) 
     List[int],
     List[int],
 ]:
-    """Resolve last hardware choice.
+    """Return (input, current default output, input channels, []).
 
-    Returns ``(mic_device, speaker_device, mic_channels, speaker_channels)``
-    in the same shape ``main_window`` already consumes. Each side falls
-    back independently:
-
-    * mic fallback     -> OS default mic + ``[0]``
-    * speaker fallback -> OS default speaker + all available channels
-
-    Explicit VE choices never use the mic fallback or mutate the input default;
-    their ordinary output is applied independently.
-    ``soundcard_only`` is for a user-requested switch back to the retained legacy
-    configuration (including its shared input/output API), not an automatic
-    fallback. ``path`` supports isolated instance use.
-    ``apply_defaults=False`` resolves a dialog draft without applying audio
-    defaults; existing startup callers retain the default applying behavior.
+    Saved output fields are inert. Explicit VE choices never fall back to or
+    mutate ordinary input. soundcard_only restores the retained input backup;
+    apply_defaults=False resolves a draft without changing audio defaults.
     """
     try:
         SoundDeviceManager.refresh_available_device()
@@ -353,24 +316,8 @@ def restore_or_default(*, path=None, soundcard_only=False, apply_defaults=True) 
         max_in = _max_channels(mic_device, "mic")
         mic_channels = [0] if max_in > 0 else []
 
-    speaker_device = _find_device_by_name(
-        devices_by_api,
-        api_name,
-        (saved or {}).get("speaker_name") if isinstance(saved, dict) else None,
-        "speaker",
-    )
-    if speaker_device is not None:
-        max_out = _max_channels(speaker_device, "speaker")
-        # The hardware dialog currently forces speaker_channels to ``[]``
-        # on every OK; an empty saved list is therefore the *normal*
-        # case, not a corruption indicator. Truncate but do not back-fill.
-        speaker_channels = _safe_int_channels(
-            saved.get("speaker_channels"), max_out
-        )
-    else:
-        speaker_device = _os_default_device("speaker")
-        max_out = _max_channels(speaker_device, "speaker")
-        speaker_channels = list(range(max_out))
+    speaker_device = _os_default_device("speaker")
+    speaker_channels = []
 
     if apply_defaults:
         _apply_default_device(mic_device, speaker_device)
@@ -385,26 +332,15 @@ def _build_payload(
     speaker_channels: Optional[List[int]],
     devices_by_api: Optional[Dict[str, Dict[str, List[Dict[str, Any]]]]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Build the JSON payload, or ``None`` if there is nothing worth saving.
-
-    Resolves the host-API name from one of the two devices' ``hostapi``
-    index -- the hardware dialog never returns ``api_name`` on its own,
-    so we have to look it up here.
-    """
-    if not mic_device and not speaker_device:
+    """Build input-only state; legacy speaker arguments are ignored."""
+    if not mic_device:
         return None
-    if devices_by_api is None:
-        devices_by_api = _enumerate_devices()
 
     api_name = None
     try:
-        hostapi_idx = None
-        for dev in (speaker_device, mic_device):
-            if isinstance(dev, dict) and dev.get("hostapi") is not None:
-                hostapi_idx = int(dev.get("hostapi"))
-                break
+        hostapi_idx = mic_device.get("hostapi")
         if hostapi_idx is not None:
-            info = SoundDeviceManager.get_api_info(hostapi_idx)
+            info = SoundDeviceManager.get_api_info(int(hostapi_idx))
             if isinstance(info, dict):
                 api_name = info.get("name")
     except Exception:
@@ -412,11 +348,6 @@ def _build_payload(
 
     payload: Dict[str, Any] = {
         "api_name": api_name,
-        "speaker_name": (speaker_device or {}).get("name") if speaker_device else None,
-        "speaker_channels": [
-            int(c) for c in (speaker_channels or [])
-            if isinstance(c, int) and not isinstance(c, bool)
-        ],
         "mic_name": (mic_device or {}).get("name") if mic_device else None,
         "mic_channels": [
             int(c) for c in (mic_channels or [])
@@ -470,25 +401,23 @@ def _ve_selection_payload(device, speaker, channels, speaker_channels, existing,
     channels = validate_physical_channels(channels)
     if not current["available"] or not set(channels).issubset(current["physical_channels"]):
         raise ValueError("VE input or selected physical_channels unavailable")
-    payload = _build_payload(None, speaker, [], speaker_channels) or {
-        "api_name": None, "speaker_name": None, "speaker_channels": [],
-    }
-    # Ordinary soundcards use one API for both input and output. Retain that
-    # bounded context separately from VE's independently chosen ordinary output.
+    # api_name and output arguments are legacy compatibility inputs. The
+    # retained soundcard input is the sole source of ordinary API context.
+    payload = {}
     legacy = legacy_soundcard_selection
     if legacy is None:
         legacy = existing.get("soundcard_selection")
     if not isinstance(legacy, dict):
         legacy = existing if existing.get("mic_name") else {}
     legacy = {key: deepcopy(legacy[key]) for key in (
-        "api_name", "speaker_name", "speaker_channels", "mic_name", "mic_channels") if key in legacy}
+        "api_name", "mic_name", "mic_channels") if key in legacy}
     if legacy_mic_device:
         mic_payload = _build_payload(legacy_mic_device, None, legacy_mic_channels, [])
         legacy.update({key: mic_payload[key] for key in ("api_name", "mic_name", "mic_channels")})
     if legacy:
         payload["soundcard_selection"] = legacy
     payload.update(
-        api_name=api_name if api_name is not None else (payload.get("api_name") or existing.get("api_name")),
+        api_name=legacy.get("api_name"),
         mic_name=legacy.get("mic_name"),
         mic_channels=deepcopy(legacy.get("mic_channels", [])),
         input_selection={"schema_version": 1, "backend": "vkinging",
@@ -501,7 +430,7 @@ def save_ve_selection(mic_device, speaker_device, mic_channels, speaker_channels
                       profile_store, calibration_store, path=None,
                       api_name=None, legacy_mic_device=None, legacy_mic_channels=None,
                       legacy_soundcard_selection=None):
-    """Save only identity, ordered routes and ordinary output on explicit OK.
+    """Save identity, ordered routes and retained input state on explicit OK.
 
     Return the validated input snapshot unchanged. Hardware selection never
     writes recording parameters to the shared profile or calibration stores.

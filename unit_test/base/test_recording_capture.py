@@ -413,12 +413,21 @@ def test_cancel_drains_accepted_audio_without_success(tmp_path, captures):
     np.testing.assert_array_equal(sf.read(result.path, dtype="float32")[0], known_audio(5)[2:, [0, 2]])
 
 
-def test_wrong_device_identity_fails_before_open(tmp_path, captures):
+@pytest.mark.parametrize("key,value", [("name", "different device at same index"), ("hostapi", 4)])
+def test_wrong_device_identity_fails_before_open(tmp_path, captures, key, value):
     backend = FakeBackend()
-    backend.device["name"] = "different device at same index"
-    capture, backend = captures(request(tmp_path), backend=backend)
+    backend.device[key] = value
+    writer = ControlledWriter()
+    req = request(tmp_path)
+    capture, backend = captures(req, backend=backend, writer_factory=writer)
     result = capture.wait(3)
     assert isinstance(result, RecordingFailure) and result.stage == "device"
+    assert result.message.startswith(f"input device identity changed at index 7: {key}")
+    for field in ("name", "hostapi", "max_input_channels"):
+        assert f"expected {field}={req.device[field]!r}" in result.message
+        assert f"actual {field}={backend.device[field]!r}" in result.message
+    assert "reselect" in result.message and "restart" in result.message
+    assert writer.writer is None
     assert backend.stream is None
 
 

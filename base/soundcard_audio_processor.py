@@ -3,7 +3,7 @@ import numpy as np
 from base.log_manager import LogManager
 from base.save_data import save_audio_simple
 from base.wav_pcm24 import quantize_pcm24
-from base.sound_device_manager import sd
+from base.sound_device_manager import SoundDeviceManager, sd
 from consts import error_code
 
 
@@ -32,7 +32,28 @@ class SoundcardAudioProcessor(object):
 
         in_num = max(in_sel) + 1
 
-        rec_raw = sd.playrec(prolong_data, samplerate=sr, channels=in_num, blocking=True)
+        code, output = SoundDeviceManager().get_default_device("speaker", refresh=False)
+        if code != error_code.OK or not output:
+            return error_code.INVALID_PLAY, "No system default output is available."
+        input_device = record_dict.get("device")
+        if input_device is None:
+            input_device = record_dict.get("input_device")
+        if isinstance(input_device, dict):
+            input_device = input_device.get("index")
+        with SoundDeviceManager.convenience_operation() as acquired:
+            if not acquired:
+                return error_code.INVALID_PLAY, "Audio backend is busy with another operation."
+            if SoundDeviceManager.output_would_interrupt():
+                return error_code.INVALID_PLAY, "System default output cannot replace another audio operation."
+            try:
+                rec_raw = sd.playrec(prolong_data, samplerate=sr, channels=in_num,
+                                     device=(input_device, output["index"]), blocking=True)
+            except Exception as exc:
+                # PortAudio/driver boundary: reject incompatible or unavailable
+                # input/output combinations without retrying another output or
+                # stopping streams owned by other operations.
+                return error_code.INVALID_PLAY, (
+                    f"Failed to play/record with selected input and system default output: {str(exc)[:80]}")
         rec_raw = np.asarray(rec_raw, dtype=np.float32)
         if rec_raw.ndim == 1:
             rec_raw = rec_raw.reshape(-1, 1)
@@ -64,18 +85,25 @@ class SoundcardAudioProcessor(object):
 
     @staticmethod
     def sd_play(stimulus_params):
-        try:
-            data = stimulus_params.get("data") * stimulus_params.get("amplitude")
-            print(stimulus_params.get("amplitude"))
-            print(data)
-            sr = stimulus_params.get("sr")
-            blocking = stimulus_params.get("blocking", True)
-            device = stimulus_params.get("device", None)
-            sd.play(data, samplerate=sr, device=device, blocking=blocking)
-            return error_code.OK, "play successfully"
-        except Exception as e:
-            err_msg = "Failed to play audio. [%s]" % (str(e)[:50])
-            return error_code.INVALID_PLAY, err_msg
+        """Play on the system output; legacy stimulus device is ignored."""
+        data = stimulus_params.get("data") * stimulus_params.get("amplitude")
+        sr = stimulus_params.get("sr")
+        blocking = stimulus_params.get("blocking", True)
+        code, output = SoundDeviceManager().get_default_device("speaker", refresh=False)
+        if code != error_code.OK or not output:
+            return error_code.INVALID_PLAY, "No system default output is available."
+        with SoundDeviceManager.convenience_operation() as acquired:
+            if not acquired:
+                return error_code.INVALID_PLAY, "Audio backend is busy with another operation."
+            if SoundDeviceManager.output_would_interrupt():
+                return error_code.INVALID_PLAY, "System default output cannot replace another audio operation."
+            try:
+                sd.play(data, samplerate=sr, device=output["index"], blocking=blocking)
+            except Exception as e:
+                # Normalize backend open/play errors at the audio API boundary.
+                err_msg = "Failed to play audio on system default output. [%s]" % (str(e)[:80])
+                return error_code.INVALID_PLAY, err_msg
+        return error_code.OK, "play successfully"
 
     @staticmethod
     def sd_rec(recorded_dict):
@@ -101,13 +129,18 @@ class SoundcardAudioProcessor(object):
             in_sel = [0]
 
         in_num = max(in_sel) + 1
-        rec_raw = sd.rec(
-            frames=num_frames,
-            samplerate=sample_rate,
-            channels=in_num,
-            device=device,
-            blocking=blocking,
-        )
+        with SoundDeviceManager.convenience_operation() as acquired:
+            if not acquired:
+                return error_code.INVALID_RECORD, "Audio backend is busy with another operation."
+            if SoundDeviceManager.output_would_interrupt():
+                return error_code.INVALID_RECORD, "Recording cannot replace another audio operation."
+            rec_raw = sd.rec(
+                frames=num_frames,
+                samplerate=sample_rate,
+                channels=in_num,
+                device=device,
+                blocking=blocking,
+            )
         rec_raw = np.asarray(rec_raw, dtype=np.float32)
         if rec_raw.ndim == 1:
             rec_raw = rec_raw.reshape(-1, 1)

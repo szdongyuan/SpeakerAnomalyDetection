@@ -97,7 +97,7 @@ def hardware(tmp_path, monkeypatch, audio_defaults):
     monkeypatch.setattr(selection, "_enumerate_devices", lambda: devices)
     monkeypatch.setattr(selection.SoundDeviceManager, "get_api_info", lambda index: {"name": "MME"})
     monkeypatch.setattr(selection, "_os_default_device", lambda kind: defaults.append(kind) or None)
-    monkeypatch.setattr(selection.SoundDeviceManager, "change_default_device", lambda *args: applied.append(args))
+    monkeypatch.setattr(selection.SoundDeviceManager, "change_default_input_device", lambda *args: applied.append(args), raising=False)
     path = tmp_path / "hardware.json"
     monkeypatch.setattr(selection, "_HARDWARE_SELECTION_PATH", str(path))
     return path, mic, speaker, defaults, applied
@@ -123,7 +123,7 @@ def test_saved_ve_is_unavailable_without_default_mic_fallback(hardware):
     assert mic["available"] is False
     assert mic["diagnostic"]
     assert channels == [7, 1]
-    assert output == speaker and output_channels == []
+    assert output is None and output_channels == []
     assert "mic" not in defaults and applied == []
     assert "index" not in mic and "hostapi" not in mic
 
@@ -151,8 +151,8 @@ def test_legacy_fields_restore_unchanged(hardware):
     path, mic, speaker, defaults, applied = hardware
     path.write_text(json.dumps({"api_name": "MME", "mic_name": "Old mic", "mic_channels": [1],
                                "speaker_name": "Old output", "speaker_channels": []}), encoding="utf-8")
-    assert selection.restore_or_default() == (mic, speaker, [1], [])
-    assert applied == [(1, 2)] and not defaults
+    assert selection.restore_or_default() == (mic, None, [1], [])
+    assert applied == [(1,)] and defaults == ["speaker"]
 
 
 @pytest.mark.parametrize("change", [{}, {"name": "Replugged"}, {"machine_id": "other"},
@@ -175,7 +175,7 @@ def test_discovery_confirms_exact_identity_model_and_routes(hardware, tmp_path, 
         assert resolved["input_config"]["sample_rate"] == 48000
     else:
         assert resolved["diagnostic"]
-    assert not defaults and not applied
+    assert "mic" not in defaults and not applied
 
 
 def test_unknown_saved_rate_is_unavailable_not_defaulted(hardware, tmp_path):
@@ -206,10 +206,10 @@ def test_strict_ve_save_retains_old_mic_fields_and_no_duplicate_rate(hardware, t
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["input_selection"] == saved_record()
     assert payload["mic_name"] == old["mic_name"] and payload["mic_channels"] == old["mic_channels"]
-    assert payload["speaker_name"] is None
+    assert "speaker_name" not in payload and "speaker_channels" not in payload
     assert saved["input_config"]["sample_rate"] == 51200
     assert device["input_config"]["sample_rate"] == 51200
-    assert not defaults and not applied
+    assert "mic" not in defaults and not applied
     # Explicit soundcard switch recovers old mic, without writing anything.
     restored = selection.restore_or_default(path=path, soundcard_only=True)
     assert restored[0] == mic and restored[2] == [1]
@@ -290,22 +290,22 @@ def test_legacy_save_api_handles_ve_without_overwriting_soundcard_fields(hardwar
 
 
 @pytest.mark.parametrize("input_default", [None, -1, 101])
-def test_output_only_setter_preserves_raw_input_default(audio_defaults, input_default):
+def test_legacy_output_setter_is_inert(audio_defaults, input_default):
     audio_defaults.pair.raw[0] = input_default
     selection.SoundDeviceManager.change_default_output_device(2)
-    assert audio_defaults.pair.raw == [input_default, 2]
-    assert audio_defaults.pair.writes == [(1, 2)]
+    assert audio_defaults.pair.raw == [input_default, 9]
+    assert audio_defaults.pair.writes == []
     assert audio_defaults.pair.reads == [] and audio_defaults.calls == []
 
 
-def test_ve_startup_restore_applies_selected_output_only(hardware, audio_defaults):
+def test_ve_startup_restore_does_not_apply_any_defaults(hardware, audio_defaults):
     path, _, speaker, defaults, applied = hardware
     write_saved(path, saved_record())
     mic, output, channels, _ = selection.restore_or_default()
-    assert not mic["available"] and channels == [7, 1] and output == speaker
-    assert audio_defaults.pair.raw == [None, 2]
-    assert audio_defaults.pair.writes == [(1, 2)]
-    assert not audio_defaults.pair.reads and not applied and not defaults
+    assert not mic["available"] and channels == [7, 1] and output is None
+    assert audio_defaults.pair.raw == [None, 9]
+    assert audio_defaults.pair.writes == []
+    assert not audio_defaults.pair.reads and not applied and defaults == ["speaker"]
 
 
 def test_ve_restore_without_output_does_not_apply_defaults(hardware, audio_defaults, monkeypatch):
@@ -321,11 +321,11 @@ def test_soundcard_staging_restore_is_non_mutating_but_default_api_still_applies
     path, mic, speaker, _, applied = hardware
     write_saved(path, saved_record())
     before = path.read_bytes()
-    assert selection.restore_or_default(soundcard_only=True, apply_defaults=False) == (mic, speaker, [1], [])
+    assert selection.restore_or_default(soundcard_only=True, apply_defaults=False) == (mic, None, [1], [])
     assert not applied and not audio_defaults.pair.writes
     assert path.read_bytes() == before
-    assert selection.restore_or_default(soundcard_only=True) == (mic, speaker, [1], [])
-    assert applied == [(1, 2)]
+    assert selection.restore_or_default(soundcard_only=True) == (mic, None, [1], [])
+    assert applied == [(1,)]
 
 
 @pytest.mark.parametrize("root, recoverable", [
@@ -357,8 +357,8 @@ def test_unmarked_legacy_invalid_root_keeps_opportunistic_defaults(hardware, mon
     path.write_text(json.dumps(root), encoding="utf-8")
     monkeypatch.setattr(selection, "_os_default_device", lambda kind: defaults.append(kind) or
                         (mic if kind == "mic" else speaker))
-    assert selection.restore_or_default() == (mic, speaker, [0], [0, 1])
-    assert defaults == ["mic", "speaker"] and applied == [(1, 2)]
+    assert selection.restore_or_default() == (mic, speaker, [0], [])
+    assert defaults == ["mic", "speaker"] and applied == [(1,)]
 
 
 @pytest.mark.parametrize("save_api", ["strict", "legacy"])
@@ -383,21 +383,21 @@ def test_cross_api_repeated_ve_saves_restore_prior_soundcard_configuration(tmp_p
         else:
             assert selection.save_if_changed(device, output, [7, 1], [], path=path)
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload["api_name"] == audio.sdm.get_api_info(output["hostapi"])["name"]
+        assert payload["api_name"] == "MME"
         assert payload["soundcard_selection"] == old
         assert payload["input_selection"] == saved_record(machine_id=machine_id)
         assert payload["mic_name"] == old["mic_name"] and payload["mic_channels"] == [1]
         assert "sample_rate" not in path.read_text(encoding="utf-8")
         mic, speaker, channels, out_channels = selection.restore_or_default(path=path)
         assert mic["machine_id"] == machine_id and not mic["available"]
-        assert (speaker, channels, out_channels) == (output, [7, 1], [])
-        assert audio.defaults.pair.raw == [None, output["index"]]
-        assert not audio.defaults.calls and not audio.defaults.pair.reads and not audio.queries
+        assert (speaker, channels, out_channels) == (audio.speaker, [7, 1], [])
+        assert audio.defaults.pair.raw == [None, 9]
+        assert not audio.defaults.calls and not audio.defaults.pair.reads and audio.queries == ["speaker"] * (2 * index + 1)
         before = path.read_bytes(), list(audio.defaults.pair.writes)
         assert selection.restore_or_default(path=path, soundcard_only=True, apply_defaults=False) == (
-            audio.mic, audio.speaker, [1], [1, 0])
+            audio.mic, audio.speaker, [1], [])
         assert (path.read_bytes(), audio.defaults.pair.writes) == before
-        assert not audio.queries
+        assert audio.queries == ["speaker"] * (2 * index + 2)
         assert not selection.save_if_changed(device, output, [7, 1], [], path=path)
         assert path.read_bytes() == before[0]
 
@@ -420,9 +420,9 @@ def test_wrong_dictionary_layout_retains_ve_provenance_without_input_defaults(tm
     assert "index" not in mic and "hostapi" not in mic
     assert mic["machine_id"] == (None if layout == "multiple" else "test-machine-1")
     assert channels == ([] if layout == "multiple" else [7, 1])
-    assert (speaker, output_channels) == (audio.speaker, [0, 1])
+    assert (speaker, output_channels) == (audio.speaker, [])
     assert audio.queries == ["speaker"]
-    assert audio.defaults.pair.raw == [None, 2] and audio.defaults.pair.writes == [(1, 2)]
+    assert audio.defaults.pair.raw == [None, 9] and audio.defaults.pair.writes == []
     assert not audio.defaults.pair.reads and not audio.defaults.calls
     assert path.read_bytes() == before
 
@@ -442,8 +442,43 @@ def test_dictionary_recovery_respects_canonical_and_unmarked_legacy_choices(tmp_
     if canonical:
         assert mic["machine_id"] == "test-machine-1" and not mic.get("selection_error")
         assert channels == [7, 1] and not audio.defaults.calls
-        assert audio.defaults.pair.writes == [(1, 2)]
+        assert audio.defaults.pair.writes == []
     else:
         assert mic == audio.mic and channels == [1]
-        assert audio.defaults.calls == [(1, 2)] and audio.defaults.pair.raw == [1, 2]
-    assert speaker == audio.speaker and not audio.queries
+        assert audio.defaults.calls == [] and audio.defaults.pair.raw == [1, 9]
+        assert audio.defaults.pair.writes == [(0, 1)]
+    assert speaker == audio.speaker and audio.queries == ["speaker"]
+
+
+@pytest.mark.parametrize("legacy_output", ["Old output", "unplugged", {"bad": []}])
+def test_saved_output_never_controls_restore_or_input_api(tmp_path, monkeypatch, legacy_output):
+    audio = fake_soundcards(monkeypatch)
+    path = tmp_path / "hardware.json"
+    path.write_text(json.dumps({"api_name": "ASIO", "mic_name": "ASIO mic", "mic_channels": [1, 0],
+                               "speaker_name": legacy_output, "speaker_channels": {"invalid": True}}), encoding="utf-8")
+    before = path.read_bytes()
+    assert selection.restore_or_default(path=path) == (audio.asio_mic, audio.speaker, [1, 0], [])
+    assert audio.defaults.pair.raw == [3, 9]
+    assert audio.defaults.pair.writes == [(0, 3)]
+    assert path.read_bytes() == before
+    assert selection.save_if_changed(audio.asio_mic, audio.speaker, [1, 0], [1], path=path)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved == {"api_name": "ASIO", "mic_name": "ASIO mic", "mic_channels": [1, 0]}
+    assert not selection.save_if_changed(audio.asio_mic, audio.asio_speaker, [1, 0], [], path=path)
+
+
+def test_ve_save_strips_output_fields_from_legacy_backup(tmp_path, monkeypatch):
+    audio = fake_soundcards(monkeypatch)
+    path = tmp_path / "hardware.json"
+    backup = {"api_name": "ASIO", "mic_name": "ASIO mic", "mic_channels": [1, 0],
+              "speaker_name": {"malformed": True}, "speaker_channels": "bad"}
+    path.write_text(json.dumps({**backup, "soundcard_selection": backup,
+                               "input_selection": saved_record()}), encoding="utf-8")
+    assert selection.save_if_changed(device_info(), audio.speaker, [7, 1], [], path=path)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    for payload in (saved, saved["soundcard_selection"]):
+        assert "speaker_name" not in payload and "speaker_channels" not in payload
+        assert payload["api_name"] == "ASIO"
+    assert selection.restore_or_default(path=path, soundcard_only=True) == (
+        audio.asio_mic, audio.speaker, [1, 0], [])
+    assert not selection.save_if_changed(device_info(), None, [7, 1], [], path=path)

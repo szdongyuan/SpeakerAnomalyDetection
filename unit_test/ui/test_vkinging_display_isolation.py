@@ -68,7 +68,7 @@ def test_list_and_status_name_are_safe_without_mutating_payload(
         window.update_statusbar()
         window.update_statusbar()
     assert window.device_label.text() == (
-        f"麦克风：{expected} · {'可用' if available else '不可用'}  扬声器：{controls.speaker['name']}")
+        f"麦克风：{expected} · {'可用' if available else '不可用'}")
     assert window.device_label.toolTip() == ""
     assert device == before
     assert caplog.records == []
@@ -255,7 +255,7 @@ def test_release_callback_logs_origin_after_switch_to_soundcard(
     window.ve_discovery.service.deliver([device_info()])
     ui_qapp.processEvents()
     monkeypatch.setitem(main_window_harness.namespace, "open_hardware_selection_window",
-                        lambda **kwargs: (True, window.speaker, [], controls.old_mic, [0]))
+                        lambda **kwargs: (True, None, [], controls.old_mic, [0]))
     window.on_hardware_window_init()
     assert window.mic == controls.old_mic
     caplog.clear()

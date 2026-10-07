@@ -52,8 +52,7 @@ def test_discovery_queue_edit_shared_save_condition_capture(
     assert view.result() == QDialog.Accepted
     host.mic = deepcopy(controller.model.state.mic_device)
     host.mic_channels = list(controller.model.state.mic_channels)
-    host.speaker = controller.model.state.speaker_device
-    assert host.mic_channels == [7, 1] and host.speaker is None
+    assert host.mic_channels == [7, 1]
     host.refresh_channel_windows()
     save_calibration(host, physical=7, factor=12)
     profile_before = host.ve_profile_store.path.read_bytes()
