@@ -546,7 +546,7 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             tone = "ng"
         else:
             label = "not_labeled"
-            display_text = "未产生判定"
+            display_text = "未判定"
             tone = "pending"
 
         artifact_failures = [
