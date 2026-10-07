@@ -497,7 +497,7 @@ def test_shared_capture_exact_trim_pcm24_voltage_with_no_portaudio(
     def forbidden(*args, **kwargs):
         pytest.fail("VE must not use sounddevice or default device")
     monkeypatch.setattr(recording_capture, "sounddevice_backend", forbidden)
-    monkeypatch.setattr(RecordingCapture, "_validate_device", forbidden)
+    monkeypatch.setattr(recording_capture, "validate_input_device", forbidden)
     raw = rate // 10 + 17
     trim = rate // 100
     capture, sdk, streams, _ = start_capture(tmp_path, CaptureSDK(counts=[0, 2, 1]), request_options={

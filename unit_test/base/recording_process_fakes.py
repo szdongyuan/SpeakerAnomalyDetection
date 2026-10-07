@@ -383,6 +383,60 @@ class MetadataFileFaults:
             boundary.wrapped.close()
 
 
+def native_retry_dependencies(**options):
+    """Spawn-safe native-owner substitute; deliberately inject no capture backend."""
+    from base import recording_worker
+
+    dependencies = process_dependencies(**options)
+    backend = dependencies.pop("backend")
+    root = Path(options["trace_dir"])
+    refreshed = False
+    attempts = 0
+    original_open = backend.InputStream
+
+    def query_devices(index=None):
+        return [backend.device.copy()] if index is None else FakeBackend.query_devices(backend, index)
+
+    def query_hostapis(index=None):
+        apis = [{"name": "Selected API"}]
+        return apis if index is None else apis[index]
+
+    def initialize():
+        nonlocal refreshed
+        (root / "refresh-entered").touch()
+        if options.get("block_refresh"):
+            threading.Event().wait()
+        refreshed = True
+
+    def terminate():
+        pass
+
+    def open_stream(**config):
+        nonlocal attempts
+        attempts += 1
+        capture = config["callback"].__self__
+        (root / "native-retry.json").write_text(json.dumps({
+            "attempts": attempts, "refreshed": refreshed,
+            "hostapi_name": capture.request.device.get("hostapi_name"),
+            "preview_time_mode": capture.request.preview_time_mode,
+            "streaming": capture.request.streaming,
+        }))
+        if not refreshed:
+            raise OSError("MME error 2: device ID out of range")
+        if options.get("block_retry"):
+            (root / "retry-entered").touch()
+            threading.Event().wait()
+        return original_open(**config)
+
+    backend.query_devices = query_devices
+    backend.query_hostapis = query_hostapis
+    backend._initialize = initialize
+    backend._terminate = terminate
+    backend.InputStream = open_stream
+    recording_worker.sounddevice_backend = lambda: backend
+    return dependencies
+
+
 def process_dependencies(**options):
     """Importable injection for actual spawn; all options are plain scalar values."""
     if options.get("hang_ready"):

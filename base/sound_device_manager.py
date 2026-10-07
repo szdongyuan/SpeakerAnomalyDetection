@@ -1,4 +1,6 @@
 import os
+import threading
+from contextlib import contextmanager
 
 os.environ["SD_ENABLE_ASIO"] = "1"
 
@@ -9,25 +11,70 @@ from consts import error_code
 
 class SoundDeviceManager(object):
 
+    _convenience_lock = threading.Lock()
+
+    @classmethod
+    @contextmanager
+    def convenience_operation(cls):
+        """Serialize project convenience calls without waiting on busy audio.
+
+        Hold through the ownership check, start and any retry. Blocking calls
+        retain ownership until completion; contenders get a busy result.
+        """
+        acquired = cls._convenience_lock.acquire(blocking=False)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                cls._convenience_lock.release()
+
     def get_default_device(self, device, refresh=True):
         if refresh:
             self.refresh_available_device()
         try:
             if device == "mic":
-                return error_code.OK, sd.query_devices(sd.default._default_device[0])
+                snapshot = dict(sd.query_devices(sd.default._default_device[0]))
+                snapshot["hostapi_name"] = sd.query_hostapis(snapshot["hostapi"])["name"]
+                return error_code.OK, snapshot
             elif device == "speaker":
-                return error_code.OK, sd.query_devices(sd.default._default_device[1])
+                # The backend host API reports the system default independently
+                # of sd.default.device overrides. Unlike _default_device, this
+                # path never resolves ordinary input (which VE does not use).
+                index = sd.query_hostapis(sd.default.hostapi).get("default_output_device")
+                if index is None or index < 0:
+                    return error_code.MISSING_HARDWARE_DEVICE, None
+                return error_code.OK, sd.query_devices(index)
         except Exception as e:
             return error_code.MISSING_HARDWARE_DEVICE, None
 
     @staticmethod
     def change_default_device(mic_id, speaker_id):
-        sd.default.device = (mic_id, speaker_id)
+        """Legacy signature: apply input only; speaker_id is inert."""
+        SoundDeviceManager.change_default_input_device(mic_id)
+
+    @staticmethod
+    def change_default_input_device(mic_id):
+        """Apply input without reading or replacing the output slot."""
+        sd.default.device[0] = mic_id
 
     @staticmethod
     def change_default_output_device(speaker_id):
-        """Set only ordinary output, without reading/resolving the input default."""
-        sd.default.device[1] = speaker_id
+        """Inert legacy API: output follows the backend default at playback."""
+
+    @staticmethod
+    def output_would_interrupt(owned_stream=None):
+        """Convenience playback stops the last convenience stream before open.
+
+        Called within convenience_operation. Refuse to replace an active stream
+        unless this caller owns it. Completed nonblocking streams can remain
+        open; allow the next convenience call to close and replace them.
+        """
+        try:
+            stream = sd.get_stream()
+        except RuntimeError:
+            # sounddevice raises this when no convenience stream exists yet.
+            return False
+        return stream is not owned_stream and not stream.closed and stream.active
 
     @staticmethod
     def get_api_info(api_index=None):
@@ -45,7 +92,7 @@ class SoundDeviceManager(object):
             for device_id in api.get("devices"):
                 device = device_list[device_id]
                 if device.get("max_input_channels") > 0:
-                    api_input.append(device)
+                    api_input.append({**device, "hostapi_name": api["name"]})
                 if device.get("max_output_channels") > 0:
                     api_output.append(device)
             host_dict[api.get("name")] = {"input": api_input, "output": api_output}

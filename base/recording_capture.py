@@ -19,6 +19,7 @@ import soundfile as sf
 
 from base.log_manager import LogManager
 from base.multichannel_waveform_session import MultichannelWaveformSession
+from base.recording_input_device import validate_input_device
 from base.recording_process_protocol import (
     RecordingCancelled, RecordingFailure, RecordingPreview, RecordingRequest, RecordingResult,
     RecordingFinalizationTiming,
@@ -82,6 +83,7 @@ class RecordingCapture:
                  metadata_appender=append_owned_recording_calibration_metadata_result,
                  blocksize=2048, queue_seconds=2.0, diagnostics=None):
         self.request = request
+        self.input_device = request.device
         self._backend = backend
         self._is_ve = request.device.get("backend") == VE_BACKEND
         self._diagnostics = diagnostics if self._is_ve else None
@@ -120,6 +122,7 @@ class RecordingCapture:
         self._failure = None
         self._thread = None
         self._stream = None
+        self._native_start_failed = False
         self._writer = None
         self._writer_finalization_log = None
         self._stream_close_attempted = False
@@ -206,6 +209,17 @@ class RecordingCapture:
     def stream_closed(self):
         """Read after joining: no stream remains with uncertain native ownership."""
         return self._stream is None
+
+    @property
+    def retryable_device_failure(self):
+        """Read after joining: a native open/start failed without owning audio."""
+        return (self._native_start_failed and not self._is_ve
+                and isinstance(self.outcome, RecordingFailure)
+                and self.outcome.stage == "device" and self._handles_released
+                and not self._cancelled.is_set() and not self.started.is_set()
+                and self.raw_frames == self.written_frames == 0
+                and self.stream_closed and self._writer is None
+                and self._writer_released)
 
     def snapshot(self, *, generation, sequence):
         """Copy only the selected bounded envelope; skip a busy consumer."""
@@ -340,14 +354,6 @@ class RecordingCapture:
             # wake the owner to stop/close; never log or send IPC on this thread.
             self._fail("capture", f"audio callback failed: {exc}")
 
-    def _validate_device(self, snapshot, channels, direction):
-        current = self._backend.query_devices(snapshot["index"])
-        for key in ("name", "hostapi"):
-            if current.get(key) != snapshot[key]:
-                raise ValueError(f"{direction} device identity changed at index {snapshot['index']}: {key}")
-        if max(channels) >= int(current.get(f"max_{direction}_channels", 0)):
-            raise ValueError(f"{direction} device no longer supports selected channels")
-
     def _open(self):
         req = self.request
         self._stage = "device"
@@ -367,16 +373,22 @@ class RecordingCapture:
             return
         if self._backend is None:
             self._backend = sounddevice_backend()
-        self._validate_device(req.device, req.channels, "input")
+        self.input_device = validate_input_device(self._backend, self.input_device, req.channels)
         self._stage = "open_wav"
         self._writer = self._writer_factory(req.path, sample_rate=req.sample_rate, channels=len(req.channels))
         self._stage = "device"
         config = dict(samplerate=req.sample_rate, dtype="float32", blocksize=self._blocksize)
-        self._stream = self._backend.InputStream(**config, channels=max(req.channels) + 1,
-                                                 device=req.device["index"], callback=self._input_callback)
-        if not self._cancelled.is_set():
-            self._stream.start()
-            self.started.set()
+        try:
+            self._stream = self._backend.InputStream(**config, channels=max(req.channels) + 1,
+                                                     device=self.input_device["index"], callback=self._input_callback)
+            if not self._cancelled.is_set():
+                self._stream.start()
+                self.started.set()
+        except Exception:
+            # Native open/start may raise backend-specific exceptions. Record the
+            # source, then let the capture boundary diagnose and close all handles.
+            self._native_start_failed = True
+            raise
 
     def _pop_block(self):
         with self._queue_lock:

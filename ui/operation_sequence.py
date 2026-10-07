@@ -102,6 +102,7 @@ class AnalysisModelSelect(ConfigDialogBase):
     def __init__(self, using_config_path, mic=None, speaker=None, mic_channels=None, speaker_channels=None, *, reference_scanner=None, parent_draft_provider=None, confirm_shared_save=None, ve_profile_provider=None,
                  deletion_busy=None, deletion_completed=None, deletion_failed=None, deletion_error=None):
         super().__init__()
+        # speaker arguments are inert compatibility inputs.
         # No selection remains empty, including after deleting the current queue.
         self.using_config_path = using_config_path or None
         # When user selects a target path via “新建”, confirm should save to that path
@@ -129,9 +130,7 @@ class AnalysisModelSelect(ConfigDialogBase):
             self.default_logger,
             using_config_path,
             mic=mic,
-            speaker=speaker,
             mic_channels=mic_channels,
-            speaker_channels=speaker_channels,
             ve_profile_provider=ve_profile_provider,
         )
         self.select_list.set_change_notifier(self._persist_current_config_silently)
@@ -799,11 +798,10 @@ class OptionList(QListView):
         self.select_analysis_model.dataChanged.connect(self.is_edit_model_item)
 
         self.default_logger = logger
+        # speaker arguments are inert compatibility inputs.
         self.mic = mic
         self.ve_profile_provider = ve_profile_provider
-        self.speaker = speaker
         self.mic_channels = self._normalize_channels(mic_channels)
-        self.speaker_channels = self._normalize_channels(speaker_channels)
         self.row_num = None
         self.darpflag = None
         self.sound_item_type = None
@@ -952,8 +950,6 @@ class OptionList(QListView):
                 model = RecordConfigWindow(
                     self.config[0].detail,
                     mic=self.mic,
-                    speaker=self.speaker,
-                    speaker_channels=self.speaker_channels,
                     ve_profile_provider=self.ve_profile_provider,
                 )
             else:

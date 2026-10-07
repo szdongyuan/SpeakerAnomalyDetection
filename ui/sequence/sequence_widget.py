@@ -66,8 +66,6 @@ class SequenceWindow(
 
         self.mic = None
         self.mic_channels = []
-        self.speaker = None
-        self.speaker_channels = []
         self.v2pa_factor = get_mic_v2pa_factor(
             self.mic,
             self.mic_channels,

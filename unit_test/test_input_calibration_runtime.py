@@ -218,7 +218,8 @@ def test_main_window_initialization_contains_scalar_refresh_errors(error_type):
             self.spacing = spacing
 
     class FakeSequenceWindow:
-        def __init__(self, *, recording_bridge, ve_prewarm_lifetime):
+        def __init__(self, *, recording_bridge, ve_prewarm_lifetime, raw_audio_csv_bridge):
+            self.left_panel = SimpleNamespace(video_monitor_panel=object())
             self.recording_bridge = recording_bridge
             self.ve_prewarm_lifetime = ve_prewarm_lifetime
             self.v2pa_factor = 9.0
@@ -229,6 +230,8 @@ def test_main_window_initialization_contains_scalar_refresh_errors(error_type):
     menu_bar = object()
     menu_row = object()
     window = SimpleNamespace(
+        video_controller=SimpleNamespace(attach_panel=mock.Mock()),
+        raw_audio_csv_bridge=None,
         recording_bridge=object(),
         ve_prewarm_lifetime=object(),
         mic=DEVICE,
@@ -375,7 +378,7 @@ def test_successful_calibration_contains_scalar_refresh_errors(error_type):
         "input_channels": [1],
         "recording_bridge": window.recording_bridge,
     }
-    assert dialog.speaker == speaker
+    assert dialog.speaker is None
     dialog.exec.assert_called_once_with()
     assert sequence.v2pa_factor == 0.0
     resolve.assert_called_once_with(DEVICE, [1])
@@ -471,7 +474,7 @@ def test_hardware_change_refreshes_factor_after_new_input_is_installed():
     open_window(window)
 
     assert events == [(new_device, [1])]
-    save_selection.assert_called_once_with(new_device, window.speaker, [1], [])
+    save_selection.assert_not_called()
     sequence.refresh_channel_windows.assert_called_once_with()
 
 
@@ -548,7 +551,7 @@ def test_hardware_change_contains_scalar_refresh_errors(error_type):
 
     assert sequence.v2pa_factor == 0.0
     resolve.assert_called_once_with(new_device, [1])
-    save_selection.assert_called_once_with(new_device, speaker, [1], [])
+    save_selection.assert_not_called()
     window.update_statusbar.assert_called_once_with()
     sequence.refresh_channel_windows.assert_called_once_with()
     default_logger.error.assert_called_once()

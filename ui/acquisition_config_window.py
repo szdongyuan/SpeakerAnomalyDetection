@@ -89,10 +89,7 @@ class RecordConfigWindow(BaseConfigWindow):
         self.input_data = input_data or {}
         self._is_vk = (self.mic or {}).get("backend") == VE_BACKEND
         self.ve_profile_provider = ve_profile_provider
-        if speaker is not None or (self.mic or {}).get("backend") == "vkinging":
-            self.speaker = speaker
-        else:
-            _, self.speaker = SoundDeviceManager().get_default_device("speaker", refresh=False)
+        # speaker arguments are retained only for legacy callers.
         self.init_ui()
 
     def init_ui(self):

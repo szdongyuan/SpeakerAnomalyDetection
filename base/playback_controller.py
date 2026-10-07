@@ -4,7 +4,7 @@ import time
 
 import numpy as np
 
-from base.sound_device_manager import sd
+from base.sound_device_manager import SoundDeviceManager, sd
 from consts import error_code
 
 
@@ -47,17 +47,6 @@ class PlaybackController:
             else:
                 raise RuntimeError("Unsupported audio shape")
             return audio_data, int(sample_rate)
-
-    @staticmethod
-    def _get_output_max_channels(device=None):
-        try:
-            if device is None:
-                device_info = sd.query_devices(kind="output")
-            else:
-                device_info = sd.query_devices(device, "output")
-            return int(device_info.get("max_output_channels") or 0)
-        except Exception:
-            return 0
 
     @staticmethod
     def _normalize_playback_audio_shape(audio_data):
@@ -130,6 +119,7 @@ class PlaybackController:
             time.sleep(self._monitor_interval_sec)
 
     def start_audio_playback(self, file_path: str, device=None):
+        """Play on the current system output; device is an inert legacy input."""
         if not file_path:
             return error_code.INVALID_PATH, "Missing audio file path."
 
@@ -145,55 +135,68 @@ class PlaybackController:
         if audio_data.size == 0:
             return error_code.INVALID_FILE, "Audio file is empty."
 
-        output_max_channels = self._get_output_max_channels(device)
+        code, output = SoundDeviceManager().get_default_device("speaker", refresh=False)
+        if code != error_code.OK or not output:
+            return error_code.INVALID_PLAY, "No system default output is available."
+        device = output["index"]
+        output_max_channels = output.get("max_output_channels")
         try:
             playback_data = self._prepare_playback_audio(audio_data, output_max_channels=output_max_channels)
         except Exception as e:
             return error_code.INVALID_FILE, f"Failed to prepare playback audio: {str(e)[:80]}"
 
-        with self._playback_lock:
-            self._playback_session_id += 1
-            session_id = self._playback_session_id
-            self._playback_current_file = abs_path
-            self._playback_is_running = True
-            self._playback_stream = None
+        with SoundDeviceManager.convenience_operation() as acquired:
+            if not acquired:
+                return error_code.INVALID_PLAY, "Audio backend is busy with another operation."
+            with self._playback_lock:
+                previous_stream = self._playback_stream
+                if SoundDeviceManager.output_would_interrupt(previous_stream):
+                    return error_code.INVALID_PLAY, "System default output cannot replace another audio operation."
+                self._playback_session_id += 1
+                session_id = self._playback_session_id
+                self._playback_current_file = abs_path
+                self._playback_is_running = True
+                self._playback_stream = None
 
-        stream = None
-        try:
-            sd.play(
-                playback_data,
-                samplerate=sample_rate,
-                device=device,
-                blocking=False,
-            )
-            stream = sd.get_stream()
-        except Exception as e:
-            if playback_data.ndim == 2 and playback_data.shape[1] > 1:
-                try:
-                    playback_data = self._downmix_playback_audio(playback_data, 1)
-                    sd.play(
-                        playback_data,
-                        samplerate=sample_rate,
-                        device=device,
-                        blocking=False,
-                    )
-                    stream = sd.get_stream()
-                except Exception as fallback_e:
+            stream = None
+            try:
+                sd.play(
+                    playback_data,
+                    samplerate=sample_rate,
+                    device=device,
+                    blocking=False,
+                )
+                stream = sd.get_stream()
+            except Exception as e:
+                if playback_data.ndim == 2 and playback_data.shape[1] > 1:
+                    if SoundDeviceManager.output_would_interrupt(previous_stream):
+                        self._reset_playback_state_if_session(session_id)
+                        return error_code.INVALID_PLAY, "System default output cannot replace another audio operation."
+                    try:
+                        playback_data = self._downmix_playback_audio(playback_data, 1)
+                        sd.play(
+                            playback_data,
+                            samplerate=sample_rate,
+                            device=device,
+                            blocking=False,
+                        )
+                        stream = sd.get_stream()
+                    except Exception as fallback_e:
+                        self._reset_playback_state_if_session(session_id)
+                        return error_code.INVALID_PLAY, f"Failed to start playback: {str(fallback_e)[:80]}"
+                else:
                     self._reset_playback_state_if_session(session_id)
-                    return error_code.INVALID_PLAY, f"Failed to start playback: {str(fallback_e)[:80]}"
-            else:
-                self._reset_playback_state_if_session(session_id)
-                return error_code.INVALID_PLAY, f"Failed to start playback: {str(e)[:80]}"
+                    return error_code.INVALID_PLAY, f"Failed to start playback: {str(e)[:80]}"
 
-        with self._playback_lock:
-            if session_id != self._playback_session_id:
-                self._close_stream_safely(stream)
-                return error_code.INVALID_PLAY, "Playback session was replaced."
-            self._playback_stream = stream
+            with self._playback_lock:
+                if session_id != self._playback_session_id:
+                    self._close_stream_safely(stream)
+                    return error_code.INVALID_PLAY, "Playback session was replaced."
+                self._playback_stream = stream
 
-        threading.Thread(target=self._monitor_playback_done, args=(session_id, stream), daemon=True).start()
+            threading.Thread(target=self._monitor_playback_done, args=(session_id, stream), daemon=True).start()
 
-        return error_code.OK, "Audio playback started."
+            return error_code.OK, "Audio playback started."
 
     def stop_audio_playback(self):
         with self._playback_lock:

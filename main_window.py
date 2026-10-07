@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, 
 
 from base.log_manager import LogManager
 from base.db_manager import DataSave
-from base.hardware_selection import restore_or_default, save_if_changed
+from base.hardware_selection import restore_or_default
 from base.sound_device_manager import SoundDeviceManager
 from consts import ui_style_const
 from consts.model_consts import DATABASE_PATH
@@ -75,17 +75,15 @@ class MainWindow(QMainWindow):
         self.access_lvl = None
         self.refresh_stimulus_flag = None
         # Restore the operator's last hardware choice from
-        # ``configs/hardware_selection.json``. Each side falls back
-        # independently when the saved device cannot be matched against
-        # current hardware: missing mic -> OS default + In1 only
-        # (PaError-9998 safety); missing speaker -> OS default + all
-        # channels. Explicit VE choices instead remain unavailable until
+        # ``configs/hardware_selection.json``. An ordinary input missing
+        # from current hardware falls back to OS default + In1 only
+        # (PaError-9998 safety). Explicit VE choices remain unavailable until
         # asynchronous discovery and profile validation confirm the identity.
         (
             self.mic,
-            self.speaker,
+            _,
             self.mic_channels,
-            self.speaker_channels,
+            _,
         ) = restore_or_default(path=self.hardware_selection_path)
 
         # set mouse drog date
@@ -549,11 +547,9 @@ class MainWindow(QMainWindow):
         main_window.setLayout(layout)
         main_window.setMouseTracking(True)  # local variable start mouse tracking
         self.setCentralWidget(main_window)
-        # transmit the mic and speaker to sequence widget
+        # Transmit the selected input to the sequence widget
         self.sequence_window.mic = self.mic
-        self.sequence_window.speaker = self.speaker
         self.sequence_window.mic_channels = self.mic_channels
-        self.sequence_window.speaker_channels = self.speaker_channels
         if (self.mic or {}).get("backend") != "vkinging":
             self.sequence_window.update_v2pa_factor()
 
@@ -682,9 +678,7 @@ class MainWindow(QMainWindow):
             analysis_model_select_dialog = AnalysisModelSelect(
                 using_config_path,
                 mic=self.mic,
-                speaker=self.speaker,
                 mic_channels=self.mic_channels,
-                speaker_channels=self.speaker_channels,
                 ve_profile_provider=lambda device: self.ve_profile_store.load(
                     device, self.ve_calibration_store),
                 deletion_busy=lambda: sequence._configuration_deletion_busy(),
@@ -758,8 +752,7 @@ class MainWindow(QMainWindow):
         else:
             mic_name = self.mic["name"] if self.mic else "无可用输入设备"
             self.device_label.setToolTip("")
-        speaker_name = self.speaker["name"] if self.speaker else "无可用输出设备"
-        device_txt = "麦克风：{mic}  扬声器：{speaker}".format(mic=mic_name, speaker=speaker_name)
+        device_txt = f"麦克风：{mic_name}"
         self.device_label.setText(device_txt)
         self.user_label.setText(
             "当前用户：{name}  用户等级：{level}".format(name=self.user_name, level=self.access_lvl)
@@ -832,9 +825,7 @@ class MainWindow(QMainWindow):
         # 将当前驱动/设备/通道作为初始值回填到硬件选择窗口
         driver_name = None
         try:
-            if self.speaker and self.speaker.get("hostapi") is not None:
-                driver_name = SoundDeviceManager.get_api_info(int(self.speaker.get("hostapi"))).get("name")
-            elif self.mic and self.mic.get("backend") != "vkinging" and self.mic.get("hostapi") is not None:
+            if self.mic and self.mic.get("backend") != "vkinging" and self.mic.get("hostapi") is not None:
                 driver_name = SoundDeviceManager.get_api_info(int(self.mic.get("hostapi"))).get("name")
         except Exception:
             driver_name = None
@@ -847,10 +838,8 @@ class MainWindow(QMainWindow):
                 selection_path=self.hardware_selection_path,
                 busy_check=lambda: not self._hardware_selection_admission_available())
             self.ve_discovery.cancel()
-        accepted, speaker, speaker_channels, mic, mic_channels = open_hardware_selection_window(
+        accepted, _, _, mic, mic_channels = open_hardware_selection_window(
             driver=driver_name,
-            speaker_device=self.speaker,
-            speaker_channels=self.speaker_channels,
             mic_device=self.mic,
             mic_channels=self.mic_channels,
             **options,
@@ -862,18 +851,11 @@ class MainWindow(QMainWindow):
             if (self.mic or {}).get("backend") == "vkinging" and not self.mic.get("available"):
                 self.ve_discovery.start()
             return
-        # VE OK already strictly persisted the hardware selection in the
-        # dialog. Do not route it through the legacy ambiguous False contract.
-        if (mic or {}).get("backend") != "vkinging":
-            save_options = {"path": self.hardware_selection_path} if hasattr(self, "hardware_selection_path") else {}
-            save_if_changed(mic, speaker, mic_channels, speaker_channels, **save_options)
-        self.mic, self.speaker = mic, speaker
-        self.mic_channels, self.speaker_channels = mic_channels, speaker_channels
+        # Both backends persist successfully before the dialog accepts.
+        self.mic, self.mic_channels = mic, mic_channels
         self.update_statusbar()
         self.sequence_window.mic = self.mic
-        self.sequence_window.speaker = self.speaker
         self.sequence_window.mic_channels = self.mic_channels
-        self.sequence_window.speaker_channels = self.speaker_channels
         if (self.mic or {}).get("backend") != "vkinging":
             self.sequence_window.update_v2pa_factor()
         self.sequence_window.refresh_channel_windows()
@@ -910,7 +892,7 @@ class MainWindow(QMainWindow):
                 self.mic.get("machine_id"), self.mic.get("diagnostic", ""))
             QMessageBox.warning(self, "VE 输入不可用", ve_failure_text("unavailable"))
             return
-        # calibration the mic and speaker
+        # Calibrate the selected input
         calibration_options = {}
         input_device = self.mic
         if (self.mic or {}).get("backend") == "vkinging":
@@ -933,7 +915,6 @@ class MainWindow(QMainWindow):
             recording_bridge=getattr(self, "recording_bridge", None),
             **calibration_options,
         )
-        dlg.speaker = self.speaker
         if (self.mic or {}).get("backend") == "vkinging":
             dlg.ve_profile_store = self.ve_profile_store
             dlg.ve_calibration_store = self.ve_calibration_store

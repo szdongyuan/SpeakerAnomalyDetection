@@ -331,6 +331,119 @@ class Events:
             cancelled=lambda session, result: self.cancelled.put(result))
 
 
+@pytest.mark.parametrize("preview_mode", [PREVIEW_TIME_MODE_CUMULATIVE, PREVIEW_TIME_MODE_RELATIVE_LATEST])
+def test_native_retry_keeps_service_consumer_contract(tmp_path, preview_mode):
+    from base.wav_calibration_metadata import read_wav_calibration_metadata
+
+    service = RecordingService(
+        backend_factory="unit_test.base.recording_process_fakes:native_retry_dependencies",
+        backend_options={"trace_dir": str(tmp_path)})
+    events, order = Events(), []
+    metadata = {"recorded_channels": [
+        {"wav_channel_index": 0, "physical_input_channel": 0, "calibrated": False},
+        {"wav_channel_index": 1, "physical_input_channel": 2, "calibrated": False},
+    ]}
+    req = request(tmp_path, device={**device_info(), "hostapi_name": "Selected API"},
+                  calibration_metadata=metadata, preview_time_mode=preview_mode)
+
+    def started(session):
+        order.append(("started", session.request.request_id))
+        events.started.put(session)
+
+    def result_ready(session, audio):
+        order.append(("result_ready", session.request.request_id))
+        events.results.put(audio)
+
+    def accepted(session, audio):
+        order.append(("accepted", session.request.request_id))
+        events.accepted.put(audio)
+
+    try:
+        session = service.start(req, replace(events.callbacks, started=started,
+                                            result_ready=result_ready, accepted=accepted))
+        assert events.started.get(timeout=10) is session
+        audio = events.results.get(timeout=10)
+        assert service.is_path_leased(req.path) and not session.released.is_set()
+        assert session.request is req and audio.descriptor.request_id == req.request_id
+        assert audio.descriptor.path == req.path and audio.descriptor.channels == req.channels
+        assert audio.descriptor.metadata_appended
+        assert [row["physical_input_channel"] for row in
+                read_wav_calibration_metadata(req.path)["recorded_channels"]] == [0, 2]
+        expected = known_audio()[2:9, [0, 2]]
+        np.testing.assert_array_equal(audio.multi, expected)
+        np.testing.assert_array_equal(sf.read(req.path, dtype="float32")[0], expected)
+        trace = json.loads((tmp_path / "native-retry.json").read_text())
+        assert trace == dict(attempts=2, refreshed=True, hostapi_name="Selected API",
+                             preview_time_mode=preview_mode, streaming=True)
+        session.accept_result()
+        assert events.accepted.get(timeout=5) is audio
+        assert session.released.wait(5) and not service.is_path_leased(req.path)
+        assert order == [(kind, req.request_id) for kind in ("started", "result_ready", "accepted")]
+        assert events.failed.empty() and events.cancelled.empty() and events.started.empty()
+        assert events.results.empty() and events.accepted.empty()
+    finally:
+        service.shutdown()
+        assert service.closed.wait(10)
+
+
+@pytest.mark.parametrize("blocked", ["refresh", "retry"])
+@pytest.mark.parametrize("action", ["deadline", "shutdown"])
+def test_blocked_native_retry_keeps_parent_deadlines(tmp_path, monkeypatch, blocked, action):
+    offset = [0.0]
+    service = RecordingService(
+        backend_factory="unit_test.base.recording_process_fakes:native_retry_dependencies",
+        backend_options={"trace_dir": str(tmp_path), f"block_{blocked}": True},
+        monotonic=lambda: time.monotonic() + offset[0], start_timeout=30,
+        shutdown_timeout=.1, terminate_timeout=.2)
+    events = Events()
+    start_deadlines = []
+    start_capture = service._start_capture
+
+    def observe_start(session):
+        start_capture(session)
+        start_deadlines.append(session._deadline)
+
+    monkeypatch.setattr(service, "_start_capture", observe_start)
+    req = request(tmp_path, device={**device_info(), "hostapi_name": "Selected API"})
+    try:
+        session = service.start(req, events.callbacks)
+        eventually(lambda: (tmp_path / f"{blocked}-entered").exists())
+        original_deadline = session._deadline
+        assert start_deadlines == [original_deadline]
+        assert original_deadline is not None and not service.can_start_recording
+        assert service.is_path_leased(req.path)
+        process = service._worker.process
+        terminate = process.terminate
+        retire_observations = []
+
+        def observe_terminate():
+            retire_observations.append((service.can_start_recording, session.released.is_set()))
+            assert service.is_path_leased(req.path)
+            terminate()
+
+        monkeypatch.setattr(process, "terminate", observe_terminate)
+        if action == "deadline":
+            offset[0] = 31.0
+            failure = events.failed.get(timeout=10)
+            assert failure.stage == "start_timeout"
+        else:
+            service.shutdown()
+            assert service.closed.wait(10)
+            assert events.failed.get(timeout=5).stage == "worker"
+        assert session.released.wait(10)
+        eventually(lambda: service.worker_pid is None)
+        assert not service.is_path_leased(req.path)
+        assert start_deadlines == [original_deadline]
+        assert retire_observations == [(False, False)]
+        trace = json.loads((tmp_path / "native-retry.json").read_text())
+        assert trace["attempts"] == (1 if blocked == "refresh" else 2)
+        assert events.started.empty() and events.results.empty() and events.accepted.empty()
+        assert events.failed.empty()
+    finally:
+        service.shutdown()
+        assert service.closed.wait(10)
+
+
 @pytest.fixture
 def services(tmp_path):
     owned = []

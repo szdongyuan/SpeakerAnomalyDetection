@@ -4,12 +4,13 @@ import multiprocessing
 import queue
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from contextlib import ExitStack
 
 from base.log_manager import LogManager
 from base.log_exit import exit_with_log_drain
 from base.recording_capture import RecordingCapture, sounddevice_backend
+from base.recording_input_device import resolve_input_device, validate_input_device
 from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_process_protocol import (
     CaptureSlotReleased,
@@ -143,6 +144,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
     controller_close_failed = False
     audio_backend = None
     audio_cleanup_failed = False
+    audio_initialized = False
     diagnostics = RecordingDiagnostics(logger, generation=generation, categories=(
         "consume", "write", "waveform_lock_wait", "waveform_lock_hold", "snapshot",
         "close_stream", "close_wav", "final_drain", "control_send", "preview_send"))
@@ -203,6 +205,8 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         # done was published. Polling keeps control/cancellation responsive.
         if not state.capture.join():
             return
+        if retry_native_start(state):
+            return
         if (audio_backend is not None
                 and state.capture.request.device.get("backend") != VE_BACKEND
                 and not state.capture.stream_closed):
@@ -212,6 +216,82 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
             "failed" if isinstance(outcome, RecordingFailure) else "cancelled")
         emit(kind, state.request_id, outcome)
         pipeline.mark_terminal(state.request_id)
+
+    def retry_native_start(state):
+        nonlocal audio_initialized, audio_cleanup_failed
+        capture = state.capture
+        if (stopping is not None or broken.is_set() or state.started
+                or audio_backend is None or audio_cleanup_failed or prewarm is not None
+                or dependencies.get("backend") is not None
+                or not capture.retryable_device_failure):
+            return False
+        if state.input_refresh_used and state.retry_input_device is None:
+            snapshot = capture.request.device
+            capture.outcome = replace(
+                capture.outcome, message=(
+                    f"Input {snapshot['name']!r} on HostAPI "
+                    f"{snapshot.get('hostapi_name', snapshot['hostapi'])!r}: "
+                    f"{capture.outcome.message}; reselect the input device."))
+            return False
+        if any(not prior.capture.stream_closed for prior in pipeline.shutdown_snapshot()
+               if prior is not state and prior.capture.request.device.get("backend") != VE_BACKEND):
+            return False
+        # Drain queued control commands before reset and again before replacing
+        # the capture. Cancel/shutdown queued during a native reset wins here.
+        if command_processed:
+            return True
+        if state.retry_input_device is not None:
+            replacement = RecordingCapture(
+                capture.request, ve_stream_factory=controller.stream, **dependencies)
+            replacement._backend = audio_backend
+            replacement.input_device = state.retry_input_device
+            state.retry_input_device = None
+            state.capture = replacement
+            replacement.start()
+            return True
+        request = capture.request
+        snapshot = request.device
+        logger.info("Refreshing input after native start failure for %s: selected=%r HostAPI=%r index=%s; %s",
+                    request.request_id, snapshot["name"],
+                    snapshot.get("hostapi_name", snapshot["hostapi"]), snapshot["index"],
+                    capture.outcome.message)
+        state.input_refresh_used = True
+        audio_initialized = False
+        try:
+            audio_backend._terminate()
+            audio_backend._initialize()
+        except Exception as exc:
+            # Native reset boundary: initialization/termination can fail with any
+            # backend exception. Joined capture has released handles; retire after
+            # its final failure and never terminate this uncertain library again.
+            logger.exception("Audio refresh failed for %s", request.request_id)
+            audio_cleanup_failed = True
+            capture.outcome = RecordingFailure(request.request_id, "device", request.path,
+                                               str(exc), handles_released=True)
+            emit("failed", state.request_id, capture.outcome)
+            pipeline.mark_terminal(state.request_id)
+            for request_id in tuple(pipeline.pending_result_acks):
+                pipeline.result_ack(request_id, "rejected")
+            emit_worker_fatal("device", exc, ordered=True)
+            broken.set()
+            return True
+        audio_initialized = True
+        try:
+            state.retry_input_device = resolve_input_device(audio_backend, snapshot, request.channels)
+        except Exception as exc:
+            # Refreshed native enumeration is an external boundary with no open
+            # capture handles. Preserve one actionable request failure.
+            capture.outcome = RecordingFailure(
+                request.request_id, "device", request.path,
+                f"Input {snapshot['name']!r} on HostAPI "
+                f"{snapshot.get('hostapi_name', snapshot['hostapi'])!r}: "
+                f"{exc}; reselect the input device.", handles_released=True)
+            return False
+        logger.info("Resolved input for retry %s: selected=%r HostAPI=%r index=%s -> %s",
+                    request.request_id, snapshot["name"],
+                    snapshot.get("hostapi_name", snapshot["hostapi"]), snapshot["index"],
+                    state.retry_input_device["index"])
+        return True
 
     stopping = None
     worker_fatal_sent = False
@@ -336,6 +416,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         emit("ready")
         while True:
             now = time.monotonic()
+            command_processed = False
             if broken.is_set() and stopping is None:
                 stopping = now + cancel_timeout
                 for state in pipeline.shutdown_snapshot():
@@ -364,6 +445,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                     exit_with_log_drain(1)
 
             if not broken.is_set() and control.poll(.01):
+                command_processed = True
                 command = control.recv()
                 if not isinstance(command, RecordingEvent):
                     protocol_fatal("command", "control message is not a RecordingEvent")
@@ -392,23 +474,6 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                     if command.payload.device.get("backend") == VE_BACKEND:
                         diagnostics.start_sampler()
                         capture_dependencies["diagnostics"] = diagnostics
-                    initialization_failure = None
-                    if (command.payload.device.get("backend") != VE_BACKEND
-                            and capture_dependencies.get("backend") is None):
-                        if audio_backend is None:
-                            try:
-                                # First import initializes PortAudio. The worker
-                                # control thread owns it across all captures.
-                                audio_backend = sounddevice_backend()
-                            except Exception as exc:
-                                # Native import/initialization is an external boundary.
-                                # No capture thread or WAV has been started yet.
-                                logger.exception("Audio initialization failed for %s",
-                                                 command.request_id)
-                                initialization_failure = RecordingFailure(
-                                    command.request_id, "device", command.payload.path,
-                                    str(exc), handles_released=True)
-                        capture_dependencies["backend"] = audio_backend
                     capture = RecordingCapture(
                         command.payload, ve_stream_factory=controller.stream,
                         **capture_dependencies)
@@ -418,9 +483,93 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                         protocol_fatal(
                             "start", f"invalid start for {command.request_id}: {exc}")
                         continue
+                    initialization_failure = None
+                    if (command.payload.device.get("backend") != VE_BACKEND
+                            and capture_dependencies.get("backend") is None):
+                        if audio_backend is None:
+                            try:
+                                # Import only after admission: the control thread
+                                # owns PortAudio across all ordinary captures.
+                                audio_backend = sounddevice_backend()
+                                audio_initialized = True
+                            except Exception as exc:
+                                # Native import/initialization is an external boundary.
+                                logger.exception("Audio initialization failed for %s",
+                                                 command.request_id)
+                                initialization_failure = RecordingFailure(
+                                    command.request_id, "device", command.payload.path,
+                                    str(exc), handles_released=True)
+                        prior_audio = (prior.capture for prior in pipeline.shutdown_snapshot()
+                                       if prior.capture is not capture
+                                       and prior.capture.request.device.get("backend") != VE_BACKEND)
+                        if initialization_failure is None and (
+                                audio_cleanup_failed or any(not prior.stream_closed
+                                                            for prior in prior_audio)):
+                            initialization_failure = RecordingFailure(
+                                command.request_id, "device", command.payload.path,
+                                "Cannot refresh input devices: previous audio stream ownership "
+                                "is uncertain; restart the application.", handles_released=True)
+                        if initialization_failure is None:
+                            snapshot = command.payload.device
+                            try:
+                                capture.input_device = validate_input_device(
+                                    audio_backend, snapshot, command.payload.channels)
+                                stale = False
+                            except Exception as exc:
+                                # PortAudio queries can fail for a removed index;
+                                # one reset below lets capture validate afresh.
+                                stale = True
+                                logger.info("Refreshing input for %s: selected=%r HostAPI=%r index=%s; %s",
+                                            command.request_id, snapshot["name"],
+                                            snapshot.get("hostapi_name", snapshot["hostapi"]),
+                                            snapshot["index"], exc)
+                            if stale:
+                                state.input_refresh_used = True
+                                # Even failed termination leaves native state
+                                # uncertain. Never retry it in shutdown/atexit.
+                                audio_initialized = False
+                                try:
+                                    audio_backend._terminate()
+                                    audio_backend._initialize()
+                                except Exception as exc:
+                                    # Native reset can raise arbitrary backend
+                                    # errors. Retire the generation after releasing
+                                    # the unstarted request; no handles were opened.
+                                    logger.exception("Audio refresh failed for %s",
+                                                     command.request_id)
+                                    initialization_failure = RecordingFailure(
+                                        command.request_id, "device", command.payload.path,
+                                        str(exc), handles_released=True)
+                                    audio_cleanup_failed = True
+                                else:
+                                    audio_initialized = True
+                                    try:
+                                        capture.input_device = resolve_input_device(
+                                            audio_backend, snapshot, command.payload.channels)
+                                    except Exception as exc:
+                                        # Refreshed native enumeration may fail independently
+                                        # of reset. No capture handles exist; fail this request.
+                                        initialization_failure = RecordingFailure(
+                                            command.request_id, "device", command.payload.path,
+                                            f"Input {snapshot['name']!r} on HostAPI "
+                                            f"{snapshot.get('hostapi_name', snapshot['hostapi'])!r}: "
+                                            f"{exc}; reselect the input device.", handles_released=True)
+                                    else:
+                                        logger.info("Resolved input for %s: selected=%r HostAPI=%r index=%s -> %s",
+                                                    command.request_id, snapshot["name"],
+                                                    snapshot.get("hostapi_name", snapshot["hostapi"]),
+                                                    snapshot["index"], capture.input_device["index"])
+                            capture._backend = audio_backend
                     if initialization_failure is not None:
                         emit("failed", state.request_id, initialization_failure)
                         pipeline.mark_terminal(state.request_id)
+                        if not audio_initialized and audio_cleanup_failed:
+                            # Fatal retirement invalidates retained result leases.
+                            for request_id in tuple(pipeline.pending_result_acks):
+                                pipeline.result_ack(request_id, "rejected")
+                            emit_worker_fatal("device", initialization_failure.message,
+                                              ordered=True)
+                            broken.set()
                         continue
                     clear_progress()
                     state.next_preview_at = now
@@ -706,7 +855,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         finished.set()
         if controller_close_failed or capture_cleanup_failed or audio_cleanup_failed:
             exit_with_log_drain(1)
-        if audio_backend is not None:
+        if audio_initialized:
             try:
                 # sounddevice's helper decrements its initialization count, so
                 # its registered atexit handler will not terminate it again.
