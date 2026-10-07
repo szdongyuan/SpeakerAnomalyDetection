@@ -182,9 +182,13 @@ class VideoMonitorWidget(QWidget):
             "正在保存…" if stopping else "停止录像" if active else "开始录像"
         )
         self.record_button.setEnabled(not stopping and (
-            self.bridge.record_start_pending or preparing or active or self.bridge.can_start_recording
+            self.bridge.record_start_pending or preparing or active
+            or (self.bridge.can_start_recording and status.connection != "reconnecting")
         ))
-        self.timer_label.setVisible((active or stopping) and status.started_at is not None)
+        self.timer_label.setVisible(
+            (active or stopping) and status.started_at is not None
+            and not status.had_gap
+        )
         self.record_indicator.setVisible(status.recording == "recording")
         self.timer_label.setText(format_elapsed(seconds))
         self.timer_label.setMinimumWidth(self.timer_label.fontMetrics().horizontalAdvance(self.timer_label.text()) + 4)
@@ -194,8 +198,10 @@ class VideoMonitorWidget(QWidget):
             message = self.bridge.control_message
         elif status.connection == "unavailable":
             message = "摄像头不可用"
+        elif status.connection == "reconnecting" and status.had_gap:
+            message = "摄像头已断开，正在保存录像…" if stopping else "摄像头已断开，录像已停止"
         elif status.connection == "reconnecting":
-            message = "摄像头已断开，等待恢复…" if active else "未检测到摄像头，请连接设备。"
+            message = "未检测到摄像头，请连接设备。"
         elif self.bridge.record_start_pending:
             message = "正在连接摄像头…"
         elif self.bridge.control_message:

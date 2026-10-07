@@ -2,7 +2,6 @@
 
 import threading
 import time
-import logging
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -10,12 +9,14 @@ import av
 import numpy as np
 import pytest
 
+from base.log_manager import LogManager
 from base.video.models import Command, CommandKind, EventKind
 from base.video.recording import (
     MediaQueue, MediaQueueCancelled, MediaQueueClosed, RecordingSession,
     PENDING_MEDIA_BYTE_LIMIT,
 )
 from base.video.runtime import FrameAdmission, VideoRuntime
+from unit_test.logging_test_support import isolated_project_logger
 from unit_test.video.test_recording import config_for, decoded
 from unit_test.video.test_runtime import SyntheticCapture, wait_for
 from unit_test.video.test_threaded_encoding_poc import synthetic_frame
@@ -283,7 +284,7 @@ def test_waiting_writer_stop_or_failure_preserves_order_and_releases_memory(tmp_
 
 
 @pytest.mark.parametrize("codec", ["h264", "h265"])
-def test_pressure_segments_reconnect_and_new_session_preserve_admitted_frames(tmp_path, codec):
+def test_pressure_disconnect_stops_and_manual_restart_preserves_admitted_frames(tmp_path, codec):
     entered, release = threading.Event(), threading.Event()
 
     class PausedSession(RecordingSession):
@@ -303,9 +304,9 @@ def test_pressure_segments_reconnect_and_new_session_preserve_admitted_frames(tm
     accepted = []
 
     def capture(index):
-        before = runtime.admission.dropped
+        before = runtime.admission.candidates - runtime.admission.dropped
         runtime.on_frame(synthetic_frame(index, 320, 180, background), 100 + index / 30)
-        if runtime.admission.dropped == before:
+        if runtime.admission.candidates - runtime.admission.dropped > before:
             accepted.append(index)
 
     runtime.writer.start()
@@ -320,19 +321,23 @@ def test_pressure_segments_reconnect_and_new_session_preserve_admitted_frames(tm
             if index < 3:
                 wait_for(lambda: runtime.work.empty() and not runtime.encoder_busy)
         wait_for(lambda: runtime.encoded.snapshot()["pending_bytes"] > 0)
-        for index in range(4, 120):
-            if index == 45:
-                runtime.on_connection(False, "synthetic reconnect under pressure")
-                runtime.on_connection(True, "")
+        for index in range(4, 45):
             capture(index)
         assert runtime.admission.dropped > 0 and runtime.accept_frames
-        runtime._command(Command(CommandKind.STOP, 1, "stop", "pressure-segments"))
+        runtime.on_connection(False, "synthetic disconnect under pressure")
+        assert runtime.stop_requested and not runtime.accept_frames
+        runtime.on_connection(True, "")
+        for index in range(45, 120):
+            capture(index)
+        assert runtime.online and not runtime.accept_frames
+        assert runtime.admission.candidates == 45
+        assert len(accepted) == 45 - runtime.admission.dropped
         release.set()
         wait_for(lambda: not runtime.session_id)
         wait_for(lambda: not runtime.encoder_busy and runtime.work.empty()
                  and runtime.encoded.snapshot()["resident_bytes"] == 0)
         files = sorted(tmp_path.glob("video/*/*.mp4"))
-        assert len(files) >= 3
+        assert len(files) == 2
         identities = []
         for path in files:
             with av.open(str(path)) as container:
@@ -351,6 +356,9 @@ def test_pressure_segments_reconnect_and_new_session_preserve_admitted_frames(tm
         assert runtime.raw_frames == runtime.raw_bytes == 0
         assert not list(tmp_path.rglob("*.recording.mp4"))
 
+        capture(120)
+        assert not runtime.accept_frames and runtime.admission.candidates == 45
+        assert not runtime.session_id
         runtime._command(Command(CommandKind.START, 1, "start-again", "fresh"))
         wait_for(lambda: runtime.accept_frames)
         assert runtime.admission.candidates == runtime.admission.dropped == 0
@@ -363,6 +371,10 @@ def test_pressure_segments_reconnect_and_new_session_preserve_admitted_frames(tm
         runtime._command(Command(CommandKind.STOP, 1, "stop-again", "fresh"))
         wait_for(lambda: not runtime.session_id)
         assert runtime.admission.candidates == 5 and runtime.admission.dropped == 0
+        new_files = set(tmp_path.glob("video/*/*.mp4")) - set(files)
+        assert len(new_files) == 1
+        assert [stamp for stamp, _ in decoded(new_files.pop())] == pytest.approx(
+            [index / 30 for index in range(5)], abs=1 / 90000)
         assert not any(event[0] == EventKind.RECORDING_FAILED for event in runtime.events.queue)
     finally:
         release.set()
@@ -385,35 +397,20 @@ def test_writer_progress_is_used_while_encoder_waits(tmp_path):
 
 
 def test_admission_log_reaches_project_file_and_does_not_emit_failure(tmp_path, monkeypatch):
-    import base.log_manager as log_module
-
-    target = tmp_path / "logs" / "main.log"
-    monkeypatch.setattr(log_module, "LOG_DIR", str(target.parent))
-    monkeypatch.setattr(log_module, "LOG_MAPPING", {"core": {
-        "log_name": str(target), "log_format": "%(name)s %(message)s",
-    }})
-    core = logging.getLogger("core")
-    old_level = core.level
-    monkeypatch.setattr(core, "handlers", [])
-    log_module.LogManager.set_log_handler("core")
-    runtime = VideoRuntime(None, None, 1, config_for(tmp_path), capture_factory=SyntheticCapture)
-    runtime.admission = FrameAdmission("file-log")
-    runtime.session_id = "file-log"
-    try:
+    with isolated_project_logger(tmp_path, monkeypatch) as state:
+        LogManager.set_log_handler("core")
+        runtime = VideoRuntime(None, None, 1, config_for(tmp_path), capture_factory=SyntheticCapture)
+        runtime.admission = FrameAdmission("file-log")
+        runtime.session_id = "file-log"
         for i in range(6):
             runtime.admission.record(runtime.admission.select(.8, 0, i), i, i, "raw_pressure")
         runtime._log_admission("file-log")
         runtime._log_admission("file-log", final=True)
         runtime._log_admission("file-log", final=True)
-        for handler in core.handlers:
-            handler.flush()
-        output = target.read_text(encoding="utf-8")
+        assert LogManager.flush(timeout=2)
+        output = state.path.read_text(encoding="utf-8")
         assert output.count("Video frame admission:") == 2
         assert "'session': 'file-log'" in output
         assert "'candidates': 6" in output and "'dropped': 1" in output
         assert "'event': 'ended'" in output
         assert runtime.events.empty()
-    finally:
-        for handler in core.handlers:
-            handler.close()
-        core.setLevel(old_level)

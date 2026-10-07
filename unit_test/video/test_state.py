@@ -1,3 +1,5 @@
+import pytest
+
 from base.video.models import Event, EventKind, VideoState
 
 
@@ -66,21 +68,62 @@ def test_generation_sequence_and_session_fences():
     assert state.status.recording == "recording"
 
 
-def test_recovery_keeps_elapsed_and_stop_revokes_resume():
+def test_disconnect_stops_session_and_rejects_late_resume():
     state = ready_state()
     state.request_start("s1")
     state.apply(Event(EventKind.STARTED, 1, 2, 10, "s1"))
     state.apply(Event(EventKind.RECOVERING, 1, 3, 20, "s1"))
-    assert state.status.record_intent
-    state.apply(Event(EventKind.STARTED, 1, 4, 30, "s1"))
-    assert state.status.elapsed(40) == 30
-    state.apply(Event(EventKind.RECOVERING, 1, 5, 40, "s1"))
-    state.request_stop()
+    assert state.status.recording == "stopping"
+    assert not state.status.record_intent
+    assert state.status.elapsed(29) == 10
+    assert not state.request_stop()
+    state.apply(Event(EventKind.READY, 1, 4, 30))
+    assert not state.request_start("s2")  # Wait for file finalization.
+    assert not state.apply(Event(EventKind.RECOVERING, 1, 5, 40, "s1"))
     assert not state.apply(Event(EventKind.STARTED, 1, 6, 41, "s1"))
     state.apply(Event(EventKind.COMPLETED, 1, 7, 42, "s1"))
     assert state.status.recording == "interrupted"
     assert state.status.had_gap
-    assert state.status.elapsed(10000) == 32
+    assert state.status.elapsed(10000) == 10
+    assert not state.apply(Event(EventKind.STARTED, 1, 8, 43, "s1"))
+
+
+def test_manual_restart_after_disconnect_creates_fresh_timer():
+    state = ready_state()
+    state.request_start("s1")
+    state.apply(Event(EventKind.STARTED, 1, 2, 10.25, "s1"))
+    state.apply(Event(EventKind.RECOVERING, 1, 3, 20.75, "s1"))
+    state.apply(Event(EventKind.COMPLETED, 1, 4, 22, "s1"))
+    assert not state.request_start("s2")  # Camera is still offline.
+    state.apply(Event(EventKind.READY, 1, 5, 25))
+    assert state.status.elapsed(1000) == 10
+    assert state.status.recording == "interrupted"
+    assert state.request_start("s2")
+    state.apply(Event(EventKind.STARTED, 1, 6, 100, "s2"))
+    assert state.status.elapsed(110) == 10
+
+
+@pytest.mark.parametrize("kind", [EventKind.FAILED, EventKind.RECORDING_FAILED, EventKind.CLOSED])
+def test_failure_or_shutdown_during_gap_keeps_timer_frozen(kind):
+    state = ready_state()
+    state.request_start("s1")
+    state.apply(Event(EventKind.STARTED, 1, 2, 10, "s1"))
+    state.apply(Event(EventKind.RECOVERING, 1, 3, 20, "s1"))
+    state.apply(Event(kind, 1, 4, 100, "s1", detail="test failure"))
+    assert state.status.elapsed(1000) == 10
+    assert not state.status.record_intent
+
+
+def test_disconnect_before_first_written_frame_cancels_start():
+    state = ready_state()
+    state.request_start("s1")
+    state.apply(Event(EventKind.RECOVERING, 1, 2, 10, "s1"))
+    assert state.status.elapsed(100) == 0
+    assert not state.status.record_intent
+    assert not state.apply(Event(EventKind.STARTED, 1, 3, 100, "s1"))
+    state.apply(Event(EventKind.COMPLETED, 1, 4, 101, "s1"))
+    assert state.status.recording == "interrupted"
+    assert state.status.elapsed(110) == 0
 
 
 def test_failed_or_closed_active_session_is_not_success():

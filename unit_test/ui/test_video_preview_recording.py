@@ -228,11 +228,15 @@ def test_recording_locks_parameters_but_allows_preview_without_probe(camera, ui_
     assert dialog.enabled.toolTip() == "保存后生效，下次启动沿用；关闭预览不影响录像。"
     assert dialog.grab().save(str(controller.config_path.parent / "settings-single-note.png"))
     assert not dialog.devices.isEnabled() and not dialog.refresh_button.isEnabled()
+    assert not dialog.preview_resolution.isEnabled()
     assert dialog.buttons.button(QDialogButtonBox.Save).isEnabled()
     assert not controller.probe_devices.called
     original = controller.config
     controller.apply_config(replace(original, width=640))
     assert controller.config == original and not controller._saving
+    controller.apply_config(replace(original, preview_width=1280, preview_height=720))
+    assert controller.config == original and not controller._saving
+    assert controller.service.status.recording == "recording"
     controller.can_configure = lambda: False
     controller.poll()
     assert not dialog.enabled.isEnabled()
@@ -375,26 +379,34 @@ def test_cancel_starting_keeps_preview_without_late_recording(camera, ui_qapp):
     assert not controller.panel.canvas.image.isNull()
 
 
-def test_preview_toggle_during_recovery_does_not_resume_cancelled_recording(camera, ui_qapp):
-    controller = camera(simulation=True, disconnect_after=.1, reconnect_after=.8)
+def test_preview_toggle_during_disconnect_does_not_resume_recording(camera, ui_qapp):
+    controller = camera(simulation=True, disconnect_after=.1, reconnect_after=1, stop_delay=.6)
     start(ui_qapp, controller)
     service = controller.service
     session, began = service.status.session_id, service.status.started_at
-    spin(ui_qapp, lambda: service.status.recording == "recovering")
+    spin(ui_qapp, lambda: service.status.recording == "stopping")
     save_preview(ui_qapp, controller, True)
     assert service.status.session_id == session and service.status.started_at == began
-    assert controller.stop_recording()
+    assert not service.status.record_intent
     spin(ui_qapp, lambda: service.status.recording == "interrupted")
+    spin(ui_qapp, lambda: controller.panel.record_button.text() == "开始录像")
+    assert not controller.panel.record_button.isEnabled()
     spin(ui_qapp, lambda: service.status.connection == "ready")
     assert not service.status.record_intent and service.status.recording == "interrupted"
     assert not service.is_closing and controller.service is service
+    spin(ui_qapp, lambda: controller.panel.record_button.isEnabled())
 
 
-def test_device_draft_is_not_silently_discarded_when_recording_starts(camera, ui_qapp):
+@pytest.mark.parametrize("field", ["bitrate", "preview_resolution"])
+def test_device_draft_is_not_silently_discarded_when_recording_starts(camera, ui_qapp, field):
     controller = camera(simulation=True)
     controller.show_settings()
     dialog = controller.dialog
-    dialog.bitrate.setValue(dialog.bitrate.value() + 100)
+    if field == "bitrate":
+        dialog.bitrate.setValue(dialog.bitrate.value() + 100)
+    else:
+        dialog.preview_resolution.setCurrentIndex(1)
+        dialog.preview_resolution.activated[int].emit(1)
     before = load_config(controller.config_path)
     start(ui_qapp, controller)
     controller.poll()

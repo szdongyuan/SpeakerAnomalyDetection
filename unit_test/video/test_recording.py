@@ -410,6 +410,7 @@ def test_readable_names_same_second_collision_and_cross_day_session(tmp_path, mo
             return stamp if tz is None else stamp.astimezone(tz)
 
     monkeypatch.setattr("base.video.recording.datetime", FixedDatetime)
+    monkeypatch.setattr("base.video.recording.time.perf_counter", lambda: 100.0)
     first = RecordingSession(config_for(tmp_path), "unique1")
     second = RecordingSession(config_for(tmp_path), "unique2")
     assert first.directory.name == "2026-09-09_10-23-30"
@@ -418,17 +419,46 @@ def test_readable_names_same_second_collision_and_cross_day_session(tmp_path, mo
     partial = first.directory / "2026-09-09_10-23-30_001.recording.mp4"
     assert partial.exists()
     stamp += timedelta(days=1)
-    write_segment(first, [(2, 101)])
+    write_segment(first, [(2, 100 + 86400)])
     first.finish()
     write_segment(second, [(3, 100)])
     second.finish()
     assert first.directory.parent == second.directory.parent == tmp_path / "video"
     assert not (tmp_path / "2026-09-09").exists()
     assert sorted(path.name for path in first.directory.glob("*.mp4")) == [
-        "2026-09-09_10-23-30_001.mp4", "2026-09-09_10-23-30_002.mp4",
+        "2026-09-09_10-23-30_001.mp4", "2026-09-10_10-23-30_002.mp4",
     ]
-    assert (second.directory / "2026-09-09_10-23-30_02_001.mp4").exists()
+    assert (second.directory / "2026-09-09_10-23-30_001.mp4").exists()
     assert not partial.exists()
+
+
+@pytest.mark.parametrize("gap_seconds", [7200, 17, 0.5])
+def test_segment_names_use_capture_time_despite_delayed_writes(tmp_path, monkeypatch, gap_seconds):
+    stamp = datetime(2026, 10, 7, 8, 0, 0).astimezone()
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return stamp if tz is None else stamp.astimezone(tz)
+
+    monkeypatch.setattr("base.video.recording.datetime", FixedDatetime)
+    monkeypatch.setattr("base.video.recording.time.perf_counter", lambda: 100.0)
+    session = RecordingSession(config_for(tmp_path), "capture-time")
+    # First capture is five seconds after session creation; writing is delayed.
+    stamp += timedelta(hours=4)
+    write_segment(session, [(1, 105)])
+    if gap_seconds != 7200:
+        session.gap("USB disconnected")
+    write_segment(session, [(2, 105 + gap_seconds)])
+    session.finish()
+    second_start = datetime(2026, 10, 7, 8, 0, 5) + timedelta(seconds=gap_seconds)
+    files = sorted(session.directory.glob("*.mp4"))
+    assert [path.name for path in files] == [
+        "2026-10-07_08-00-05_001.mp4",
+        f"{second_start:%Y-%m-%d_%H-%M-%S}_002.mp4",
+    ]
+    assert [len(decoded(path)) for path in files] == [1, 1]
+    assert not list(session.directory.glob("*.recording.mp4"))
 
 
 def test_existing_video_directory_is_reused_without_overwriting_files(tmp_path):
@@ -490,7 +520,7 @@ def test_failed_finalization_keeps_partial_file_and_logs_error(tmp_path, monkeyp
     calls = []
     real_abandon = session.segment_writer.abandon
 
-    def fail():
+    def fail(final):
         calls.append("finish")
         raise PermissionError("模拟视频改名拒绝访问")
 

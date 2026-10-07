@@ -57,6 +57,16 @@ def test_separate_process_manual_sessions_and_preview_continues(service_factory,
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("size", [(640, 360), (1280, 720), (1920, 1080), (2560, 1440)])
+def test_selected_preview_size_crosses_process_boundary(service_factory, size):
+    service = service_factory(preview_size=size)
+    wait_until(lambda: service.latest_preview() is not None)
+    frame = service.latest_preview()
+    assert (frame.width, frame.height) == size
+    assert len(frame.rgb) == size[0] * size[1] * 3
+    assert not service.status.record_intent
+
+
 def test_stop_while_starting_is_not_late_restarted(service_factory):
     service = service_factory(SimulationOptions(start_delay=0.5))
     service.start_recording()
@@ -67,24 +77,35 @@ def test_stop_while_starting_is_not_late_restarted(service_factory):
     assert service.status.started_at is None
 
 
-def test_reconnect_resumes_same_session(service_factory):
+def test_reconnect_only_restores_preview_and_requires_manual_start(service_factory):
     service = service_factory(SimulationOptions(disconnect_after=0.1, reconnect_after=0.25))
     service.start_recording()
-    wait_until(lambda: service.status.recording == "recovering")
+    wait_until(lambda: service.status.recording == "interrupted")
     session = service.status.session_id
     started = service.status.started_at
     assert service.latest_preview() is None
-    wait_until(lambda: service.status.recording == "recording")
+    wait_until(lambda: service.status.connection == "ready")
+    wait_until(lambda: service.latest_preview() is not None)
+    assert service.status.recording == "interrupted"
+    assert not service.status.record_intent
     assert service.status.session_id == session
     assert service.status.started_at == started
-
-
-def test_stop_while_recovering_does_not_resume_but_preview_recovers(service_factory):
-    service = service_factory(SimulationOptions(disconnect_after=0.1, reconnect_after=0.5))
-    service.start_recording()
-    wait_until(lambda: service.status.recording == "recovering")
+    assert service.start_recording()
+    assert service.status.session_id != session
+    assert service.status.started_at is None
+    wait_until(lambda: service.status.recording == "recording")
     assert service.stop_recording()
+
+
+def test_reconnect_during_finalization_does_not_resume(service_factory):
+    service = service_factory(SimulationOptions(disconnect_after=0.1, reconnect_after=0.1, stop_delay=0.5))
+    service.start_recording()
+    wait_until(lambda: service.status.recording == "stopping")
+    assert not service.stop_recording()
     assert not service.status.record_intent
+    wait_until(lambda: service.status.connection == "ready")
+    assert service.status.recording == "stopping"
+    assert not service.start_recording()
     wait_until(lambda: service.status.recording == "interrupted")
     wait_until(lambda: service.status.connection == "ready")
     assert service.status.recording == "interrupted"
@@ -289,7 +310,7 @@ def test_supervisor_log_drain_precedes_terminate_and_kill(monkeypatch, caplog, s
     context = SimpleNamespace(Process=Process, Pipe=lambda **kwargs: (channel, channel))
     monkeypatch.setattr(module, "ProcessLogDrain", SimpleNamespace(create=lambda _: Drain()), raising=False)
     monkeypatch.setattr(module.multiprocessing, "get_context", lambda _: context)
-    monkeypatch.setattr(module, "PreviewMailbox", lambda _: object())
+    monkeypatch.setattr(module, "PreviewMailbox", lambda _, width, height: object())
     service = VideoService(worker_target=close_without_exiting_worker, worker_options="custom", heartbeat_timeout=-1)
     service.start()
     try:
@@ -415,7 +436,7 @@ def test_video_log_drain_cleans_start_failure_and_reports_self_exit(monkeypatch,
     context = SimpleNamespace(Process=Process, Pipe=lambda **kwargs: (channel, channel))
     monkeypatch.setattr(module, "ProcessLogDrain", SimpleNamespace(create=lambda _: drain))
     monkeypatch.setattr(module.multiprocessing, "get_context", lambda _: context)
-    monkeypatch.setattr(module, "PreviewMailbox", lambda _: object())
+    monkeypatch.setattr(module, "PreviewMailbox", lambda _, width, height: object())
     service = VideoService(worker_target=close_without_exiting_worker, worker_options=None)
     service.start()
     assert service.wait_closed(3)

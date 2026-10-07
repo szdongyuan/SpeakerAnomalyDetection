@@ -526,7 +526,7 @@ class SegmentWriter:
             self.failed = True
             raise
 
-    def finish(self):
+    def finish(self, final: Path):
         if self.failed:
             raise OSError("录像文件写入曾失败，已保留未完成尾段")
         try:
@@ -540,7 +540,6 @@ class SegmentWriter:
             raise ValueError("录像没有有效视频帧")
         # Read-back validation belongs to offline tests: large-file probing stalls
         # the writer for seconds and can exhaust even a separate encoded queue.
-        final = self.path.with_name(self.path.name.replace(".recording.mp4", ".mp4"))
         if final.exists():
             raise FileExistsError(final)
         with self.diagnostics.stage("rename_media"):
@@ -569,7 +568,11 @@ class RecordingSession:
         root.mkdir(parents=True, exist_ok=True)
         validate_volume(root)
         check_space(root, config.min_free_bytes)
-        name = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
+        started_at = datetime.now().astimezone()
+        # USB capture timestamps use perf_counter, not the watchdog's monotonic clock.
+        # Anchor once so queued writes and later clock adjustments cannot shift names.
+        self._capture_clock_origin = started_at.timestamp() - time.perf_counter()
+        name = started_at.strftime("%Y-%m-%d_%H-%M-%S")
         suffix = 1
         while True:
             self.directory = root / (name if suffix == 1 else f"{name}_{suffix:02d}")
@@ -693,7 +696,11 @@ class RecordingSession:
                 self.summary["current_segment"] = None
                 self._last_file_name, self._last_file_bytes = "", 0
                 return
-            final = segment_writer.finish()
+            started_at = datetime.fromtimestamp(
+                self._capture_clock_origin + segment_writer.first_time,
+            ).astimezone()
+            final_path = self.directory / f"{started_at:%Y-%m-%d_%H-%M-%S}_{self._segment_sequence:03d}.mp4"
+            final = segment_writer.finish(final_path)
         except Exception:
             # Take ownership once: later session cleanup must not re-flush/retry a
             # failed trailer or rename. Keep the incomplete file for inspection.

@@ -188,12 +188,13 @@ class VideoRuntime:
             if ready != was_online or detail:
                 logger.info("Video connection ready=%s: %s", ready, detail)
             self.post(EventKind.READY if ready else EventKind.OFFLINE, detail=detail)
-            if not ready and was_online and self.accept_frames:
+            if not ready and was_online and (self.accept_frames or self.start_pending):
                 # USB gaps are not part of a run of software-skipped frames.
                 self.admission.drop_run = 0
                 self.admission.last_stamp = None
                 self.admission.low_since = None
                 self._raw_control("gap", self.session_id, (detail, utc_now()))
+                self._stop_locked()
                 self.post(EventKind.RECOVERING, self.session_id, detail)
 
     def on_frame(self, frame, stamp):
@@ -280,6 +281,14 @@ class VideoRuntime:
             self.drain_started = time.monotonic()
             self.post(EventKind.STOPPING, self.session_id, "录像异常，正在收尾")
 
+    def _stop_locked(self):
+        if self.stop_requested:
+            return
+        self.stop_requested = True
+        self.drain_started = time.monotonic()
+        self.start_pending = self.accept_frames = False
+        self._raw_control("stop", self.session_id)
+
     def _command(self, command):
         if command.generation != self.generation:
             return
@@ -308,12 +317,7 @@ class VideoRuntime:
                 self.start_pending = True
                 self._raw_control("start", self.session_id)
             elif command.kind == CommandKind.STOP and command.session_id == self.session_id:
-                if self.stop_requested:
-                    return
-                self.stop_requested = True
-                self.drain_started = time.monotonic()
-                self.start_pending = self.accept_frames = False
-                self._raw_control("stop", self.session_id)
+                self._stop_locked()
             elif command.kind == CommandKind.SHUTDOWN and not self.stopping:
                 self.start_pending = self.accept_frames = False
                 self.stopping = True

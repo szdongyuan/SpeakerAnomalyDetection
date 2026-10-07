@@ -132,7 +132,7 @@ class VideoState:
     def request_stop(self):
         if not self.status.record_intent:
             return False
-        # Revoke recovery intent BEFORE sending stop to the child process.
+        # Reject late STARTED events before sending stop to the child process.
         self.status = replace(self.status, record_intent=False, recording="stopping")
         return True
 
@@ -142,7 +142,7 @@ class VideoState:
             self.status, connection="unavailable", record_intent=False, connection_detail=detail,
             recording_detail=detail if active else self.status.recording_detail,
             recording="failed" if active else self.status.recording,
-            ended_at=now if active else self.status.ended_at,
+            ended_at=now if active and self.status.ended_at is None else self.status.ended_at,
         )
 
     def apply(self, event):
@@ -151,6 +151,7 @@ class VideoState:
         self.sequence = event.sequence
         status = self.status
         kind = event.kind
+        ended_at = status.ended_at if status.ended_at is not None else event.monotonic_time
         if event.session_id and event.session_id != status.session_id:
             return False
         if kind == EventKind.PREVIEW_CHANGED:
@@ -167,7 +168,7 @@ class VideoState:
                 return False
             self.status = replace(status, recording="stopping", record_intent=False, recording_detail=event.detail)
         elif kind == EventKind.STARTED:
-            if not status.record_intent or status.recording not in {"starting", "recovering"}:
+            if not status.record_intent or status.recording != "starting":
                 return False
             self.status = replace(
                 status, connection="ready", recording="recording", connection_detail="", recording_detail="",
@@ -177,16 +178,18 @@ class VideoState:
         elif kind == EventKind.RECOVERING:
             if not status.record_intent or status.recording not in {"starting", "recording", "recovering"}:
                 return False
+            # Capture loss ends recording; camera READY only restores preview.
             self.status = replace(
-                status, connection="reconnecting", recording="recovering",
+                status, connection="reconnecting", recording="stopping", record_intent=False,
                 had_gap=True, connection_detail=event.detail,
+                ended_at=ended_at,
             )
         elif kind == EventKind.COMPLETED:
             if status.recording not in {"starting", "recording", "recovering", "stopping"}:
                 return False
             self.status = replace(
                 status, recording="interrupted" if status.had_gap else "completed", record_intent=False,
-                ended_at=event.monotonic_time, recording_detail=event.detail,
+                ended_at=ended_at, recording_detail=event.detail,
             )
         elif kind == EventKind.FAILED:
             self.fail(event.detail, event.monotonic_time)
@@ -195,13 +198,13 @@ class VideoState:
                 return False
             self.status = replace(
                 status, recording="failed", record_intent=False,
-                recording_detail=event.detail, ended_at=event.monotonic_time,
+                recording_detail=event.detail, ended_at=ended_at,
             )
         elif kind == EventKind.CLOSED:
             active = status.recording in {"starting", "recording", "recovering", "stopping"}
             self.status = replace(
                 status, connection="closed", record_intent=False,
                 recording="interrupted" if active else status.recording,
-                ended_at=event.monotonic_time if active else status.ended_at,
+                ended_at=ended_at if active else status.ended_at,
             )
         return True

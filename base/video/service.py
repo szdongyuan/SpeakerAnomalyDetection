@@ -23,10 +23,12 @@ class VideoService:
         drain_timeout=None,
         initial_connection="connecting",
         initial_preview_enabled=True,
+        preview_size=(640, 360),
     ):
         # No default fake backend: callers must explicitly select a worker.
         self._worker_target = worker_target
         self._worker_options = worker_options
+        self._preview_size = preview_size
         self._state = VideoState(generation)
         self._state.status = replace(self._state.status, connection=initial_connection,
                                      preview_enabled=initial_preview_enabled)
@@ -157,7 +159,7 @@ class VideoService:
         received_closed = False
         try:
             context = multiprocessing.get_context("spawn")
-            self._mailbox = PreviewMailbox(context)
+            self._mailbox = PreviewMailbox(context, *self._preview_size)
             channel, child_channel = context.Pipe(duplex=True)
             log_drain = ProcessLogDrain.create(context)
             process = context.Process(
