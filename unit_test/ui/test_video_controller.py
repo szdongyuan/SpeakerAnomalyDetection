@@ -20,6 +20,12 @@ def simulated_probe_worker(channel):
     channel.close()
 
 
+def configurable_preview_worker(channel, mailbox, generation, config):
+    """Exercise the production controller/service with synthetic RGB frames."""
+    from base.video.worker import SimulationOptions, simulated_video_worker
+    simulated_video_worker(channel, mailbox, generation, SimulationOptions(preview_enabled=config.enabled))
+
+
 @pytest.fixture(autouse=True)
 def isolate_video_project_logging(tmp_path, monkeypatch):
     from unit_test.logging_test_support import isolated_project_logger
@@ -149,6 +155,37 @@ def test_save_settings_and_reload_without_automatic_recording(ui_qapp, tmp_path)
         controller._timer.stop()
 
 
+@pytest.mark.parametrize("capture_size", [(1280, 720), (2560, 1440)])
+def test_saved_preview_resolution_rebuilds_service_and_reaches_qt(ui_qapp, tmp_path, monkeypatch, capture_size):
+    monkeypatch.setattr(video_controller_module, "usb_video_worker", configurable_preview_worker)
+    path = tmp_path / "video.json"
+    config = VideoConfig(
+        enabled=True, device_id="test-camera", device_name="Synthetic camera",
+        width=capture_size[0], height=capture_size[1], target_bitrate_bps=8_000_000,
+        recording_root=str(tmp_path),
+    )
+    save_config(path, config)
+    controller = VideoController(config_path=path, start_automatically=False)
+    sizes = []
+    controller.preview_changed.connect(lambda image: sizes.append((image.width(), image.height())))
+    try:
+        controller.start_preview()
+        spin(ui_qapp, lambda: bool(sizes))
+        assert sizes[-1] == (640, 360)
+        old_service = controller.service
+        updated = replace(config, preview_width=2560, preview_height=1440)
+        controller.apply_config(updated)
+        spin(ui_qapp, lambda: bool(sizes) and sizes[-1] == capture_size)
+        assert old_service.is_closed and controller.service is not old_service
+        assert load_config(path) == updated
+        assert controller.config == updated
+        assert not controller.service.status.record_intent
+    finally:
+        controller.shutdown()
+        spin(ui_qapp, lambda: controller.is_shutdown_complete)
+        controller._timer.stop()
+
+
 @pytest.mark.parametrize("recent", ["", "existing", "missing"])
 def test_open_directory_uses_recent_session_or_video_child(ui_qapp, tmp_path, monkeypatch, recent):
     video = tmp_path / "video"
@@ -221,7 +258,7 @@ def test_simplified_settings_preserve_hidden_encoding_and_storage_policy(ui_qapp
     requested = []
     dialog.configuration_requested.connect(requested.append)
     try:
-        assert len(dialog.findChildren(QComboBox)) == 3
+        assert len(dialog.findChildren(QComboBox)) == 4
         assert len(dialog.findChildren(QSpinBox)) == 1
         labels = {label.text() for label in dialog.findChildren(QLabel)}
         assert not labels & {"输入格式", "录像编码", "最低保留空间", "文件分段"}
@@ -236,6 +273,76 @@ def test_simplified_settings_preserve_hidden_encoding_and_storage_policy(ui_qapp
         assert saved.codec == config.codec
         assert saved.min_free_bytes == config.min_free_bytes
         assert saved.segment_duration_seconds == config.segment_duration_seconds
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("size", [(1280, 720), (2560, 1440), (2944, 1656)])
+def test_recording_selector_omits_removed_size_and_keeps_saved_size(ui_qapp, size):
+    config = VideoConfig(width=size[0], height=size[1])
+    dialog = VideoSettingsDialog(config)
+    try:
+        assert dialog.resolution.findText("2048 × 1536") == -1
+        assert dialog.resolution.currentData() == size
+    finally:
+        dialog.close()
+
+
+def test_removed_recording_size_requires_explicit_reselection(ui_qapp, tmp_path, monkeypatch):
+    config = VideoConfig(width=2048, height=1536)
+    config_path = tmp_path / "video_settings.json"
+    save_config(config_path, config)
+    dialog = VideoSettingsDialog(load_config(config_path))
+    messages, requested = [], []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: messages.append(text))
+    dialog.configuration_requested.connect(requested.append)
+    try:
+        assert dialog.resolution.findText("2048 × 1536") == -1
+        assert dialog.resolution.currentData() is None
+        assert "重新选择" in dialog.resolution.currentText()
+        assert not dialog.resolution.model().item(dialog.resolution.currentIndex()).isEnabled()
+        dialog.submit()
+        assert messages == ["请选择录像分辨率后再保存。"]
+        assert not requested
+        assert load_config(config_path) == config
+
+        dialog.resolution.setCurrentIndex(dialog.resolution.findText("2560 × 1440"))
+        dialog.submit()
+        assert requested == [replace(config, width=2560, height=1440)]
+        save_config(config_path, requested[0])
+        reopened = VideoSettingsDialog(load_config(config_path))
+        try:
+            assert reopened.resolution.currentData() == (2560, 1440)
+            assert reopened.resolution.findText("2048 × 1536") == -1
+        finally:
+            reopened.close()
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("size", [(640, 360), (1280, 720), (1920, 1080), (2560, 1440)])
+def test_preview_selector_preserves_recording_settings(ui_qapp, tmp_path, size):
+    config = VideoConfig(
+        device_id="usb1", device_name="USB Camera", recording_root=str(tmp_path),
+        width=2560, height=1440, fps_num=25, target_bitrate_bps=8_000_000,
+    )
+    dialog = VideoSettingsDialog(config)
+    requested = []
+    dialog.configuration_requested.connect(requested.append)
+    try:
+        assert [dialog.preview_resolution.itemData(i) for i in range(dialog.preview_resolution.count())] == [
+            (640, 360), (1280, 720), (1920, 1080), (2560, 1440),
+        ]
+        dialog.preview_resolution.setCurrentIndex(dialog.preview_resolution.findText(f"{size[0]} × {size[1]}"))
+        dialog.submit()
+        assert requested == [replace(config, preview_width=size[0], preview_height=size[1])]
+        labels = {label.text() for label in dialog.findChildren(QLabel)}
+        assert {"预览分辨率", "录像分辨率", "录像帧率"} <= labels
+        reopened = VideoSettingsDialog(requested[0])
+        try:
+            assert reopened.preview_resolution.currentData() == size
+        finally:
+            reopened.close()
     finally:
         dialog.close()
 
@@ -279,7 +386,14 @@ def test_simplified_settings_layout_and_persistent_readonly_notice(ui_qapp, tmp_
         assert dialog.devices.font().pixelSize() == 13
         assert dialog.devices.height() >= 28
         assert dialog.folder.width() >= 250
-        inputs = (dialog.devices, dialog.resolution, dialog.rate, dialog.bitrate, dialog.folder)
+        inputs = (dialog.devices, dialog.preview_resolution, dialog.resolution,
+                  dialog.rate, dialog.bitrate, dialog.folder)
+        assert dialog.preview_resolution.isEnabled() != read_only
+        assert dialog.enabled.geometry().bottom() < dialog.devices.geometry().top()
+        ordered_fields = (dialog.devices, dialog.resolution, dialog.rate, dialog.bitrate,
+                          dialog.preview_resolution, dialog.folder)
+        assert all(before.geometry().bottom() < after.geometry().top()
+                   for before, after in zip(ordered_fields, ordered_fields[1:]))
         assert len({field.width() for field in inputs}) == 1
         assert len({field.geometry().left() for field in inputs}) == 1
         assert len({field.geometry().right() for field in inputs}) == 1
@@ -308,7 +422,7 @@ def test_settings_geometry_stays_fixed_across_device_refresh(ui_qapp, tmp_path, 
     dialog.show()
     ui_qapp.processEvents()
     widgets = (
-        dialog.enabled, dialog.devices, dialog.resolution, dialog.rate,
+        dialog.enabled, dialog.devices, dialog.preview_resolution, dialog.resolution, dialog.rate,
         dialog.bitrate, dialog.folder, dialog.refresh_button, dialog.browse_button,
         dialog.message, dialog.buttons,
     )

@@ -13,8 +13,8 @@ class PreviewFrame:
 
 
 class PreviewMailbox:
-    def __init__(self, context, width=320, height=180):
-        if not (0 < width <= 1920 and 0 < height <= 1080):
+    def __init__(self, context, width=640, height=360):
+        if not (0 < width <= 2560 and 0 < height <= 1440):
             raise ValueError("invalid preview dimensions")
         self.width = width
         self.height = height

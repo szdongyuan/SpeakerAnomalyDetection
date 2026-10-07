@@ -168,6 +168,7 @@ class VideoController(VideoServiceBridge):
             worker_target=usb_video_worker, worker_options=self.config, generation=self._generation,
             initial_connection="connecting" if self.config.enabled else "disabled",
             initial_preview_enabled=self.config.enabled,
+            preview_size=self.config.preview_size,
             heartbeat_timeout=8, command_timeout=20, shutdown_timeout=120, drain_timeout=30,
         )
 

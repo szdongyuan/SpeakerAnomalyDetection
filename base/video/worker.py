@@ -69,7 +69,7 @@ def simulated_video_worker(channel, mailbox, generation, options):
                     return
 
             now = time.monotonic()
-            if not ready and now >= ready_due:
+            if not ready and recovery_due is None and now >= ready_due:
                 ready = True
                 emit(EventKind.READY)
             if start_due is not None and now >= start_due:
@@ -96,13 +96,14 @@ def simulated_video_worker(channel, mailbox, generation, options):
                     and elapsed >= options.disconnect_after
                 ):
                     disconnected_once = True
+                    ready = False
                     recovery_due = now + options.reconnect_after
-                    emit(EventKind.RECOVERING, session_id, detail="模拟摄像头断开，等待恢复")
+                    stop_due = now + options.stop_delay
+                    emit(EventKind.RECOVERING, session_id, detail="模拟摄像头断开，正在停止录像")
             if recovery_due is not None and now >= recovery_due:
                 recovery_due = None
+                ready = True
                 emit(EventKind.READY)
-                if session_id and started_at is not None and stop_due is None:
-                    emit(EventKind.STARTED, session_id)
             if ready and preview_enabled and now >= next_frame and recovery_due is None:
                 frame_number += 1
                 # Small RGB test pattern with a moving bar; constant memory footprint.

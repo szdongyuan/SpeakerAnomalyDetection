@@ -32,10 +32,47 @@ def test_roundtrip_unicode_and_fixed_segment_duration(tmp_path):
     {"recording_root": "relative/path"}, {"segment_duration_seconds": 600},
     {"segment_duration_seconds": 18000},
     {"codec": "unknown"}, {"input_format": "unknown"}, {"device_id": 5},
+    {"preview_width": True}, {"preview_height": 0},
+    {"preview_width": 1920, "preview_height": 1200},
+    {"preview_width": 2560, "preview_height": 360},
 ])
 def test_invalid_configuration_rejected(changes):
     with pytest.raises(ValueError):
         VideoConfig(**changes)
+
+
+def test_legacy_config_defaults_preview_without_rewriting_file(tmp_path):
+    path = tmp_path / "video.json"
+    path.write_text('{"width": 2560, "height": 1440}', encoding="utf-8")
+    original = path.read_bytes()
+    config = load_config(path)
+    assert (config.preview_width, config.preview_height) == (640, 360)
+    assert config.preview_size == (640, 360)
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("size", [(640, 360), (1280, 720), (1920, 1080), (2560, 1440)])
+def test_preview_resolution_roundtrip_preserves_recording_parameters(tmp_path, size):
+    path = tmp_path / "video.json"
+    config = VideoConfig(
+        width=2560, height=1440, fps_num=25, target_bitrate_bps=8_000_000,
+        preview_width=size[0], preview_height=size[1],
+    )
+    save_config(path, config)
+    loaded = load_config(path)
+    assert loaded == config
+    assert loaded.preview_size == size
+    assert (loaded.width, loaded.height, loaded.fps_num, loaded.target_bitrate_bps) == (2560, 1440, 25, 8_000_000)
+
+
+@pytest.mark.parametrize("capture_size,expected", [
+    ((1280, 720), (1280, 720)), ((640, 480), (640, 480)), ((160, 90), (160, 90)),
+])
+def test_preview_does_not_exceed_capture_size(capture_size, expected):
+    config = VideoConfig(
+        width=capture_size[0], height=capture_size[1], preview_width=2560, preview_height=1440,
+    )
+    assert config.preview_size == expected
 
 
 def test_replace_failure_preserves_previous_settings(tmp_path, monkeypatch):

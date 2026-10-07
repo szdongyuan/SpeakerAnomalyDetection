@@ -70,7 +70,7 @@ def wait_for(predicate, timeout=8):
 
 
 @pytest.mark.parametrize("name", ["normal", "disconnect"])
-def test_real_encoding_in_independent_process_and_manual_stop(tmp_path, name):
+def test_real_encoding_stops_manually_or_on_disconnect(tmp_path, name):
     service = VideoService(
         worker_target=synthetic_video_worker, worker_options=config_for(tmp_path, device_name=name),
         heartbeat_timeout=8, command_timeout=10, shutdown_timeout=10,
@@ -82,8 +82,6 @@ def test_real_encoding_in_independent_process_and_manual_stop(tmp_path, name):
         wait_for(lambda: service.status.recording == "recording")
         assert decoded(next(tmp_path.glob("*/*/*.recording.mp4")))
         if name == "disconnect":
-            wait_for(lambda: service.status.recording == "recovering")
-            assert service.stop_recording()
             wait_for(lambda: service.status.recording == "interrupted")
         else:
             assert service.stop_recording()
@@ -602,8 +600,33 @@ def test_production_runtime_recovers_from_real_file_write_pause(tmp_path, monkey
         assert not runtime.encoder_thread.is_alive() and not runtime.writer.is_alive()
 
 
+def test_disconnect_during_startup_cannot_reenable_writer(tmp_path):
+    runtime = VideoRuntime(None, None, 1, config_for(tmp_path), capture_factory=SyntheticCapture)
+    runtime.preview_due, runtime.online = float("inf"), True
+    runtime._command(Command(CommandKind.START, 1, "start", "startup-disconnect"))
+    assert runtime.start_pending
+    runtime.on_connection(False, "startup unplug")
+    runtime.on_connection(False, "still unplugged")
+    runtime.on_connection(True, "")
+    assert not runtime.start_pending and not runtime.accept_frames
+    runtime.writer.start()
+    runtime.encoder_thread.start()
+    try:
+        wait_for(lambda: not runtime.session_id)
+        assert not runtime.accept_frames
+        assert not list(tmp_path.rglob("*.mp4"))
+        interruptions = [event for event in runtime.events.queue if event[0] == EventKind.RECOVERING]
+        assert len(interruptions) == 1
+        assert not any(event[0] == EventKind.STARTED for event in runtime.events.queue)
+    finally:
+        runtime._command(Command(CommandKind.SHUTDOWN, 1, "close"))
+        runtime.encoder_thread.join(5)
+        runtime.writer.join(5)
+        assert not runtime.encoder_thread.is_alive() and not runtime.writer.is_alive()
+
+
 @pytest.mark.parametrize("codec", ["h264", "h265"])
-def test_production_segments_and_reconnect_preserve_all_frames(tmp_path, codec):
+def test_production_disconnect_finalizes_frames_without_automatic_resume(tmp_path, codec):
     config = replace(config_for(tmp_path), width=320, height=180, fps_num=30, codec=codec)
     # Test-only shortened segment boundary; saved settings still require two hours.
     config = SimpleNamespace(**(vars(config) | {"segment_duration_seconds": 1}))
@@ -618,14 +641,16 @@ def test_production_segments_and_reconnect_preserve_all_frames(tmp_path, codec):
         for index in range(90):
             if index == 45:
                 runtime.on_connection(False, "合成断线")
+                assert not runtime.accept_frames
                 runtime.on_connection(True, "")
             runtime.on_frame(synthetic_frame(index, 320, 180, background), 100 + index / 30)
             wait_for(lambda: runtime.work.empty() and not runtime.encoder_busy)
-        runtime._command(Command(CommandKind.STOP, 1, "stop", "segments"))
         wait_for(lambda: not runtime.session_id)
         files = sorted(tmp_path.glob("video/*/*.mp4"))
-        assert len(files) == 4
-        verify_files(files, 90)
+        assert len(files) == 2
+        verify_files(files, 45)
+        assert not runtime.accept_frames
+        assert runtime.stop_requested
         assert runtime.encoded.snapshot()["bytes"] == runtime.raw_bytes == 0
         assert not list(tmp_path.rglob("*.recording.mp4"))
     finally:

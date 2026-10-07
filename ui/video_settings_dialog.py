@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
     QLabel, QLineEdit, QMessageBox, QPushButton, QSizePolicy, QSpinBox, QVBoxLayout,
 )
 
+from base.video.config import PREVIEW_RESOLUTIONS
 from consts import ui_style_const
 from ui.dialog_enter_policy import install_dialog_enter_policy
 
@@ -76,12 +77,18 @@ class VideoSettingsDialog(QDialog):
         resolutions = list(dict.fromkeys([
             (config.width, config.height),
             (640, 480), (1280, 720), (1920, 1080),
-            (2048, 1536), (2560, 1440),
+            (2560, 1440),
         ]))
+        # A saved value must not reintroduce the removed preset.
+        resolutions = [size for size in resolutions if size != (2048, 1536)]
         for width, height in resolutions:
             self.resolution.addItem(f"{width} × {height}", (width, height))
-        self.resolution.setToolTip("影响画面清晰度；所选分辨率必须由摄像头支持。")
-        form.addWidget(QLabel("分辨率"), 2, 0)
+        if (config.width, config.height) not in resolutions:
+            self.resolution.insertItem(0, "原分辨率已移除，请重新选择", None)
+            self.resolution.model().item(0).setEnabled(False)
+            self.resolution.setCurrentIndex(0)
+        self.resolution.setToolTip("决定摄像头采集及录像分辨率；所选分辨率必须由摄像头支持。")
+        form.addWidget(QLabel("录像分辨率"), 2, 0)
         form.addWidget(self.resolution, 2, 1)
         self.rate = QComboBox()
         rates = [
@@ -91,7 +98,7 @@ class VideoSettingsDialog(QDialog):
         for rate in dict.fromkeys(rates):
             self.rate.addItem(f"{float(rate):g} 帧/秒", Fraction(rate))
         self.rate.setToolTip("影响画面流畅度；所选帧率必须由摄像头支持。")
-        form.addWidget(QLabel("帧率"), 3, 0)
+        form.addWidget(QLabel("录像帧率"), 3, 0)
         form.addWidget(self.rate, 3, 1)
         self.bitrate = QSpinBox()
         self.bitrate.setRange(100, 100_000)
@@ -100,15 +107,29 @@ class VideoSettingsDialog(QDialog):
         self.bitrate.setToolTip("影响录像画质与容量；数值越大，通常占用的磁盘空间越多。")
         form.addWidget(QLabel("录像码率"), 4, 0)
         form.addWidget(self.bitrate, 4, 1)
+        self.preview_resolution = QComboBox()
+        for width, height in PREVIEW_RESOLUTIONS:
+            self.preview_resolution.addItem(f"{width} × {height}", (width, height))
+        self.preview_resolution.setCurrentIndex(
+            PREVIEW_RESOLUTIONS.index((config.preview_width, config.preview_height))
+        )
+        self.preview_resolution.setToolTip(
+            "控制预览图像的像素数量上限，不改变录像分辨率或窗口大小。\n"
+            "例如：录像为2560×1440，选择640×360后，仅预览图像缩小到640×360。\n"
+            "实际预览尺寸不超过录像分辨率；数值越大，预览处理量越多。\n"
+            "请在停止录像后修改并保存。"
+        )
+        form.addWidget(QLabel("预览分辨率"), 5, 0)
+        form.addWidget(self.preview_resolution, 5, 1)
         self.folder = QLineEdit(config.recording_root)
         self.folder.setPlaceholderText("选择根目录，录像存入其下的video文件夹")
         self.folder.setToolTip("选择video的上一级目录；已有video时直接复用，没有则创建。\n连续录像每2小时换一个文件；空间不足时停止保存并提示。")
         self.browse_button = QPushButton("浏览…")
         self.browse_button.setFixedWidth(64)
         self.browse_button.clicked.connect(self.choose_directory)
-        form.addWidget(QLabel("保存位置"), 5, 0)
-        form.addWidget(self.folder, 5, 1)
-        form.addWidget(self.browse_button, 5, 2)
+        form.addWidget(QLabel("保存位置"), 6, 0)
+        form.addWidget(self.folder, 6, 1)
+        form.addWidget(self.browse_button, 6, 2)
         self.message = QLabel("点击“刷新”查找USB摄像头。")
         self.message.setTextFormat(Qt.PlainText)
         self.message.setStyleSheet("color:#657789; font-size:12px;")
@@ -130,7 +151,7 @@ class VideoSettingsDialog(QDialog):
         self.buttons.rejected.connect(self.close)
         root.addWidget(self.buttons)
         self.set_access(read_only=read_only, preview_only=preview_only)
-        for widget in (self.devices, self.resolution, self.rate):
+        for widget in (self.devices, self.preview_resolution, self.resolution, self.rate):
             widget.activated.connect(self._mark_parameters_edited)
         self.bitrate.valueChanged.connect(self._mark_parameters_edited)
         self.folder.textChanged.connect(self._mark_parameters_edited)
@@ -150,7 +171,7 @@ class VideoSettingsDialog(QDialog):
         self.read_only, self.preview_only, self._saving = access
         editable = not read_only and not saving
         self.enabled.setEnabled(editable)
-        for widget in (self.devices, self.resolution, self.rate, self.bitrate,
+        for widget in (self.devices, self.preview_resolution, self.resolution, self.rate, self.bitrate,
                        self.folder, self.browse_button, self.refresh_button):
             widget.setEnabled(editable and not preview_only)
         self.buttons.button(QDialogButtonBox.Save).setEnabled(editable)
@@ -208,7 +229,11 @@ class VideoSettingsDialog(QDialog):
             self.configuration_requested.emit(replace(self.config, enabled=self.enabled.isChecked()))
             return
         try:
-            width, height = self.resolution.currentData()
+            resolution = self.resolution.currentData()
+            if resolution is None:
+                raise ValueError("请选择录像分辨率后再保存。")
+            width, height = resolution
+            preview_width, preview_height = self.preview_resolution.currentData()
             rate = self.rate.currentData()
             config = replace(
                 self.config, enabled=self.enabled.isChecked(),
@@ -217,6 +242,7 @@ class VideoSettingsDialog(QDialog):
                     self.devices.itemData(self.devices.currentIndex(), Qt.UserRole + 1) or self.config.device_name
                 ),
                 width=width, height=height, fps_num=rate.numerator, fps_den=rate.denominator,
+                preview_width=preview_width, preview_height=preview_height,
                 target_bitrate_bps=self.bitrate.value() * 1000, recording_root=self.folder.text().strip(),
             )
         except ValueError as exc:

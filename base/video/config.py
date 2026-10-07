@@ -7,6 +7,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
+PREVIEW_RESOLUTIONS = ((640, 360), (1280, 720), (1920, 1080), (2560, 1440))
+
+
 @dataclass(frozen=True)
 class VideoConfig:
     schema_version: int = 1
@@ -23,11 +26,14 @@ class VideoConfig:
     recording_root: str = ""
     segment_duration_seconds: int = 7_200
     min_free_bytes: int = 5 * 1024**3
+    preview_width: int = 640
+    preview_height: int = 360
 
     def __post_init__(self):
         integer_fields = (
             "schema_version", "width", "height", "fps_num", "fps_den",
             "target_bitrate_bps", "segment_duration_seconds", "min_free_bytes",
+            "preview_width", "preview_height",
         )
         for name in integer_fields:
             value = getattr(self, name)
@@ -46,6 +52,8 @@ class VideoConfig:
             raise ValueError("分辨率不能超过7680×4320。")
         if self.width % 2 or self.height % 2:
             raise ValueError("当前录像编码要求分辨率的宽度和高度均为偶数。")
+        if (self.preview_width, self.preview_height) not in PREVIEW_RESOLUTIONS:
+            raise ValueError("预览分辨率仅支持640×360、1280×720、1920×1080或2560×1440。")
         if self.fps_num > 240 * self.fps_den:
             raise ValueError("帧率不能超过240帧/秒。")
         if self.codec not in {"h264", "h265"}:
@@ -56,6 +64,11 @@ class VideoConfig:
             raise ValueError("录像保存位置必须为完整路径，请点击“浏览…”选择文件夹。")
         if self.enabled:
             self.validate_capture()
+
+    @property
+    def preview_size(self):
+        """Bound the preview buffer by capture size so it never enlarges pixels."""
+        return min(self.preview_width, self.width), min(self.preview_height, self.height)
 
     def validate_capture(self):
         """Validate an actual acquisition request, including recording without preview."""
