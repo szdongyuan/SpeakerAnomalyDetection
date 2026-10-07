@@ -4,7 +4,15 @@ from types import SimpleNamespace
 import pytest
 from PyQt5.QtWidgets import QApplication
 
+from base.analysis_process_protocol import (
+    AnalysisInstanceResult,
+    AnalysisTaskResult,
+    build_runtime_key,
+)
 from ui.sequence.motor_result_panel import MotorResultPanel
+from ui.sequence.sequence_widget_analysis_process_ops import (
+    SequenceWidgetAnalysisProcessOpsMixin,
+)
 from unit_test.test_manual_product_condition_cycle import _DummyManualCycleWidget
 
 
@@ -262,3 +270,64 @@ def test_channel_progress_ignores_unselected_and_duplicate_channels(host):
     assert panel.channel_labels == ["CH3", "CH8"]
     panel.set_channels([2])
     assert panel.rows["q6000"]["labels"]["progress"].text() == "通道判定：0/1"
+
+
+def test_unjudged_automatic_result_survives_next_gear_and_refresh(host, tmp_path):
+    host.count_board.mode = "mark"
+    host._manual_product_condition_group_id = "group-unjudged"
+    host.left_panel.set_channels([0])
+    results = {}
+    host._manual_product_group_raw_results = Mock(return_value=results)
+    process = SequenceWidgetAnalysisProcessOpsMixin()
+    process.left_panel = host.left_panel
+    process.default_logger = Mock()
+    process._update_analysis_record_label = Mock(return_value={})
+    process._update_process_result_session_snapshot = Mock()
+
+    for key in ("q6000", "q7000"):
+        host._active_product_condition_key = key
+        host.player_status_flag = True
+        host.left_panel.set_condition_result(key, "采集中", tone="running")
+        results[key] = "not_labeled"
+        host._refresh_manual_product_condition_results_from_group("group-unjudged")
+        assert row_text(host, key) == "采集中"
+        if key == "q7000":
+            assert row_text(host, "q6000") == "未判定"
+
+        host.player_status_flag = False
+        instance = AnalysisInstanceResult(
+            task_id=key,
+            config_key="SPL",
+            runtime_key=build_runtime_key("SPL", 0),
+            analysis_type="SPL",
+            raw_channel=0,
+            source_wav_column=0,
+            execution_status="分析完成",
+            contributes_to_final=False,
+            judgement=None,
+            metrics={},
+            display_payload={},
+        )
+        result = AnalysisTaskResult(
+            task_id=key,
+            condition_key=key,
+            wav_path=str(tmp_path / f"{key}.wav"),
+            source="自动分析",
+            execution_status="分析完成",
+            judgement_status="未产生判定",
+            final_judgement=None,
+            instance_results=(instance,),
+        )
+        process._apply_automatic_analysis_result(result, {})
+        assert row_text(host, key) == "未判定"
+        assert host.left_panel.rows[key]["analysis_completed"] is True
+        assert result.judgement_status == "未产生判定"
+        process._update_analysis_record_label.assert_called_with(
+            key, result.wav_path, {}, "not_labeled"
+        )
+        process._update_process_result_session_snapshot.assert_called_with(
+            result, {}, "not_labeled"
+        )
+
+    host._refresh_manual_product_condition_results_from_group("group-unjudged")
+    assert row_text(host, "q6000") == row_text(host, "q7000") == "未判定"
