@@ -23,7 +23,7 @@ from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOps
 from ui.sequence.sequence_widget_recording_process_ops import SequenceWidgetRecordingProcessOpsMixin
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
 from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
-from unit_test.base.test_product_test_config_refresh import make_refresh_manager
+from unit_test.base.test_product_test_config_refresh import add_second_queue, make_refresh_manager
 
 
 class ProductRefreshHost(SequenceWidgetConfigOpsMixin, SequenceWidgetStreamingOpsMixin,
@@ -123,6 +123,19 @@ def save_b(host, project):
     b["project_name"] = "B"
     assert host.product_program_manager.save_project(None, b)[0]
     return b
+
+
+def test_runtime_refresh_allows_acquisition_difference_after_save(refresh_host):
+    host, project, path, warnings = refresh_host
+    second_path = add_second_queue(host.product_program_manager, project, path)
+    queue = json.loads(second_path.read_text(encoding="utf-8"))
+    queue[0]["seq1"]["acq"]["detail"].update(sample_rate=44100, ve_range_index=1)
+    assert LoadUiConfig.save_data_to_json(queue, str(second_path))
+    host.on_sequence_config_updated()
+    assert host._product_queue_catalog["second"]["available"]
+    assert host._applied_product_snapshot.queue_catalog["second"]["data"] == queue
+    assert host.player_btn.isEnabled()
+    assert warnings == []
 
 
 def test_hardware_channels_refresh_saved_queue_and_live_product_without_opening_editor(refresh_host):

@@ -50,7 +50,8 @@ def make_manager(tmp_path, queue_specs=None):
                         "mode": spec.get("mode", "RECORD_ONLY"),
                         "detail": {
                             "total_time": spec.get("duration", 600),
-                            "sample_rate": 48000,
+                            "sample_rate": spec.get("sample_rate", 48000),
+                            "ve_range_index": spec.get("ve_range_index", 0),
                         },
                     },
                     "analysis_list": {
@@ -102,6 +103,139 @@ def make_project(tmp_path, *, project_name="PB-A01充电宝", condition_count=1)
             },
         ],
     }
+
+
+def set_queue_acquisition(manager, queue_name, mutate):
+    path = Path(manager.load_queue_catalog()[queue_name]["path"])
+    data = json.loads(path.read_text(encoding="utf-8"))
+    mutate(next(iter(data[0].values())))
+    assert LoadUiConfig.save_data_to_json(data, str(path))
+
+
+@pytest.mark.parametrize("rate,range_index,fields", [
+    (44100, 0, ["采样率"]), (48000, 1, ["量程"]),
+    (44100, 1, ["采样率", "量程"]),
+])
+@pytest.mark.parametrize("cross_group", [False, True])
+def test_save_acquisition_conflict_diagnostic(tmp_path, rate, range_index, fields, cross_group):
+    manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {
+        "sample_rate": rate, "ve_range_index": range_index,
+    }})
+    project = make_project(tmp_path, condition_count=2)
+    group_index, condition_index = (1, 0) if cross_group else (0, 1)
+    project[TEST_GROUPS_KEY][group_index][TEST_CONDITIONS_KEY][condition_index]["test_queue"] = "队列B"
+
+    success, message = manager.save_project(None, project)
+
+    assert not success
+    assert message.summary == "、".join(fields) + "不一致："
+    assert len(message.rows) == 3
+    for text in ["USB-C输出口/档位1", "基础测试", "队列B", "48000 Hz", f"{rate} Hz", "±10 V", *fields]:
+        assert text in message
+    assert ("USB-A输出口/档位1" if cross_group else "USB-C输出口/档位2") in message
+    if range_index == 1:
+        assert "±5 V" in message
+    assert not Path(manager.registry_path).exists()
+    assert not Path(project[RESULT_ROOT_DIRECTORY_KEY]).exists()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("sample_rate", True), ("sample_rate", 48000.0), ("sample_rate", "48000"),
+    ("sample_rate", 0), ("sample_rate", -1), ("sample_rate", 3999), ("sample_rate", 102401),
+    ("ve_range_index", True), ("ve_range_index", 0.0), ("ve_range_index", "0"),
+    ("ve_range_index", -1), ("ve_range_index", 7),
+])
+def test_save_acquisition_invalid_single_queue(tmp_path, field, value):
+    manager = make_manager(tmp_path, {"基础测试": {field: value}})
+    success, message = manager.save_project(None, make_project(tmp_path))
+    assert not success
+    for text in ["USB-C输出口/档位1", "基础测试", field, repr(value)]:
+        assert text in message
+    assert "\n" not in message
+
+
+@pytest.mark.parametrize("field", ["sample_rate", "ve_range_index"])
+def test_save_acquisition_missing_field(tmp_path, field):
+    manager = make_manager(tmp_path)
+    set_queue_acquisition(manager, "基础测试", lambda seq: seq["acq"]["detail"].pop(field))
+    success, message = manager.save_project(None, make_project(tmp_path))
+    assert not success
+    for text in ["USB-C输出口/档位1", "基础测试", field, "缺少"]:
+        assert text in message
+
+
+@pytest.mark.parametrize("field,value", [("acq", None), ("acq", []), ("detail", None), ("detail", [])])
+def test_save_acquisition_malformed_shape(tmp_path, field, value):
+    manager = make_manager(tmp_path)
+    def mutate(seq):
+        (seq if field == "acq" else seq["acq"])[field] = value
+    set_queue_acquisition(manager, "基础测试", mutate)
+    success, message = manager.save_project(None, make_project(tmp_path))
+    assert not success
+    for text in ["USB-C输出口/档位1", "基础测试", field]:
+        assert text in message
+    assert "\n" not in message
+
+
+@pytest.mark.parametrize("variant", ["single", "repeated", "equal", "unreferenced"])
+def test_save_acquisition_valid_references(tmp_path, variant):
+    manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {
+        "sample_rate": 44100 if variant == "unreferenced" else 48000,
+        "ve_range_index": 1 if variant == "unreferenced" else 0,
+    }})
+    project = make_project(tmp_path)
+    if variant == "single":
+        project[TEST_GROUPS_KEY].pop()
+    elif variant == "equal":
+        project[TEST_GROUPS_KEY][1][TEST_CONDITIONS_KEY][0]["test_queue"] = "队列B"
+    assert manager.save_project(None, project)[0]
+
+
+@pytest.mark.parametrize("variant", ["new", "existing", "renamed", "save_as", "import_draft", "import_overwrite"])
+def test_save_acquisition_rejection_preserves_storage(tmp_path, variant):
+    manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {}})
+    project = make_project(tmp_path)
+    success, current_file = manager.save_project(None, project)
+    assert success
+    project[TEST_GROUPS_KEY][1][TEST_CONDITIONS_KEY][0]["test_queue"] = "队列B"
+    set_queue_acquisition(manager, "队列B", lambda seq: seq["acq"]["detail"].update(sample_rate=44100))
+    project[RESULT_ROOT_DIRECTORY_KEY] = str(tmp_path / "new-results")
+    if variant in {"new", "renamed", "import_draft"}:
+        project[PROJECT_NAME_KEY] = "新项目"
+    if variant.startswith("import"):
+        source = tmp_path / "import.json"
+        assert LoadUiConfig.save_data_to_json(project, str(source))
+        imported, project = manager.import_project(str(source))
+        assert imported  # Import is a draft operation, without the save-only guard.
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+    if variant == "save_as":
+        success, message = manager.save_as(project, "新项目")
+    else:
+        target = None if variant in {"new", "import_draft"} else current_file
+        success, message = manager.save_project(target, project)
+    assert not success
+    assert "采样率" in message
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
+    assert not Path(project[RESULT_ROOT_DIRECTORY_KEY]).exists()
+
+
+def test_save_acquisition_opt_in_uses_one_fresh_catalog(tmp_path, monkeypatch):
+    manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {"sample_rate": 44100, "ve_range_index": 1}})
+    project = make_project(tmp_path)
+    project[TEST_GROUPS_KEY][1][TEST_CONDITIONS_KEY][0]["test_queue"] = "队列B"
+    assert manager.validate_project(project, None)["is_usable"]
+    original = manager.load_queue_catalog
+    calls = []
+    def load():
+        calls.append(True)
+        return original()
+    monkeypatch.setattr(manager, "load_queue_catalog", load)
+    assert not manager.validate_project(project, None, check_acquisition_consistency=True)["can_save"]
+    assert len(calls) == 1
+    calls.clear()
+    project[PROJECT_NAME_KEY] = ""
+    assert not manager.validate_project(project, None, check_acquisition_consistency=True)["can_save"]
+    assert calls == []
 
 
 def test_runtime_loader_flattens_groups_with_composite_keys(tmp_path):
@@ -607,3 +741,37 @@ def test_import_new_project_does_not_create_files_or_results(tmp_path):
     assert success is True
     assert imported == project
     assert set(tmp_path.rglob("*")) == before
+
+
+def test_acquisition_conflict_includes_all_ordered_repeated_references(tmp_path):
+    manager = make_manager(tmp_path, {
+        "基础测试": {}, "队列B": {"sample_rate": 44100},
+        "队列C": {"sample_rate": 44100, "ve_range_index": 1},
+    })
+    project = make_project(tmp_path, condition_count=3)
+    conditions = project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY]
+    conditions[1]["test_queue"] = "队列B"
+    conditions[2]["test_queue"] = "队列C"
+    project[TEST_GROUPS_KEY][1][TEST_CONDITIONS_KEY].append({
+        "condition_name": "档位2", "trigger_state": "", "test_queue": "队列B",
+    })
+    expected = (
+        "USB-C输出口/档位1的测试队列“基础测试”（采样率 48000 Hz，量程 ±10 V）",
+        "USB-C输出口/档位2的测试队列“队列B”（采样率 44100 Hz，量程 ±10 V）",
+        "USB-C输出口/档位3的测试队列“队列C”（采样率 44100 Hz，量程 ±5 V）",
+        "USB-A输出口/档位1的测试队列“基础测试”（采样率 48000 Hz，量程 ±10 V）",
+        "USB-A输出口/档位2的测试队列“队列B”（采样率 44100 Hz，量程 ±10 V）",
+    )
+    errors = ProductTestProjectValidator.validate_queue_acquisition_consistency(
+        project, manager.load_queue_catalog()
+    )
+    assert len(errors) == 1
+    conflict = errors[0]
+    assert isinstance(conflict, str)
+    assert conflict.rows == expected
+    assert conflict.summary == "采样率、量程不一致："
+    assert str(conflict) == "\n".join((conflict.summary, *expected))
+    success, message = manager.save_project(None, project)
+    assert not success
+    assert type(message) is type(conflict)
+    assert message.rows == expected

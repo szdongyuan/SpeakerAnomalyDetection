@@ -35,6 +35,7 @@ from PyQt5.QtWidgets import (
 
 from base.product_test_project_config import (
     ProductTestProjectConfigManager,
+    QueueAcquisitionConflict,
     normalize_trigger_state,
 )
 from consts import error_code, ui_style_const
@@ -55,6 +56,7 @@ from consts.product_test_project_consts import (
 )
 from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
+from ui.product_queue_conflict_dialog import ProductQueueConflictDialog
 from ui.config_delete_dialog import ConfigDeleteDialog
 from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.output_load_config_dialog import OutputLoadConfigDialog
@@ -1496,6 +1498,9 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             self.deletion_failed(message)
 
     def _show_save_error(self, title, message):
+        if isinstance(message, QueueAcquisitionConflict):
+            ProductQueueConflictDialog(message.summary, message.rows, title, self).exec_()
+            return
         QMessageBox.warning(self, title, message.split("\n", 1)[0])
 
     def _save_project(self, close_dialog=True):
@@ -1510,11 +1515,12 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             )
             save_file = overwrite_file
         validation = self.manager.validate_project(
-            project_data, save_file, self.queue_catalog
+            project_data, save_file, check_acquisition_consistency=True
         )
         if not validation["can_save"]:
+            errors = validation["save_errors"]
             self._show_save_error(
-                "无法保存", "\n".join(validation["save_errors"])
+                "无法保存", errors[0] if len(errors) == 1 else "\n".join(errors)
             )
             return False
         if overwrite_file:

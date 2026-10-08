@@ -12,7 +12,7 @@ from base.product_test_project_config import ProductTestProjectConfigManager
 def make_refresh_manager(tmp_path, condition_count=20, port_count=10):
     queue_path = tmp_path / "queues" / "test.json"
     queue = [{"seq1": {
-        "acq": {"mode": "RECORD_ONLY", "detail": {"total_time": 10, "sample_rate": 48000}},
+        "acq": {"mode": "RECORD_ONLY", "detail": {"total_time": 10, "sample_rate": 48000, "ve_range_index": 0}},
         "analysis_list": {"display_sequence": ["SPL"], "SPL": {"type": "SPL", "limit_checked": True}},
     }}]
     assert LoadUiConfig.save_data_to_json(queue, str(queue_path))
@@ -33,6 +33,28 @@ def make_refresh_manager(tmp_path, condition_count=20, port_count=10):
     saved = manager.save_project(None, project)
     assert saved[0], saved
     return manager, project, queue_path
+
+
+def add_second_queue(manager, project, queue_path):
+    second_path = queue_path.with_name("second.json")
+    second_path.write_bytes(queue_path.read_bytes())
+    assert LoadUiConfig.save_data_to_json({"test": str(queue_path), "second": str(second_path)}, manager.queue_registry_path)
+    project["test_groups"][-1]["test_conditions"][0]["test_queue"] = "second"
+    assert manager.save_project("A.json", project)[0]
+    return second_path
+
+
+def test_snapshot_allows_acquisition_difference_after_save(tmp_path):
+    manager, project, path = make_refresh_manager(tmp_path)
+    second_path = add_second_queue(manager, project, path)
+    queue = json.loads(second_path.read_text(encoding="utf-8"))
+    queue[0]["seq1"]["acq"]["detail"].update(sample_rate=44100, ve_range_index=1)
+    assert LoadUiConfig.save_data_to_json(queue, str(second_path))
+    assert manager.validate_project(project, "A.json")["is_usable"]
+    snapshot = build_product_test_refresh_snapshot(manager, "A.json")
+    assert snapshot.queue_catalog["test"]["available"]
+    assert snapshot.queue_catalog["second"]["available"]
+    assert len(snapshot.conditions) == 200
 
 
 def test_snapshot_reads_shared_queue_once_for_200_conditions(tmp_path, monkeypatch):

@@ -11,7 +11,9 @@ from base.hardware_trigger.serial_product_port_plan import build_serial_product_
 from base.load_config import LoadUiConfig
 from base.analysis_config_validation import validate_analysis_config
 from base.recording_preview_config import resolve_recording_preview_time_mode
+from base.ve3668n_input import validate_range_index, validate_sample_rate
 from consts import error_code
+from consts.ve3668n_consts import VE_RANGE_INDEX_CONFIG_KEY, VE_RANGE_LABELS
 from consts.product_test_project_consts import (
     CONDITION_NAME_KEY,
     EXPORT_RAW_AUDIO_CSV_KEY,
@@ -127,7 +129,69 @@ def is_manual_project_play_allowed(conditions_or_project, *, serial_enabled=True
     )
 
 
+class QueueAcquisitionConflict(str):
+    """String-compatible save error with complete ordered comparison rows."""
+
+    def __new__(cls, summary, rows):
+        rows = tuple(rows)
+        message = super().__new__(cls, "\n".join((summary, *rows)))
+        message.summary = summary
+        message.rows = rows
+        return message
+
+
 class ProductTestProjectValidator(object):
+    @staticmethod
+    def validate_queue_acquisition_consistency(project_data, queue_catalog):
+        """Validate explicit acquisition parameters of referenced queues on save."""
+        parameter_values = []
+        rows = []
+        for group_index, group, condition_index, condition in iter_test_conditions(
+            project_data
+        ):
+            queue_name = str(condition.get(TEST_QUEUE_KEY, "") or "").strip()
+            if not queue_name:
+                continue
+            queue_data = queue_catalog.get(queue_name, {}).get("data")
+            # The catalog retains data only once its first sequence is readable.
+            # Missing/unreadable queues remain the reference validator's concern.
+            if queue_data is None:
+                continue
+            sequence = next(iter(queue_data[0].values()))
+            location = ProductTestProjectValidator.condition_location(
+                group_index, group, condition_index, condition
+            )
+            context = " ".join(f"{location}的测试队列“{queue_name}”".splitlines())
+            acquisition = sequence.get("acq")
+            if not isinstance(acquisition, dict):
+                return [f"{context}的 acq 必须是对象"]
+            detail = acquisition.get("detail")
+            if not isinstance(detail, dict):
+                return [f"{context}的 acq.detail 必须是对象"]
+            for field, label, validator in (
+                ("sample_rate", "采样率", validate_sample_rate),
+                (VE_RANGE_INDEX_CONFIG_KEY, "量程", validate_range_index),
+            ):
+                if field not in detail:
+                    return [f"{context}缺少{label}字段 {field}"]
+                try:
+                    validator(detail[field])
+                except ValueError:
+                    return [f"{context}的{label}字段 {field} 无效：{detail[field]!r}"]
+            values = (detail["sample_rate"], detail[VE_RANGE_INDEX_CONFIG_KEY])
+            description = (
+                f"{context}（采样率 {values[0]} Hz，量程 {VE_RANGE_LABELS[values[1]]}）"
+            )
+            parameter_values.append(values)
+            rows.append(description)
+        fields = "、".join(
+            label for index, label in enumerate(("采样率", "量程"))
+            if len({values[index] for values in parameter_values}) > 1
+        )
+        if fields:
+            return [QueueAcquisitionConflict(f"{fields}不一致：", rows)]
+        return []
+
     @staticmethod
     def validate_test_queue_references(project_data, queue_catalog):
         errors = []
@@ -452,9 +516,11 @@ class ProductTestProjectConfigManager(object):
             current_file = self.existing_project_file(current_file) or current_file
 
         registry = self.load_registry()
-        errors = self._collect_save_errors(project_data, registry, current_file)
+        errors, _queue_catalog = self._collect_save_errors(
+            project_data, registry, current_file, check_acquisition_consistency=True
+        )
         if errors:
-            return False, "\n".join(errors)
+            return False, errors[0] if len(errors) == 1 else "\n".join(errors)
 
         normalized_project = self._normalize_project(project_data)
         project_name = normalized_project[PROJECT_NAME_KEY]
@@ -570,15 +636,17 @@ class ProductTestProjectConfigManager(object):
             return False, str(error)
         return True, file_name
 
-    def validate_project(self, project_data, current_file, queue_catalog=None):
+    def validate_project(
+        self, project_data, current_file, queue_catalog=None, *,
+        check_acquisition_consistency=False,
+    ):
         registry = self.load_registry()
-        if queue_catalog is None:
-            queue_catalog = self.load_queue_catalog()
-        save_errors = self._collect_save_errors(
+        save_errors, queue_catalog = self._collect_save_errors(
             project_data,
             registry,
             current_file,
             queue_catalog,
+            check_acquisition_consistency=check_acquisition_consistency,
         )
         use_errors = list(save_errors)
         if not save_errors:
@@ -632,7 +700,10 @@ class ProductTestProjectConfigManager(object):
         registry,
         current_file,
         queue_catalog=None,
+        *,
+        check_acquisition_consistency=False,
     ):
+        """Return errors and the shared catalog, loading it after structure checks."""
         _serial_error, serial_config = LoadUiConfig.load_serial_discrete_input_config()
         idle_code = (
             serial_config.get("port_switch_idle_code", "")
@@ -645,16 +716,22 @@ class ProductTestProjectConfigManager(object):
             port_switch_idle_code=idle_code,
         )
         if errors:
-            return errors
+            return errors, queue_catalog
         if queue_catalog is None:
             queue_catalog = self.load_queue_catalog()
+        if check_acquisition_consistency:
+            errors = ProductTestProjectValidator.validate_queue_acquisition_consistency(
+                project_data, queue_catalog
+            )
+            if errors:
+                return errors, queue_catalog
         errors.extend(
             ProductTestProjectValidator.validate_test_queue_references(
                 project_data,
                 queue_catalog,
             )
         )
-        return errors
+        return errors, queue_catalog
 
     def load_queue_catalog(self, queue_names=None):
         registry = LoadUiConfig._load_sequence_config_registry(
@@ -782,12 +859,15 @@ class ProductTestProjectConfigManager(object):
             info["reason"] = "测试队列序列格式错误"
             return info
 
+        info["data"] = queue_data
         acquisition = sequence_data.get("acq", {})
+        if not isinstance(acquisition, dict):
+            info["reason"] = "测试队列采集配置格式错误"
+            return info
         acquisition_mode = str(acquisition.get("mode") or "RECORD_ONLY").strip().upper()
         info["acquisition_mode"] = acquisition_mode
         acquisition_detail = acquisition.get("detail", {})
         analysis_list = sequence_data.get("analysis_list", {})
-        info["data"] = queue_data
         info["analysis_list"] = analysis_list
         try:
             validate_analysis_config(analysis_list)

@@ -85,13 +85,13 @@ def test_contextual_queue_editor_collects_visible_draft_without_saving(app, tmp_
     dialog.close()
 
 
-def make_queue_config(duration=600.0):
+def make_queue_config(duration=600.0, sample_rate=48000, ve_range_index=0):
     return [
         {
             "sequence_1": {
                 "acq": {
                     "mode": "RECORD_ONLY",
-                    "detail": {"total_time": duration, "sample_rate": 44100},
+                    "detail": {"total_time": duration, "sample_rate": sample_rate, "ve_range_index": ve_range_index},
                 },
                 "analysis_list": {
                     "display_sequence": [
@@ -168,7 +168,155 @@ def close_dialog(dialog):
     dialog.close()
 
 
-@pytest.mark.parametrize("save_path", ["validation", "write", "save_as"])
+def capture_conflict_dialog(monkeypatch, observed):
+    from ui.product_queue_conflict_dialog import ProductQueueConflictDialog
+
+    def capture(window):
+        rows = tuple(window.conflict_list.item(i).text() for i in range(window.conflict_list.count()))
+        observed.append((window.windowTitle(), window.prompt_label.text(), rows))
+        return QMessageBox.Ok
+
+    monkeypatch.setattr(ProductQueueConflictDialog, "exec_", capture)
+
+
+@pytest.mark.parametrize("save_as", [False, True])
+@pytest.mark.parametrize("invalid", [False, True])
+def test_acquisition_save_rejection_keeps_dialog_draft(app, tmp_path, monkeypatch, save_as, invalid):
+    manager = make_manager(tmp_path)
+    first_path = register_queue(manager)
+    second_path = str(Path(first_path).with_name("队列B.json"))
+    assert LoadUiConfig.save_data_to_json(make_queue_config(), second_path)
+    assert LoadUiConfig.save_data_to_json({"低噪声基础测试": first_path, "队列B": second_path}, manager.queue_registry_path)
+    data = project_data(tmp_path)
+    data["test_groups"][1]["test_conditions"][0]["test_queue"] = "队列B"
+    success, file_name = manager.save_project(None, data)
+    assert success
+    dialog = ProductTestProjectConfigDialog(manager)
+    dialog._show_project(data, file_name)
+    dialog.project_name_input.setText("未保存草稿")
+    dialog.condition_table.item(0, 1).setText("未保存工况")
+    assert dialog._dirty
+    # Disk changes after the dialog captured its catalog must be seen on save.
+    changed = make_queue_config(sample_rate="bad" if invalid else 44100, ve_range_index=1)
+    assert LoadUiConfig.save_data_to_json(changed, second_path)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+    contents = dialog.collect_project()
+    messages, changes, accepted, conflicts = [], [], [], []
+    if not invalid:
+        capture_conflict_dialog(monkeypatch, conflicts)
+    dialog.projects_changed.connect(lambda: changes.append("projects"))
+    dialog.programs_changed.connect(lambda: changes.append("programs"))
+    dialog.accepted.connect(lambda: accepted.append(True))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: messages.append((args[1], args[2])))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: pytest.fail("unexpected success"))
+    def accept_name(name_dialog):
+        name_dialog.setTextValue("另存草稿")
+        return QInputDialog.Accepted
+    monkeypatch.setattr(QInputDialog, "exec_", accept_name)
+    try:
+        if save_as:
+            dialog._save_project_as()
+        else:
+            assert dialog._save_project() is False
+        if invalid:
+            assert len(messages) == 1 and not conflicts
+            title, message = messages[0]
+            assert "\n" not in message
+        else:
+            assert not messages and len(conflicts) == 1
+            title, summary, rows = conflicts[0]
+            assert summary == "采样率、量程不一致："
+            assert rows == (
+                "USB-C输出口/未保存工况的测试队列“低噪声基础测试”（采样率 48000 Hz，量程 ±10 V）",
+                "USB-A输出口/档位1的测试队列“队列B”（采样率 44100 Hz，量程 ±5 V）",
+            )
+            message = "\n".join((summary, *rows))
+        assert title == ("另存为失败" if save_as else "无法保存")
+        for text in ["队列B", "USB-A输出口/档位1"]:
+            assert text in message
+        for text in (["sample_rate", "bad"] if invalid else ["低噪声基础测试", "48000 Hz", "44100 Hz", "±10 V", "±5 V", "采样率", "量程"]):
+            assert text in message
+        assert dialog.current_file == file_name and dialog._dirty
+        assert dialog.collect_project() == contents
+        assert not changes and not accepted
+        assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
+        assert not (tmp_path / "results" / "未保存草稿").exists()
+        assert not (tmp_path / "results" / "另存草稿").exists()
+    finally:
+        close_dialog(dialog)
+
+
+def test_acquisition_save_sees_corrected_disk_queue(app, tmp_path, monkeypatch):
+    manager = make_manager(tmp_path)
+    path = register_queue(manager)
+    assert LoadUiConfig.save_data_to_json(make_queue_config(sample_rate="bad"), path)
+    dialog = ProductTestProjectConfigDialog(manager)
+    dialog._show_project(project_data(tmp_path), None)
+    assert LoadUiConfig.save_data_to_json(make_queue_config(), path)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: pytest.fail(args[2]))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    try:
+        assert dialog._save_project(close_dialog=False)
+        assert not dialog._dirty
+    finally:
+        close_dialog(dialog)
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_acquisition_imported_draft_rejection_keeps_import_state(app, tmp_path, monkeypatch, overwrite, invalid):
+    manager = make_manager(tmp_path)
+    file_name = prepare_project(manager, tmp_path)
+    data = project_data(tmp_path)
+    if not overwrite:
+        data["project_name"] = "导入草稿"
+    data["result_root_directory"] = str(tmp_path / "new-results")
+    source = tmp_path / "import.json"
+    queue_path = manager.load_queue_catalog()["低噪声基础测试"]["path"]
+    if invalid:
+        malformed = make_queue_config()
+        del malformed[0]["sequence_1"]["acq"]["detail"]["ve_range_index"]
+        assert LoadUiConfig.save_data_to_json(malformed, queue_path)
+    else:
+        second_path = str(Path(queue_path).with_name("队列B.json"))
+        assert LoadUiConfig.save_data_to_json(make_queue_config(sample_rate=44100), second_path)
+        assert LoadUiConfig.save_data_to_json({"低噪声基础测试": queue_path, "队列B": second_path}, manager.queue_registry_path)
+        data["test_groups"][1]["test_conditions"][0]["test_queue"] = "队列B"
+    assert LoadUiConfig.save_data_to_json(data, str(source))
+    dialog = ProductTestProjectConfigDialog(manager)
+    messages, changes, conflicts = [], [], []
+    if not invalid:
+        capture_conflict_dialog(monkeypatch, conflicts)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(source), ""))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: messages.append(args[2]))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: pytest.fail("unexpected success"))
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: pytest.fail("invalid import must fail before overwrite confirmation"))
+    dialog.projects_changed.connect(lambda: changes.append(True))
+    try:
+        dialog._import_project()
+        assert dialog._imported_draft and dialog._dirty and not messages
+        contents = dialog.collect_project()
+        before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+        assert dialog._save_project() is False
+        if invalid:
+            assert len(messages) == 1 and "ve_range_index" in messages[0]
+        else:
+            assert not messages and len(conflicts) == 1
+            assert conflicts[0] == ("无法保存", "采样率不一致：", (
+                "USB-C输出口/档位1的测试队列“低噪声基础测试”（采样率 48000 Hz，量程 ±10 V）",
+                "USB-A输出口/档位1的测试队列“队列B”（采样率 44100 Hz，量程 ±10 V）",
+            ))
+        assert dialog.current_file is None and dialog._imported_draft and dialog._dirty
+        assert dialog.collect_project() == contents
+        assert not changes
+        assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
+        assert Path(manager.program_dir, file_name).exists()
+        assert not (tmp_path / "new-results").exists()
+    finally:
+        close_dialog(dialog)
+
+
+@pytest.mark.parametrize("save_path", ["validation", "stale_catalog", "save_as"])
 def test_many_save_errors_show_one_problem_without_writing(app, tmp_path, monkeypatch, save_path):
     manager = make_manager(tmp_path)
     register_queue(manager, duration=100)
@@ -186,8 +334,8 @@ def test_many_save_errors_show_one_problem_without_writing(app, tmp_path, monkey
     ]
     dialog = ProductTestProjectConfigDialog(manager)
     dialog._show_project(project_data(tmp_path, conditions), None)
-    if save_path == "write":
-        # An editor can hold an older catalog; the write boundary reloads it.
+    if save_path == "stale_catalog":
+        # Save preflight must reload even when the editor has an older catalog.
         dialog.queue_catalog["低噪声基础测试"]["duration"] = 120
     observed = []
 
@@ -206,7 +354,7 @@ def test_many_save_errors_show_one_problem_without_writing(app, tmp_path, monkey
         else:
             assert dialog._save_project(close_dialog=False) is False
         assert observed == [(
-            {"validation": "无法保存", "write": "保存失败", "save_as": "另存为失败"}[save_path],
+            {"validation": "无法保存", "stale_catalog": "无法保存", "save_as": "另存为失败"}[save_path],
             "录音时长必须是分段间隔的整数倍，请调整分段间隔",
         )]
         assert not list(Path(manager.program_dir).glob("*.json"))
@@ -1453,3 +1601,44 @@ def test_project_condition_display_uses_group_and_composite_key():
     assert recent_conditions == [
         {"key": "group_1:condition_1", "name": "USB-C输出口 / 档位1"}
     ]
+
+
+def test_acquisition_late_manager_failure_routes_full_conflict(app, tmp_path, monkeypatch):
+    manager = make_manager(tmp_path)
+    first_path = register_queue(manager)
+    second_path = str(Path(first_path).with_name("队列B.json"))
+    assert LoadUiConfig.save_data_to_json(make_queue_config(), second_path)
+    assert LoadUiConfig.save_data_to_json({"低噪声基础测试": first_path, "队列B": second_path}, manager.queue_registry_path)
+    data = project_data(tmp_path)
+    data["test_groups"][1]["test_conditions"][0]["test_queue"] = "队列B"
+    success, file_name = manager.save_project(None, data)
+    assert success
+    dialog = ProductTestProjectConfigDialog(manager)
+    dialog.project_name_input.setText("晚到冲突草稿")
+    dialog._set_dirty(True)
+    assert dialog._dirty
+    original_validate = manager.validate_project
+    def validate_then_change(*args, **kwargs):
+        result = original_validate(*args, **kwargs)
+        assert result["can_save"]
+        assert LoadUiConfig.save_data_to_json(make_queue_config(sample_rate=44100), second_path)
+        return result
+    monkeypatch.setattr(manager, "validate_project", validate_then_change)
+    conflicts, accepted = [], []
+    capture_conflict_dialog(monkeypatch, conflicts)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: pytest.fail("conflict lost its type"))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: pytest.fail("unexpected success"))
+    dialog.accepted.connect(lambda: accepted.append(True))
+    before = {p: p.read_bytes() for p in Path(manager.program_dir).glob("*.json")}
+    contents = dialog.collect_project()
+    try:
+        assert dialog._save_project() is False
+        assert conflicts == [("保存失败", "采样率不一致：", (
+            "USB-C输出口/档位1的测试队列“低噪声基础测试”（采样率 48000 Hz，量程 ±10 V）",
+            "USB-A输出口/档位1的测试队列“队列B”（采样率 44100 Hz，量程 ±10 V）",
+        ))]
+        assert dialog.current_file == file_name and dialog._dirty
+        assert dialog.collect_project() == contents and not accepted
+        assert {p: p.read_bytes() for p in Path(manager.program_dir).glob("*.json")} == before
+    finally:
+        close_dialog(dialog)
