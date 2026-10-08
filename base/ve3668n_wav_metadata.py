@@ -1,4 +1,4 @@
-"""Closed VE v1 voltage/provenance schema, independent of current registries.
+"""Closed VE v1/v2 voltage/calibration schemas, independent of current registries.
 
 Validation accepts frozen Mapping snapshots and returns owned JSON-ready data.
 Historical file rates are positive integers, independent of acquisition bounds.
@@ -14,7 +14,7 @@ from base.ve3668n_input import (
     validate_physical_channels, validate_voltage_range,
 )
 from consts.ve3668n_consts import (
-    VE_BACKEND, VE_INPUT_MODE, VE_MODEL, VE_UNIT,
+    VE_BACKEND, VE_INPUT_MODE, VE_MODEL, VE_UNIT, VE_WAV_SCHEMA_VERSION,
 )
 
 
@@ -41,7 +41,7 @@ def _number(value, name, *, positive=False):
     return number
 
 
-def _calibration(value):
+def _calibration(value, *, schema_version):
     _fields(value, ("standard_spl", "calibrated_at", "sample_rate", "duration_seconds"),
             "calibration")
     timestamp = value["calibrated_at"]
@@ -50,6 +50,10 @@ def _calibration(value):
     parsed = datetime.fromisoformat(timestamp)
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("calibrated_at must include a UTC offset")
+    if schema_version == 2 and all(
+        value[field] is None for field in ("standard_spl", "sample_rate", "duration_seconds")
+    ):
+        return dict(value)
     return {
         "standard_spl": _number(value["standard_spl"], "standard_spl"),
         "calibrated_at": timestamp,
@@ -59,11 +63,13 @@ def _calibration(value):
 
 
 def validate_ve_wav_metadata(payload):
-    """Return an independent v1 snapshot, or raise ValueError; never repair it."""
+    """Return an independent snapshot in its input version; never repair it."""
     _fields(payload, ("schema_version", "backend", "acquisition", "recorded_channels"),
             "VE metadata")
-    if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
+    schema_version = payload["schema_version"]
+    if type(schema_version) is not int or schema_version not in (1, VE_WAV_SCHEMA_VERSION):
         raise ValueError("unsupported VE schema_version")
+    calibrated_source = "measured" if schema_version == 1 else "calibrated"
     if payload["backend"] != VE_BACKEND:
         raise ValueError(f"backend must be {VE_BACKEND}")
     acquisition = payload["acquisition"]
@@ -96,18 +102,18 @@ def validate_ve_wav_metadata(payload):
         indices.add(index)
         physical_channels.add(physical)
         source = channel["factor_source"]
-        if source == "measured":
+        if source == calibrated_source:
             if channel["calibrated"] is not True:
-                raise ValueError("measured requires calibrated=true")
+                raise ValueError(f"{calibrated_source} requires calibrated=true")
             factor = _number(channel["v2pa_factor"], "v2pa_factor", positive=True)
-            calibration = _calibration(channel["calibration"])
+            calibration = _calibration(channel["calibration"], schema_version=schema_version)
         elif source == "none":
             if (channel["calibrated"] is not False or channel["v2pa_factor"] is not None
                     or channel["calibration"] is not None):
                 raise ValueError("none requires calibrated=false and null factor/calibration")
             factor, calibration = None, None
         else:
-            raise ValueError("factor_source must be measured or none")
+            raise ValueError(f"factor_source must be {calibrated_source} or none")
         normalized_channels.append({
             "wav_channel_index": index, "physical_input_channel": physical,
             "factor_source": source, "calibrated": channel["calibrated"],
@@ -116,7 +122,7 @@ def validate_ve_wav_metadata(payload):
     if indices != set(range(len(channels))):
         raise ValueError("wav_channel_index must be contiguous from zero")
     return {
-        "schema_version": 1, "backend": VE_BACKEND,
+        "schema_version": schema_version, "backend": VE_BACKEND,
         "acquisition": dict(acquisition), "recorded_channels": normalized_channels,
     }
 
@@ -141,20 +147,20 @@ def build_ve_recording_metadata(device, channels, profile, calibration_store):
         record = records.get(physical)
         if record is not None and record["status"] not in ("valid", "invalidated"):
             raise ValueError("calibration record status must be valid or invalidated")
-        measured = record is not None and record["status"] == "valid"
+        calibrated = record is not None and record["status"] == "valid"
         recorded_channels.append({
             "wav_channel_index": index, "physical_input_channel": physical,
-            "factor_source": "measured" if measured else "none", "calibrated": measured,
-            "v2pa_factor": record["v2pa_factor"] if measured else None,
+            "factor_source": "calibrated" if calibrated else "none", "calibrated": calibrated,
+            "v2pa_factor": record["v2pa_factor"] if calibrated else None,
             "calibration": {
                 "standard_spl": record["standard_spl"],
                 "calibrated_at": record["calibrated_at"],
                 "sample_rate": record["calibration_sample_rate"],
                 "duration_seconds": record["calibration_duration_seconds"],
-            } if measured else None,
+            } if calibrated else None,
         })
     return validate_ve_wav_metadata({
-        "schema_version": 1, "backend": VE_BACKEND,
+        "schema_version": VE_WAV_SCHEMA_VERSION, "backend": VE_BACKEND,
         "acquisition": {"model": current["model"], "machine_id": current["machine_id"], **profile},
         "recorded_channels": recorded_channels,
     })
@@ -163,7 +169,7 @@ def build_ve_recording_metadata(device, channels, profile, calibration_store):
 @dataclass(frozen=True)
 class VEWavCalibrationResolution:
     factor: float | None
-    state: str  # measured | none | invalid
+    state: str  # calibrated | none | invalid
     diagnostic: str = ""
 
 
@@ -180,5 +186,5 @@ def resolve_ve_wav_channel_v2pa_factor(metadata, wav_channel_index):
     channel = next(item for item in normalized["recorded_channels"]
                    if item["wav_channel_index"] == wav_channel_index)
     if channel["factor_source"] == "none":
-        return VEWavCalibrationResolution(1.0, "none", "uncalibrated voltage data; no measured Pa/V")
-    return VEWavCalibrationResolution(channel["v2pa_factor"], "measured")
+        return VEWavCalibrationResolution(1.0, "none", "uncalibrated voltage data; no calibrated Pa/V")
+    return VEWavCalibrationResolution(channel["v2pa_factor"], "calibrated")

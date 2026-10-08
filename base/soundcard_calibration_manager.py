@@ -16,7 +16,7 @@ MIC_INPUT_CALIBRATION_PATH = os.path.join(
     model_consts.JSON_DIR_PATH,
     "mic_input_calibration.json",
 )
-MIC_INPUT_CALIBRATION_VERSION = 2
+MIC_INPUT_CALIBRATION_VERSION = 3
 _mic_input_calibration_io_lock = threading.Lock()
 
 
@@ -120,7 +120,7 @@ def _float_value(value, field_name, error_type):
         raise error_type(f"{field_name} must be a representable number") from exc
 
 
-def _validated_record(record, error_type):
+def _validated_record(record, error_type, *, allow_missing_measurement=False):
     expected_fields = {
         "v2pa_factor",
         "standard_spl_db",
@@ -141,6 +141,16 @@ def _validated_record(record, error_type):
     factor_value = _float_value(factor, "v2pa_factor", error_type)
     if not math.isfinite(factor_value) or factor_value <= 0.0:
         raise error_type("v2pa_factor must be finite and positive")
+    if allow_missing_measurement and all(
+        value is None for value in (standard_spl, sample_rate, duration)
+    ):
+        return {
+            "v2pa_factor": factor_value,
+            "standard_spl_db": None,
+            "sample_rate_hz": None,
+            "duration_seconds": None,
+            "calibrated_at": _validated_timestamp(record["calibrated_at"], error_type),
+        }
     if isinstance(standard_spl, bool) or not isinstance(standard_spl, numeric_types):
         raise error_type("standard_spl_db must be numeric")
     standard_spl_value = _float_value(standard_spl, "standard_spl_db", error_type)
@@ -174,7 +184,7 @@ def _validated_mic_input_registry(payload):
     if not isinstance(payload, dict) or set(payload) != {"version", "devices"}:
         raise MicCalibrationFormatError("The microphone calibration root is invalid")
     version = payload["version"]
-    if isinstance(version, bool) or not isinstance(version, int) or version != 2:
+    if isinstance(version, bool) or not isinstance(version, int) or version not in (2, 3):
         raise MicCalibrationFormatError("Unsupported microphone calibration version")
     if not isinstance(payload["devices"], list):
         raise MicCalibrationFormatError("devices must be a list")
@@ -217,13 +227,14 @@ def _validated_mic_input_registry(payload):
             canonical_channels[channel_key] = _validated_record(
                 record,
                 MicCalibrationFormatError,
+                allow_missing_measurement=version == 3,
             )
         canonical_devices.append({
             "input": canonical_identity,
             "channels": canonical_channels,
         })
 
-    return {"version": MIC_INPUT_CALIBRATION_VERSION, "devices": canonical_devices}
+    return {"version": version, "devices": canonical_devices}
 
 
 def _load_mic_input_calibration_unlocked(path):
@@ -254,7 +265,7 @@ def _load_mic_input_calibration_unlocked(path):
 
 
 def load_mic_input_calibration(calibration_path=None):
-    """Load the canonical version-2 microphone calibration registry."""
+    """Load a validated microphone registry without migrating its version."""
     path = calibration_path or MIC_INPUT_CALIBRATION_PATH
     with _mic_input_calibration_io_lock:
         return _load_mic_input_calibration_unlocked(path)
@@ -331,10 +342,6 @@ def save_mic_channel_calibration(
     calibrated_at=None,
 ):
     """Atomically save one physical-channel calibration record."""
-    identity = build_mic_input_identity(input_device)
-    if identity is None:
-        raise ValueError("The input device identity is invalid.")
-    channel_index = _validated_channel_index(input_channel)
     if calibrated_at is None:
         calibrated_at = datetime.now().astimezone().isoformat(timespec="seconds")
     record = _validated_save_record(
@@ -344,6 +351,38 @@ def save_mic_channel_calibration(
         duration_seconds,
         calibrated_at,
     )
+    _save_mic_channel_record(record, input_device, input_channel, calibration_path)
+
+
+def save_mic_channel_factor(
+    v2pa_factor,
+    input_device,
+    input_channel,
+    calibration_path=None,
+    calibrated_at=None,
+):
+    """Atomically save a coefficient without claiming measurement metadata."""
+    if calibrated_at is None:
+        calibrated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    record = _validated_record(
+        {
+            "v2pa_factor": v2pa_factor,
+            "standard_spl_db": None,
+            "sample_rate_hz": None,
+            "duration_seconds": None,
+            "calibrated_at": calibrated_at,
+        },
+        ValueError,
+        allow_missing_measurement=True,
+    )
+    _save_mic_channel_record(record, input_device, input_channel, calibration_path)
+
+
+def _save_mic_channel_record(record, input_device, input_channel, calibration_path):
+    identity = build_mic_input_identity(input_device)
+    if identity is None:
+        raise ValueError("The input device identity is invalid.")
+    channel_index = _validated_channel_index(input_channel)
 
     path = calibration_path or MIC_INPUT_CALIBRATION_PATH
     with _mic_input_calibration_io_lock:
@@ -353,6 +392,7 @@ def save_mic_channel_calibration(
             device = {"input": identity, "channels": {}}
             registry["devices"].append(device)
         device["channels"][_channel_index_to_decimal_key(channel_index)] = record
+        registry["version"] = MIC_INPUT_CALIBRATION_VERSION
         _atomic_write_json(path, _validated_mic_input_registry(registry))
 
 
@@ -384,6 +424,7 @@ def clear_mic_channel_calibrations(
             return False
         if not device["channels"]:
             registry["devices"].remove(device)
+        registry["version"] = MIC_INPUT_CALIBRATION_VERSION
         _atomic_write_json(path, _validated_mic_input_registry(registry))
         return True
 

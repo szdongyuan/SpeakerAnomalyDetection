@@ -40,6 +40,12 @@ def save_measurement(calibrations, device, channel, **overrides):
     )
 
 
+def save_factor(calibrations, device, channel, **overrides):
+    values = {"v2pa_factor": 10.0, "calibrated_at": "2026-10-07T15:00:00+08:00"}
+    values.update(overrides)
+    return calibrations.save_factor(device, channel, **values)
+
+
 def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -47,6 +53,180 @@ def read_json(path):
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value), encoding="utf-8")
+
+
+def test_direct_factor_preserves_profile_version(tmp_path):
+    profiles, calibrations = make_stores(tmp_path)
+    device = device_info()
+    profiles.set_sample_rate(device, 51200, calibrations)
+    record = calibrations.save_factor(
+        device, 7, v2pa_factor=12.3456789012345,
+        calibrated_at="2026-10-07T15:00:00+08:00",
+    )
+    assert record["status"] == "valid"
+    assert record["standard_spl"] is None
+    assert record["calibration_sample_rate"] is None
+    assert record["calibration_duration_seconds"] is None
+    assert record["calibrated_at"] == "2026-10-07T15:00:00+08:00"
+    assert calibrations.get_factor(device, 7) == 12.3456789012345
+    assert read_json(calibrations.path)["schema_version"] == 2
+    assert read_json(profiles.path)["schema_version"] == 1
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("status", ["valid", "invalidated"])
+@pytest.mark.parametrize("null_mask", range(8))
+def test_measurement_null_group_is_versioned_and_reads_never_migrate(tmp_path, version, status, null_mask):
+    profiles, calibrations = make_stores(tmp_path)
+    payload = document("calibration")
+    payload["schema_version"] = version
+    record = payload["devices"]["test-machine-1"]["channels"]["7"]
+    record["status"] = status
+    for index, field in enumerate(("standard_spl", "calibration_sample_rate", "calibration_duration_seconds")):
+        if null_mask & (1 << index):
+            record[field] = None
+    write_json(calibrations.path, payload)
+    original = calibrations.path.read_bytes()
+    if null_mask == 0 or (version == 2 and null_mask == 7):
+        assert calibrations.get_record(device_info(), 7) == record
+        assert calibrations.get_factor(device_info(), 7) == (10.0 if status == "valid" else None)
+        assert calibrations.reset(device_info(), 0) is False
+    else:
+        for operation in operations("calibration", profiles, calibrations):
+            with pytest.raises(stores.VEStoreFormatError):
+                operation()
+    assert calibrations.path.read_bytes() == original
+
+
+def test_profile_rejects_calibration_schema_version(tmp_path):
+    profiles, calibrations = make_stores(tmp_path)
+    payload = document("profile")
+    payload["schema_version"] = 2
+    write_json(profiles.path, payload)
+    original = profiles.path.read_bytes()
+    for operation in operations("profile", profiles, calibrations):
+        with pytest.raises(stores.VEStoreFormatError, match="schema_version"):
+            operation()
+    assert profiles.path.read_bytes() == original
+    assert not calibrations.path.exists()
+
+
+def test_read_version_context_is_not_cached_between_external_replacements(tmp_path):
+    _, calibrations = make_stores(tmp_path)
+    device = device_info()
+    record = save_factor(calibrations, device, 7)
+    assert calibrations.get_record(device, 7) == record
+    payload = read_json(calibrations.path)
+    payload["schema_version"] = 1
+    write_json(calibrations.path, payload)
+    original = calibrations.path.read_bytes()
+    with pytest.raises(stores.VEStoreFormatError, match="standard_spl"):
+        calibrations.get_record(device, 7)
+    assert calibrations.path.read_bytes() == original
+
+
+@pytest.mark.parametrize("action", ["measure", "direct", "reset", "invalidate"])
+def test_first_v1_mutation_upgrades_and_preserves_other_records(tmp_path, action):
+    _, calibrations = make_stores(tmp_path)
+    device, other = device_info(), device_info(machine_id="other")
+    payload = document("calibration")
+    channels = payload["devices"][device["machine_id"]]["channels"]
+    channels["1"] = measured_record(device, 1, factor=3.5, rate=44100)
+    payload["devices"]["other"] = {"channels": {"7": measured_record(other, 7)}}
+    payload["devices"]["other"]["channels"]["7"]["status"] = "invalidated"
+    write_json(calibrations.path, payload)
+    original = calibrations.path.read_bytes()
+    assert calibrations.get_record(device, 7) == channels["7"]
+    assert not calibrations.reset(device, 0)
+    assert calibrations.path.read_bytes() == original
+    expected = deepcopy(payload)
+    expected["schema_version"] = 2
+    changed = expected["devices"][device["machine_id"]]["channels"]
+    if action == "reset":
+        assert calibrations.reset(device, 7)
+        del changed["7"]
+    elif action == "invalidate":
+        with pytest.raises(ValueError, match="unit"):
+            calibrations.observe({**device, "input_config": input_config(unit="g")})
+        for record in changed.values():
+            record["status"] = "invalidated"
+    else:
+        save = save_measurement if action == "measure" else save_factor
+        changed["7"] = save(calibrations, device, 7, v2pa_factor=2.5)
+    assert read_json(calibrations.path) == expected
+
+
+@pytest.mark.parametrize("failure", ["fsync", "replace"])
+@pytest.mark.parametrize("action", ["measure", "direct", "reset", "invalidate"])
+def test_failed_v1_migration_preserves_old_bytes(tmp_path, monkeypatch, failure, action):
+    _, calibrations = make_stores(tmp_path)
+    device = device_info()
+    write_json(calibrations.path, document("calibration"))
+    original = calibrations.path.read_bytes()
+
+    def fail(*args):
+        raise OSError("injected migration failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(stores.os, failure, fail)
+        with pytest.raises(stores.VEStoreIOError, match="migration failure"):
+            if action == "reset":
+                calibrations.reset(device, 7)
+            elif action == "invalidate":
+                calibrations.observe({**device, "input_config": input_config(unit="g")})
+            else:
+                save = save_measurement if action == "measure" else save_factor
+                save(calibrations, device, 7, v2pa_factor=2.5)
+    assert calibrations.path.read_bytes() == original
+    assert set(calibrations.path.parent.iterdir()) == {calibrations.path}
+
+
+@pytest.mark.parametrize("field,value", [
+    ("v2pa_factor", value) for value in (None, True, False, "2", 0, -1, float("nan"), float("inf"), -float("inf"), 10 ** 400)
+] + [
+    ("calibrated_at", value) for value in (None, True, "", "yesterday", "2026-10-07", "2026-10-07T15:00:00")
+])
+def test_direct_factor_rejects_invalid_values_without_writes(tmp_path, field, value):
+    _, calibrations = make_stores(tmp_path)
+    device = device_info()
+    held = save_measurement(calibrations, device, 7)
+    original = calibrations.path.read_bytes()
+    with pytest.raises(ValueError, match=field):
+        save_factor(calibrations, device, 7, **{field: value})
+    assert calibrations.path.read_bytes() == original
+    assert calibrations.get_record(device, 7) == held
+
+
+def test_measured_save_rejects_all_null_after_direct_save_and_then_restores_measurement(tmp_path):
+    _, calibrations = make_stores(tmp_path)
+    device = device_info()
+    direct = save_factor(calibrations, device, 7, v2pa_factor=1e-300)
+    assert direct["v2pa_factor"] == 1e-300
+    original = calibrations.path.read_bytes()
+    with pytest.raises(ValueError, match="standard_spl"):
+        save_measurement(
+            calibrations, device, 7, standard_spl=None,
+            calibration_sample_rate=None, calibration_duration_seconds=None,
+        )
+    assert calibrations.path.read_bytes() == original
+    result = save_measurement(calibrations, device, 7, v2pa_factor=2.5)
+    assert result == measured_record(device, 7, factor=2.5)
+    assert calibrations.get_record(device, 7) == result
+
+
+@pytest.mark.parametrize("change", [{"unit": "g"}, {"input_mode": "VOLTAGE"}])
+def test_direct_factor_conditions_invalidate_and_direct_replacement_recovers(tmp_path, change):
+    _, calibrations = make_stores(tmp_path)
+    device = device_info()
+    held = save_factor(calibrations, device, 7)
+    save_factor(calibrations, device, 1)
+    with pytest.raises(ValueError, match="unit|input_mode"):
+        calibrations.observe({**device, "input_config": input_config(**change)})
+    assert calibrations.get_record(device, 7) == {**held, "status": "invalidated"}
+    save_factor(calibrations, device, 7, v2pa_factor=2.5)
+    _, reopened = make_stores(tmp_path)
+    assert reopened.get_factor(device, 7) == 2.5
+    assert reopened.get_factor(device, 1) is None
 
 
 @pytest.mark.parametrize("initial_rate", [44100, 48000, 51200])
@@ -103,11 +283,12 @@ def test_rate_change_does_not_write_or_mutate_calibration(
 
 
 @pytest.mark.parametrize("initial_limit", VE_RANGE_LIMITS)
-def test_all_legal_ranges_and_rates_retain_calibration_without_writes(tmp_path, monkeypatch, initial_limit):
+@pytest.mark.parametrize("save", [save_measurement, save_factor])
+def test_all_legal_ranges_and_rates_retain_calibration_without_writes(tmp_path, monkeypatch, initial_limit, save):
     profiles, calibrations = make_stores(tmp_path)
     device = device_info(input_config=input_config(range_min=-initial_limit, range_max=initial_limit))
-    original = save_measurement(calibrations, device, 7)
-    save_measurement(calibrations, device, 1)
+    original = save(calibrations, device, 7)
+    save(calibrations, device, 1)
     saved = read_json(calibrations.path)
     saved["devices"][device["machine_id"]]["channels"]["1"]["status"] = "invalidated"
     write_json(calibrations.path, saved)
@@ -259,13 +440,14 @@ def operations(kind, profiles, calibrations):
         lambda: calibrations.get_factor(device, 7),
         lambda: save_measurement(calibrations, device, 7),
         lambda: calibrations.reset(device, 7),
+        lambda: save_factor(calibrations, device, 7),
     )
 
 
 @pytest.mark.parametrize("kind", ["profile", "calibration"])
 @pytest.mark.parametrize("bad_root", [
     None, [], {}, {"devices": {}}, {"schema_version": 1},
-    {"schema_version": 2, "devices": {}},
+    {"schema_version": 3, "devices": {}},
     {"schema_version": True, "devices": {}},
     {"schema_version": 1.0, "devices": {}},
     {"schema_version": "1", "devices": {}},
@@ -333,9 +515,11 @@ def test_strict_device_and_profile_shapes_are_not_repaired(tmp_path, kind, mutat
 
 @pytest.mark.parametrize("level", ["record", "fingerprint"])
 @pytest.mark.parametrize("mutation", ["unknown", "sensitivity", "sample_rate", "missing", "not-object"])
-def test_record_and_fingerprint_are_closed_schemas(tmp_path, level, mutation):
+@pytest.mark.parametrize("version", [1, 2])
+def test_record_and_fingerprint_are_closed_schemas(tmp_path, level, mutation, version):
     profiles, calibrations = make_stores(tmp_path)
     payload = document("calibration")
+    payload["schema_version"] = version
     channels = payload["devices"]["test-machine-1"]["channels"]
     record = channels["7"]
     target = record if level == "record" else record["fingerprint"]
@@ -370,7 +554,8 @@ def test_record_and_fingerprint_are_closed_schemas(tmp_path, level, mutation):
         None, 123, "", "yesterday", "2026-08-28", "2026-08-28T10:00:00", "2026-02-30T10:00:00Z",
     )
 ])
-def test_provenance_is_strict_on_load_and_failed_recalibration_preserves_valid_record(tmp_path, field, bad_value):
+@pytest.mark.parametrize("version", [1, 2])
+def test_provenance_is_strict_on_load_and_failed_recalibration_preserves_valid_record(tmp_path, field, bad_value, version):
     profiles, calibrations = make_stores(tmp_path)
     device = device_info()
     original_record = save_measurement(calibrations, device, 7)
@@ -383,6 +568,7 @@ def test_provenance_is_strict_on_load_and_failed_recalibration_preserves_valid_r
     # Invalidated records must retain *valid provenance*, not bypass validation.
     for status in ("valid", "invalidated"):
         payload = document("calibration")
+        payload["schema_version"] = version
         record = payload["devices"]["test-machine-1"]["channels"]["7"]
         record.update({field: bad_value, "status": status})
         write_json(calibrations.path, payload)
@@ -475,7 +661,7 @@ def test_atomic_write_flushes_fsyncs_and_closes_owned_same_directory_temp_before
     def track_fsync(descriptor):
         assert events == ["flush"]
         assert descriptor == opened[-1]["descriptor"]
-        assert read_json(opened[-1]["name"])["schema_version"] == 1
+        assert read_json(opened[-1]["name"])["schema_version"] == (1 if kind == "profile" else 2)
         events.append("fsync")
         return fsync(descriptor)
 
@@ -640,7 +826,7 @@ def test_failed_invalidation_stays_fail_closed_when_external_profile_is_restored
     assert calibrations.get_record(device, 7) == {**held, "status": "invalidated"}
 
 
-@pytest.mark.parametrize("action", ["reset", "recalibrate"])
+@pytest.mark.parametrize("action", ["reset", "recalibrate", "direct"])
 @pytest.mark.parametrize("observed_machine_ids", [
     ("test-machine-1",), ("other",), ("test-machine-1", "other"), (),
 ])
@@ -672,6 +858,10 @@ def test_successful_channel_recovery_persists_pending_invalidations_before_resta
     if action == "reset":
         assert calibrations.reset(device, 7) is True
         expected["devices"][device["machine_id"]]["channels"].pop("7")
+    elif action == "direct":
+        expected["devices"][device["machine_id"]]["channels"]["7"] = save_factor(
+            calibrations, device, 7, v2pa_factor=2.5,
+        )
     else:
         replacement = save_measurement(
             calibrations, device, 7, v2pa_factor=2.5, standard_spl=114.0,
@@ -691,7 +881,7 @@ def test_successful_channel_recovery_persists_pending_invalidations_before_resta
     assert read_json(calibrations.path) == expected
 
 
-@pytest.mark.parametrize("action", ["reset", "recalibrate"])
+@pytest.mark.parametrize("action", ["reset", "recalibrate", "direct"])
 @pytest.mark.parametrize("failure", ["fsync", "replace"])
 def test_failed_channel_recovery_retains_pending_invalidations_for_retry(
     tmp_path, monkeypatch, action, failure,
@@ -716,6 +906,8 @@ def test_failed_channel_recovery_retains_pending_invalidations_for_retry(
         with pytest.raises(stores.VEStoreIOError):
             if action == "reset":
                 calibrations.reset(device, 7)
+            elif action == "direct":
+                save_factor(calibrations, device, 7, v2pa_factor=2.5)
             else:
                 save_measurement(calibrations, device, 7, v2pa_factor=2.5)
         assert calibrations.path.read_bytes() == original_bytes
@@ -795,7 +987,7 @@ def test_default_paths_are_separate_and_old_soundcard_registry_is_untouched(tmp_
     assert read_json(profiles.path) == {
         "schema_version": 1, "devices": {"test-machine-1": input_config(44100)},
     }
-    assert read_json(calibrations.path) == {"schema_version": 1, "devices": {}}
+    assert read_json(calibrations.path) == {"schema_version": 2, "devices": {}}
     assert legacy_path.read_bytes() == old_bytes
     assert soundcard.load_mic_input_calibration() == {"version": 2, "devices": []}
 
@@ -977,6 +1169,6 @@ def test_no_calibration_file_is_created_for_rate_changes_and_recalibration_never
         result = save_measurement(calibrations, device, 7, calibration_sample_rate=rate, v2pa_factor=factor)
         assert result == measured_record(device, 7, factor=factor, rate=rate)
         assert read_json(calibrations.path) == {
-            "schema_version": 1, "devices": {"test-machine-1": {"channels": {"7": result}}},
+            "schema_version": 2, "devices": {"test-machine-1": {"channels": {"7": result}}},
         }
         assert profiles.path.read_bytes() == original_profile

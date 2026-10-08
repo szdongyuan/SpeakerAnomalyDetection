@@ -9,7 +9,7 @@ from base.soundcard_calibration_manager import (
 )
 from base.recording_process_protocol import FrozenConfig
 from base.ve3668n_stores import VECalibrationStore, VEStoreIOError
-from unit_test.base.ve3668n_fakes import device_info, input_config, wav_metadata
+from unit_test.base.ve3668n_fakes import device_info, input_config, wav_metadata_v2
 
 
 DEVICE = {
@@ -143,6 +143,76 @@ def _ve_store(tmp_path):
     return device, store
 
 
+@pytest.mark.parametrize("backend", ["soundcard", "ve"])
+def test_direct_factor_snapshot_wav_and_resolver_remain_frozen_after_update(tmp_path, monkeypatch, backend):
+    import numpy as np
+    from scipy.io import wavfile
+    from base import soundcard_calibration_manager as manager
+    from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
+    from base.wav_calibration_metadata import (
+        append_wav_calibration_metadata, inspect_wav_calibration_metadata,
+        resolve_wav_channel_v2pa_factor,
+    )
+
+    factor = 0.12345678901234567
+    timestamp = "2026-10-07T15:00:00+08:00"
+    if backend == "ve":
+        device = device_info()
+        store = VECalibrationStore(tmp_path / "ve.json")
+
+        def save(value):
+            store.save_factor(device, 7, v2pa_factor=value, calibrated_at=timestamp)
+
+        def snapshot():
+            return build_recording_wav_calibration_metadata(
+                (7, 1), device, ve_calibration_store=store,
+            )
+    else:
+        monkeypatch.setattr(manager.SoundDeviceManager, "get_api_info",
+                            lambda index: {"name": "Test API"})
+        path = tmp_path / "mic.json"
+
+        def save(value):
+            manager.save_mic_channel_factor(
+                value, DEVICE, 2, calibration_path=str(path), calibrated_at=timestamp,
+            )
+
+        def snapshot():
+            return build_recording_wav_calibration_metadata((2, 0), DEVICE, str(path))
+
+    save(factor)
+    frozen = FrozenConfig.snapshot(snapshot())
+    expected = frozen.to_dict()
+    channel = expected["recorded_channels"][0]
+    assert channel["calibrated"] is True
+    assert channel["v2pa_factor"] == factor
+    if backend == "ve":
+        assert expected["schema_version"] == 2
+        assert channel["factor_source"] == "calibrated"
+        assert channel["calibration"]["standard_spl"] is None
+        sample_rate = expected["acquisition"]["sample_rate"]
+    else:
+        assert channel["standard_spl"] is None
+        sample_rate = 48000
+    wav_path = tmp_path / "recording.wav"
+    audio = np.array([[0.25, -0.5], [-0.75, 1.0]], dtype=np.float32)
+    wavfile.write(wav_path, sample_rate, audio)
+    original_audio = wav_path.read_bytes()
+    assert append_wav_calibration_metadata(wav_path, frozen.to_dict())
+    written = wav_path.read_bytes()
+    save(99.0)
+    assert snapshot()["recorded_channels"][0]["v2pa_factor"] == 99.0
+    assert frozen.to_dict() == expected
+    result = inspect_wav_calibration_metadata(wav_path)
+    assert result.metadata == expected
+    resolution = resolve_wav_channel_v2pa_factor(result.metadata, 0)
+    assert resolution.factor == factor
+    assert resolution.has_valid_metadata and resolution.used_file_metadata
+    assert wav_path.read_bytes() == written
+    assert written[8:len(original_audio)] == original_audio[8:]
+    np.testing.assert_array_equal(wavfile.read(wav_path)[1], audio)
+
+
 @pytest.mark.parametrize("limit", [10.0, 5.0, 2.5, 1.0, 0.5, 0.1, 0.02])
 def test_ve_route_uses_explicit_store_and_current_profile_without_legacy_lookup(tmp_path, limit):
     from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
@@ -155,7 +225,7 @@ def test_ve_route_uses_explicit_store_and_current_profile_without_legacy_lookup(
             (7, 1), FrozenConfig.snapshot(device), ve_calibration_store=store,
         )
     legacy.assert_not_called()
-    expected = wav_metadata()
+    expected = wav_metadata_v2()
     expected['acquisition'].update(range_min=-limit, range_max=limit)
     assert actual == expected
     assert store.path.read_bytes() == original
@@ -189,7 +259,7 @@ def test_ve_builder_uses_one_observation_and_freezes_original_provenance(tmp_pat
     actual = ve3668n_wav_metadata.build_ve_recording_metadata(
         FrozenConfig.snapshot(device), (7, 1), FrozenConfig.snapshot(profile), observed,
     )
-    assert actual == wav_metadata()
+    assert actual == wav_metadata_v2()
     assert len(observed.calls) == 1
     assert observed.calls[0]['input_config']['sample_rate'] == 44100
     frozen = FrozenConfig.snapshot(actual)
@@ -198,8 +268,8 @@ def test_ve_builder_uses_one_observation_and_freezes_original_provenance(tmp_pat
     profile['sample_rate'] = 51200
     device['machine_id'] = 'other-device'
     store.reset(observed.calls[0], 7)
-    assert actual == wav_metadata()
-    assert frozen.to_dict() == wav_metadata()
+    assert actual == wav_metadata_v2()
+    assert frozen.to_dict() == wav_metadata_v2()
 
 
 def test_invalidated_record_becomes_none_snapshot_and_is_not_revived_by_rate(tmp_path):
@@ -212,7 +282,7 @@ def test_invalidated_record_becomes_none_snapshot_and_is_not_revived_by_rate(tmp
     actual = ve3668n_wav_metadata.build_ve_recording_metadata(
         device, (7, 1), input_config(44100), store,
     )
-    assert actual == wav_metadata(('none', 'none'))
+    assert actual == wav_metadata_v2(('none', 'none'))
     assert store.get_record(device, 7)['status'] == 'invalidated'
     assert store.get_factor(device, 7) is None
 

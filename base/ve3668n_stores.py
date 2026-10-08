@@ -1,6 +1,7 @@
-"""Independent, versioned VE profiles and measured channel calibrations.
+"""Independent, versioned VE profiles and channel calibrations.
 
-Both documents have ``schema_version=1`` and ``devices`` keyed by MachineId.
+Profiles use schema v1; calibrations read v1/v2 and write v2.
+Both documents have ``devices`` keyed by MachineId.
 Profile entries are closed input_config objects; calibration entries contain
 ``channels`` keyed by decimal physical indices, never by sampling rate.
 
@@ -44,7 +45,9 @@ from base.ve3668n_input import (
     validate_sample_rate,
 )
 from consts import model_consts
-from consts.ve3668n_consts import VE_BACKEND, VE_INPUT_SCHEMA_VERSION, VE_RANGE_LIMITS
+from consts.ve3668n_consts import (
+    VE_BACKEND, VE_CALIBRATION_SCHEMA_VERSION, VE_INPUT_SCHEMA_VERSION, VE_RANGE_LIMITS,
+)
 
 
 class VEStoreFormatError(ValueError):
@@ -91,7 +94,7 @@ def _finite_number(value, field, *, positive=False):
     return number
 
 
-def _validated_record(record, machine_id, physical_channel):
+def _validated_record(record, machine_id, physical_channel, schema_version):
     _fields(record, (
         "status", "fingerprint", "v2pa_factor", "standard_spl",
         "calibration_sample_rate", "calibration_duration_seconds", "calibrated_at",
@@ -115,16 +118,23 @@ def _validated_record(record, machine_id, physical_channel):
         **{key: fingerprint[key] for key in ("input_mode", "unit", "range_min", "range_max")},
     })
     factor = _finite_number(record["v2pa_factor"], "v2pa_factor", positive=True)
-    standard_spl = _finite_number(record["standard_spl"], "standard_spl")
-    if standard_spl not in (94.0, 114.0):
-        raise ValueError("standard_spl must be exactly 94 or 114")
-    try:
-        sample_rate = validate_sample_rate(record["calibration_sample_rate"])
-    except ValueError as exc:
-        raise ValueError(f"calibration_sample_rate: {exc}") from exc
-    duration = _finite_number(
-        record["calibration_duration_seconds"], "calibration_duration_seconds", positive=True,
-    )
+    if schema_version == VE_CALIBRATION_SCHEMA_VERSION and all(
+        record[field] is None for field in (
+            "standard_spl", "calibration_sample_rate", "calibration_duration_seconds",
+        )
+    ):
+        standard_spl = sample_rate = duration = None
+    else:
+        standard_spl = _finite_number(record["standard_spl"], "standard_spl")
+        if standard_spl not in (94.0, 114.0):
+            raise ValueError("standard_spl must be exactly 94 or 114")
+        try:
+            sample_rate = validate_sample_rate(record["calibration_sample_rate"])
+        except ValueError as exc:
+            raise ValueError(f"calibration_sample_rate: {exc}") from exc
+        duration = _finite_number(
+            record["calibration_duration_seconds"], "calibration_duration_seconds", positive=True,
+        )
     timestamp = record["calibrated_at"]
     if not isinstance(timestamp, str) or not timestamp.strip():
         raise ValueError("calibrated_at must be an ISO-8601 timestamp with a UTC offset")
@@ -189,6 +199,9 @@ def _atomic_write_json(path, payload):
 class _JsonStore:
     """Shared file boundary; callers hold their instance lock across mutations."""
 
+    schema_version = VE_INPUT_SCHEMA_VERSION
+    supported_versions = (VE_INPUT_SCHEMA_VERSION,)
+
     def __init__(self, path):
         self.path = Path(path)
         self._lock = RLock()
@@ -197,7 +210,7 @@ class _JsonStore:
         try:
             stream = self.path.open(encoding="utf-8")
         except FileNotFoundError:
-            return {"schema_version": VE_INPUT_SCHEMA_VERSION, "devices": {}}
+            return {"schema_version": self.schema_version, "devices": {}}
         except OSError as exc:
             raise VEStoreIOError(f"Could not read VE store {self.path}: {exc}") from exc
         try:
@@ -208,7 +221,7 @@ class _JsonStore:
                 )
             _fields(payload, ("schema_version", "devices"), "root")
             version = payload["schema_version"]
-            if type(version) is not int or version != VE_INPUT_SCHEMA_VERSION:
+            if type(version) is not int or version not in self.supported_versions:
                 raise ValueError(f"unsupported schema_version: {version!r}")
             if not isinstance(payload["devices"], Mapping):
                 raise ValueError("devices must be an object keyed by machine_id")
@@ -217,8 +230,8 @@ class _JsonStore:
                 machine_id = normalize_machine_id(key)
                 if machine_id in devices:
                     raise ValueError(f"duplicate machine_id: {machine_id!r}")
-                devices[machine_id] = self._validate_entry(machine_id, entry)
-            return {"schema_version": VE_INPUT_SCHEMA_VERSION, "devices": devices}
+                devices[machine_id] = self._validate_entry(machine_id, entry, version)
+            return {"schema_version": version, "devices": devices}
         except (ValueError, RecursionError) as exc:
             raise VEStoreFormatError(f"Invalid VE store {self.path}: {exc}") from exc
         except OSError as exc:
@@ -233,7 +246,7 @@ class VEInputProfileStore(_JsonStore):
             path = (Path(model_consts.DEFAULT_DIR) / "configs/ve3668n_input_profiles.json").resolve()
         super().__init__(path)
 
-    def _validate_entry(self, machine_id, entry):
+    def _validate_entry(self, machine_id, entry, schema_version):
         # A structurally valid saved rate may be wrong and need user repair;
         # future conditions must be observable before acquisition validation.
         validate_calibration_conditions(entry)
@@ -273,7 +286,10 @@ class VEInputProfileStore(_JsonStore):
 
 
 class VECalibrationStore(_JsonStore):
-    """One current measured record per MachineId and physical channel."""
+    """One current calibration record per MachineId and physical channel."""
+
+    schema_version = VE_CALIBRATION_SCHEMA_VERSION
+    supported_versions = (1, VE_CALIBRATION_SCHEMA_VERSION)
 
     def __init__(self, path=None):
         if path is None:
@@ -283,7 +299,7 @@ class VECalibrationStore(_JsonStore):
         # owner. This is a retry latch, not a published calibration-status cache.
         self._pending_invalidations = set()
 
-    def _validate_entry(self, machine_id, entry):
+    def _validate_entry(self, machine_id, entry, schema_version):
         _fields(entry, ("channels",), "device calibration")
         if not isinstance(entry["channels"], Mapping):
             raise ValueError("channels must be an object")
@@ -291,13 +307,13 @@ class VECalibrationStore(_JsonStore):
         for key, record in entry["channels"].items():
             if not isinstance(key, str) or len(key) != 1 or key not in "01234567":
                 raise ValueError("channel keys must be canonical physical indices 0 through 7")
-            channels[key] = _validated_record(record, machine_id, int(key))
+            channels[key] = _validated_record(record, machine_id, int(key), schema_version)
         return {"channels": channels}
 
     def _write(self, registry, *, recalibrated_channel=None):
         """Commit all observed invalidations with this registry mutation.
 
-        Only a new measurement can supersede its channel's pending mismatch.
+        Only a newly saved coefficient can supersede its channel's pending mismatch.
         Failed writes leave the retry latch intact and publish no new state.
         """
         for machine_id, channel in self._pending_invalidations:
@@ -307,7 +323,7 @@ class VECalibrationStore(_JsonStore):
             record = channels.get(str(channel))
             if record is not None:
                 record["status"] = "invalidated"
-        _atomic_write_json(self.path, registry)
+        _atomic_write_json(self.path, {**registry, "schema_version": self.schema_version})
         self._pending_invalidations.clear()
 
     def observe(self, device):
@@ -354,7 +370,7 @@ class VECalibrationStore(_JsonStore):
         return self.observe(device).get(channel)
 
     def get_factor(self, device, physical_channel):
-        """Observe first; return only a valid measured Pa/V factor, else None."""
+        """Observe first; return only a valid Pa/V factor, else None."""
         record = self.get_record(device, physical_channel)
         if record is None or record["status"] != "valid":
             return None
@@ -369,15 +385,29 @@ class VECalibrationStore(_JsonStore):
         Measurement rate/duration/timestamp are required provenance. The rate
         need not equal the current device rate and is never part of identity.
         """
+        return self._save_record(
+            device, physical_channel, schema_version=1,
+            v2pa_factor=v2pa_factor, standard_spl=standard_spl,
+            calibration_sample_rate=calibration_sample_rate,
+            calibration_duration_seconds=calibration_duration_seconds,
+            calibrated_at=calibrated_at,
+        )
+
+    def save_factor(self, device, physical_channel, *, v2pa_factor, calibrated_at):
+        """Atomically replace one channel's coefficient without measurement data."""
+        return self._save_record(
+            device, physical_channel, schema_version=VE_CALIBRATION_SCHEMA_VERSION,
+            v2pa_factor=v2pa_factor, standard_spl=None,
+            calibration_sample_rate=None, calibration_duration_seconds=None,
+            calibrated_at=calibrated_at,
+        )
+
+    def _save_record(self, device, physical_channel, *, schema_version, **values):
         fingerprint = _device_fingerprint(device, physical_channel)
         validate_input_config(device["input_config"])
         record = _validated_record({
-            "status": "valid", "fingerprint": fingerprint,
-            "v2pa_factor": v2pa_factor, "standard_spl": standard_spl,
-            "calibration_sample_rate": calibration_sample_rate,
-            "calibration_duration_seconds": calibration_duration_seconds,
-            "calibrated_at": calibrated_at,
-        }, fingerprint["machine_id"], physical_channel)
+            "status": "valid", "fingerprint": fingerprint, **values,
+        }, fingerprint["machine_id"], physical_channel, schema_version)
         with self._lock:
             registry = self._read()
             channels = registry["devices"].setdefault(fingerprint["machine_id"], {"channels": {}})["channels"]

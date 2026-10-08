@@ -66,6 +66,19 @@ def wav_metadata(sources=("measured", "none"), sample_rate=44100,
     }
 
 
+def wav_metadata_v2(sources=("calibrated", "none"), sample_rate=44100,
+                    physical_channels=None):
+    """Explicit current-version fixture; historical wav_metadata stays v1."""
+    payload = wav_metadata(
+        tuple("measured" if source == "calibrated" else source for source in sources),
+        sample_rate, physical_channels,
+    )
+    payload["schema_version"] = 2
+    for channel, source in zip(payload["recorded_channels"], sources):
+        channel["factor_source"] = source
+    return payload
+
+
 def capture_request(path, **overrides):
     """Frozen request with file-local provenance; never accesses real stores."""
     from base.recording_process_protocol import RecordingRequest

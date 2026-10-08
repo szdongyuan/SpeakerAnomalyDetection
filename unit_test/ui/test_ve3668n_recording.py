@@ -242,6 +242,37 @@ def save_calibration(host, physical=7, factor=10):
         calibrated_at="2026-08-28T10:00:00+08:00")
 
 
+def test_direct_factor_recording_keeps_voltage_and_frozen_calibrated_tooltip(host_factory):
+    from pathlib import Path
+    from base.wav_calibration_metadata import resolve_wav_channel_v2pa_factor
+
+    host = host_factory(live=True)
+    host.ve_calibration_store.save_factor(
+        host.mic, 7, v2pa_factor=0.12345678901234567,
+        calibrated_at="2026-10-07T15:00:00+08:00",
+    )
+    session, capture, audio = started_audio(host)
+    path = session.request.path
+    original = Path(path).read_bytes()
+    host.ve_calibration_store.save_factor(
+        host.mic, 7, v2pa_factor=99.0, calibrated_at="2026-10-07T16:00:00+08:00",
+    )
+    preview = capture.snapshot(generation=session.generation, sequence=1)
+    host._on_process_recording_preview(session, preview)
+    windows = host.channel_workspace.all_subwindows()
+    assert windows[0].toolTip() == "校准有效；原始电压 V"
+    assert windows[1].toolTip() == "未校准，仅电压数据"
+    result = inspect_wav_calibration_metadata(path)
+    assert result.metadata["schema_version"] == 2
+    assert result.metadata["recorded_channels"][0]["calibration"]["standard_spl"] is None
+    resolution = resolve_wav_channel_v2pa_factor(result, 0)
+    assert resolution.factor == 0.12345678901234567
+    assert resolution.used_file_metadata
+    assert Path(path).read_bytes() == original
+    np.testing.assert_array_equal(sf.read(path, dtype="float32")[0], audio.multi)
+    np.testing.assert_array_equal(windows[0].plot_item.getData()[1], preview.waveforms[0].amplitude)
+
+
 @pytest.mark.parametrize("measured", [False, True])
 def test_request_freezes_shared_store_profile_and_calibration(host_factory, monkeypatch, measured):
     host = host_factory()
@@ -256,7 +287,7 @@ def test_request_freezes_shared_store_profile_and_calibration(host_factory, monk
     request = host._recording_process_session.request
     original = request.calibration_metadata.to_dict()
     assert request.sample_rate == original["acquisition"]["sample_rate"] == 44100
-    assert original["recorded_channels"][0]["factor_source"] == ("measured" if measured else "none")
+    assert original["recorded_channels"][0]["factor_source"] == ("calibrated" if measured else "none")
     assert original["recorded_channels"][0]["v2pa_factor"] == (10 if measured else None)
     assert original["recorded_channels"][1]["factor_source"] == "none"
     if measured:
@@ -482,7 +513,7 @@ def test_completed_vk_capture_reaches_analysis_entry_with_file_local_factors(
     assert by_channel[7].calibration_available is measured
     assert (by_channel[1].source_wav_column, by_channel[1].v2pa_factor) == (1, 1.0)
     assert not by_channel[1].calibration_available
-    assert metadata["recorded_channels"][0]["factor_source"] == ("measured" if measured else "none")
+    assert metadata["recorded_channels"][0]["factor_source"] == ("calibrated" if measured else "none")
     assert metadata["recorded_channels"][1]["v2pa_factor"] is None
     warning.assert_called_once()
     assert "结果仅供参考" in warning.call_args.args[-1]
@@ -735,7 +766,7 @@ def test_preview_is_raw_voltage_and_uses_frozen_calibration_hint(host_factory, m
         assert x[-1] == 0.0
         assert window.is_live_preview is True
         assert "Amplitude(V)" in window.plot_widget.getAxis("left").labelText
-        assert ("实测校准有效" if measured and column == 0 else "未校准，仅电压数据") in window.toolTip()
+        assert ("校准有效；原始电压 V" if measured and column == 0 else "未校准，仅电压数据") in window.toolTip()
 
 
 @pytest.mark.parametrize("measured", [False, True])
@@ -759,7 +790,7 @@ def test_legacy_waveform_replacement_resets_only_ve_owned_tooltip(
     for sequence in (1, 2):
         host._on_process_recording_preview(session, capture.snapshot(generation=1, sequence=sequence))
     finish_ve_capture(host, session, audio)
-    assert ("实测校准有效" if measured else "未校准，仅电压数据") in window.toolTip()
+    assert ("校准有效；原始电压 V" if measured else "未校准，仅电压数据") in window.toolTip()
     if other_hint == "changed":
         expected_hint = "updated channel note"
         window.setToolTip(expected_hint)
