@@ -101,7 +101,6 @@ class MainWindow(QMainWindow):
 
         # set the menubar action
         self.function_action_product_test_program = QAction("产品测试程序配置", self)
-        self.function_action_test_sequence = QAction("测试队列", self)
         self.function_audio_manager = QAction("音频数据管理", self)
         self.function_action_report_export = QAction("报告导出", self)
         self.function_action_exit = QAction("退出", self)
@@ -118,7 +117,6 @@ class MainWindow(QMainWindow):
         ]
         self.widget_list_engineer = self.widget_list_operator + [
             self.function_action_product_test_program,
-            self.function_action_test_sequence,
             self.hardware_action_selection,
             self.hardware_action_calibration,
         ]
@@ -598,9 +596,6 @@ class MainWindow(QMainWindow):
         self.function_action_product_test_program.triggered.connect(
             self.on_product_test_program_config
         )
-        function_menu.addAction(self.function_action_test_sequence)
-        self.function_action_test_sequence.triggered.disconnect()
-        self.function_action_test_sequence.triggered.connect(self.analysis_model_select)
         function_menu.addSeparator()
         function_menu.addAction(self.function_audio_manager)
         self.function_audio_manager.triggered.disconnect()
