@@ -1974,7 +1974,7 @@ class SequenceWidgetStreamingOpsMixin:
             owned = getattr(window, "_recording_voltage_tooltip", None)
             if owned is not None and previous_hint == owned[1]:
                 previous_hint = owned[0]
-            hint = ("实测校准有效；原始电压 V" if channel["factor_source"] == "measured"
+            hint = ("校准有效；原始电压 V" if channel["calibrated"]
                     else "未校准，仅电压数据")
             window.setToolTip(hint)
             window._recording_voltage_tooltip = (previous_hint, hint)

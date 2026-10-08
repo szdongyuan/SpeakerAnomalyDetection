@@ -13,10 +13,92 @@ from scipy.io import wavfile
 from base import wav_calibration_metadata as wav_metadata_io
 from base.recording_process_protocol import FrozenConfig
 from consts.ve3668n_consts import VE_RANGE_LIMITS
-from unit_test.base.ve3668n_fakes import wav_metadata
+from unit_test.base.ve3668n_fakes import wav_metadata, wav_metadata_v2
 from unit_test.base.test_wav_calibration_metadata import (
     _append_raw_chunk, _chunk, _install_bounded_open, _metadata_list_chunk,
 )
+
+
+def test_v2_nullable_calibration_round_trip_and_resolution(tmp_path):
+    payload = wav_metadata()
+    payload["schema_version"] = 2
+    channel = payload["recorded_channels"][0]
+    channel["factor_source"] = "calibrated"
+    channel["calibration"].update(
+        standard_spl=None, sample_rate=None, duration_seconds=None,
+    )
+    path = tmp_path / "nullable.wav"
+    audio = np.array([[2.5, -7.0], [-4.0, 1.5]], dtype=np.float32)
+    wavfile.write(path, 44100, audio)
+    original = path.read_bytes()
+
+    assert wav_metadata_io.append_wav_calibration_metadata(path, payload)
+    written = path.read_bytes()
+    result = wav_metadata_io.inspect_wav_calibration_metadata(path)
+    assert result.metadata == payload
+    resolution = wav_metadata_io.resolve_wav_channel_v2pa_factor(result, 0)
+    assert resolution.factor == 10.0
+    assert resolution.has_valid_metadata
+    assert resolution.used_file_metadata
+    assert path.read_bytes() == written
+    assert written[8:len(original)] == original[8:]
+    rate, actual = wavfile.read(path)
+    assert rate == 44100
+    np.testing.assert_array_equal(actual, audio)
+    assert wav_metadata()["schema_version"] == 1
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+@pytest.mark.parametrize("null_fields", [
+    ("standard_spl",), ("sample_rate",), ("duration_seconds",),
+    ("standard_spl", "sample_rate"), ("standard_spl", "duration_seconds"),
+    ("sample_rate", "duration_seconds"),
+])
+def test_partial_null_measurements_are_invalid(schema_version, null_fields):
+    payload = wav_metadata() if schema_version == 1 else wav_metadata_v2()
+    payload["recorded_channels"][0]["calibration"].update(dict.fromkeys(null_fields))
+    assert wav_metadata_io.normalize_wav_calibration_metadata(payload) is None
+
+
+def test_v1_rejects_all_null_measurements():
+    payload = wav_metadata()
+    payload["recorded_channels"][0]["calibration"].update(
+        standard_spl=None, sample_rate=None, duration_seconds=None,
+    )
+    assert wav_metadata_io.normalize_wav_calibration_metadata(payload) is None
+
+
+@pytest.mark.parametrize("schema_version,source", [(1, "calibrated"), (2, "measured")])
+def test_version_and_calibrated_source_cannot_be_mixed(schema_version, source):
+    payload = wav_metadata()
+    payload["schema_version"] = schema_version
+    payload["recorded_channels"][0]["factor_source"] = source
+    assert wav_metadata_io.normalize_wav_calibration_metadata(payload) is None
+
+
+def test_v2_mixed_measurement_null_and_none_channels_resolve_without_rewriting(tmp_path):
+    from base.ve3668n_wav_metadata import resolve_ve_wav_channel_v2pa_factor
+
+    payload = wav_metadata_v2(("calibrated", "calibrated", "none"),
+                              physical_channels=(7, 1, 3))
+    payload["recorded_channels"][1]["calibration"].update(
+        standard_spl=None, sample_rate=None, duration_seconds=None,
+    )
+    path = tmp_path / "mixed.wav"
+    audio = np.array([[2.5, -4.0, 1.5]], dtype=np.float32)
+    wavfile.write(path, 44100, audio)
+    assert wav_metadata_io.append_wav_calibration_metadata(path, payload)
+    original = path.read_bytes()
+    result = wav_metadata_io.inspect_wav_calibration_metadata(path)
+    for index in (0, 1, 2):
+        resolution = wav_metadata_io.resolve_wav_channel_v2pa_factor(result, index)
+        assert resolution.factor == (10.0 if index < 2 else 1.0)
+        assert resolution.used_file_metadata is (index < 2)
+        assert resolve_ve_wav_channel_v2pa_factor(result.metadata, index).state == (
+            "calibrated" if index < 2 else "none"
+        )
+    assert path.read_bytes() == original
+    np.testing.assert_array_equal(wavfile.read(path)[1], audio)
 
 
 @pytest.mark.parametrize("sources", [("none", "none"), ("measured", "measured"),
@@ -32,7 +114,9 @@ def test_none_measured_mixed_round_trip_preserves_voltage_and_original_rate(tmp_
 
     assert wav_metadata_io.normalize_wav_calibration_metadata(payload) == payload
     assert wav_metadata_io.append_wav_calibration_metadata(path, payload)
+    written = path.read_bytes()
     assert wav_metadata_io.read_wav_calibration_metadata(path) == payload
+    assert path.read_bytes() == written
     assert path.read_bytes()[8:len(original)] == original[8:]
     rate, actual = wavfile.read(path)
     assert rate == 44100
@@ -54,8 +138,9 @@ def _section(payload, section):
 
 @pytest.mark.parametrize("section", ["root", "acquisition", "channel", "calibration"])
 @pytest.mark.parametrize("field", ["unknown", "sensitivity", "nominal_factor"])
-def test_schema_rejects_unknown_fields_at_every_level(section, field):
-    payload = wav_metadata()
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_schema_rejects_unknown_fields_at_every_level(section, field, schema_version):
+    payload = wav_metadata() if schema_version == 1 else wav_metadata_v2()
     _section(payload, section)[field] = 1000.0
     assert wav_metadata_io.normalize_wav_calibration_metadata(payload) is None
 
@@ -66,14 +151,15 @@ def test_schema_rejects_unknown_fields_at_every_level(section, field):
     for field in _section(wav_metadata(), section)
     if field != "backend"  # A missing marker intentionally retains legacy semantics.
 ])
-def test_schema_requires_every_declared_field(section, field):
-    payload = wav_metadata()
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_schema_requires_every_declared_field(section, field, schema_version):
+    payload = wav_metadata() if schema_version == 1 else wav_metadata_v2()
     del _section(payload, section)[field]
     assert wav_metadata_io.normalize_wav_calibration_metadata(payload) is None
 
 
 @pytest.mark.parametrize("section,field,value", [
-    *(('root', 'schema_version', value) for value in (0, 2, True, 1.0, '1', None)),
+    *(('root', 'schema_version', value) for value in (0, 3, True, 1.0, '1', None)),
     *(('root', 'recorded_channels', value) for value in (None, [], {}, 'channels')),
     *(('acquisition', field, value) for field, value in (
         ('model', 'VE3668N-extra'), ('model', None), ('machine_id', ''),
@@ -98,8 +184,9 @@ def test_schema_requires_every_declared_field(section, field):
         None, True, '', 'not-a-time', '2026-08-28', '2026-08-28T10:00:00',
     )),
 ])
-def test_schema_rejects_invalid_types_values_and_source_combinations(section, field, value):
-    payload = wav_metadata()
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_schema_rejects_invalid_types_values_and_source_combinations(section, field, value, schema_version):
+    payload = wav_metadata() if schema_version == 1 else wav_metadata_v2()
     _section(payload, section)[field] = value
     assert wav_metadata_io.normalize_wav_calibration_metadata(payload) is None
 
@@ -109,15 +196,17 @@ def test_schema_rejects_invalid_types_values_and_source_combinations(section, fi
     ('v2pa_factor', 1.0), ('v2pa_factor', False),
     ('calibration', {}), ('calibration', False), ('factor_source', 'measured'),
 ])
-def test_none_is_exactly_false_null_null(field, value):
-    payload = wav_metadata(('none', 'none'))
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_none_is_exactly_false_null_null(field, value, schema_version):
+    payload = (wav_metadata if schema_version == 1 else wav_metadata_v2)(("none", "none"))
     payload['recorded_channels'][0][field] = value
     assert wav_metadata_io.normalize_wav_calibration_metadata(payload) is None
 
 
 @pytest.mark.parametrize("field", ['wav_channel_index', 'physical_input_channel'])
-def test_duplicate_channel_identity_is_rejected(field):
-    payload = wav_metadata()
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_duplicate_channel_identity_is_rejected(field, schema_version):
+    payload = wav_metadata() if schema_version == 1 else wav_metadata_v2()
     payload['recorded_channels'][1][field] = payload['recorded_channels'][0][field]
     assert wav_metadata_io.normalize_wav_calibration_metadata(payload) is None
 
@@ -157,7 +246,7 @@ def test_ve_factor_resolution_is_file_local_and_explicit():
     payload = FrozenConfig.snapshot(wav_metadata())
     measured = ve3668n_wav_metadata.resolve_ve_wav_channel_v2pa_factor(payload, 0)
     assert measured.factor == 10.0
-    assert measured.state == 'measured'
+    assert measured.state == 'calibrated'
     none = ve3668n_wav_metadata.resolve_ve_wav_channel_v2pa_factor(payload, 1)
     assert none.factor == 1.0
     assert none.state == 'none'
@@ -635,7 +724,7 @@ def test_invalid_ve_cannot_be_masked_even_by_another_valid_ve_comment(tmp_path, 
     if invalid_kind == 'header':
         invalid['acquisition']['sample_rate'] = 48000
     else:
-        invalid['schema_version'] = 2
+        invalid['schema_version'] = 3
     for payload in ((invalid, valid) if invalid_first else (valid, invalid)):
         _append_raw_chunk(path, _metadata_list_chunk(json.dumps(payload).encode()))
     _assert_invalid_ve(path)

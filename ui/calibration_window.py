@@ -27,7 +27,8 @@ from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFr
 from base.recording_process_protocol import RecordingRequest
 from base.recording_service import RecordingCallbacks, RecordingService
 from base.ve3668n_calibration import verify_ve_calibration_result
-from base.ve3668n_input import calibration_fingerprint, validate_device_snapshot
+from base.ve3668n_input import calibration_applicability_key, calibration_fingerprint, validate_device_snapshot
+from base.ve3668n_recording_config import resolve_ve_recording_device
 from base.ve3668n_stores import VEStoreIOError
 from ui.recording_service_bridge import RecordingProcessorFacade, RecordingServiceBridge
 from base.soundcard_audio_processor import SoundcardAudioProcessor
@@ -37,7 +38,9 @@ from base.soundcard_calibration_manager import (
     clear_mic_channel_calibrations,
     load_mic_channel_v2pa_factors,
     save_mic_channel_calibration,
+    save_mic_channel_factor,
 )
+from ui.calibration_coefficient_editor import CalibrationCoefficientEditor
 from consts import ui_style_const, error_code
 from consts.running_consts import DEFAULT_DIR
 from ui.vkinging_presentation import device_display_name, ve_failure_text
@@ -116,6 +119,9 @@ class CalibrationWindow(QDialog):
         self.reset_btn.clicked.connect(self.clicked_reset_button)
         cancel_btn = QPushButton(" 退  出 ")
         cancel_btn.clicked.connect(self.clicked_close_button)
+        for button, action in ((self.cal_btn, "calibrate"), (self.reset_btn, "reset"),
+                               (cancel_btn, "exit")):
+            self.input_cal_wnd.coefficient_editor.register_action(button, action)
         h_spacer_btn1 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         h_spacer_btn2 = QSpacerItem(10, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         btn_layout.addWidget(self.cal_btn)
@@ -127,6 +133,8 @@ class CalibrationWindow(QDialog):
 
     def clicked_calibration_button(self):
         """Start input calibration when its controls are available."""
+        if not self.input_cal_wnd.coefficient_editor.before_action("calibrate"):
+            return
         if not self._input_calibration_controls_available():
             self._sync_calibration_button_state()
             return
@@ -144,11 +152,12 @@ class CalibrationWindow(QDialog):
 
     def _input_calibration_controls_available(self):
         bridge = self.input_cal_wnd.recording_bridge
-        if (self.input_cal_wnd._ve_input and bridge is not None
+        if (bridge is not None
                 and not self.input_cal_wnd._can_start_recording_workflow()):
             return False
         return (
             self.input_cal_wnd.calibration_available
+            and not self.input_cal_wnd._recording_closed
             and self.input_cal_wnd.current_channel is not None
             and self.input_cal_wnd.streaming_processor is None
         )
@@ -164,6 +173,8 @@ class CalibrationWindow(QDialog):
 
     def clicked_reset_button(self):
         """Reset input calibration when its controls are available."""
+        if not self.input_cal_wnd.coefficient_editor.before_action("reset"):
+            return
         if not self._input_calibration_controls_available():
             self._sync_calibration_button_state()
             return
@@ -175,14 +186,17 @@ class CalibrationWindow(QDialog):
         self.reject()
 
     def reject(self):
+        self.input_cal_wnd.coefficient_editor.before_action("exit")
         self.input_cal_wnd.close_recording()
         super().reject()
 
     def closeEvent(self, event):
+        self.input_cal_wnd.coefficient_editor.before_action("exit")
         self.input_cal_wnd.close_recording()
         super().closeEvent(event)
 
     def done(self, result):
+        self.input_cal_wnd.coefficient_editor.before_action("exit")
         self.input_cal_wnd.close_recording()
         super().done(result)
 
@@ -233,7 +247,96 @@ class InputCalibration(QWidget):
         self.active_capture_channel = None
 
         self.init_ui()
+        self.coefficient_editor = CalibrationCoefficientEditor(
+            self.v2pa_factor_lineedit, self._save_coefficient,
+            lambda message: self.calibration_popup(success_flag=False, message=message),
+            parent=self,
+        )
+        self.coefficient_editor.register_action(self.channel_combo_box, "channel")
+        self._display_coefficient_context = None
         self._initialize_calibration_state()
+        # The shared bridge has no busy-change signal. Poll only panel admission;
+        # persistence still rechecks live state synchronously at every commit.
+        self.coefficient_state_timer = QTimer(self)
+        self.coefficient_state_timer.setInterval(100)
+        self.coefficient_state_timer.timeout.connect(self._sync_coefficient_editability)
+        self.coefficient_state_timer.start()
+
+    def _coefficient_context(self, device=None):
+        device = self.input_device if device is None else device
+        if not isinstance(device, Mapping) or self.current_channel is None:
+            return None
+        if self._ve_input:
+            return calibration_applicability_key(calibration_fingerprint(
+                device, self.current_channel, device.get("input_config")))
+        return (tuple(device.get(key) for key in
+                      ("backend", "index", "name", "hostapi", "max_input_channels")),
+                self.current_channel)
+
+    def _coefficient_available(self):
+        device = self.input_device
+        available = (not self._recording_closed and self.calibration_available
+                and isinstance(device, Mapping) and device.get("available", True)
+                and self.current_channel in self.input_channels
+                and self.streaming_processor is None and self.active_capture_channel is None
+                and self._can_start_recording_workflow())
+        if not available:
+            return False
+        if self._ve_input:
+            try:
+                if self.ve_queue_config_provider is not None:
+                    # Poll with the last validated fallback, without observing or
+                    # loading stores. The save boundary resolves the live profile.
+                    fallback = self._ve_display_device or device
+                    device = resolve_ve_recording_device(
+                        device, self.ve_queue_config_provider(),
+                        fallback_profile=fallback["input_config"])
+            except ValueError:
+                # Invalid live config revokes editing and discards the draft via
+                # the timer; explicit save/refresh retain their error diagnostics.
+                return False
+            return self.current_channel in device.get("physical_channels", ())
+        count = device.get("max_input_channels")
+        return isinstance(count, Integral) and 0 <= self.current_channel < count
+
+    def _sync_coefficient_editability(self):
+        try:
+            enabled = (self._coefficient_available()
+                       and self._coefficient_context() == self._display_coefficient_context)
+        except ValueError:
+            # Live VE config may become unsupported; disable/discard until the
+            # existing explicit refresh path can report its domain diagnostic.
+            enabled = False
+        was_editable = not self.v2pa_factor_lineedit.isReadOnly()
+        if enabled != was_editable:
+            self.coefficient_editor.set_editable(enabled)
+            self.calibration_availability_changed.emit()
+
+    def _save_coefficient(self, context, factor):
+        try:
+            if not self._coefficient_available() or context != self._coefficient_context():
+                raise ValueError("输入设备、通道或录音状态已变更，请重新打开校准窗口")
+            if self._ve_input:
+                device = self._current_ve_device()
+                if (not device["available"] or self.current_channel not in device["physical_channels"]
+                        or context != self._coefficient_context(device)):
+                    raise ValueError("VE 输入设备或通道已变更")
+                record = self.ve_calibration_store.save_factor(
+                    device, self.current_channel, v2pa_factor=factor,
+                    calibrated_at=datetime.now(timezone.utc).isoformat())
+            else:
+                save_mic_channel_factor(factor, self.input_device, self.current_channel)
+        except (ValueError, MicCalibrationFormatError, MicCalibrationIOError, VEStoreIOError) as exc:
+            self.default_logger.error(f"Failed to save input calibration coefficient: {exc}")
+            self.calibration_popup(success_flag=False, message=(ve_failure_text("calibration")
+                if self._ve_input else "输入校准系数保存失败，请重试。"))
+            return False
+        if self._ve_input:
+            self._ve_calibration_records[self.current_channel] = record
+        self.saved_v2pa_factors[self.current_channel] = factor
+        self._refresh_channel_display()
+        self.calibration_state_changed.emit(True)
+        return True
 
     def _can_start_recording_workflow(self):
         bridge = self.recording_bridge
@@ -302,8 +405,6 @@ class InputCalibration(QWidget):
         if not isinstance(self.input_device, Mapping):
             raise ValueError("VE 输入设备身份无效")
         if self.ve_queue_config_provider is not None:
-            from base.ve3668n_recording_config import resolve_ve_recording_device
-
             context = self._ve_capture_context
             if context is not None:
                 # Active capture owns its complete config. Only live identity and
@@ -381,12 +482,19 @@ class InputCalibration(QWidget):
         self.channel_combo_box.blockSignals(False)
         self.channel_combo_box.setEnabled(False)
         self.channel_status_label.setText(message)
-        self.v2pa_factor_lineedit.clear()
+        self._display_coefficient_context = None
+        self.coefficient_editor.show_value(None, None)
+        self.coefficient_editor.set_editable(False)
         if self._ve_input:
             self.standard_spl_i.setEnabled(False)
             self.standard_spl_ii.setEnabled(False)
 
     def _on_channel_changed(self, index):
+        if not self.coefficient_editor.before_action("channel"):
+            self.channel_combo_box.blockSignals(True)
+            self.channel_combo_box.setCurrentIndex(self.channel_combo_box.findData(self.current_channel))
+            self.channel_combo_box.blockSignals(False)
+            return
         if not self.calibration_available or index < 0:
             self.current_channel = None
             return
@@ -404,6 +512,7 @@ class InputCalibration(QWidget):
         self._refresh_channel_display()
 
     def _begin_capture(self, physical_channel):
+        self.coefficient_editor.set_editable(False)
         self.active_capture_channel = physical_channel
         self.channel_combo_box.setEnabled(False)
         self.channel_status_label.setText("状态: 录制中")
@@ -435,25 +544,23 @@ class InputCalibration(QWidget):
             self._refresh_channel_display()
 
     def _refresh_channel_display(self):
+        factor = self.saved_v2pa_factors.get(self.current_channel)
+        self._display_coefficient_context = self._coefficient_context(
+            self._ve_display_device if self._ve_input else None)
+        self.coefficient_editor.show_value(self._display_coefficient_context, factor)
+        self.coefficient_editor.set_editable(self._coefficient_available())
         if self._ve_input:
             record = self._ve_calibration_records.get(self.current_channel)
             status = record["status"] if record is not None else "none"
-            text = {"none": "未校准，仅电压数据", "valid": "实测校准有效",
+            text = {"none": "未校准，仅电压数据", "valid": "校准有效",
                     "invalidated": "配置已变更，需重新校准"}[status]
             self.channel_status_label.setText("状态: " + text)
-            factor = self.saved_v2pa_factors.get(self.current_channel)
-            self.v2pa_factor_lineedit.setText(
-                str(np.round(float(factor), decimals=6)) if factor is not None else "")
             return
         factor = self.saved_v2pa_factors.get(self.current_channel)
         if factor is None:
             self.channel_status_label.setText("状态: 未校准")
-            self.v2pa_factor_lineedit.clear()
             return
         self.channel_status_label.setText("状态: 已校准")
-        self.v2pa_factor_lineedit.setText(
-            str(np.round(float(factor), decimals=6))
-        )
 
     def _select_channel(self, physical_channel):
         index = self.channel_combo_box.findData(physical_channel)
@@ -567,8 +674,8 @@ class InputCalibration(QWidget):
         """
         Create a QGroupBox to display the sound pressure v2pa_factor.
 
-        This method creates a QGroupBox containing a label and a read-only line edit
-        to show the sound pressure v2pa_factor from the calibration results. The layout
+        This method creates a QGroupBox containing a label and an editable line edit
+        for the current channel's confirmed Pa/V coefficient. The layout
         uses a horizontal box layout to arrange the elements horizontally.
 
         Returns:
@@ -682,6 +789,8 @@ class InputCalibration(QWidget):
 
     def clicked_calibration(self):
         """Start one asynchronous, single-channel ten-second calibration."""
+        if not self.coefficient_editor.before_action("calibrate"):
+            return False
         if self._recording_closed:
             return False
         if not self.calibration_available or self.current_channel is None:
@@ -695,9 +804,9 @@ class InputCalibration(QWidget):
             return False
         self.stop_timer = False
         self.recorded_time = 10
+        self._begin_capture(self.current_channel)
         if not self._ve_input:
             self.v2pa_factor_lineedit.clear()
-        self._begin_capture(self.current_channel)
         self._capture_standard_spl_db = 94.0 if self.standard_spl_flag else 114.0
         is_ve = self._ve_input
         machine_id = self.input_device.get("machine_id") if isinstance(self.input_device, Mapping) else None
@@ -1115,6 +1224,8 @@ class InputCalibration(QWidget):
         It resets the recorded time to 10 seconds and updates the recorded label to display the new time in red.
         Additionally, it clears the v2pa_factor line edit and stops any ongoing streaming recording.
         """
+        if not self.coefficient_editor.before_action("reset"):
+            return
         if self._ve_input:
             self._reset_ve_calibration()
             return
@@ -1205,12 +1316,15 @@ class InputCalibration(QWidget):
     def close_recording(self):
         if self._recording_closed:
             return
+        self.coefficient_editor.close()
+        self.coefficient_state_timer.stop()
         self._recording_closed = True
         self.cancel_calibration()
         if self._owns_recording_bridge:
             self.recording_bridge.shutdown()
 
     def closeEvent(self, event):
+        self.coefficient_editor.before_action("exit")
         self.close_recording()
         super().closeEvent(event)
 

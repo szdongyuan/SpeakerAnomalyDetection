@@ -14,6 +14,18 @@ normalize_wav_calibration_metadata = wav_calibration_metadata.normalize_wav_cali
 resolve_wav_channel_v2pa_factor = wav_calibration_metadata.resolve_wav_channel_v2pa_factor
 
 
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_ve_adapter_marks_neutral_calibrated_resolution_as_file_metadata(schema_version):
+    from base.ve3668n_wav_metadata import resolve_ve_wav_channel_v2pa_factor
+    from unit_test.base.ve3668n_fakes import wav_metadata, wav_metadata_v2
+
+    payload = wav_metadata() if schema_version == 1 else wav_metadata_v2()
+    assert resolve_ve_wav_channel_v2pa_factor(payload, 0).state == "calibrated"
+    result = resolve_wav_channel_v2pa_factor(payload, 0)
+    assert result == WavCalibrationResolution(10.0, True, True)
+    assert resolve_wav_channel_v2pa_factor(payload, 1) == WavCalibrationResolution(1.0, True, False)
+
+
 class _BoundedReadFile:
     def __init__(self, raw_file, max_read_size=65536):
         self._raw_file = raw_file

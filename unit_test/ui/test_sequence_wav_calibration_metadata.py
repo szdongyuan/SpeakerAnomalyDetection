@@ -23,6 +23,29 @@ STREAMING_OPS_PATH = (
 )
 
 
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_ve_tooltip_uses_neutral_calibrated_state_for_both_file_versions(ui_qapp, schema_version):
+    from PyQt5.QtWidgets import QWidget
+    from base.ve3668n_wav_metadata import validate_ve_wav_metadata
+    from unit_test.base.ve3668n_fakes import wav_metadata, wav_metadata_v2
+
+    payload = wav_metadata() if schema_version == 1 else wav_metadata_v2()
+    if schema_version == 2:
+        payload["recorded_channels"][0]["calibration"].update(
+            standard_spl=None, sample_rate=None, duration_seconds=None,
+        )
+    windows = [QWidget(), QWidget()]
+    try:
+        SequenceWidgetStreamingOpsMixin._set_recording_voltage_tooltips(
+            windows, validate_ve_wav_metadata(payload),
+        )
+        assert windows[0].toolTip() == "校准有效；原始电压 V"
+        assert windows[1].toolTip() == "未校准，仅电压数据"
+    finally:
+        for window in windows:
+            window.close()
+
+
 @pytest.mark.parametrize("mode", ["streaming", "blocking", "play_record"])
 @pytest.mark.parametrize("trim", [0, 1, 100])
 def test_legacy_completion_publishes_saved_pcm24(tmp_path, monkeypatch, mode, trim):
@@ -550,6 +573,7 @@ def test_final_projection_failure_is_presentation_only_and_releases_run_state(
     warning.assert_called_once()
     assert "波形刷新失败" in warning.call_args.args[2]
     assert host._condition_record_cache["condition-1"] == {
+        "config_snapshot": {},
         "recorded_path": "recorded.wav",
         "recorded_signal_info": {
             "labels": "not_labeled",

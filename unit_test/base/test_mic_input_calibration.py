@@ -79,13 +79,175 @@ def write_registry(path, payload):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def test_direct_factor_creates_v3_without_measurement(tmp_path):
+    path = tmp_path / "mic.json"
+    manager.save_mic_channel_factor(
+        0.12345678901234567, DEVICE, 1,
+        calibration_path=str(path),
+        calibrated_at="2026-10-07T15:00:00+08:00",
+    )
+    record = load_mic_channel_calibrations(DEVICE, str(path))[1]
+    assert record == {
+        "v2pa_factor": 0.12345678901234567,
+        "standard_spl_db": None,
+        "sample_rate_hz": None,
+        "duration_seconds": None,
+        "calibrated_at": "2026-10-07T15:00:00+08:00",
+    }
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 3
+
+
+def test_v2_read_preserves_version_and_file_bytes(tmp_path):
+    path = tmp_path / "mic.json"
+    payload = valid_registry()
+    write_registry(path, payload)
+    original = path.read_bytes()
+
+    with mock.patch.object(manager, "_atomic_write_json") as write:
+        assert load_mic_input_calibration(str(path)) == payload
+        assert load_mic_channel_v2pa_factors(DEVICE, str(path)) == {1: 2.5}
+    write.assert_not_called()
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("operation", ["direct", "measured", "clear"])
+def test_v2_mutation_upgrades_and_preserves_other_records(tmp_path, operation):
+    path = tmp_path / "mic.json"
+    payload = valid_registry()
+    channels = payload["devices"][0]["channels"]
+    channels["2"] = {**channels["1"], "v2pa_factor": 8.5}
+    payload["devices"].append({
+        "input": {"api_name": "Test API", "device_name": OTHER_DEVICE["name"]},
+        "channels": {"0": dict(channels["1"])},
+    })
+    write_registry(path, payload)
+
+    if operation == "direct":
+        manager.save_mic_channel_factor(3.5, DEVICE, 1, str(path))
+    elif operation == "measured":
+        save_channel(path, factor=3.5)
+    else:
+        assert clear_mic_channel_calibrations(DEVICE, [1], str(path)) is True
+
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["version"] == 3
+    assert persisted["devices"][0]["channels"]["2"] == channels["2"]
+    assert persisted["devices"][1] == payload["devices"][1]
+    assert load_mic_channel_v2pa_factors(DEVICE, str(path)) == (
+        {2: 8.5} if operation == "clear" else {1: 3.5, 2: 8.5}
+    )
+
+
+def test_v2_no_change_reset_does_not_upgrade_or_write(tmp_path):
+    path = tmp_path / "mic.json"
+    write_registry(path, valid_registry())
+    original = path.read_bytes()
+
+    with mock.patch.object(manager, "_atomic_write_json") as write:
+        assert clear_mic_channel_calibrations(DEVICE, [0], str(path)) is False
+        assert clear_mic_channel_calibrations(OTHER_DEVICE, [1], str(path)) is False
+        assert clear_mic_channel_calibrations(DEVICE, [], str(path)) is False
+    write.assert_not_called()
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("version,null_mask", [
+    (version, mask) for version in (2, 3) for mask in range(1, 8)
+    if version == 2 or mask != 7
+])
+def test_versioned_measurement_null_group_is_strict(tmp_path, version, null_mask):
+    path = tmp_path / "mic.json"
+    payload = valid_registry()
+    payload["version"] = version
+    record = payload["devices"][0]["channels"]["1"]
+    for index, field in enumerate(("standard_spl_db", "sample_rate_hz", "duration_seconds")):
+        if null_mask & (1 << index):
+            record[field] = None
+    write_registry(path, payload)
+
+    with pytest.raises(MicCalibrationFormatError):
+        load_mic_input_calibration(str(path))
+
+
+@pytest.mark.parametrize("null_mask", range(1, 8))
+def test_measured_save_rejects_missing_measurements(tmp_path, null_mask):
+    path = tmp_path / "mic.json"
+    overrides = {
+        field: None
+        for index, field in enumerate(("standard_spl_db", "sample_rate_hz", "duration_seconds"))
+        if null_mask & (1 << index)
+    }
+    with pytest.raises(ValueError):
+        save_channel(path, **overrides)
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("overrides", [
+    {"v2pa_factor": value}
+    for value in (True, None, "2.5", 0, -1, float("nan"), float("inf"), 10 ** 309)
+] + [
+    {"calibrated_at": value}
+    for value in (True, "", "not-a-time", "2026-10-07T15:00:00")
+] + [
+    {"input_device": None}, {"input_channel": True},
+    {"input_channel": -1}, {"input_channel": 1.0},
+])
+def test_direct_factor_invalid_arguments_preserve_file(tmp_path, overrides):
+    path = tmp_path / "mic.json"
+    write_registry(path, valid_registry())
+    original = path.read_bytes()
+    kwargs = dict(v2pa_factor=3.5, input_device=DEVICE, input_channel=1,
+                  calibration_path=str(path), calibrated_at="2026-10-07T15:00:00+08:00")
+    kwargs.update(overrides)
+
+    with pytest.raises(ValueError):
+        manager.save_mic_channel_factor(**kwargs)
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("operation", ["direct", "measured", "clear"])
+@pytest.mark.parametrize("content", ['{broken', '{"version": 4, "devices": []}'])
+def test_mutation_never_overwrites_corrupt_or_unknown_registry(tmp_path, operation, content):
+    path = tmp_path / "mic.json"
+    path.write_text(content, encoding="utf-8")
+    original = path.read_bytes()
+
+    with pytest.raises(MicCalibrationFormatError):
+        if operation == "direct":
+            manager.save_mic_channel_factor(3.5, DEVICE, 1, str(path))
+        elif operation == "measured":
+            save_channel(path)
+        else:
+            clear_mic_channel_calibrations(DEVICE, [1], str(path))
+    assert path.read_bytes() == original
+
+
+def test_direct_overwrite_discards_measurement_and_subsequent_measurement_restores_it(tmp_path):
+    path = tmp_path / "mic.json"
+    save_channel(path)
+    manager.save_mic_channel_factor(
+        2.5, DEVICE, 1, str(path), calibrated_at="2026-10-07T15:00:00+08:00",
+    )
+    direct_record = load_mic_channel_calibrations(DEVICE, str(path))[1]
+    assert direct_record == {
+        "v2pa_factor": 2.5, "standard_spl_db": None, "sample_rate_hz": None,
+        "duration_seconds": None, "calibrated_at": "2026-10-07T15:00:00+08:00",
+    }
+
+    save_channel(path, factor=4.5, spl=114, sample_rate_hz=48000, duration_seconds=5.0)
+    assert load_mic_channel_calibrations(DEVICE, str(path))[1] == {
+        "v2pa_factor": 4.5, "standard_spl_db": 114, "sample_rate_hz": 48000,
+        "duration_seconds": 5.0, "calibrated_at": "2026-08-24T10:00:00+08:00",
+    }
+
+
 def beyond_digit_limit_channel():
     configured_limit = sys.get_int_max_str_digits()
     digit_count = max(configured_limit + 100, 5000)
     return 10 ** digit_count, "1" + ("0" * digit_count)
 
 
-def test_v2_registry_preserves_devices_and_channels(tmp_path):
+def test_registry_preserves_devices_and_channels(tmp_path):
     path = tmp_path / "mic_input_calibration.json"
     save_channel(path, channel=0, factor=1.25)
     save_channel(path, channel=2, factor=2.5, spl=114.0)
@@ -144,7 +306,7 @@ def test_clear_supports_channel_beyond_interpreter_digit_limit(tmp_path):
     write_registry(path, payload)
 
     assert clear_mic_channel_calibrations(DEVICE, [channel], str(path)) is True
-    assert load_mic_input_calibration(str(path)) == {"version": 2, "devices": []}
+    assert load_mic_input_calibration(str(path)) == {"version": 3, "devices": []}
 
 
 def test_updating_channel_preserves_every_other_record(tmp_path):
@@ -188,24 +350,24 @@ def test_missing_file_and_exact_v1_load_as_empty_registry(tmp_path, initial):
     if initial is not None:
         write_registry(path, initial)
 
-    assert load_mic_input_calibration(str(path)) == {"version": 2, "devices": []}
+    assert load_mic_input_calibration(str(path)) == {"version": 3, "devices": []}
     assert load_mic_channel_calibrations(DEVICE, str(path)) == {}
     assert load_mic_channel_v2pa_factors(DEVICE, str(path)) == {}
 
 
-def test_first_save_replaces_version_1_with_version_2(tmp_path):
+def test_first_save_replaces_version_1_with_version_3(tmp_path):
     path = tmp_path / "mic_input_calibration.json"
     write_registry(path, {"version": 1, "legacy": "ignored"})
 
     save_channel(path)
 
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 2
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 3
     assert load_mic_channel_v2pa_factors(DEVICE, str(path)) == {1: 2.5}
 
 
 @pytest.mark.parametrize(
     "payload",
-    [{}, {"devices": []}, {"version": 1.0}, {"version": 3, "devices": []},
+    [{}, {"devices": []}, {"version": 1.0}, {"version": 4, "devices": []},
      {"version": True, "devices": []}, {"version": 2, "devices": {}}, [], None],
 )
 def test_invalid_root_or_version_raises_format_error(tmp_path, payload):
@@ -377,9 +539,13 @@ def test_oversized_save_numeric_raises_value_error_without_disk_mutation(
     assert list(tmp_path.glob("*.tmp")) == []
 
 
-def test_default_timestamp_has_local_offset_seconds_and_no_microseconds(tmp_path):
+@pytest.mark.parametrize("operation", ["direct", "measured"])
+def test_default_timestamp_has_local_offset_seconds_and_no_microseconds(tmp_path, operation):
     path = tmp_path / "mic_input_calibration.json"
-    save_channel(path, calibrated_at=None)
+    if operation == "direct":
+        manager.save_mic_channel_factor(2.5, DEVICE, 1, str(path))
+    else:
+        save_channel(path, calibrated_at=None)
 
     timestamp = load_mic_channel_calibrations(DEVICE, str(path))[1]["calibrated_at"]
     parsed = datetime.fromisoformat(timestamp)
@@ -453,9 +619,10 @@ def test_atomic_write_uses_target_directory_and_fsync_before_replace(tmp_path):
 
 
 @pytest.mark.parametrize("stage", ["write", "flush", "fsync", "replace"])
-def test_atomic_stage_failure_preserves_original_and_removes_temporary(tmp_path, stage):
+@pytest.mark.parametrize("operation", ["direct", "measured", "clear"])
+def test_atomic_stage_failure_preserves_original_and_removes_temporary(tmp_path, stage, operation):
     path = tmp_path / "mic_input_calibration.json"
-    save_channel(path, factor=1.25)
+    write_registry(path, valid_registry())
     original = path.read_bytes()
     failure = OSError(f"{stage} failed")
 
@@ -497,7 +664,12 @@ def test_atomic_stage_failure_preserves_original_and_removes_temporary(tmp_path,
 
     with patcher:
         with pytest.raises(MicCalibrationIOError) as caught:
-            save_channel(path, factor=3.0)
+            if operation == "direct":
+                manager.save_mic_channel_factor(3.0, DEVICE, 1, str(path))
+            elif operation == "measured":
+                save_channel(path, factor=3.0)
+            else:
+                clear_mic_channel_calibrations(DEVICE, [1], str(path))
 
     assert caught.value.__cause__ is failure
     assert path.read_bytes() == original
@@ -589,7 +761,7 @@ class TrackingLock:
         self.held = False
 
 
-@pytest.mark.parametrize("operation", ["save", "clear"])
+@pytest.mark.parametrize("operation", ["save", "direct", "clear"])
 def test_mutations_hold_lock_across_read_modify_write(tmp_path, operation):
     path = tmp_path / "mic_input_calibration.json"
     save_channel(path)
@@ -610,6 +782,8 @@ def test_mutations_hold_lock_across_read_modify_write(tmp_path, operation):
     ), mock.patch.object(manager, "_atomic_write_json", tracked_write):
         if operation == "save":
             save_channel(path, channel=2)
+        elif operation == "direct":
+            manager.save_mic_channel_factor(3.5, DEVICE, 2, str(path))
         else:
             clear_mic_channel_calibrations(DEVICE, [1], str(path))
 
@@ -645,7 +819,7 @@ def test_clear_final_channel_removes_empty_device(tmp_path):
     save_channel(path, channel=0)
 
     assert clear_mic_channel_calibrations(DEVICE, [0], str(path)) is True
-    assert load_mic_input_calibration(str(path)) == {"version": 2, "devices": []}
+    assert load_mic_input_calibration(str(path)) == {"version": 3, "devices": []}
 
 
 def test_exact_device_and_channel_resolution_never_falls_back(tmp_path):
@@ -676,7 +850,7 @@ def test_public_api_has_no_database_path_parameter():
     for function in (
         load_mic_input_calibration, load_mic_channel_calibrations,
         load_mic_channel_v2pa_factors, resolve_mic_channel_v2pa_factor,
-        save_mic_channel_calibration, clear_mic_channel_calibrations,
+        save_mic_channel_calibration, manager.save_mic_channel_factor, clear_mic_channel_calibrations,
         get_mic_v2pa_factor,
     ):
         assert "db_path" not in inspect.signature(function).parameters

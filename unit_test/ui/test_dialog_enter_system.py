@@ -407,6 +407,30 @@ def test_calibration_enter_never_clicks_buttons(opened, monkeypatch, enter, ui_q
     assert callbacks == ["clicked_calibration_button"]
 
 
+def test_calibration_enter_keeps_dirty_coefficient_until_focus_out(opened, monkeypatch, enter, ui_qapp):
+    saves = []
+    monkeypatch.setattr("ui.calibration_window.load_mic_channel_v2pa_factors", lambda device: {})
+    monkeypatch.setattr("ui.calibration_window.save_mic_channel_factor", lambda *args: saves.append(args))
+    window = opened(CalibrationWindow(
+        input_device={"index": 7, "name": "Test Microphone", "hostapi": 3, "max_input_channels": 2},
+        input_channels=[1, 0]))
+    line = window.input_cal_wnd.v2pa_factor_lineedit
+    line.setFocus()
+    QTest.keyClicks(line, "2.123456789012345")
+    clicks = watch_buttons(window)
+    enter(line)
+    ui_qapp.processEvents()
+    assert saves == []
+    assert clicks == []
+    assert line.text() == "2.123456789012345"
+    window.input_cal_wnd.standard_spl_i.setFocus()
+    ui_qapp.processEvents()
+    assert len(saves) == 1
+    assert saves[0][0] == 2.123456789012345
+    assert saves[0][2] == 1
+    assert window.input_calibration_flag
+
+
 def test_record_base_does_not_inherit_policy(opened):
     window = opened(BaseConfigWindow(mic={"name": "Soundcard"}))
     window.main_layout.addLayout(window.create_cancel_ok_buttons())

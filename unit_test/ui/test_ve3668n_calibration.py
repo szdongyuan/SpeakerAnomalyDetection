@@ -111,6 +111,184 @@ def seed_old(setup, widget, channel=7, factor=73):
     return record
 
 
+def _edit_manual(widget, text):
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QApplication
+    widget.show()
+    widget.activateWindow()
+    QApplication.processEvents()
+    widget.v2pa_factor_lineedit.setFocus()
+    widget.v2pa_factor_lineedit.selectAll()
+    QTest.keyClicks(widget.v2pa_factor_lineedit, text)
+
+
+def test_manual_ve_focus_out_persists_current_physical_channel(setup):
+    from PyQt5.QtWidgets import QApplication
+    widget = setup.make()
+    changes = []
+    widget.calibration_state_changed.connect(changes.append)
+    _edit_manual(widget, "1.234567890123456e-12")
+    widget.standard_spl_ii.setFocus()
+    QApplication.processEvents()
+    record = setup.calibrations.get_record(widget.input_device, 7)
+    assert record is not None
+    assert record["v2pa_factor"] == 1.234567890123456e-12
+    assert record["standard_spl"] is None
+    assert record["calibration_sample_rate"] is None
+    assert record["calibration_duration_seconds"] is None
+    assert widget.current_channel == 7
+    assert changes == [True]
+    assert setup.bridge.sessions == []
+    assert widget.channel_status_label.text() == "状态: 校准有效"
+    widget.calibration_popup.assert_not_called()
+
+
+@pytest.mark.parametrize("change", ["identity", "unavailable", "mode", "busy"])
+def test_manual_ve_rechecks_context_before_save(setup, change):
+    widget = setup.make()
+    _edit_manual(widget, "2.5")
+    if change == "identity":
+        widget.input_device["machine_id"] = "changed-secret-id"
+    elif change == "unavailable":
+        widget.input_device["available"] = False
+    elif change == "mode":
+        widget.input_device["input_config"]["input_mode"] = "unsupported"
+    else:
+        setup.bridge.service.busy = True
+    assert not widget.coefficient_editor.commit_pending()
+    assert not setup.calibrations.path.exists()
+    assert widget.saved_v2pa_factors == {}
+    assert widget.v2pa_factor_lineedit.text() == ""
+    assert "changed-secret-id" not in str(widget.calibration_popup.call_args)
+
+
+@pytest.mark.parametrize("text", [None, "73.000", "2.123456789012345"])
+def test_manual_ve_edit_and_same_value_preserve_expected_record(setup, text):
+    from PyQt5.QtWidgets import QApplication
+    widget = setup.make()
+    old = seed_old(setup, widget)
+    before = setup.calibrations.path.read_bytes()
+    changed = []
+    widget.calibration_state_changed.connect(changed.append)
+    _edit_manual(widget, "" if text is None else text)
+    widget.standard_spl_i.setFocus()
+    QApplication.processEvents()
+    record = setup.calibrations.get_record(widget.input_device, 7)
+    if text == "2.123456789012345":
+        assert record["v2pa_factor"] == float(text)
+        assert record["standard_spl"] is None
+        assert record["calibration_sample_rate"] is None
+        assert record["calibration_duration_seconds"] is None
+        assert changed == [True]
+    else:
+        assert setup.calibrations.path.read_bytes() == before
+        assert record == old
+        assert changed == []
+
+
+def test_manual_ve_atomic_failure_restores_old_record_and_display(setup, monkeypatch):
+    widget = setup.make()
+    old = seed_old(setup, widget)
+    before = setup.calibrations.path.read_bytes()
+    changed = []
+    widget.calibration_state_changed.connect(changed.append)
+    monkeypatch.setattr("base.ve3668n_stores.os.replace", mock.Mock(side_effect=OSError("denied")))
+    _edit_manual(widget, "2.5")
+    assert not widget.coefficient_editor.commit_pending()
+    assert setup.calibrations.path.read_bytes() == before
+    assert widget._ve_calibration_records[7] == old
+    assert widget.saved_v2pa_factors == {7: 73.0}
+    assert widget.v2pa_factor_lineedit.text() == "73.0"
+    assert changed == []
+    widget.calibration_popup.assert_called_once()
+
+
+def test_manual_ve_channel_change_saves_old_then_reset_only_new_channel(setup):
+    widget = setup.make()
+    seed_old(setup, widget, channel=1, factor=5)
+    widget._select_channel(7)
+    _edit_manual(widget, "2.5")
+    widget.channel_combo_box.setCurrentIndex(1)
+    assert widget.current_channel == 1
+    assert setup.calibrations.get_factor(widget.input_device, 7) == 2.5
+    widget.reset_btn_clicked()
+    assert setup.calibrations.get_record(widget.input_device, 1) is None
+    assert setup.calibrations.get_factor(widget.input_device, 7) == 2.5
+
+
+def test_manual_ve_forced_close_discards_draft_and_stops_admission_timer(setup):
+    widget = setup.make()
+    _edit_manual(widget, "2.5")
+    setup.bridge.shutting_down.emit()
+    assert not setup.calibrations.path.exists()
+    assert widget.v2pa_factor_lineedit.isReadOnly()
+    assert not widget.coefficient_state_timer.isActive()
+    widget.calibration_popup.assert_not_called()
+
+
+def test_manual_ve_replaces_invalidated_record_without_capture(setup):
+    widget = setup.make()
+    seed_old(setup, widget)
+    changed = deepcopy(widget.input_device)
+    changed["input_config"]["unit"] = "g"
+    with pytest.raises(ValueError):
+        setup.calibrations.observe(changed)
+    widget.refresh_ve_calibration_state()
+    assert widget._ve_calibration_records[7]["status"] == "invalidated"
+    _edit_manual(widget, "2.5")
+    assert widget.coefficient_editor.commit_pending()
+    assert setup.calibrations.get_factor(widget.input_device, 7) == 2.5
+    assert widget._ve_calibration_records[7]["status"] == "valid"
+    assert setup.bridge.sessions == []
+
+
+@pytest.mark.parametrize("field,value", [("sample_rate", 0), ("ve_range_index", 7)])
+def test_manual_ve_invalid_live_queue_config_discards_draft_without_storage_io(setup, field, value):
+    from PyQt5.QtTest import QTest
+    detail = {"sample_rate": 51200, "ve_range_index": 0}
+    widget = setup.make(ve_queue_config_provider=lambda: detail)
+    seed_old(setup, widget)
+    before = setup.calibrations.path.read_bytes()
+    _edit_manual(widget, "2.5")
+    detail[field] = value
+    with mock.patch.object(setup.profiles, "load", side_effect=AssertionError("poll read profile")), \
+            mock.patch.object(setup.calibrations, "observe", side_effect=AssertionError("poll observed store")), \
+            mock.patch.object(setup.calibrations, "save_factor") as save:
+        QTest.qWait(200)
+        assert widget.v2pa_factor_lineedit.isReadOnly()
+        assert widget.v2pa_factor_lineedit.text() == "73.0"
+        assert widget.coefficient_editor.commit_pending()
+        save.assert_not_called()
+    assert setup.calibrations.path.read_bytes() == before
+    assert widget.saved_v2pa_factors == {7: 73.0}
+    widget.calibration_popup.assert_not_called()
+
+
+@pytest.mark.parametrize("detail_after", [
+    {"sample_rate": 44100, "ve_range_index": 0},
+    {"sample_rate": 51200, "ve_range_index": 6},
+    {"ve_range_index": 2},
+])
+def test_manual_ve_valid_live_queue_changes_keep_draft_without_storage_io(setup, detail_after):
+    from PyQt5.QtTest import QTest
+    detail = {"sample_rate": 51200, "ve_range_index": 0}
+    widget = setup.make(ve_queue_config_provider=lambda: detail)
+    old = seed_old(setup, widget)
+    _edit_manual(widget, "2.5")
+    detail.clear()
+    detail.update(detail_after)
+    with mock.patch.object(setup.profiles, "load", side_effect=AssertionError("poll read profile")), \
+            mock.patch.object(setup.calibrations, "observe", side_effect=AssertionError("poll observed store")):
+        QTest.qWait(200)
+        assert not widget.v2pa_factor_lineedit.isReadOnly()
+        assert widget.v2pa_factor_lineedit.text() == "2.5"
+        assert widget.saved_v2pa_factors == {7: 73.0}
+        assert widget._ve_calibration_records[7] == old
+    assert widget.coefficient_editor.commit_pending()
+    assert setup.calibrations.get_factor(widget.input_device, 7) == 2.5
+    widget.calibration_popup.assert_not_called()
+
+
 def offered(widget, volts=None):
     assert widget.clicked_calibration()
     session = widget.streaming_processor.session
@@ -286,7 +464,7 @@ def test_calibration_fault_gui_is_private_and_preserves_old_record(
     if boundary == "refresh":
         monkeypatch.setattr(setup.profiles, "load", original_load)
         assert widget.refresh_ve_calibration_state()
-        assert widget.channel_status_label.text() == "状态: 实测校准有效"
+        assert widget.channel_status_label.text() == "状态: 校准有效"
 
 
 @pytest.mark.parametrize("device", [None, {}, ["invalid identity"]])
@@ -505,15 +683,15 @@ def test_non_path_session_request_change_is_not_service_allocation(setup, monkey
     assert not setup.calibrations.path.exists()
 
 
-def test_ve_display_is_three_state_with_readonly_pa_per_volt_and_reminder(setup):
+def test_ve_display_is_three_state_with_editable_pa_per_volt_and_reminder(setup):
     widget = setup.make()
     assert widget.channel_status_label.text() == "状态: 未校准，仅电压数据"
-    assert widget.v2pa_factor_lineedit.isReadOnly()
+    assert not widget.v2pa_factor_lineedit.isReadOnly()
     labels = [label.text() for label in widget.findChildren(QLabel)]
     assert any("Pa/V" in text for text in labels)
     assert "更换麦克风后请清除该通道旧校准并重新校准" in labels
     old = seed_old(setup, widget)
-    assert widget.channel_status_label.text() == "状态: 实测校准有效"
+    assert widget.channel_status_label.text() == "状态: 校准有效"
     assert widget.v2pa_factor_lineedit.text() == "73.0"
     changed = deepcopy(widget.input_device)
     changed["input_config"]["unit"] = "g"
@@ -537,7 +715,7 @@ def test_fs_only_refresh_keeps_display_selection_record_and_no_popup(setup):
         widget.refresh_ve_calibration_state()
         assert widget.current_channel == 7
         assert widget.v2pa_factor_lineedit.text() == display
-        assert widget.channel_status_label.text() == "状态: 实测校准有效"
+        assert widget.channel_status_label.text() == "状态: 校准有效"
         assert setup.calibrations.path.read_bytes() == before
     widget.calibration_popup.assert_not_called()
 
@@ -563,7 +741,7 @@ def test_new_attempt_retains_old_valid_display_and_reenables_controls(setup, out
     assert setup.calibrations.path.read_bytes() == before
     assert widget.saved_v2pa_factors == {7: 73.0}
     assert widget.v2pa_factor_lineedit.text() == "73.0"
-    assert widget.channel_status_label.text() == "状态: 实测校准有效"
+    assert widget.channel_status_label.text() == "状态: 校准有效"
     assert widget.channel_combo_box.isEnabled()
     assert widget.standard_spl_i.isEnabled() and widget.standard_spl_ii.isEnabled()
 

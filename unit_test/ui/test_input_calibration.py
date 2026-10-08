@@ -28,6 +28,249 @@ DEVICE = {
 }
 
 
+def _edit_coefficient(widget, text, qapp):
+    from PyQt5.QtTest import QTest
+    widget.show()
+    widget.activateWindow()
+    qapp.processEvents()
+    line = widget.v2pa_factor_lineedit
+    line.setFocus()
+    line.selectAll()
+    QTest.keyClicks(line, text)
+
+
+def test_direct_coefficient_focus_out_saves_selected_channel(qapp):
+    widget = InputCalibration(dict(DEVICE), [1, 0])
+    changed = []
+    widget.calibration_state_changed.connect(changed.append)
+    widget.calibration_popup = mock.Mock()
+    with mock.patch("ui.calibration_window.save_mic_channel_factor", create=True) as save:
+        _edit_coefficient(widget, "2.5", qapp)
+        widget.standard_spl_i.setFocus()
+        qapp.processEvents()
+        save.assert_called_once_with(2.5, DEVICE, 1)
+    assert changed == [True]
+    assert widget.saved_v2pa_factors == {1: 2.5}
+    assert widget.current_channel == 1
+    assert widget.streaming_processor is None
+    widget.calibration_popup.assert_not_called()
+    widget.close()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_manual_channel_change_preflights_old_context(qapp, fails):
+    widget = InputCalibration(dict(DEVICE), [1, 0])
+    widget.calibration_popup = mock.Mock()
+    with mock.patch("ui.calibration_window.save_mic_channel_factor",
+                    side_effect=MicCalibrationIOError("denied") if fails else None) as save:
+        _edit_coefficient(widget, "2.5", qapp)
+        widget.channel_combo_box.setCurrentIndex(1)
+        save.assert_called_once_with(2.5, DEVICE, 1)
+        assert widget.current_channel == (1 if fails else 0)
+        assert widget.channel_combo_box.currentData() == widget.current_channel
+        assert widget.saved_v2pa_factors == ({} if fails else {1: 2.5})
+    widget.close()
+
+
+@pytest.mark.parametrize("entry", ["reject", "done", "close", "button"])
+@pytest.mark.parametrize("fails", [False, True])
+def test_manual_normal_dialog_close_commits_once(qapp, entry, fails):
+    window = CalibrationWindow(dict(DEVICE), [1])
+    widget = window.input_cal_wnd
+    window.show()
+    widget.calibration_popup = mock.Mock()
+    with mock.patch("ui.calibration_window.save_mic_channel_factor",
+                    side_effect=MicCalibrationIOError("denied") if fails else None) as save:
+        _edit_coefficient(widget, "2.5", qapp)
+        if entry == "done":
+            window.done(0)
+        elif entry == "button":
+            window.clicked_close_button()
+        else:
+            getattr(window, entry)()
+        assert widget._recording_closed
+        save.assert_called_once_with(2.5, DEVICE, 1)
+        assert widget.calibration_popup.call_count == int(fails)
+
+
+def test_manual_forced_bridge_close_discards_without_write(qapp):
+    from unit_test.ui.test_ve3668n_calibration import CalibrationBridgeFake
+    bridge = CalibrationBridgeFake(None)
+    widget = InputCalibration(dict(DEVICE), [1], recording_bridge=bridge)
+    widget.calibration_popup = mock.Mock()
+    with mock.patch("ui.calibration_window.save_mic_channel_factor") as save:
+        _edit_coefficient(widget, "2.5", qapp)
+        bridge.shutting_down.emit()
+        widget.close()
+        save.assert_not_called()
+    widget.calibration_popup.assert_not_called()
+
+
+@pytest.mark.parametrize("change", ["busy", "device", "channel", "unavailable"])
+def test_manual_admission_change_discards_before_disable(qapp, change):
+    from unit_test.ui.test_ve3668n_calibration import CalibrationBridgeFake
+    bridge = CalibrationBridgeFake(None)
+    widget = InputCalibration(dict(DEVICE), [1], recording_bridge=bridge)
+    widget.calibration_popup = mock.Mock()
+    with mock.patch("ui.calibration_window.save_mic_channel_factor") as save:
+        _edit_coefficient(widget, "2.5", qapp)
+        if change == "busy":
+            bridge.service.busy = True
+        elif change == "device":
+            widget.input_device["name"] = "Other mic"
+        elif change == "channel":
+            widget.input_channels = []
+        else:
+            widget.input_device["available"] = False
+        from PyQt5.QtTest import QTest
+        QTest.qWait(150)
+        assert widget.v2pa_factor_lineedit.isReadOnly()
+        widget.standard_spl_i.setFocus()
+        qapp.processEvents()
+        save.assert_not_called()
+        assert widget.v2pa_factor_lineedit.text() == ""
+    widget.close()
+
+
+@pytest.mark.parametrize("action", ["calibration", "reset"])
+def test_manual_failed_mouse_gesture_cancels_outer_action(qapp, action):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+    window = CalibrationWindow(dict(DEVICE), [1])
+    widget = window.input_cal_wnd
+    window.show()
+    widget.calibration_popup = mock.Mock()
+    method = "clicked_calibration" if action == "calibration" else "reset_btn_clicked"
+    button = window.cal_btn if action == "calibration" else window.reset_btn
+    with mock.patch("ui.calibration_window.save_mic_channel_factor",
+                    side_effect=MicCalibrationIOError("denied")) as save, \
+            mock.patch.object(widget, method) as perform:
+        _edit_coefficient(widget, "2.5", qapp)
+        QTest.mouseClick(button, Qt.LeftButton)
+        qapp.processEvents()
+        save.assert_called_once()
+        perform.assert_not_called()
+        QTest.mouseClick(button, Qt.LeftButton)
+        perform.assert_called_once()
+    window.close()
+
+
+@pytest.mark.parametrize("text", [None, "1.2500", "2.123456789012345"])
+def test_manual_mic_persistence_preserves_same_value_measurement(qapp, tmp_path, text):
+    from base import soundcard_calibration_manager as manager
+    path = tmp_path / "mic.json"
+    with mock.patch.object(manager.SoundDeviceManager, "get_api_info", return_value={"name": "Test API"}):
+        manager.save_mic_channel_calibration(1.25, DEVICE, 1, 94, 44100, 10,
+            calibration_path=str(path), calibrated_at="2026-10-07T00:00:00+00:00")
+        before = path.read_bytes()
+        widget = InputCalibration(dict(DEVICE), [1])
+        widget.saved_v2pa_factors = {1: 1.25}
+        widget._refresh_channel_display()
+        changed = []
+        widget.calibration_state_changed.connect(changed.append)
+        with mock.patch("ui.calibration_window.save_mic_channel_factor",
+                        side_effect=lambda *args: manager.save_mic_channel_factor(*args, calibration_path=str(path))) as save:
+            _edit_coefficient(widget, "" if text is None else text, qapp)
+            widget.standard_spl_ii.setFocus()
+            qapp.processEvents()
+            record = manager.load_mic_channel_calibrations(DEVICE, str(path))[1]
+            if text == "2.123456789012345":
+                assert record["v2pa_factor"] == float(text)
+                assert record["standard_spl_db"] is None
+                assert record["sample_rate_hz"] is None
+                assert record["duration_seconds"] is None
+                assert changed == [True]
+                save.assert_called_once()
+            else:
+                assert path.read_bytes() == before
+                assert changed == []
+                save.assert_not_called()
+        widget.close()
+
+
+@pytest.mark.parametrize("action", ["calibrate", "reset"])
+def test_manual_programmatic_action_saves_before_existing_operation(qapp, action):
+    widget = InputCalibration(dict(DEVICE), [1, 0])
+    widget.calibration_popup = mock.Mock()
+    events = []
+    with mock.patch("ui.calibration_window.save_mic_channel_factor",
+                    side_effect=lambda *args: events.append(("save", args[2]))), \
+            mock.patch("ui.calibration_window.clear_mic_channel_calibrations",
+                       side_effect=lambda *args: events.append(("reset", args[1])) or True):
+        _edit_coefficient(widget, "2.5", qapp)
+        if action == "calibrate":
+            widget.clicked_calibration()
+            assert events == [("save", 1)]
+            assert widget.active_capture_channel == 1
+            assert widget.v2pa_factor_lineedit.isReadOnly()
+        else:
+            widget.reset_btn_clicked()
+            assert events == [("save", 1), ("reset", [1, 0])]
+        widget.close_recording()
+        assert widget.v2pa_factor_lineedit.isReadOnly()
+    widget.close()
+
+
+@pytest.mark.parametrize("error", [MicCalibrationFormatError, MicCalibrationIOError])
+def test_manual_mic_failed_write_preserves_confirmed_cache_and_signal(qapp, error):
+    widget = InputCalibration(dict(DEVICE), [1])
+    widget.saved_v2pa_factors = {1: 1.123456789012345}
+    widget._refresh_channel_display()
+    changed = []
+    widget.calibration_state_changed.connect(changed.append)
+    widget.calibration_popup = mock.Mock()
+    with mock.patch("ui.calibration_window.save_mic_channel_factor", side_effect=error("denied")):
+        _edit_coefficient(widget, "2.5", qapp)
+        widget.standard_spl_i.setFocus()
+        qapp.processEvents()
+        assert widget.saved_v2pa_factors == {1: 1.123456789012345}
+        assert widget.v2pa_factor_lineedit.text() == "1.123456789012345"
+        assert changed == []
+        widget.calibration_popup.assert_called_once()
+    widget.close()
+
+
+@pytest.mark.parametrize("change", ["busy", "device", "channel", "unavailable", "capture"])
+def test_manual_mic_commit_rechecks_admission_without_timer(qapp, change):
+    from unit_test.ui.test_ve3668n_calibration import CalibrationBridgeFake
+    bridge = CalibrationBridgeFake(None)
+    widget = InputCalibration(dict(DEVICE), [1], recording_bridge=bridge)
+    widget.calibration_popup = mock.Mock()
+    with mock.patch("ui.calibration_window.save_mic_channel_factor") as save:
+        _edit_coefficient(widget, "2.5", qapp)
+        if change == "busy":
+            bridge.service.busy = True
+        elif change == "device":
+            widget.input_device["index"] = 8
+        elif change == "channel":
+            widget.input_channels = []
+        elif change == "capture":
+            widget.active_capture_channel = 1
+        else:
+            widget.input_device = None
+        assert not widget.coefficient_editor.commit_pending()
+        save.assert_not_called()
+        assert widget.saved_v2pa_factors == {}
+        assert widget.v2pa_factor_lineedit.text() == ""
+    widget.close_recording()
+    widget.close()
+
+
+def test_automatic_capture_keeps_existing_blank_result_display(qapp):
+    from PyQt5.QtTest import QTest
+    widget = InputCalibration(dict(DEVICE), [1])
+    widget.saved_v2pa_factors = {1: 1.25}
+    widget._refresh_channel_display()
+    with mock.patch("ui.calibration_window.save_mic_channel_factor") as save:
+        assert widget.clicked_calibration()
+        QTest.qWait(150)
+        assert widget.v2pa_factor_lineedit.text() == ""
+        assert widget.v2pa_factor_lineedit.isReadOnly()
+        save.assert_not_called()
+    widget.close_recording()
+    widget.close()
+
+
 @pytest.fixture(scope="session")
 def qapp(ui_qapp):
     return ui_qapp
@@ -281,7 +524,7 @@ def test_selector_lists_physical_channels_and_prefers_first_missing(qapp):
     ] == [0, 2]
     assert widget.current_channel == 2
     assert widget.channel_status_label.text() == "状态: 未校准"
-    assert widget.v2pa_factor_lineedit.isReadOnly() is True
+    assert widget.v2pa_factor_lineedit.isReadOnly() is False
 
 
 def test_all_calibrated_starts_on_first_channel(qapp):
@@ -449,10 +692,10 @@ def test_selector_change_refreshes_saved_factor_and_status(qapp):
     assert widget.v2pa_factor_lineedit.text() == ""
 
 
-def test_factor_display_is_read_only_without_manual_mode_controls(qapp):
+def test_factor_display_is_editable_without_manual_mode_controls(qapp):
     widget = InputCalibration(DEVICE, [0])
 
-    assert widget.v2pa_factor_lineedit.isReadOnly() is True
+    assert widget.v2pa_factor_lineedit.isReadOnly() is False
     assert widget.v2pa_factor_lineedit.isEnabled() is True
     assert [button.text() for button in widget.findChildren(QRadioButton)] == [
         "94  dB",
