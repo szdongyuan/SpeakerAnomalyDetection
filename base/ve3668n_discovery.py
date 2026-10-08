@@ -53,17 +53,56 @@ def _analog_channels(routes, name):
     return validate_physical_channels(channels)
 
 
-def discover_devices(sdk):
+def _observed_call(observer, phase, call, *, checkpoint=None, on_failure=None, **fields):
+    def notify(event, **details):
+        if observer is not None:
+            try:
+                observer(event=event, phase=phase, at=time.perf_counter(), **fields, **details)
+            except Exception:
+                # Optional external observers must never change discovery policy
+                # or mask SDK failures. Discovery's own diagnostics remain intact.
+                return
+
+    if checkpoint is not None:
+        checkpoint()
+    notify("BEGIN")
+    try:
+        if checkpoint is not None:
+            checkpoint()
+        result = call()
+    except Exception as exc:
+        # SDK calls can raise arbitrary native errors; preserve the exact error
+        # before optional diagnostic delivery can yield past a caller deadline.
+        if on_failure is not None:
+            on_failure(exc)
+        notify("ERROR", error=exc)
+        raise
+    notify("END", result=result)
+    if checkpoint is not None:
+        checkpoint()
+    return result
+
+
+def discover_devices(sdk, *, observer=None, checkpoint=None, on_failure=None):
     """Enumerate through a caller-owned SDK; no loading, tasks, or persistence.
 
     Attributes are queried ONLY by native name (the documented SDK contract).
     Simultaneously duplicate names cannot be disambiguated by address. IDs are
     checked across all verified identities before any record is made available.
     The new input_config is a discovery placeholder, not a restored profile.
+    A caller's cancellation checkpoint is separate from the optional observer;
+    cancellation must raise its own non-SDK, non-ValueError control exception.
+    on_failure records decisive failures before diagnostic delivery; ordinary
+    per-device rejection and optional status errors retain their filtering.
     """
+    def unfiltered_failure(exc):
+        if on_failure is not None and not isinstance(exc, (vkinging_sdk.VkDaqError, ValueError)):
+            on_failure(exc)
+
     diagnostics = []
     try:
-        entries = sdk.get_devices()
+        entries = _observed_call(observer, "get_devices", sdk.get_devices,
+                                 checkpoint=checkpoint, on_failure=on_failure)
     except vkinging_sdk.VkDaqError as exc:
         return DiscoveryResult(diagnostics=(str(exc),))
     if not isinstance(entries, (tuple, list)):
@@ -89,11 +128,19 @@ def discover_devices(sdk):
             continue
         try:
             machine_id = normalize_machine_id(_text(
-                sdk.get_device_attribute(name, "MachineId"), "machine_id"))
+                _observed_call(observer, "get_device_attribute",
+                               lambda: sdk.get_device_attribute(name, "MachineId"),
+                               device_name=name, attribute="MachineId", checkpoint=checkpoint,
+                               on_failure=unfiltered_failure), "machine_id"))
             identities.append(machine_id)
             address = None if address is None else _text(address, "address", empty=True)
-            model = normalize_model(sdk.get_device_attribute(name, "Model"))
-            channels = _analog_channels(sdk.get_channels(name), name)
+            model = normalize_model(_observed_call(
+                observer, "get_device_attribute", lambda: sdk.get_device_attribute(name, "Model"),
+                device_name=name, attribute="Model", checkpoint=checkpoint,
+                on_failure=unfiltered_failure))
+            channels = _analog_channels(_observed_call(
+                observer, "get_channels", lambda: sdk.get_channels(name), device_name=name,
+                checkpoint=checkpoint, on_failure=unfiltered_failure), name)
             device = validate_device_snapshot({
                 "backend": VE_BACKEND, "model": model, "machine_id": machine_id,
                 "name": name, "address": address, "physical_channels": channels,
@@ -104,7 +151,10 @@ def discover_devices(sdk):
             diagnostics.append(f"{name}: {exc}")
             continue
         try:
-            _text(sdk.get_device_attribute(name, "DeviceStatus"), "DeviceStatus", empty=True)
+            _text(_observed_call(
+                observer, "get_device_attribute", lambda: sdk.get_device_attribute(name, "DeviceStatus"),
+                device_name=name, machine_id=machine_id, attribute="DeviceStatus", checkpoint=checkpoint,
+                on_failure=unfiltered_failure), "DeviceStatus", empty=True)
         except (vkinging_sdk.VkDaqError, ValueError) as exc:
             diagnostics.append(f"{name}: optional DeviceStatus: {exc}")
         candidates.append(device)
@@ -116,7 +166,7 @@ def discover_devices(sdk):
                                  if counts[device["machine_id"]] == 1), tuple(diagnostics))
 
 
-def resolve_device(sdk, machine_id, channels):
+def resolve_device(sdk, machine_id, channels, *, observer=None, checkpoint=None, on_failure=None):
     """Return a fresh route snapshot with channels in REQUEST order.
 
     Re-enumerate on every call. Capture must use its separately frozen request
@@ -124,7 +174,7 @@ def resolve_device(sdk, machine_id, channels):
     """
     machine_id = normalize_machine_id(_text(machine_id, "machine_id"))
     channels = validate_physical_channels(channels)
-    result = discover_devices(sdk)
+    result = discover_devices(sdk, observer=observer, checkpoint=checkpoint, on_failure=on_failure)
     matches = [device for device in result.devices if device["machine_id"] == machine_id]
     if len(matches) != 1:
         raise ValueError(f"machine_id {machine_id} unavailable: " + "; ".join(result.diagnostics))

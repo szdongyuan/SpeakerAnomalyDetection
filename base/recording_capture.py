@@ -78,7 +78,7 @@ class CaptureSlotState:
 
 class RecordingCapture:
     def __init__(self, request: RecordingRequest, *, backend=None,
-                 ve_stream_factory=None,
+                 ve_stream_factory=None, startup_budget=None, on_retry=None,
                  writer_factory=StreamingWavWriter,
                  metadata_appender=append_owned_recording_calibration_metadata_result,
                  blocksize=2048, queue_seconds=2.0, diagnostics=None):
@@ -94,6 +94,8 @@ class RecordingCapture:
         # Request-local tail only; the shared helper's maxima span a generation.
         self._tail_stats = {}
         self._ve_stream_factory = ve_stream_factory
+        self._startup_budget = startup_budget
+        self._on_retry = on_retry
         self._native_stream = None
         self._writer_factory = writer_factory
         self._metadata_appender = metadata_appender
@@ -364,9 +366,14 @@ class RecordingCapture:
             self._writer = self._writer_factory(req.path, sample_rate=req.sample_rate, channels=len(req.channels))
             self._stage = "device"
             factory = self._ve_stream_factory or Ve3668nInputStream
+            startup_options = {}
+            if self._startup_budget is not None:
+                startup_options["startup_budget"] = self._startup_budget
+            if self._on_retry is not None:
+                startup_options["on_retry"] = self._on_retry
             self._stream = self._native_stream = factory(
                 request=req, callback=self._input_callback, fail=self._fail,
-                stop_event=self._stop_requested,
+                stop_event=self._stop_requested, **startup_options,
             )
             if not self._cancelled.is_set() and self._stream.start():
                 self.started.set()
@@ -514,7 +521,13 @@ class RecordingCapture:
             else:
                 released = False
                 self._handles_released = False
-                self._fail("close_stream", "VE native handles are not released: " + "; ".join(stream.diagnostics))
+                if not (self._cancelled.is_set() and not self.started.is_set()
+                        and self._failure is None):
+                    self._fail("close_stream", "VE native handles are not released: " + "; ".join(stream.diagnostics))
+                # A cancelled cold start can return while its revoked owner is
+                # still cleaning up. Keep ownership unconfirmed, but preserve
+                # cancellation so the parent can protect older finalizers and
+                # defer retirement. Actual native failures still win above.
             for diagnostic in stream.diagnostics:
                 self._logger.warning("VE capture %s: %s", self.request.request_id, diagnostic)
             self._adapter_released = released and stream.handles_released
@@ -652,6 +665,7 @@ class RecordingCapture:
             elif self._cancelled.is_set():
                 self.outcome = RecordingCancelled(self.request.request_id, self.request.path,
                                                   self.raw_frames, self._final_frames,
+                                                  handles_released=self._handles_released,
                                                   cleanup_paths=tuple(sorted(self._owned_temporary_paths)))
             self.done.set()
             if self._consume_lane is not None:

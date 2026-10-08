@@ -4,7 +4,7 @@ import multiprocessing
 import queue
 import threading
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from contextlib import ExitStack
 
 from base.log_manager import LogManager
@@ -28,6 +28,7 @@ from base.recording_process_protocol import (
     VePrewarmStarted,
     VeReleaseOutcome,
     WorkerFatal,
+    VE_RESOURCE_RETRY,
 )
 from base.recording_worker_pipeline import WorkerCapturePipeline
 from base.ve3668n_resource import VeResourceController, VeResourceFault
@@ -117,6 +118,9 @@ class _WorkerPrewarm:
     progress_frames: int = 0
     detaching_sent: bool = False
     terminal_sent: bool = False
+    startup_thread: object = None
+    startup_done: threading.Event = field(default_factory=threading.Event)
+    fault_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 def recording_worker(control, preview, generation, backend_factory, backend_options,
@@ -299,6 +303,14 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
     prewarm_ids = set()
     deferred_native_fatals = []
     last_terminal_prewarm = None
+    prewarm_startups = []
+
+    def emit_retry(proof, *, ordered=False):
+        if broken.is_set() or stopping is not None:
+            raise RuntimeError("worker stopped before retry proof delivery")
+        publish = emit_ordered if ordered else emit
+        if not publish(VE_RESOURCE_RETRY, proof.request_id, proof):
+            raise RuntimeError("retry proof control queue rejected delivery")
 
     def emit_worker_fatal(stage, source, *, ordered=False):
         nonlocal worker_fatal_sent
@@ -327,18 +339,34 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         return True
 
     def remember_prewarm_fault(state, stage, message):
-        if state.first_fault is not None:
-            return
-        fault = None if state.adapter is None else state.adapter.failure_snapshot
-        if fault is None:
-            detail = str(message).strip() or f"{stage} failed"
-            fault = VeResourceFault(stage, None, detail)
-        state.first_fault = fault
+        with state.fault_lock:
+            if state.first_fault is not None:
+                return
+            fault = None if state.adapter is None else state.adapter.failure_snapshot
+            if fault is None:
+                detail = str(message).strip() or f"{stage} failed"
+                fault = VeResourceFault(stage, None, detail)
+            state.first_fault = fault
+
+    def start_prewarm(state):
+        try:
+            state.adapter.start()
+        except Exception as exc:
+            # Adapter startup is the external SDK/control-callback boundary.
+            # Preserve the fault and release through its existing owner path.
+            remember_prewarm_fault(state, "prewarm", exc)
+            state.adapter.stop()
+        finally:
+            state.startup_done.set()
 
     def emit_prewarm_terminal(state):
         nonlocal prewarm, last_terminal_prewarm
         if state.terminal_sent:
             return False
+        if state.startup_thread is not None:
+            state.startup_thread.join(0)
+            if state.startup_thread.is_alive():
+                return False
         adapter = state.adapter
         if adapter is not None and state.first_fault is None:
             state.first_fault = adapter.failure_snapshot
@@ -378,7 +406,9 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         if state is None or state.terminal_sent:
             return
         if state.adapter is not None:
-            state.adapter.stop()
+            state.adapter.stop_event.set()
+            if state.startup_done.is_set() or state.adapter.started.is_set():
+                state.adapter.stop()
         if state.first_fault is None:
             remember_prewarm_fault(state, "cancelled", detail)
         # A detach timeout is itself a terminal ownership fact. Publish it as
@@ -412,6 +442,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         controller = VeResourceController(
             sdk_factory=sdk_factory,
             fatal=lambda stage, message: native_fatals.put((stage, message)),
+            logger=logger, generation=generation,
         )
         emit("ready")
         while True:
@@ -474,6 +505,8 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                     if command.payload.device.get("backend") == VE_BACKEND:
                         diagnostics.start_sampler()
                         capture_dependencies["diagnostics"] = diagnostics
+                        capture_dependencies["startup_budget"] = command.startup_budget
+                        capture_dependencies["on_retry"] = emit_retry
                     capture = RecordingCapture(
                         command.payload, ve_stream_factory=controller.stream,
                         **capture_dependencies)
@@ -602,9 +635,19 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
 
                     try:
                         state.adapter = controller.prewarm(
-                            request=state.request, fail=prewarm_failed)
-                        state.adapter.start()
+                            request=state.request, fail=prewarm_failed,
+                            startup_budget=command.startup_budget,
+                            on_retry=lambda proof: emit_retry(proof, ordered=True))
+                        state.startup_thread = threading.Thread(
+                            target=start_prewarm, args=(state,),
+                            name="recording-prewarm-startup", daemon=True)
+                        state.startup_thread.start()
+                        prewarm_startups.append(state.startup_thread)
                     except Exception as exc:
+                        # Construction/thread-start boundary acquired no running
+                        # startup runner on failure; diagnose and release adapter.
+                        state.startup_thread = None
+                        state.startup_done.set()
                         remember_prewarm_fault(state, "prewarm", exc)
                         if state.adapter is not None:
                             state.adapter.stop()
@@ -719,14 +762,20 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                                      active_prewarm.request.signature,
                                      progress.started_at, progress.frames,
                                      progress.last_frame_at))
-                if adapter is not None and adapter.completed.is_set():
-                    emit_prewarm_terminal(active_prewarm)
+                if (adapter is not None and active_prewarm.startup_done.is_set()
+                        and (adapter.completed.is_set() or active_prewarm.first_fault is not None)):
+                    if active_prewarm.first_fault is not None:
+                        adapter.stop()
+                    if not emit_prewarm_terminal(active_prewarm):
+                        continue
                     if deferred_native_fatals:
                         stage, message = deferred_native_fatals[0]
                         emit_worker_fatal(stage, message, ordered=True)
                         deferred_native_fatals.clear()
                         last_terminal_prewarm = None
                         broken.set()
+
+            prewarm_startups = [thread for thread in prewarm_startups if thread.is_alive()]
 
             state = pipeline.active
             if state is not None:
@@ -829,7 +878,13 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
             controller_closed = release_outcome.success
             controller_close_failed = not release_outcome.success
         if prewarm is not None:
+            if prewarm.startup_thread is not None:
+                prewarm.startup_thread.join(max(0, cleanup_deadline - time.monotonic()))
             emit_prewarm_terminal(prewarm)
+        startup_cleanup_failed = False
+        for thread in prewarm_startups:
+            thread.join(max(0, cleanup_deadline - time.monotonic()))
+            startup_cleanup_failed |= thread.is_alive()
         capture_cleanup_failed = False
         for state in cleanup_states:
             if not state.capture.join(max(0, cleanup_deadline - time.monotonic())):
@@ -853,7 +908,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         # stop without joining or extending the existing log-drain deadlines.
         diagnostics.close(timeout=0)
         finished.set()
-        if controller_close_failed or capture_cleanup_failed or audio_cleanup_failed:
+        if controller_close_failed or capture_cleanup_failed or audio_cleanup_failed or startup_cleanup_failed:
             exit_with_log_drain(1)
         if audio_initialized:
             try:

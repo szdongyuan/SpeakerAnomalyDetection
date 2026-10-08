@@ -1,4 +1,8 @@
-"""VE parent confirmation thresholds measured from target sample completion."""
+"""Shared VE startup budgets and parent capture confirmation thresholds."""
+
+VE_STARTUP_FIRST_ATTEMPT_TIMEOUT_SECONDS = 3.5
+VE_STARTUP_CLEANUP_TIMEOUT_SECONDS = 1.5
+VE_STARTUP_TOTAL_TIMEOUT_SECONDS = 10.0
 
 VE_CAPTURE_RELEASE_SLOW_SECONDS = 1.0
 VE_CAPTURE_RELEASE_TIMEOUT_SECONDS = 20.0
