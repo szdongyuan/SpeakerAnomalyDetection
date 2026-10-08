@@ -35,11 +35,13 @@ from base.recording_process_protocol import (
     VE_PREWARM_STARTED, VE_PREWARM_TERMINAL, VeLifecycleCounts,
     VePrewarmProgress, VePrewarmRequest, VePrewarmResult, VePrewarmStarted,
     VeReleaseOutcome, WorkerFatal,
+    VeResourceRetryProof, VE_RESOURCE_RETRY, VE_STARTUP_RECOVERY_TERMINAL_STAGES,
 )
 from base.recording_result_reader import ResultReader
 from base.recording_worker import recording_worker
 from base.ve3668n_capture_timing import VeCaptureDeadline
 from base.ve3668n_input import ve_acquisition_signature
+from base.ve_startup_policy import VeStartupBudget
 from consts.recording_timeout_consts import (
     VE_CAPTURE_RELEASE_SLOW_SECONDS, VE_CAPTURE_RELEASE_TIMEOUT_SECONDS,
 )
@@ -53,7 +55,7 @@ _DISPATCH_KINDS = (
     "ready", "started", "finalizing", "preview", "progress", "completed",
     "failed", "cancelled", "capture_slot_released", "ve_released",
     "ve_release_failed", "worker_fatal", VE_PREWARM_STARTED,
-    VE_PREWARM_PROGRESS, VE_PREWARM_DETACHING, VE_PREWARM_TERMINAL, "unknown")
+    VE_PREWARM_PROGRESS, VE_PREWARM_DETACHING, VE_PREWARM_TERMINAL, VE_RESOURCE_RETRY, "unknown")
 
 
 class _TimedInboxItem(tuple):
@@ -162,6 +164,9 @@ class RecordingSession:
         self._sent = False
         self._deadline = None
         self._capture_requested_at = None
+        self._startup_budget = None
+        self._startup_retry_proof = None
+        self._cold_start = False
         self._capture_deadline = None
         self._slot_release_deadline = None
         self._slot_release_warning_sent = False
@@ -293,6 +298,8 @@ class _PendingVePrewarm:
     ownership_safe: bool = True
     prerequisite_release: bool = False
     validation_error: str | None = None
+    startup_budget: VeStartupBudget | None = None
+    startup_retry_proof: VeResourceRetryProof | None = None
 
 
 class RecordingService:
@@ -339,6 +346,8 @@ class RecordingService:
         self._retained_ve_signature = None
         self._retained_lifecycle_counts = None
         self._expected_next_lifecycle_counts = None
+        self._actual_lifecycle_counts = self._empty_ve_lifecycle_counts()
+        self._counts_retirement_pending = False
         self._ownership_uncertain = False
         self._leases = {}
         self._request_ids = set()
@@ -522,6 +531,11 @@ class RecordingService:
     def _empty_ve_lifecycle_counts():
         return VeLifecycleCounts(0, 0, 0, 0, 0, 0)
 
+    @staticmethod
+    def _counts_after_create(counts):
+        return replace(counts, sdk_open=counts.sdk_open + 1,
+                       task_create=counts.task_create + 1, task_start=counts.task_start + 1)
+
     def _begin_ve_prewarm(self, pending):
         if pending is not self._pending_ve_prewarm or pending.completed:
             return
@@ -595,9 +609,15 @@ class RecordingService:
         request = pending.current_request
         pending.phase = "starting"
         pending.start_sent_at = self._clock()
-        pending.start_deadline = pending.start_sent_at + self._start_timeout
+        if pending.startup_budget is None:
+            pending.startup_budget = VeStartupBudget.create(pending.start_sent_at, self._start_timeout)
+        if pending.startup_budget.remaining(self._clock()) <= 0:
+            self._retire_ve_prewarm(pending, "startup_deadline", "VE startup budget exhausted")
+            return
+        pending.start_deadline = pending.startup_budget.deadline
         worker.outgoing.put_nowait(RecordingEvent(
-            worker.generation, request.warmup_id, VE_PREWARM_COMMAND, request))
+            worker.generation, request.warmup_id, VE_PREWARM_COMMAND, request,
+            startup_budget=pending.startup_budget))
 
     def _remember_prewarm_fault(self, pending, stage, detail, *, code=None,
                                 frames=0, handles_released=False,
@@ -660,6 +680,17 @@ class RecordingService:
             except Exception:
                 self._logger.exception("VE prewarm callback failed")
 
+    def _prewarm_recovery_exhausted(self, pending, stage=None):
+        return (stage in VE_STARTUP_RECOVERY_TERMINAL_STAGES
+                or pending.startup_retry_proof is not None
+                or (pending.startup_budget is not None
+                    and (pending.startup_budget.remaining(self._clock()) <= 0
+                         # Lost transport/owner cannot prove that first-attempt
+                         # cleanup completed once revocation is due. An explicit
+                         # unrelated native fault retains its earlier semantics.
+                         or (stage in (None, "worker") and pending.phase == "starting"
+                             and self._clock() >= pending.startup_budget.first_attempt_deadline))))
+
     def _retire_ve_prewarm(self, pending, stage, detail, *, result=None,
                            retryable=True, release_failure=False):
         if pending.phase == "releasing":
@@ -674,6 +705,8 @@ class RecordingService:
                 pending.first_fault = result
         else:
             self._remember_prewarm_fault(pending, stage, detail)
+        exhausted = self._prewarm_recovery_exhausted(pending, stage)
+        retryable = retryable and not exhausted
         if release_failure:
             pending.phase = "retiring_release"
         elif retryable and pending.attempt == 1:
@@ -685,6 +718,11 @@ class RecordingService:
             self._finish_ve_prewarm(pending, success=False, ownership_safe=True)
         else:
             self._retire_generation(worker, stage, detail)
+            if exhausted:
+                # Notify at the policy deadline even if the owner cannot exit.
+                # Retirement continues to protect admission and ownership.
+                self._finish_ve_prewarm(pending, success=False, result=result,
+                                       ownership_safe=False)
 
     def _transition_prerequisite_release_failure(self, pending, detail, *, diagnostics=()):
         """Latch every prerequisite-release error into the same non-retry path."""
@@ -1000,7 +1038,8 @@ class RecordingService:
         if (worker is not None and not worker.retiring
                 and (session is None or session.generation == worker.generation)):
             worker.outgoing.put_nowait(RecordingEvent(worker.generation,
-                session.request.request_id if session else "", kind, payload))
+                session.request.request_id if session else "", kind, payload,
+                startup_budget=(session._startup_budget if kind == "start" and session else None)))
 
     def _begin(self, session):
         if session.cancel_requested:
@@ -1086,10 +1125,13 @@ class RecordingService:
                 session._child_released = False
                 session._sent = True
                 session.state = "starting"
-                now = time.monotonic()
+                now = self._clock()
                 session._deadline = now + self._start_timeout
                 if session.request.device.get("backend") == VE_BACKEND:
                     session._capture_requested_at = now
+                    session._startup_budget = VeStartupBudget.create(now, self._start_timeout)
+                    session._deadline = session._startup_budget.deadline
+                    session._cold_start = self._retained_ve_signature is None
                 self._command("start", session, session.request)
         if cancelled_before_send:
             self._cancelled(session)
@@ -1107,7 +1149,7 @@ class RecordingService:
             # Child finalizers have no cancellation command. Preserve the
             # request-scoped intent and apply it when its terminal arrives.
             return
-        session._deadline = time.monotonic() + self._cancel_timeout
+        session._deadline = self._clock() + self._cancel_timeout
         if session.reader is not None:
             session.reader.cancel()
         if session._child_released:
@@ -1135,7 +1177,7 @@ class RecordingService:
                                                            session.request.path, message)
             if session.reader is not None:
                 session.reader.cancel()
-            session._deadline = time.monotonic() + self._cancel_timeout
+            session._deadline = self._clock() + self._cancel_timeout
             self._notify(session, "failed", session.failure)
         self._release(session)
 
@@ -1190,10 +1232,10 @@ class RecordingService:
         lifecycle_event = (getattr(event, "kind", None) in (
             "capture_slot_released", "ve_released", "ve_release_failed", "worker_fatal",
             VE_PREWARM_STARTED, VE_PREWARM_PROGRESS, VE_PREWARM_DETACHING,
-            VE_PREWARM_TERMINAL)
+            VE_PREWARM_TERMINAL, VE_RESOURCE_RETRY)
             or isinstance(payload, (CaptureSlotReleased, VeReleaseOutcome, WorkerFatal,
                                     VePrewarmRequest, VePrewarmStarted,
-                                    VePrewarmProgress, VePrewarmResult)))
+                                    VePrewarmProgress, VePrewarmResult, VeResourceRetryProof)))
         terminal_event = (getattr(event, "kind", None) in ("completed", "failed", "cancelled")
                           or isinstance(payload, (RecordingResult, RecordingFailure,
                                                   RecordingCancelled)))
@@ -1203,6 +1245,9 @@ class RecordingService:
             VE_PREWARM_TERMINAL)
             or isinstance(payload, (VePrewarmRequest, VePrewarmStarted,
                                     VePrewarmProgress, VePrewarmResult)))
+        if (getattr(event, "kind", None) == VE_RESOURCE_RETRY
+                and self._pending_ve_prewarm is not None):
+            prewarm_boundary_event = True
         if any(type(getattr(event, name, None)) is not expected for name, expected in (
                 ("version", int), ("generation", int), ("request_id", str), ("kind", str))):
             if protocol_boundary_event:
@@ -1220,6 +1265,8 @@ class RecordingService:
                                             "worker event scalar envelope is invalid", cause)
             return
         if event.generation != worker.generation:
+            if event.generation < worker.generation and event.kind == VE_RESOURCE_RETRY:
+                return
             session = self._session(event.request_id)
             if session is not None and session.request.device.get("backend") != VE_BACKEND:
                 return  # Preserve legacy soundcard stale-event isolation.
@@ -1228,7 +1275,7 @@ class RecordingService:
             payload = event.payload
             if isinstance(payload, (CaptureSlotReleased, VeReleaseOutcome, WorkerFatal,
                                     VePrewarmRequest, VePrewarmStarted,
-                                    VePrewarmProgress, VePrewarmResult)):
+                                    VePrewarmProgress, VePrewarmResult, VeResourceRetryProof)):
                 payload.__post_init__()
             if event.kind == "progress":
                 RecordingProgress.__post_init__(payload)
@@ -1257,6 +1304,50 @@ class RecordingService:
             return
         capture = self._capture_session
         pending_prewarm = self._pending_ve_prewarm
+        if event.kind == VE_RESOURCE_RETRY:
+            if self._closing and (pending_prewarm is not None or capture is None):
+                # Shutdown removes prewarm admission, but live recording sessions
+                # still need queued evidence to authenticate their file/slot release.
+                return
+            proof = event.payload
+            warm = pending_prewarm is not None
+            target = pending_prewarm if warm else capture
+            cancelling = target is not None and not warm and (target.cancel_requested or self._closing)
+            valid = target is not None and self._retained_ve_signature is None
+            if warm:
+                valid = (valid and not target.completed and target.phase == "starting"
+                         and target.generation == worker.generation
+                         and proof.request_id == target.base_request.warmup_id
+                         and proof.signature == target.base_request.signature
+                         and proof.startup_budget == target.startup_budget
+                         and target.startup_retry_proof is None)
+            else:
+                valid = (valid and not target._terminal
+                         and target.state == "starting" and target._sent
+                         and target.generation == worker.generation
+                         and proof.request_id == target.request.request_id
+                         and proof.signature == self._request_signature(target.request)
+                         and proof.startup_budget == target._startup_budget
+                         and target._startup_retry_proof is None)
+            valid = (valid and proof.before_counts == self._actual_lifecycle_counts
+                     and proof.cleanup_confirmed_at <= self._clock()
+                     and (cancelling or self._clock() < proof.startup_budget.deadline))
+            if not valid:
+                if warm:
+                    self._retire_ve_prewarm(target, "protocol", "invalid VE retry proof context", retryable=False)
+                else:
+                    self._retire_generation(worker, "protocol", "invalid VE retry proof context", capture)
+                return
+            if warm:
+                target.startup_retry_proof = proof
+            else:
+                # Cancellation may overtake a proof already in the worker FIFO.
+                # Authenticate past cleanup without altering cancel state or its
+                # deadline. The terminal still determines safe deferred retirement.
+                target._startup_retry_proof = proof
+            self._actual_lifecycle_counts = proof.after_cleanup_counts
+            self._expected_next_lifecycle_counts = self._counts_after_create(proof.after_cleanup_counts)
+            return
         if event.kind in (VE_PREWARM_STARTED, VE_PREWARM_PROGRESS,
                           VE_PREWARM_DETACHING, VE_PREWARM_TERMINAL):
             if self._closing:
@@ -1285,7 +1376,11 @@ class RecordingService:
                         or started.attempt != pending_prewarm.attempt
                         or started.signature != pending_prewarm.base_request.signature
                         or pending_prewarm.start_sent_at is None
-                        or not pending_prewarm.start_sent_at <= started.started_at <= now):
+                        or not pending_prewarm.start_sent_at <= started.started_at <= now
+                        or (pending_prewarm.startup_retry_proof is not None
+                            and started.started_at < pending_prewarm.startup_retry_proof.cleanup_confirmed_at)
+                        or (pending_prewarm.startup_budget is not None
+                            and started.started_at >= pending_prewarm.startup_budget.deadline)):
                     self._retire_ve_prewarm(
                         pending_prewarm, "protocol",
                         "VE prewarm started identity mismatch", retryable=False)
@@ -1374,8 +1469,16 @@ class RecordingService:
             pending_prewarm.detach_deadline = None
             pending_prewarm.results += (result,)
             if result.success:
+                expected = (self._expected_next_lifecycle_counts or
+                            (self._retained_lifecycle_counts if self._retained_ve_signature is not None
+                             else self._counts_after_create(self._actual_lifecycle_counts)))
+                if result.lifecycle_counts != expected:
+                    self._retire_ve_prewarm(pending_prewarm, "protocol",
+                                           "VE prewarm lifecycle count mismatch", retryable=False)
+                    return
                 self._retained_ve_signature = result.signature
                 self._retained_lifecycle_counts = result.lifecycle_counts
+                self._actual_lifecycle_counts = result.lifecycle_counts
                 self._expected_next_lifecycle_counts = None
                 self._finish_ve_prewarm(
                     pending_prewarm, success=True, result=result,
@@ -1430,15 +1533,18 @@ class RecordingService:
                 return
             preparing = pending.preparing
             self._retained_ve_signature = None
-            counts = self._expected_next_lifecycle_counts or self._retained_lifecycle_counts
-            if counts is not None:
-                self._expected_next_lifecycle_counts = replace(
-                    counts, sdk_open=counts.sdk_open + 1,
-                    task_create=counts.task_create + 1,
-                    task_start=counts.task_start + 1,
+            if outcome.released_signature is not None:
+                counts = self._retained_lifecycle_counts
+                if counts is None:
+                    self._retire_generation(worker, "protocol", "VE release has no validated count baseline")
+                    return
+                self._actual_lifecycle_counts = replace(
+                    counts,
                     task_stop=counts.task_stop + 1,
                     task_clear=counts.task_clear + 1,
                     sdk_close=counts.sdk_close + 1)
+            self._retained_lifecycle_counts = None
+            self._expected_next_lifecycle_counts = self._counts_after_create(self._actual_lifecycle_counts)
             self._finish_ve_release("released", outcome.diagnostics)
             if (isinstance(preparing, _PendingVePrewarm)
                     and preparing is self._pending_ve_prewarm
@@ -1497,12 +1603,12 @@ class RecordingService:
         is_ve = session.request.device.get("backend") == VE_BACKEND
         if event.kind == "progress":
             deadline = session._capture_deadline
-            if not is_ve or deadline is None or session._terminal or session.cancel_requested:
+            if not is_ve or deadline is None or session._terminal:
                 return
             progress = event.payload
             previous = deadline.snapshot()
             if (not previous.frames <= progress.frames <= session.request.target_samples
-                    or not previous.last_frame_at <= progress.last_frame_at <= time.monotonic()):
+                    or not previous.last_frame_at <= progress.last_frame_at <= self._clock()):
                 return
             # Equal counts are deliberately a no-op, even with a newer time.
             deadline.observe(progress.frames, at=progress.last_frame_at)
@@ -1539,14 +1645,19 @@ class RecordingService:
                 # Admission cannot observe this tentative transition while the
                 # lock is held. The timestamp after it is the authoritative t1.
                 self._capture_session = None
-                admitted_at = time.monotonic()
+                admitted_at = self._clock()
                 if admitted_at > session._slot_release_deadline:
                     self._capture_session = session
                     late = True
                 else:
                     session._slot_release_deadline = None
+                    if session.cancel_requested and not session._terminal:
+                        # Capture cancellation is acknowledged by the verified
+                        # adapter/writer release; file finalization may continue.
+                        session._deadline = None
                     session._slot_lifecycle_counts = counts
                     self._retained_lifecycle_counts = counts
+                    self._actual_lifecycle_counts = counts
                     self._expected_next_lifecycle_counts = None
                     self._retained_ve_signature = self._request_signature(session.request)
                     session._slot_released_at = admitted_at
@@ -1580,24 +1691,37 @@ class RecordingService:
             if session.callbacks.preview is None:
                 self.release_preview(session.request.request_id, snapshot.sequence)
         elif event.kind == "finalizing" and not session._terminal:
+            if is_ve and (session.cancel_requested or self._closing):
+                return
             if session.state == "recording":
                 session.state = "finalizing"
             self._notify_finalizing(session)
         elif event.kind == "started" and not session._terminal:
             if session.state == "starting":
                 if is_ve:
+                    if session._capture_deadline is not None:
+                        return  # A queued duplicate cannot reset authenticated time.
                     if (event.payload is None or session._capture_requested_at is None
-                            or not session._capture_requested_at <= event.payload <= time.monotonic()):
+                            or not session._capture_requested_at <= event.payload <= self._clock()
+                            or (session._startup_retry_proof is not None
+                                and event.payload < session._startup_retry_proof.cleanup_confirmed_at)
+                            or (session._startup_budget is not None
+                                and event.payload >= session._startup_budget.deadline)):
                         return
                     session._capture_deadline = VeCaptureDeadline(
-                        session.request.sample_rate, session.request.target_samples, event.payload)
+                        session.request.sample_rate, session.request.target_samples, event.payload,
+                        clock=self._clock)
                 session._observe_capture_started()
-                session.state = "recording"
                 if is_ve:
                     self._retained_ve_signature = self._request_signature(session.request)
                     if (self._retained_lifecycle_counts is None
                             and self._expected_next_lifecycle_counts is None):
                         self._expected_next_lifecycle_counts = VeLifecycleCounts(1, 1, 1, 0, 0, 0)
+                    if session.cancel_requested or self._closing:
+                        # Preserve evidence for queued progress/slot/terminal
+                        # validation without reviving UI state or its deadline.
+                        return
+                session.state = "recording"
                 if not session.cancel_requested:
                     session._deadline = None
                 self._notify(session, "started")
@@ -1630,24 +1754,39 @@ class RecordingService:
                     worker, session, "worker cleanup paths conflict with another session lease")
                 return
             session._cleanup_paths = descriptor.cleanup_paths
-            if not descriptor.handles_released:
+            cancelled_start_pending_cleanup = (
+                not descriptor.handles_released and is_ve and event.kind == "cancelled"
+                and session.cancel_requested and session._cold_start
+                and session._capture_deadline is None and session._target_reached_at is None
+                and session._slot_released_at is None
+                and descriptor.raw_frames == 0 and descriptor.final_frames == 0)
+            if not descriptor.handles_released and not cancelled_start_pending_cleanup:
                 failure = descriptor if event.kind == "failed" else None
                 self._retire_terminal_fault(
                     worker, session, "worker retained file/device handles",
                     stage="close", failure=failure)
                 return
-            # Only a fully validated, handle-released descriptor crosses the
-            # trust boundary. From here reader/UI flow may safely continue even
-            # if another request later retires this generation.
+            # Cancelled initialization can finish before its owner. Preserve
+            # that uncertainty and the path lease until OS death, while older
+            # finalizers finish before the deferred generation retirement.
             session.descriptor = descriptor
-            session._child_released = True
+            session._child_released = descriptor.handles_released
+            if cancelled_start_pending_cleanup:
+                session._deadline = None
+            if (is_ve and event.kind == "cancelled" and session._cold_start
+                    and session._slot_released_at is None):
+                # A cancelled partial initialization has no count-bearing slot
+                # proof. Drain older finalizers before retiring this generation;
+                # do not admit a new request with an unverified native baseline.
+                self._counts_retirement_pending = True
+                self._ownership_uncertain = True
             if is_ve and session._slot_released_at is None and self._capture_session is session:
                 self._capture_session = None
             if event.kind == "failed":
                 session._trusted_terminal = is_ve
                 self._fail(session, descriptor.stage, descriptor.message, descriptor)
             elif session.cancel_requested or event.kind == "cancelled":
-                session._trusted_terminal = is_ve
+                session._trusted_terminal = is_ve and descriptor.handles_released
                 self._cancelled(session)
             elif event.kind == "completed" and not session._terminal:
                 session._trusted_terminal = is_ve
@@ -1936,6 +2075,7 @@ class RecordingService:
                     "recording worker exited during VE prewarm")
                 pending_prewarm.phase = (
                     "retiring_retry" if pending_prewarm.attempt == 1
+                    and not self._prewarm_recovery_exhausted(pending_prewarm)
                     else "retiring_final")
         if not worker.retiring:
             self._retire_generation(worker, "worker", "recording worker exited before result acceptance")
@@ -1966,6 +2106,8 @@ class RecordingService:
         self._retained_ve_signature = None
         self._retained_lifecycle_counts = None
         self._expected_next_lifecycle_counts = None
+        self._actual_lifecycle_counts = self._empty_ve_lifecycle_counts()
+        self._counts_retirement_pending = False
         for session in sessions:
             self._release(session)
             if (session.request.device.get("backend") != VE_BACKEND
@@ -1978,6 +2120,9 @@ class RecordingService:
                 and pending_prewarm is not None and not pending_prewarm.completed
                 and pending_prewarm.generation == worker.generation):
             if pending_prewarm.phase == "retiring_retry":
+                if self._prewarm_recovery_exhausted(pending_prewarm):
+                    self._finish_ve_prewarm(pending_prewarm, success=False, ownership_safe=True)
+                    return
                 pending_prewarm.phase = "retry_wait"
                 pending_prewarm.retry_deadline = self._clock() + self._retry_delay
                 pending_prewarm.generation = None
@@ -1999,6 +2144,12 @@ class RecordingService:
         self.threads = retained
         now = self._clock()
         worker = self._worker
+        if (worker is not None and not worker.retiring and self._counts_retirement_pending
+                and all(session._trusted_terminal or session._terminal
+                        for session in self._sessions.values()
+                        if session.generation == worker.generation)):
+            self._counts_retirement_pending = False
+            self._retire_generation(worker, "cancelled", "cancelled VE initialization requires a fresh count baseline")
         if worker is not None:
             if worker.process.pid is not None and not worker.process.is_alive():
                 self._dead(worker)
@@ -2057,6 +2208,9 @@ class RecordingService:
             elif (pending_prewarm.phase == "retry_wait"
                     and pending_prewarm.retry_deadline is not None
                     and now >= pending_prewarm.retry_deadline):
+                if self._prewarm_recovery_exhausted(pending_prewarm):
+                    self._finish_ve_prewarm(pending_prewarm, success=False, ownership_safe=True)
+                    return
                 pending_prewarm.retry_deadline = None
                 pending_prewarm.attempt = 2
                 self._dispatch_ve_prewarm_attempt(pending_prewarm)

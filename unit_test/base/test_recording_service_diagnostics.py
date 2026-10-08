@@ -89,7 +89,7 @@ def test_timeout_snapshot_uses_original_decision_clock(monkeypatch, tmp_path):
     probe.service._clock = clock
     probe.service._tick()
     assert probe.session.failure.stage == "capture_release_timeout"
-    assert len(calls) == 2  # Original tick + terminate deadline only.
+    assert len(calls) == 3  # Tick, failure/cancel deadline, and terminate deadline.
     record = next(m for m in messages(probe.service) if "stage=parent_release_timeout" in m)
     fields = json.loads(record.split(" details=", 1)[1].split(" summary=", 1)[0])
     assert (fields["t0"], fields["deadline"], fields["decision_now"]) == (100.1, 120.1, 120.1)

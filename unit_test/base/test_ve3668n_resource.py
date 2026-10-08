@@ -13,6 +13,7 @@ from base.recording_process_protocol import (
     VeLifecycleCounts,
     VePrewarmRequest,
 )
+from base.ve_startup_policy import VeStartupBudget
 from base.ve3668n_discovery import discover_devices
 from base.ve3668n_resource import (
     VeResourceConfigurationError,
@@ -425,7 +426,7 @@ def test_prewarm_normalizes_empty_initialization_exception_once(native):
     assert failures[0][0] == fatals[0][0] == "start_task"
     assert expected.detail in failures[0][1]
     assert expected.detail in fatals[0][1]
-    assert any(item.startswith("bind:") for item in adapter.diagnostics)
+    assert any(item.startswith("start_task:") for item in adapter.diagnostics)
     assert adapter.failure_snapshot == expected
     assert adapter.progress_snapshot.frames == 0
 
@@ -488,7 +489,7 @@ def test_prewarm_preserves_first_native_fault_over_cleanup_and_bind_diagnostics(
     assert failures == [("start_task", str(VkDaqError(
         "VkDaqStartTask", -12001,
         "iio_device_create_multi_buffer: invalid argument")))]
-    assert any(item.startswith("bind:") for item in adapter.diagnostics)
+    assert any(item.startswith("start_task:") for item in adapter.diagnostics)
     assert controller.release(.2).success is False
     assert adapter.failure_snapshot == expected
     assert controller.failure_snapshot == expected
@@ -839,7 +840,7 @@ def test_detach_timeout_is_permanently_fatal_and_never_restores_release_claim(tm
     assert controller.release(.1).success is False
 
 
-def test_bind_timeout_never_claims_attachment_and_permanently_fails(tmp_path):
+def test_cold_cleanup_timeout_never_claims_attachment_and_permanently_fails(tmp_path):
     entered = threading.Event()
     allow_factory = threading.Event()
 
@@ -848,14 +849,18 @@ def test_bind_timeout_never_claims_attachment_and_permanently_fails(tmp_path):
         assert allow_factory.wait(2)
         return CaptureSDK()
 
-    controller, fatals = controller_for(factory, bind_timeout=.03)
+    controller, fatals = controller_for(factory)
     adapter, _, failures = stream(controller, tmp_path)
-
-    assert adapter.start() is False and entered.is_set()
-    assert adapter.handles_released and not adapter.started.is_set()
-    assert controller.failed and len(fatals) == 1
-    allow_factory.set()
-    time.sleep(.05)
+    adapter.startup_budget = VeStartupBudget.create(time.monotonic(), .2, .03, .03)
+    try:
+        assert adapter.start() is False and entered.is_set()
+        assert not adapter.handles_released and not adapter.started.is_set()
+        assert controller.failed and len(fatals) == 1
+        assert failures[0][0] == "startup_cleanup_timeout"
+    finally:
+        allow_factory.set()
+        controller._owner.join(1)
+        assert not controller._owner.is_alive()
     assert len(failures) == 1
     assert controller.release(.1).success is False
 

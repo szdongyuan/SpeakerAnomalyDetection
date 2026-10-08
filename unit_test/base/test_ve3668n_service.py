@@ -114,6 +114,9 @@ def _service_prewarm_probe(monkeypatch, tmp_path, *, ready=True, retained=None,
     service._worker = worker
     service._generation = 1
     service._retained_ve_signature = retained
+    if retained is not None:
+        service._retained_lifecycle_counts = VeLifecycleCounts(1, 1, 1, 0, 0, 0)
+        service._actual_lifecycle_counts = service._retained_lifecycle_counts
     completions = []
     request = _prewarm_request(tmp_path)
     assert service.prewarm_ve(request, completions.append) == "accepted"
@@ -479,7 +482,7 @@ def test_prewarm_ready_timeout_fires_at_ten_seconds(monkeypatch, tmp_path):
     assert service._pending_ve_prewarm.first_fault.stage == "ready_timeout"
 
 
-def test_prewarm_start_timeout_fires_at_ten_seconds_but_bind_at_three_owns_cause(
+def test_prewarm_start_timeout_notifies_at_budget_and_preserves_earlier_native_cause(
         monkeypatch, tmp_path):
     timeout = _service_prewarm_probe(monkeypatch, tmp_path, start_timeout=10)
     timeout.clock.advance(9.999)
@@ -488,7 +491,8 @@ def test_prewarm_start_timeout_fires_at_ten_seconds_but_bind_at_three_owns_cause
     timeout.clock.advance(.001)
     timeout.service._tick()
     assert timeout.worker.retiring
-    assert timeout.service._pending_ve_prewarm.first_fault.stage == "start_timeout"
+    assert timeout.service._pending_ve_prewarm is None
+    assert timeout.completions[0].stage == "start_timeout"
 
     bind = _service_prewarm_probe(monkeypatch, tmp_path / "bind", start_timeout=10)
     bind.clock.advance(3)
@@ -1022,7 +1026,7 @@ def test_prewarm_worker_first_structured_fault_precedes_generation_fatal(tmp_pat
         assert terminal.code is None
         assert terminal.detail == "injected native start_task"
         assert terminal.handles_released
-        assert any("owner exited before binding" in item
+        assert any("injected native start_task" in item
                    for item in terminal.diagnostics)
         assert events[1].payload.stage == "start_task"
         if worker.control.poll(.2):

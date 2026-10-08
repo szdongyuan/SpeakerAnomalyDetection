@@ -17,6 +17,7 @@ from base.ve3668n_input import (
     ve_acquisition_signature,
 )
 from base.ve3668n_wav_metadata import validate_ve_wav_metadata
+from base.ve_startup_policy import VeStartupBudget
 from consts.recording_preview_consts import (
     MAIN_RECORDING_LIVE_MAX_POINTS,
     MAIN_RECORDING_LIVE_WINDOW_SECONDS,
@@ -32,6 +33,11 @@ VE_PREWARM_STARTED = "ve_prewarm_started"
 VE_PREWARM_PROGRESS = "ve_prewarm_progress"
 VE_PREWARM_DETACHING = "ve_prewarm_detaching"
 VE_PREWARM_TERMINAL = "ve_prewarm_terminal"
+VE_RESOURCE_RETRY = "ve_resource_retry"
+VE_STARTUP_RECOVERY_TERMINAL_STAGES = frozenset({
+    "startup_cleanup_timeout", "startup_cleanup_failed", "startup_retry_failed",
+    "startup_deadline",
+})
 
 
 @dataclass(frozen=True)
@@ -409,6 +415,60 @@ def _acquisition_signature(value):
 
 
 @dataclass(frozen=True)
+class VeResourceRetryProof:
+    """Confirmed first-attempt cleanup, before the sole replacement starts.
+
+    Task IDs identify logical attempts, including an attempt revoked before any
+    native operation. Counts record calls, not successful native acquisitions.
+    The receiving service must additionally validate its own session context.
+    """
+    request_id: str
+    generation: int
+    signature: tuple
+    attempt: int
+    old_task_id: str
+    new_task_id: str
+    startup_budget: VeStartupBudget
+    cleanup_confirmed_at: float
+    before_counts: VeLifecycleCounts
+    after_cleanup_counts: VeLifecycleCounts
+
+    def __post_init__(self):
+        for name in ("request_id", "old_task_id", "new_task_id"):
+            value = getattr(self, name)
+            if type(value) is not str or not value.strip():
+                raise ValueError(f"{name} must be a nonempty identity")
+        _integer("generation", self.generation, 1)
+        if type(self.attempt) is not int or self.attempt != 2:
+            raise ValueError("resource retry attempt must be 2")
+        if self.old_task_id == self.new_task_id:
+            raise ValueError("resource retry task identities must differ")
+        object.__setattr__(self, "signature", _acquisition_signature(self.signature))
+        if not isinstance(self.startup_budget, VeStartupBudget):
+            raise ValueError("startup_budget must be a VeStartupBudget")
+        VeStartupBudget.__post_init__(self.startup_budget)
+        _monotonic_time("cleanup_confirmed_at", self.cleanup_confirmed_at)
+        if not (self.startup_budget.first_attempt_deadline <= self.cleanup_confirmed_at
+                < self.startup_budget.cleanup_deadline
+                and self.cleanup_confirmed_at < self.startup_budget.deadline):
+            raise ValueError("cleanup confirmation must be within the startup cleanup window")
+        for name in ("before_counts", "after_cleanup_counts"):
+            counts = getattr(self, name)
+            if not isinstance(counts, VeLifecycleCounts):
+                raise ValueError(f"{name} must be a VeLifecycleCounts snapshot")
+            VeLifecycleCounts.__post_init__(counts)
+        delta = tuple(getattr(self.after_cleanup_counts, name) - getattr(self.before_counts, name)
+                      for name in ("sdk_open", "task_create", "task_start", "task_stop",
+                                   "task_clear", "sdk_close"))
+        if delta not in (
+            (0, 0, 0, 0, 0, 0), (1, 0, 0, 0, 0, 0),
+            (1, 0, 0, 0, 0, 1), (1, 1, 0, 0, 0, 1),
+            (1, 1, 0, 1, 1, 1), (1, 1, 1, 1, 1, 1),
+        ):
+            raise ValueError("resource retry cleanup count delta is invalid")
+
+
+@dataclass(frozen=True)
 class VePrewarmRequest:
     """Frozen, no-file request for one half-second VE acquisition attempt."""
     warmup_id: str
@@ -596,6 +656,7 @@ class RecordingEvent:
     kind: str
     payload: object = None
     version: int = 1
+    startup_budget: VeStartupBudget | None = None
 
     def __post_init__(self):
         if self.version != 1:
@@ -608,8 +669,17 @@ class RecordingEvent:
                              "completed", "failed", "cancelled", "capture_slot_released",
                              "release_ve", "ve_released", "ve_release_failed", "worker_fatal",
                              VE_PREWARM_COMMAND, VE_PREWARM_STARTED, VE_PREWARM_PROGRESS,
-                             VE_PREWARM_DETACHING, VE_PREWARM_TERMINAL):
+                             VE_PREWARM_DETACHING, VE_PREWARM_TERMINAL, VE_RESOURCE_RETRY):
             raise ValueError("unknown recording event kind")
+        if self.startup_budget is not None:
+            if not isinstance(self.startup_budget, VeStartupBudget):
+                raise ValueError("startup_budget must be a VeStartupBudget")
+            VeStartupBudget.__post_init__(self.startup_budget)
+            if not (self.kind == VE_PREWARM_COMMAND
+                    or (self.kind == "start" and isinstance(self.payload, RecordingRequest)
+                        and isinstance(self.payload.device, Mapping)
+                        and self.payload.device.get("backend") == VE_BACKEND)):
+                raise ValueError("startup_budget is only valid on VE startup commands")
         if (self.kind in ("release_ve", "ve_released", "ve_release_failed", "worker_fatal")
                 and self.request_id != ""):
             raise ValueError(f"{self.kind} request_id must be empty")
@@ -620,6 +690,7 @@ class RecordingEvent:
                           "ve_released": VeReleaseOutcome,
                           "ve_release_failed": VeReleaseOutcome,
                           "worker_fatal": WorkerFatal,
+                          VE_RESOURCE_RETRY: VeResourceRetryProof,
                           VE_PREWARM_COMMAND: VePrewarmRequest,
                           VE_PREWARM_STARTED: VePrewarmStarted,
                           VE_PREWARM_PROGRESS: VePrewarmProgress,
@@ -631,7 +702,7 @@ class RecordingEvent:
                 raise ValueError(f"{self.kind} payload must match its type and session")
             if expected in (CaptureSlotReleased, VeReleaseOutcome, WorkerFatal,
                             VePrewarmRequest, VePrewarmStarted, VePrewarmProgress,
-                            VePrewarmResult):
+                            VePrewarmResult, VeResourceRetryProof):
                 expected.__post_init__(self.payload)
             if expected in (VePrewarmRequest, VePrewarmStarted,
                             VePrewarmProgress, VePrewarmResult):

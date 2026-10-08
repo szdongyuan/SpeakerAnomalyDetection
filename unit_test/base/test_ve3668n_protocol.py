@@ -546,3 +546,154 @@ def test_ve_prewarm_result_revalidates_nested_lifecycle_counts():
 
     with pytest.raises(ValueError, match="task_clear"):
         result.__post_init__()
+
+
+def test_startup_budget_is_optional_sixth_field_and_only_for_ve_start(tmp_path):
+    from base.recording_process_protocol import RecordingEvent, VE_PREWARM_COMMAND
+    from base.ve_startup_policy import VeStartupBudget
+
+    budget = VeStartupBudget.create(100.0)
+    request = capture_request(tmp_path / "budget.wav")
+    legacy = RecordingEvent(2, request.request_id, "start", request, 1)
+    assert legacy.startup_budget is None
+    assert "startup_budget" not in request.__dataclass_fields__
+    for kind, payload, request_id in (
+        ("start", request, request.request_id),
+        (VE_PREWARM_COMMAND, _prewarm_request(), "warm-1"),
+    ):
+        event = RecordingEvent(2, request_id, kind, payload, 1, budget)
+        assert pickle.loads(pickle.dumps(event)) == event
+        event.__post_init__()
+        for invalid in ({}, True, 10.0):
+            with pytest.raises(ValueError, match="startup_budget"):
+                RecordingEvent(2, request_id, kind, payload, startup_budget=invalid)
+    legacy_request = capture_request(tmp_path / "legacy.wav", device=legacy_device(),
+                                     channels=(0,), calibration_metadata=None)
+    with pytest.raises(ValueError, match="startup_budget"):
+        RecordingEvent(2, legacy_request.request_id, "start", legacy_request,
+                       startup_budget=budget)
+    for kind in ("cancel", "ready", "shutdown", "started", "release_ve"):
+        with pytest.raises(ValueError, match="startup_budget"):
+            RecordingEvent(2, "", kind, startup_budget=budget)
+
+
+def test_start_command_revalidates_unpickled_startup_budget(tmp_path):
+    from base.recording_process_protocol import RecordingEvent
+    from base.ve_startup_policy import VeStartupBudget
+
+    request = capture_request(tmp_path / "budget.wav")
+    event = RecordingEvent(2, request.request_id, "start", request,
+                           startup_budget=VeStartupBudget.create(100.0))
+    object.__setattr__(event.startup_budget, "deadline", 111.0)
+    restored = pickle.loads(pickle.dumps(event))
+    with pytest.raises(ValueError, match="cap"):
+        restored.__post_init__()
+
+
+def _retry_proof(**changes):
+    from base.recording_process_protocol import VeLifecycleCounts, VeResourceRetryProof
+    from base.ve_startup_policy import VeStartupBudget
+
+    values = dict(request_id="ve", generation=2,
+                  signature=_prewarm_request().signature, attempt=2,
+                  old_task_id="task-1", new_task_id="task-2",
+                  startup_budget=VeStartupBudget.create(100.0),
+                  cleanup_confirmed_at=104.0,
+                  before_counts=VeLifecycleCounts(2, 2, 2, 2, 2, 2),
+                  after_cleanup_counts=VeLifecycleCounts(3, 3, 3, 3, 3, 3))
+    values.update(changes)
+    return VeResourceRetryProof(**values)
+
+
+@pytest.mark.parametrize("request_id", ["ve", "warm-1"])
+def test_retry_proof_is_frozen_serializable_and_event_matched(request_id):
+    from base.recording_process_protocol import RecordingEvent, VE_RESOURCE_RETRY
+
+    proof = _retry_proof(request_id=request_id)
+    event = RecordingEvent(2, request_id, VE_RESOURCE_RETRY, proof)
+    assert VE_RESOURCE_RETRY == "ve_resource_retry"
+    assert pickle.loads(pickle.dumps(event)) == event
+    with pytest.raises(AttributeError):
+        proof.attempt = 3
+    for generation, identity, payload in (
+        (3, request_id, proof), (2, "other", proof),
+        (2, request_id, None), (2, request_id, {}),
+    ):
+        with pytest.raises(ValueError):
+            RecordingEvent(generation, identity, VE_RESOURCE_RETRY, payload)
+
+
+@pytest.mark.parametrize("changes", [
+    {"request_id": ""}, {"request_id": 1}, {"request_id": " "},
+    {"generation": True}, {"generation": 0}, {"generation": 2.0},
+    {"attempt": True}, {"attempt": 1}, {"attempt": 3}, {"attempt": 2.0},
+    {"old_task_id": ""}, {"old_task_id": None}, {"old_task_id": " "},
+    {"new_task_id": ""}, {"new_task_id": 2}, {"new_task_id": " "},
+    {"new_task_id": "task-1"},
+    {"signature": None}, {"signature": ()},
+    {"signature": ("sounddevice", "machine", (7, 1), 51200, "IEPE", "V", -10., 10.)},
+    {"signature": ("vkinging", "machine", (7, 7), 51200, "IEPE", "V", -10., 10.)},
+    {"signature": ("vkinging", "machine", (7, 1), 51200, "IEPE", "V", -10., float("nan"))},
+    {"startup_budget": None}, {"startup_budget": {}},
+    {"cleanup_confirmed_at": True}, {"cleanup_confirmed_at": -1},
+    {"cleanup_confirmed_at": float("nan")}, {"cleanup_confirmed_at": float("inf")},
+    {"cleanup_confirmed_at": "104"}, {"cleanup_confirmed_at": 103.49},
+    {"cleanup_confirmed_at": 105.0}, {"cleanup_confirmed_at": 110.0},
+    {"before_counts": None}, {"after_cleanup_counts": {}},
+])
+def test_retry_proof_rejects_invalid_contract_fields(changes):
+    with pytest.raises(ValueError):
+        _retry_proof(**changes)
+
+
+def test_retry_confirmation_accepts_first_boundary_but_requires_time_left():
+    from base.ve_startup_policy import VeStartupBudget
+
+    assert _retry_proof(cleanup_confirmed_at=103.5).cleanup_confirmed_at == 103.5
+    with pytest.raises(ValueError):
+        _retry_proof(startup_budget=VeStartupBudget.create(100.0, total_timeout=3.5),
+                     cleanup_confirmed_at=103.5)
+
+
+def test_retry_proof_accepts_exactly_the_six_legal_cleanup_deltas():
+    from itertools import product
+    from base.recording_process_protocol import VeLifecycleCounts
+
+    allowed = {(0, 0, 0, 0, 0, 0), (1, 0, 0, 0, 0, 0),
+               (1, 0, 0, 0, 0, 1), (1, 1, 0, 0, 0, 1),
+               (1, 1, 0, 1, 1, 1), (1, 1, 1, 1, 1, 1)}
+    for delta in product(range(-1, 3), repeat=6):
+        after = VeLifecycleCounts(*(2 + value for value in delta))
+        if delta in allowed:
+            assert _retry_proof(after_cleanup_counts=after).after_cleanup_counts == after
+        else:
+            with pytest.raises(ValueError, match="delta"):
+                _retry_proof(after_cleanup_counts=after)
+
+
+@pytest.mark.parametrize("nested,field,value", [
+    ("before_counts", "sdk_open", -1),
+    ("after_cleanup_counts", "task_create", True),
+    ("startup_budget", "deadline", 111.0),
+    ("startup_budget", "first_attempt_deadline", float("nan")),
+    (None, "attempt", 3),
+    (None, "signature", ("vkinging", "machine", (7, 7), 51200, "IEPE", "V", -10., 10.)),
+])
+def test_retry_event_strictly_revalidates_unpickled_proof(nested, field, value):
+    from base.recording_process_protocol import RecordingEvent
+
+    proof = _retry_proof()
+    event = RecordingEvent(2, "ve", "ve_resource_retry", proof)
+    object.__setattr__(getattr(proof, nested) if nested else proof, field, value)
+    restored = pickle.loads(pickle.dumps(event))
+    with pytest.raises(ValueError):
+        restored.__post_init__()
+
+
+def test_startup_recovery_terminal_stages_are_a_finite_protocol_set():
+    from base.recording_process_protocol import VE_STARTUP_RECOVERY_TERMINAL_STAGES
+
+    assert VE_STARTUP_RECOVERY_TERMINAL_STAGES == frozenset({
+        "startup_cleanup_timeout", "startup_cleanup_failed", "startup_retry_failed",
+        "startup_deadline",
+    })

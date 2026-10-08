@@ -851,7 +851,7 @@ def test_authoritative_t1_after_atomic_slot_change_cannot_open_late_admission(mo
     def transition_clock():
         return 120.11 if probe.service._capture_session is None else 120.09
 
-    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=transition_clock))
+    monkeypatch.setattr(probe.service, "_clock", transition_clock)
     probe.service._event(probe.worker, RecordingEvent(
         1, probe.session.request.request_id, "capture_slot_released", slot_payload(probe)))
     assert probe.worker.retiring
