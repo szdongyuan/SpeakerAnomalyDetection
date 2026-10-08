@@ -388,9 +388,10 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
     programs_changed = pyqtSignal()
 
     def __init__(self, manager=None, queue_editor_callback=None, parent=None, *, contextual_queue_editor_callback=None,
-                 deletion_busy=None, deletion_completed=None, deletion_failed=None, deletion_error=None):
+                 deletion_busy=None, deletion_completed=None, deletion_failed=None, deletion_error=None,
+                 input_device_provider=None):
         super().__init__(parent)
-        self.manager = manager or ProductTestProjectConfigManager()
+        self.manager = manager or ProductTestProjectConfigManager(input_device_provider=input_device_provider)
         self.queue_editor_callback = queue_editor_callback
         self.contextual_queue_editor_callback = contextual_queue_editor_callback
         self._queue_reference_draft = None

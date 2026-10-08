@@ -709,6 +709,7 @@ class MainWindow(QMainWindow):
                 self._open_analysis_model_select,
                 self,
                 contextual_queue_editor_callback=self._open_analysis_model_select,
+                input_device_provider=lambda: self.mic,
                 deletion_busy=lambda: self.sequence_window._configuration_deletion_busy(),
                 deletion_completed=lambda target: self.sequence_window._configuration_deleted(target),
                 deletion_failed=lambda message: self.sequence_window._configuration_deletion_failed(message),

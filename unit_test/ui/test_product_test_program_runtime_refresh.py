@@ -903,8 +903,11 @@ def test_main_window_connects_program_changes_before_opening_dialog():
 
     class FakeDialog:
         def __init__(self, manager, queue_editor, parent, *, contextual_queue_editor_callback,
-                     deletion_busy, deletion_completed, deletion_failed, deletion_error):
+                     deletion_busy, deletion_completed, deletion_failed, deletion_error, input_device_provider):
             assert manager is None
+            assert input_device_provider() is parent.mic
+            parent.mic = {"backend": "vkinging"}
+            assert input_device_provider() is parent.mic
             assert queue_editor is parent._open_analysis_model_select
             assert contextual_queue_editor_callback is queue_editor
             assert all(callable(callback) for callback in (deletion_busy, deletion_completed, deletion_failed, deletion_error))
@@ -936,6 +939,7 @@ def test_main_window_connects_program_changes_before_opening_dialog():
         refresh_button()
 
     window = SimpleNamespace(
+        mic={"backend": "soundcard"},
         _open_analysis_model_select=refresh_nested_queue,
         sequence_window=sequence_window,
     )
@@ -961,7 +965,7 @@ def test_main_window_refreshes_button_after_exceptional_dialog_exit():
 
     class FakeDialog:
         def __init__(self, _manager, _queue_editor, _parent, *, contextual_queue_editor_callback,
-                     deletion_busy, deletion_completed, deletion_failed, deletion_error):
+                     deletion_busy, deletion_completed, deletion_failed, deletion_error, input_device_provider):
             assert contextual_queue_editor_callback is _queue_editor
             assert contextual_queue_editor_callback is _parent._open_analysis_model_select
             self.programs_changed = FakeSignal()

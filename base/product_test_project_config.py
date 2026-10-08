@@ -13,7 +13,7 @@ from base.analysis_config_validation import validate_analysis_config
 from base.recording_preview_config import resolve_recording_preview_time_mode
 from base.ve3668n_input import validate_range_index, validate_sample_rate
 from consts import error_code
-from consts.ve3668n_consts import VE_RANGE_INDEX_CONFIG_KEY, VE_RANGE_LABELS
+from consts.ve3668n_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY, VE_RANGE_LABELS
 from consts.product_test_project_consts import (
     CONDITION_NAME_KEY,
     EXPORT_RAW_AUDIO_CSV_KEY,
@@ -142,8 +142,11 @@ class QueueAcquisitionConflict(str):
 
 class ProductTestProjectValidator(object):
     @staticmethod
-    def validate_queue_acquisition_consistency(project_data, queue_catalog):
+    def validate_queue_acquisition_consistency(project_data, queue_catalog, *, check_range=False):
         """Validate explicit acquisition parameters of referenced queues on save."""
+        applicable_fields = [("sample_rate", "采样率", validate_sample_rate)]
+        if check_range:
+            applicable_fields.append((VE_RANGE_INDEX_CONFIG_KEY, "量程", validate_range_index))
         parameter_values = []
         rows = []
         for group_index, group, condition_index, condition in iter_test_conditions(
@@ -168,24 +171,22 @@ class ProductTestProjectValidator(object):
             detail = acquisition.get("detail")
             if not isinstance(detail, dict):
                 return [f"{context}的 acq.detail 必须是对象"]
-            for field, label, validator in (
-                ("sample_rate", "采样率", validate_sample_rate),
-                (VE_RANGE_INDEX_CONFIG_KEY, "量程", validate_range_index),
-            ):
+            for field, label, validator in applicable_fields:
                 if field not in detail:
                     return [f"{context}缺少{label}字段 {field}"]
                 try:
                     validator(detail[field])
                 except ValueError:
                     return [f"{context}的{label}字段 {field} 无效：{detail[field]!r}"]
-            values = (detail["sample_rate"], detail[VE_RANGE_INDEX_CONFIG_KEY])
-            description = (
-                f"{context}（采样率 {values[0]} Hz，量程 {VE_RANGE_LABELS[values[1]]}）"
-            )
+            values = tuple(detail[field] for field, _, _ in applicable_fields)
+            description = f"{context}（采样率 {values[0]} Hz"
+            if check_range:
+                description += f"，量程 {VE_RANGE_LABELS[values[1]]}"
+            description += "）"
             parameter_values.append(values)
             rows.append(description)
         fields = "、".join(
-            label for index, label in enumerate(("采样率", "量程"))
+            label for index, (_, label, _) in enumerate(applicable_fields)
             if len({values[index] for values in parameter_values}) > 1
         )
         if fields:
@@ -416,10 +417,13 @@ class ProductTestProjectConfigManager(object):
         program_dir=PRODUCT_TEST_PROGRAM_DIR,
         registry_path=PRODUCT_TEST_PROGRAM_REGISTRY_PATH,
         queue_registry_path=SEQUENCE_CONFIG_REGISTRY_PATH,
+        *,
+        input_device_provider=None,
     ):
         self.program_dir = os.path.abspath(program_dir)
         self.registry_path = os.path.abspath(registry_path)
         self.queue_registry_path = os.path.abspath(queue_registry_path)
+        self.input_device_provider = input_device_provider
 
     @staticmethod
     def default_project():
@@ -720,8 +724,9 @@ class ProductTestProjectConfigManager(object):
         if queue_catalog is None:
             queue_catalog = self.load_queue_catalog()
         if check_acquisition_consistency:
+            device = self.input_device_provider() if self.input_device_provider is not None else None
             errors = ProductTestProjectValidator.validate_queue_acquisition_consistency(
-                project_data, queue_catalog
+                project_data, queue_catalog, check_range=(device or {}).get("backend") == VE_BACKEND
             )
             if errors:
                 return errors, queue_catalog

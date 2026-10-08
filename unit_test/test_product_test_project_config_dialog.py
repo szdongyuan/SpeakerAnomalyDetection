@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QApplication, QComboBox, QFileDialog, QInputDialog, 
 from base.load_config import LoadUiConfig
 from base.sequence_queue_references import SequenceQueueReferenceScanner
 from base.product_test_project_config import ProductTestProjectConfigManager
+from consts.ve3668n_consts import VE_BACKEND
 from consts import ui_style_const
 from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
 from ui.product_test_project_config_dialog import (
@@ -32,7 +33,7 @@ def app():
     application.processEvents()
 
 
-def make_manager(tmp_path):
+def make_manager(tmp_path, *, input_device_provider=lambda: {"backend": VE_BACKEND}):
     program_dir = tmp_path / "product_test_programs"
     queue_dir = tmp_path / "analysis_sequence_config"
     program_dir.mkdir()
@@ -41,6 +42,7 @@ def make_manager(tmp_path):
         str(program_dir),
         str(program_dir / "program_registry.json"),
         str(queue_dir / "sequence_config_registry.json"),
+        input_device_provider=input_device_provider,
     )
 
 
@@ -166,6 +168,101 @@ def prepare_project(manager, tmp_path, conditions=None):
 def close_dialog(dialog):
     dialog._set_dirty(False)
     dialog.close()
+
+
+@pytest.mark.parametrize("save_as", [False, True])
+@pytest.mark.parametrize("variant", ["missing", "invalid", "different", "no_device", "rate_mismatch", "unavailable_vk", "late_vk"])
+def test_device_context_save_paths(app, tmp_path, monkeypatch, save_as, variant):
+    import ui.product_test_project_config_dialog as dialog_module
+
+    device = None if variant == "no_device" else {"backend": "soundcard"}
+    if variant == "unavailable_vk":
+        device = {"backend": VE_BACKEND, "available": False}
+    calls = []
+    def provider():
+        calls.append(device)
+        if variant == "late_vk" and len(calls) == 2:
+            return {"backend": VE_BACKEND}
+        return device
+    setup_manager = make_manager(tmp_path, input_device_provider=None)
+    first_path = register_queue(setup_manager)
+    second_path = str(Path(first_path).with_name("队列B.json"))
+    first, second = make_queue_config(), make_queue_config()
+    first[0]["sequence_1"]["acq"]["detail"].pop("ve_range_index")
+    detail = second[0]["sequence_1"]["acq"]["detail"]
+    if variant == "invalid":
+        detail["ve_range_index"] = "bad"
+    elif variant == "different":
+        first[0]["sequence_1"]["acq"]["detail"]["ve_range_index"] = 0
+        detail["ve_range_index"] = 1
+    else:
+        detail.pop("ve_range_index")
+    if variant == "rate_mismatch":
+        detail["sample_rate"] = 44100
+    assert LoadUiConfig.save_data_to_json(first, first_path)
+    assert LoadUiConfig.save_data_to_json(second, second_path)
+    assert LoadUiConfig.save_data_to_json({"低噪声基础测试": first_path, "队列B": second_path}, setup_manager.queue_registry_path)
+    # Keep the real default-manager construction, redirecting only its file paths.
+    def create_manager(**kwargs):
+        return ProductTestProjectConfigManager(setup_manager.program_dir, setup_manager.registry_path,
+                                               setup_manager.queue_registry_path, **kwargs)
+    monkeypatch.setattr(dialog_module, "ProductTestProjectConfigManager", create_manager)
+    dialog = ProductTestProjectConfigDialog(input_device_provider=provider)
+    data = project_data(tmp_path)
+    data["test_groups"][1]["test_conditions"][0]["test_queue"] = "队列B"
+    dialog._show_project(data, None)
+    dialog.condition_table.item(0, 1).setText("草稿工况")
+    contents = dialog.collect_project()
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+    messages, conflicts, changes = [], [], []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: messages.append(args[2]))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    capture_conflict_dialog(monkeypatch, conflicts)
+    def accept_name(name_dialog):
+        name_dialog.setTextValue("副本")
+        if variant == "late_vk" and save_as:
+            device["backend"] = VE_BACKEND
+        return QInputDialog.Accepted
+    monkeypatch.setattr(QInputDialog, "exec_", accept_name)
+    dialog.programs_changed.connect(lambda: changes.append(True))
+    assert calls == []
+    try:
+        if save_as:
+            dialog._save_project_as()
+        else:
+            dialog._save_project(close_dialog=False)
+        if variant in {"rate_mismatch", "unavailable_vk", "late_vk"}:
+            assert not changes
+            assert dialog._dirty and dialog.collect_project() == contents
+            assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
+            if variant == "rate_mismatch":
+                assert conflicts[0][1] == "采样率不一致："
+                assert len(conflicts[0][2]) == 2
+                assert all("量程" not in row for row in conflicts[0][2])
+            else:
+                assert "ve_range_index" in messages[0]
+        else:
+            assert changes == [True]
+            assert not messages and not conflicts
+            assert len(calls) == (1 if save_as else 2)
+            assert Path(setup_manager.program_dir, "副本.json" if save_as else data["project_name"] + ".json").exists()
+            assert {p: p.read_bytes() for p in before} == before
+        if variant == "late_vk":
+            assert len(calls) == (1 if save_as else 2)
+    finally:
+        close_dialog(dialog)
+
+
+def test_injected_manager_keeps_its_device_context(app, tmp_path):
+    manager = make_manager(tmp_path)
+    def unexpected_provider():
+        pytest.fail("Injected manager must keep its own provider")
+    dialog = ProductTestProjectConfigDialog(manager, input_device_provider=unexpected_provider)
+    try:
+        assert dialog.manager is manager
+        assert manager.input_device_provider()["backend"] == VE_BACKEND
+    finally:
+        close_dialog(dialog)
 
 
 def capture_conflict_dialog(monkeypatch, observed):
