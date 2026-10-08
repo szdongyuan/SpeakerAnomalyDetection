@@ -13,6 +13,7 @@ from base.product_test_project_config import (
     flatten_test_conditions,
     iter_test_conditions,
 )
+from consts.ve3668n_consts import VE_BACKEND
 from consts import error_code
 from consts.recording_preview_consts import RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
 from consts.product_test_project_consts import (
@@ -25,7 +26,7 @@ from consts.product_test_project_consts import (
 )
 
 
-def make_manager(tmp_path, queue_specs=None):
+def make_manager(tmp_path, queue_specs=None, *, vk=False, **manager_kwargs):
     program_dir = tmp_path / "projects"
     registry_path = program_dir / "program_registry.json"
     queue_dir = tmp_path / "queues"
@@ -67,10 +68,13 @@ def make_manager(tmp_path, queue_specs=None):
         queue_registry,
         str(queue_registry_path),
     )
+    if vk:
+        manager_kwargs["input_device_provider"] = lambda: {"backend": VE_BACKEND}
     return ProductTestProjectConfigManager(
         program_dir=str(program_dir),
         registry_path=str(registry_path),
         queue_registry_path=str(queue_registry_path),
+        **manager_kwargs,
     )
 
 
@@ -112,6 +116,113 @@ def set_queue_acquisition(manager, queue_name, mutate):
     assert LoadUiConfig.save_data_to_json(data, str(path))
 
 
+@pytest.mark.parametrize("legacy_range", ["missing", "invalid", "different"])
+@pytest.mark.parametrize("save_as", [False, True])
+def test_soundcard_save_ignores_range(tmp_path, legacy_range, save_as):
+    manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {}})
+    project = make_project(tmp_path)
+    project[TEST_GROUPS_KEY][1][TEST_CONDITIONS_KEY][0]["test_queue"] = "队列B"
+    def change(sequence):
+        detail = sequence["acq"]["detail"]
+        if legacy_range == "missing":
+            detail.pop("ve_range_index")
+        else:
+            detail["ve_range_index"] = "bad" if legacy_range == "invalid" else 1
+    set_queue_acquisition(manager, "队列B", change)
+    queues_before = {p: p.read_bytes() for p in (tmp_path / "queues").glob("*.json")}
+    assert ProductTestProjectValidator.validate_queue_acquisition_consistency(
+        project, manager.load_queue_catalog()
+    ) == []
+
+    success, message = (manager.save_as(project, "副本") if save_as
+                        else manager.save_project(None, project))
+
+    assert success, message
+    assert {p: p.read_bytes() for p in queues_before} == queues_before
+
+
+def test_soundcard_rate_conflict_has_all_rows_without_range(tmp_path):
+    manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {"sample_rate": 44100, "ve_range_index": "bad"}})
+    project = make_project(tmp_path, condition_count=2)
+    project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][1]["test_queue"] = "队列B"
+    success, conflict = manager.save_project(None, project)
+    assert not success
+    assert conflict.summary == "采样率不一致："
+    assert conflict.rows == (
+        "USB-C输出口/档位1的测试队列“基础测试”（采样率 48000 Hz）",
+        "USB-C输出口/档位2的测试队列“队列B”（采样率 44100 Hz）",
+        "USB-A输出口/档位1的测试队列“基础测试”（采样率 48000 Hz）",
+    )
+    assert "量程" not in conflict
+    assert not Path(manager.registry_path).exists()
+
+
+@pytest.mark.parametrize("device", [None, {}, {"backend": "soundcard"}, {"backend": VE_BACKEND, "available": False}])
+def test_save_range_requirement_uses_device_backend(tmp_path, device):
+    calls = []
+    def provider():
+        calls.append(device)
+        return device
+    manager = make_manager(tmp_path, input_device_provider=provider)
+    set_queue_acquisition(manager, "基础测试", lambda seq: seq["acq"]["detail"].pop("ve_range_index"))
+    project = make_project(tmp_path)
+    assert manager.validate_project(project, None)["is_usable"]
+    assert calls == []  # Runtime validation must not consult hardware.
+    success, message = manager.save_project(None, project)
+    assert calls == [device]
+    assert success is ((device or {}).get("backend") != VE_BACKEND)
+    if not success:
+        assert "ve_range_index" in message
+        assert not Path(manager.registry_path).exists()
+
+
+def test_save_rechecks_device_after_successful_preflight(tmp_path):
+    device = {"backend": "soundcard"}
+    manager = make_manager(tmp_path, input_device_provider=lambda: device)
+    set_queue_acquisition(manager, "基础测试", lambda seq: seq["acq"]["detail"].pop("ve_range_index"))
+    project = make_project(tmp_path)
+    assert manager.validate_project(project, None, check_acquisition_consistency=True)["can_save"]
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+    device["backend"] = VE_BACKEND
+    success, message = manager.save_project(None, project)
+    assert not success and "ve_range_index" in message
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
+    device["backend"] = "soundcard"
+    assert manager.save_project(None, project)[0]
+
+
+def test_save_provider_error_propagates_without_writing(tmp_path):
+    def provider():
+        raise RuntimeError("device context failed")
+    manager = make_manager(tmp_path, input_device_provider=provider)
+    with pytest.raises(RuntimeError, match="device context failed"):
+        manager.save_project(None, make_project(tmp_path))
+    assert not Path(manager.registry_path).exists()
+
+
+def test_load_import_and_runtime_refresh_do_not_read_device(tmp_path):
+    from base.product_test_config_refresh import build_product_test_refresh_snapshot
+
+    setup_manager = make_manager(tmp_path)
+    success, file_name = setup_manager.save_project(None, make_project(tmp_path))
+    assert success
+    def unexpected_provider():
+        pytest.fail("Only save validation may read the device")
+    manager = ProductTestProjectConfigManager(
+        setup_manager.program_dir, setup_manager.registry_path, setup_manager.queue_registry_path,
+        input_device_provider=unexpected_provider,
+    )
+    set_queue_acquisition(manager, "基础测试", lambda seq: seq["acq"]["detail"].pop("ve_range_index"))
+    queue_path = Path(manager.load_queue_catalog()["基础测试"]["path"])
+    queue_data = json.loads(queue_path.read_text(encoding="utf-8"))
+    queue_data[0] = {"seq1": next(iter(queue_data[0].values()))}
+    assert LoadUiConfig.save_data_to_json(queue_data, str(queue_path))
+    assert manager.load_project(file_name)[0] == error_code.OK
+    assert manager.import_project(str(Path(manager.program_dir, file_name)))[0]
+    snapshot = build_product_test_refresh_snapshot(manager, file_name)
+    assert len(snapshot.conditions) == 2
+
+
 @pytest.mark.parametrize("rate,range_index,fields", [
     (44100, 0, ["采样率"]), (48000, 1, ["量程"]),
     (44100, 1, ["采样率", "量程"]),
@@ -120,7 +231,7 @@ def set_queue_acquisition(manager, queue_name, mutate):
 def test_save_acquisition_conflict_diagnostic(tmp_path, rate, range_index, fields, cross_group):
     manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {
         "sample_rate": rate, "ve_range_index": range_index,
-    }})
+    }}, vk=True)
     project = make_project(tmp_path, condition_count=2)
     group_index, condition_index = (1, 0) if cross_group else (0, 1)
     project[TEST_GROUPS_KEY][group_index][TEST_CONDITIONS_KEY][condition_index]["test_queue"] = "队列B"
@@ -146,7 +257,7 @@ def test_save_acquisition_conflict_diagnostic(tmp_path, rate, range_index, field
     ("ve_range_index", -1), ("ve_range_index", 7),
 ])
 def test_save_acquisition_invalid_single_queue(tmp_path, field, value):
-    manager = make_manager(tmp_path, {"基础测试": {field: value}})
+    manager = make_manager(tmp_path, {"基础测试": {field: value}}, vk=True)
     success, message = manager.save_project(None, make_project(tmp_path))
     assert not success
     for text in ["USB-C输出口/档位1", "基础测试", field, repr(value)]:
@@ -156,7 +267,7 @@ def test_save_acquisition_invalid_single_queue(tmp_path, field, value):
 
 @pytest.mark.parametrize("field", ["sample_rate", "ve_range_index"])
 def test_save_acquisition_missing_field(tmp_path, field):
-    manager = make_manager(tmp_path)
+    manager = make_manager(tmp_path, vk=True)
     set_queue_acquisition(manager, "基础测试", lambda seq: seq["acq"]["detail"].pop(field))
     success, message = manager.save_project(None, make_project(tmp_path))
     assert not success
@@ -166,7 +277,7 @@ def test_save_acquisition_missing_field(tmp_path, field):
 
 @pytest.mark.parametrize("field,value", [("acq", None), ("acq", []), ("detail", None), ("detail", [])])
 def test_save_acquisition_malformed_shape(tmp_path, field, value):
-    manager = make_manager(tmp_path)
+    manager = make_manager(tmp_path, vk=True)
     def mutate(seq):
         (seq if field == "acq" else seq["acq"])[field] = value
     set_queue_acquisition(manager, "基础测试", mutate)
@@ -182,7 +293,7 @@ def test_save_acquisition_valid_references(tmp_path, variant):
     manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {
         "sample_rate": 44100 if variant == "unreferenced" else 48000,
         "ve_range_index": 1 if variant == "unreferenced" else 0,
-    }})
+    }}, vk=True)
     project = make_project(tmp_path)
     if variant == "single":
         project[TEST_GROUPS_KEY].pop()
@@ -747,7 +858,7 @@ def test_acquisition_conflict_includes_all_ordered_repeated_references(tmp_path)
     manager = make_manager(tmp_path, {
         "基础测试": {}, "队列B": {"sample_rate": 44100},
         "队列C": {"sample_rate": 44100, "ve_range_index": 1},
-    })
+    }, vk=True)
     project = make_project(tmp_path, condition_count=3)
     conditions = project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY]
     conditions[1]["test_queue"] = "队列B"
@@ -763,7 +874,7 @@ def test_acquisition_conflict_includes_all_ordered_repeated_references(tmp_path)
         "USB-A输出口/档位2的测试队列“队列B”（采样率 44100 Hz，量程 ±10 V）",
     )
     errors = ProductTestProjectValidator.validate_queue_acquisition_consistency(
-        project, manager.load_queue_catalog()
+        project, manager.load_queue_catalog(), check_range=True
     )
     assert len(errors) == 1
     conflict = errors[0]
