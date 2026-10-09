@@ -1,5 +1,4 @@
 import math
-from contextlib import nullcontext
 import os
 from datetime import datetime
 
@@ -64,8 +63,6 @@ def get_recorded_info(
     use_product_model_dir=False,
     recording_root="",
     analysis_storage_context=None,
-    *,
-    startup_trace=None,
 ):
     """
         Generate recorded information.
@@ -81,19 +78,17 @@ def get_recorded_info(
     now = datetime.now()
     recording_time = now.strftime("%Y-%m-%d")
     recording_time_for_name = now.strftime("%Y-%m-%d-%H-%M-%S")
-    with (startup_trace.stage("mac_address", domain="GUI") if startup_trace is not None else nullcontext()):
-        mac_address = get_mac_address()
-        mac_address = mac_address.replace(":", "") if mac_address else None
+    mac_address = get_mac_address()
+    mac_address = mac_address.replace(":", "") if mac_address else None
 
     if analysis_storage_context is not None:
         from base.analysis_artifact_paths import build_wav_path, next_available_path
 
         effective_product_model = analysis_storage_context.product_model
-        with (startup_trace.stage("directory", domain="GUI") if startup_trace is not None else nullcontext()):
-            recorded_path = next_available_path(
-                build_wav_path(analysis_storage_context)
-            )
-            os.makedirs(recorded_path.parent, exist_ok=True)
+        recorded_path = next_available_path(
+            build_wav_path(analysis_storage_context)
+        )
+        os.makedirs(recorded_path.parent, exist_ok=True)
         recorded_signal_info = {
             "file_path": str(recorded_path),
             "product_model": effective_product_model,
@@ -121,16 +116,15 @@ def get_recorded_info(
         name_suffix,
         use_product_model_dir,
     )
-    with (startup_trace.stage("directory", domain="GUI") if startup_trace is not None else nullcontext()):
-        store_record_dir = FileOps.get_recording_store_dir(
-            effective_product_model,
-            label,
-            use_product_model_dir,
-            recording_root,
-        )
-        if not os.path.exists(store_record_dir):
-            os.makedirs(store_record_dir)
-        recorded_path = os.path.join(store_record_dir, recorded_name)
+    store_record_dir = FileOps.get_recording_store_dir(
+        effective_product_model,
+        label,
+        use_product_model_dir,
+        recording_root,
+    )
+    if not os.path.exists(store_record_dir):
+        os.makedirs(store_record_dir)
+    recorded_path = os.path.join(store_record_dir, recorded_name)
     recorded_signal_info = {
         "file_path": recorded_path,
         "product_model": effective_product_model,

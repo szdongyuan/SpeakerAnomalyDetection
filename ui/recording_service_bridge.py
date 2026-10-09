@@ -8,9 +8,6 @@ import threading
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
 
 from base.log_manager import LogManager
-from consts.recording_startup_consts import (
-    EVENT_QT_POST, EVENT_QT_DELIVERY, EVENT_CALLBACK_ENTER, EVENT_CALLBACK_RETURN,
-)
 from base.recording_service import RecordingCallbacks, RecordingSession
 
 
@@ -151,32 +148,21 @@ class RecordingServiceBridge(QObject):
                 self._ve_prewarm_pending = bool(self._ve_prewarm_calls)
         return status
 
-    def start(self, request, callbacks, *, startup_trace=None):
+    def start(self, request, callbacks):
         if QThread.currentThread() is not self.thread():
             raise RuntimeError("Recording bridge must be started on its GUI thread")
         self._callbacks[request.request_id] = callbacks
         routed = {}
         for kind in RecordingCallbacks.__dataclass_fields__:
             routed[kind] = lambda session, value=None, kind=kind: self._enqueue(kind, session, value)
-        # Parent-local routing metadata lets the service preserve the Qt
-        # completion boundary even when no GUI attempt trace was supplied.
-        routed["started"]._recording_qt_callback = True
         try:
-            if startup_trace is None:
-                return self.service.start(request, RecordingCallbacks(**routed))
-            return self.service.start(request, RecordingCallbacks(**routed), startup_trace=startup_trace)
+            return self.service.start(request, RecordingCallbacks(**routed))
         except (RuntimeError, ValueError, TypeError):
             self._callbacks.pop(request.request_id, None)
             raise
 
     def _enqueue(self, kind, session, value):
-        trace = getattr(session, "startup_trace", None)
-        if trace is not None and kind == "started":
-            trace.set_context(completion_boundary="qt_callback_return")
-            trace.mark(EVENT_QT_POST, domain="service_supervisor")
         if self._delivery_closed:
-            if trace is not None:
-                trace.finish("cancelled", domain="service_supervisor")
             if kind == "preview":
                 session.release_preview(value.sequence)
             elif kind == "result_ready":
@@ -230,15 +216,9 @@ class RecordingServiceBridge(QObject):
         self._delivered.add(token)
         if kind == "started" and isinstance(session, RecordingSession):
             session._observe_qt_started()
-        trace = getattr(session, "startup_trace", None) if kind == "started" else None
-        if trace is not None:
-            timing = session.startup_timing
-            trace.mark(EVENT_QT_DELIVERY, domain="GUI",
-                       capture_to_qt_ms=(timing.qt_delivery_seconds * 1000
-                                         if timing.qt_delivery_seconds is not None else "unknown"))
-            trace.mark(EVENT_CALLBACK_ENTER, domain="GUI")
+            self._logger.info("Recording timing request=%s process=parent stage=qt_started seconds=%s",
+                              session.request.request_id, session.startup_timing.qt_delivery_seconds)
         callback = getattr(callbacks, kind)
-        callback_failed = False
         try:
             if callback is not None:
                 if kind in ("started", "finalizing", "released"):
@@ -246,16 +226,12 @@ class RecordingServiceBridge(QObject):
                 else:
                     callback(session, value)
         except Exception as error:
-            callback_failed = True
             # The UI extension boundary must never unwind through a Qt slot.
             # Reject provisional delivery; accepted recordings stay successful.
             self._logger.exception("Recording UI %s failed: %s", kind, error)
             if kind == "result_ready":
                 session.reject_result(f"UI result validation failed: {error}")
         finally:
-            if trace is not None:
-                trace.mark(EVENT_CALLBACK_RETURN, domain="GUI", callback_result="failed" if callback_failed else "ok")
-                trace.finish("failed" if callback_failed else "started", domain="GUI")
             if kind == "released":
                 self._callbacks.pop(key, None)
                 self._delivered.difference_update((key, name) for name in RecordingCallbacks.__dataclass_fields__)

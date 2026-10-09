@@ -1,7 +1,6 @@
 """Spawn entry point. Capture, control sends and preview sends never share a wait."""
 import importlib
 import multiprocessing
-import os
 import queue
 import threading
 import time
@@ -11,7 +10,6 @@ from contextlib import ExitStack
 from base.log_manager import LogManager
 from base.log_exit import exit_with_log_drain
 from base.recording_capture import RecordingCapture, sounddevice_backend
-from base.recording_startup_trace import RecordingStartupTrace
 from base.recording_input_device import resolve_input_device, validate_input_device
 from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_process_protocol import (
@@ -36,18 +34,11 @@ from base.recording_worker_pipeline import WorkerCapturePipeline
 from base.ve3668n_resource import VeResourceController, VeResourceFault
 from base.vkinging_sdk import VkDaqClient
 from consts.ve3668n_consts import VE_BACKEND
-from consts.recording_startup_consts import EVENT_STARTED_SENT, EVENT_WORKER_COMMAND_RECEIVED
-
-
-@dataclass(frozen=True)
-class _StartupSend:
-    """Child-local queue envelope; only event is serialized onto the pipe."""
-    event: RecordingEvent
-    trace: RecordingStartupTrace
 
 
 def _send_loop(connection, outgoing, broken, latest=None, wake=None, urgent=None,
                ordered=None, diagnostics=None):
+    logger = LogManager.set_log_handler("core")
     try:
         while True:
             source = outgoing
@@ -75,9 +66,6 @@ def _send_loop(connection, outgoing, broken, latest=None, wake=None, urgent=None
             try:
                 if event is None:
                     return
-                startup_trace = event.trace if isinstance(event, _StartupSend) else None
-                if startup_trace is not None:
-                    event = event.event
                 token = 0
                 if diagnostics is not None:
                     # Final progress uses the existing reliable control lane;
@@ -93,11 +81,9 @@ def _send_loop(connection, outgoing, broken, latest=None, wake=None, urgent=None
                 try:
                     connection.send(event)
                     sent = True
+                    if isinstance(event, RecordingEvent) and event.kind == "started":
+                        logger.info("Recording timing request=%s process=child stage=started_send", event.request_id)
                 finally:
-                    if startup_trace is not None:
-                        if sent:
-                            startup_trace.mark(EVENT_STARTED_SENT, domain="worker_sender")
-                        startup_trace.finish("started" if sent else "failed", domain="worker_sender")
                     if diagnostics is not None:
                         elapsed = diagnostics.end(token, emit_slow=True)
                         if final:
@@ -191,19 +177,16 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         sender.start()
         senders.append(sender)
 
-    def emit(kind, request_id="", payload=None, *, startup_trace=None):
+    def emit(kind, request_id="", payload=None):
         final = kind in ("progress", "capture_slot_released")
         if final:
             diagnostics.milestone("control_enqueue_begin", request=request_id, kind=kind,
                                   queue_depth=control_out.qsize())
         accepted = False
         try:
-            event = RecordingEvent(generation, request_id, kind, payload)
-            control_out.put_nowait(_StartupSend(event, startup_trace) if startup_trace is not None else event)
+            control_out.put_nowait(RecordingEvent(generation, request_id, kind, payload))
             accepted = True
         except queue.Full as exc:
-            if startup_trace is not None:
-                startup_trace.finish("failed", domain="worker_control")
             emit_worker_fatal("worker/control_queue", exc)
             broken.set()
             return False
@@ -238,8 +221,6 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         outcome = state.capture.outcome
         kind = "completed" if isinstance(outcome, RecordingResult) else (
             "failed" if isinstance(outcome, RecordingFailure) else "cancelled")
-        if not state.started:
-            state.startup_trace.finish(kind, domain="worker_control")
         emit(kind, state.request_id, outcome)
         pipeline.mark_terminal(state.request_id)
 
@@ -268,8 +249,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
             return True
         if state.retry_input_device is not None:
             replacement = RecordingCapture(
-                capture.request, ve_stream_factory=controller.stream,
-                startup_trace=state.startup_trace, startup_attempt=2, **dependencies)
+                capture.request, ve_stream_factory=controller.stream, **dependencies)
             replacement._backend = audio_backend
             replacement.input_device = state.retry_input_device
             state.retry_input_device = None
@@ -295,7 +275,6 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
             audio_cleanup_failed = True
             capture.outcome = RecordingFailure(request.request_id, "device", request.path,
                                                str(exc), handles_released=True)
-            state.startup_trace.finish("failed", domain="worker_control")
             emit("failed", state.request_id, capture.outcome)
             pipeline.mark_terminal(state.request_id)
             for request_id in tuple(pipeline.pending_result_acks):
@@ -448,7 +427,6 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
             emit_worker_fatal(f"protocol/{stage}", message)
         broken.set()
 
-    pending_startup_trace = None
     try:
         dependencies = {}
         if backend_factory:
@@ -521,23 +499,8 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                 elif stopping is not None:
                     continue
                 elif command.kind == "start":
-                    startup_trace = RecordingStartupTrace(
-                        logger, process="child", request_id=command.request_id)
-                    pending_startup_trace = startup_trace
-                    request = command.payload
-                    resource = "unknown" if request.device.get("backend") == VE_BACKEND else "not_applicable"
-                    startup_trace.set_context(
-                        generation=generation, worker_pid=os.getpid(),
-                        start_boundary=EVENT_WORKER_COMMAND_RECEIVED, completion_boundary="started_send",
-                        backend=request.device.get("backend", "sounddevice"),
-                        sample_rate=request.sample_rate, channel_count=len(request.channels),
-                        target_samples=request.target_samples,
-                        target_duration_seconds=request.target_samples / request.sample_rate,
-                        startup_trim_samples=request.trim_samples, export_mode="unknown",
-                        resource_task_id=resource, reuse_result=resource)
-                    startup_trace.mark(EVENT_WORKER_COMMAND_RECEIVED, domain="worker_control")
+                    logger.info("Recording timing request=%s process=child stage=start_receive", command.request_id)
                     if prewarm is not None:
-                        startup_trace.finish("rejected", domain="worker_control")
                         protocol_fatal(
                             "start", "recording cannot start during active VE prewarm")
                         continue
@@ -548,100 +511,101 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                         capture_dependencies["diagnostics"] = diagnostics
                         capture_dependencies["startup_budget"] = command.startup_budget
                         capture_dependencies["on_retry"] = emit_retry
-                    with startup_trace.stage("session_build", domain="worker_control"):
-                        capture = RecordingCapture(
-                            command.payload, ve_stream_factory=controller.stream,
-                            startup_trace=startup_trace, **capture_dependencies)
+                    started = time.perf_counter()
+                    logger.info("Recording timing request=%s process=child stage=session_build event=begin", command.request_id)
+                    capture = RecordingCapture(
+                        command.payload, ve_stream_factory=controller.stream,
+                        **capture_dependencies)
+                    logger.info("Recording timing request=%s process=child stage=session_build event=end seconds=%.6f",
+                                command.request_id, time.perf_counter() - started)
                     try:
                         state = pipeline.start(command.request_id, capture)
-                        state.startup_trace = startup_trace
                     except (ValueError, RuntimeError) as exc:
-                        startup_trace.finish("rejected", domain="worker_control")
                         protocol_fatal(
                             "start", f"invalid start for {command.request_id}: {exc}")
                         continue
-                    with startup_trace.stage("worker_validate", domain="worker_control") as observation:
-                        initialization_failure = None
-                        if (command.payload.device.get("backend") != VE_BACKEND
-                                and capture_dependencies.get("backend") is None):
-                            if audio_backend is None:
+                    started = time.perf_counter()
+                    logger.info("Recording timing request=%s process=child stage=backend_prepare event=begin", command.request_id)
+                    initialization_failure = None
+                    if (command.payload.device.get("backend") != VE_BACKEND
+                            and capture_dependencies.get("backend") is None):
+                        if audio_backend is None:
+                            try:
+                                # Import only after admission: the control thread
+                                # owns PortAudio across all ordinary captures.
+                                audio_backend = sounddevice_backend()
+                                audio_initialized = True
+                            except Exception as exc:
+                                # Native import/initialization is an external boundary.
+                                logger.exception("Audio initialization failed for %s",
+                                                 command.request_id)
+                                initialization_failure = RecordingFailure(
+                                    command.request_id, "device", command.payload.path,
+                                    str(exc), handles_released=True)
+                        prior_audio = (prior.capture for prior in pipeline.shutdown_snapshot()
+                                       if prior.capture is not capture
+                                       and prior.capture.request.device.get("backend") != VE_BACKEND)
+                        if initialization_failure is None and (
+                                audio_cleanup_failed or any(not prior.stream_closed
+                                                            for prior in prior_audio)):
+                            initialization_failure = RecordingFailure(
+                                command.request_id, "device", command.payload.path,
+                                "Cannot refresh input devices: previous audio stream ownership "
+                                "is uncertain; restart the application.", handles_released=True)
+                        if initialization_failure is None:
+                            snapshot = command.payload.device
+                            try:
+                                capture.input_device = validate_input_device(
+                                    audio_backend, snapshot, command.payload.channels)
+                                stale = False
+                            except Exception as exc:
+                                # PortAudio queries can fail for a removed index;
+                                # one reset below lets capture validate afresh.
+                                stale = True
+                                logger.info("Refreshing input for %s: selected=%r HostAPI=%r index=%s; %s",
+                                            command.request_id, snapshot["name"],
+                                            snapshot.get("hostapi_name", snapshot["hostapi"]),
+                                            snapshot["index"], exc)
+                            if stale:
+                                state.input_refresh_used = True
+                                # Even failed termination leaves native state
+                                # uncertain. Never retry it in shutdown/atexit.
+                                audio_initialized = False
                                 try:
-                                    # Import only after admission: the control thread
-                                    # owns PortAudio across all ordinary captures.
-                                    audio_backend = sounddevice_backend()
-                                    audio_initialized = True
+                                    audio_backend._terminate()
+                                    audio_backend._initialize()
                                 except Exception as exc:
-                                    # Native import/initialization is an external boundary.
-                                    logger.exception("Audio initialization failed for %s",
+                                    # Native reset can raise arbitrary backend
+                                    # errors. Retire the generation after releasing
+                                    # the unstarted request; no handles were opened.
+                                    logger.exception("Audio refresh failed for %s",
                                                      command.request_id)
                                     initialization_failure = RecordingFailure(
                                         command.request_id, "device", command.payload.path,
                                         str(exc), handles_released=True)
-                            prior_audio = (prior.capture for prior in pipeline.shutdown_snapshot()
-                                           if prior.capture is not capture
-                                           and prior.capture.request.device.get("backend") != VE_BACKEND)
-                            if initialization_failure is None and (
-                                    audio_cleanup_failed or any(not prior.stream_closed
-                                                                for prior in prior_audio)):
-                                initialization_failure = RecordingFailure(
-                                    command.request_id, "device", command.payload.path,
-                                    "Cannot refresh input devices: previous audio stream ownership "
-                                    "is uncertain; restart the application.", handles_released=True)
-                            if initialization_failure is None:
-                                snapshot = command.payload.device
-                                try:
-                                    capture.input_device = validate_input_device(
-                                        audio_backend, snapshot, command.payload.channels)
-                                    stale = False
-                                except Exception as exc:
-                                    # PortAudio queries can fail for a removed index;
-                                    # one reset below lets capture validate afresh.
-                                    stale = True
-                                    logger.info("Refreshing input for %s: selected=%r HostAPI=%r index=%s; %s",
-                                                command.request_id, snapshot["name"],
-                                                snapshot.get("hostapi_name", snapshot["hostapi"]),
-                                                snapshot["index"], exc)
-                                if stale:
-                                    state.input_refresh_used = True
-                                    # Even failed termination leaves native state
-                                    # uncertain. Never retry it in shutdown/atexit.
-                                    audio_initialized = False
+                                    audio_cleanup_failed = True
+                                else:
+                                    audio_initialized = True
                                     try:
-                                        audio_backend._terminate()
-                                        audio_backend._initialize()
+                                        capture.input_device = resolve_input_device(
+                                            audio_backend, snapshot, command.payload.channels)
                                     except Exception as exc:
-                                        # Native reset can raise arbitrary backend
-                                        # errors. Retire the generation after releasing
-                                        # the unstarted request; no handles were opened.
-                                        logger.exception("Audio refresh failed for %s",
-                                                         command.request_id)
+                                        # Refreshed native enumeration may fail independently
+                                        # of reset. No capture handles exist; fail this request.
                                         initialization_failure = RecordingFailure(
                                             command.request_id, "device", command.payload.path,
-                                            str(exc), handles_released=True)
-                                        audio_cleanup_failed = True
+                                            f"Input {snapshot['name']!r} on HostAPI "
+                                            f"{snapshot.get('hostapi_name', snapshot['hostapi'])!r}: "
+                                            f"{exc}; reselect the input device.", handles_released=True)
                                     else:
-                                        audio_initialized = True
-                                        try:
-                                            capture.input_device = resolve_input_device(
-                                                audio_backend, snapshot, command.payload.channels)
-                                        except Exception as exc:
-                                            # Refreshed native enumeration may fail independently
-                                            # of reset. No capture handles exist; fail this request.
-                                            initialization_failure = RecordingFailure(
-                                                command.request_id, "device", command.payload.path,
-                                                f"Input {snapshot['name']!r} on HostAPI "
-                                                f"{snapshot.get('hostapi_name', snapshot['hostapi'])!r}: "
-                                                f"{exc}; reselect the input device.", handles_released=True)
-                                        else:
-                                            logger.info("Resolved input for %s: selected=%r HostAPI=%r index=%s -> %s",
-                                                        command.request_id, snapshot["name"],
-                                                        snapshot.get("hostapi_name", snapshot["hostapi"]),
-                                                        snapshot["index"], capture.input_device["index"])
-                                capture._backend = audio_backend
-                        if initialization_failure is not None:
-                            observation.observe("failed", reason="device_initialization")
+                                        logger.info("Resolved input for %s: selected=%r HostAPI=%r index=%s -> %s",
+                                                    command.request_id, snapshot["name"],
+                                                    snapshot.get("hostapi_name", snapshot["hostapi"]),
+                                                    snapshot["index"], capture.input_device["index"])
+                            capture._backend = audio_backend
+                    logger.info("Recording timing request=%s process=child stage=backend_prepare event=end seconds=%.6f success=%s",
+                                command.request_id, time.perf_counter() - started, initialization_failure is None)
                     if initialization_failure is not None:
-                        startup_trace.finish("failed", domain="worker_control")
                         emit("failed", state.request_id, initialization_failure)
                         pipeline.mark_terminal(state.request_id)
                         if not audio_initialized and audio_cleanup_failed:
@@ -656,7 +620,6 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                     state.next_preview_at = now
                     state.next_progress_at = now
                     capture.start()
-                    pending_startup_trace = None
                 elif command.kind == VE_PREWARM_COMMAND:
                     diagnostics.start_sampler()
                     if command.request_id in prewarm_ids:
@@ -832,8 +795,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                 capture_done = capture.done.is_set()
                 if capture.started.is_set() and not state.started:
                     state.started = True
-                    emit("started", state.request_id, capture.started_at,
-                         startup_trace=state.startup_trace)
+                    emit("started", state.request_id, capture.started_at)
                 if (state.started and not state.finalizing
                         and capture.raw_frames >= capture.request.target_samples):
                     state.finalizing = True
@@ -916,8 +878,6 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         else:
             emit_worker_fatal("worker", exc)
     finally:
-        if pending_startup_trace is not None:
-            pending_startup_trace.finish("failed", domain="worker_control")
         cleanup_deadline = stopping if stopping is not None else time.monotonic() + cancel_timeout
         cleanup_states = pipeline.shutdown_snapshot()
         for state in cleanup_states:
@@ -945,10 +905,6 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                   and state.capture.request.device.get("backend") != VE_BACKEND
                   and not state.capture.stream_closed):
                 audio_cleanup_failed = True
-            if not state.started:
-                state.startup_trace.finish(
-                    "failed" if isinstance(state.capture.outcome, RecordingFailure) else "cancelled",
-                    domain="worker_control")
         # The control sentinel shares the ordered lane so it cannot overtake a
         # prewarm terminal/fatal pair while the pipe is backpressured.
         ordered_control_out.put_nowait(None)

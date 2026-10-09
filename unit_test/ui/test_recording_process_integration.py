@@ -31,7 +31,7 @@ class CapturingBridge:
     def __init__(self):
         self.service = SimpleNamespace(busy=False)
 
-    def start(self, request, callbacks, *, startup_trace=None):
+    def start(self, request, callbacks):
         from base.recording_service import RecordingSession
         self.request, self.callbacks = request, callbacks
         return RecordingSession(self.service, request, callbacks)

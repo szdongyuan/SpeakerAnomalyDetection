@@ -105,9 +105,7 @@ def gated_startup_worker(control, preview, generation, factory, options, *args):
         snapshot = {}
         for name, lane in lanes.items():
             with lane.mutex:
-                snapshot[name] = [
-                    (event.event if isinstance(event, module._StartupSend) else event).kind
-                    for event in lane.queue if event is not None]
+                snapshot[name] = [event.kind for event in lane.queue if event is not None]
         if any(kind in ("completed", "ve_prewarm_terminal")
                for values in snapshot.values() for kind in values):
             (trace_dir / "backlog.json").write_text(json.dumps(snapshot))

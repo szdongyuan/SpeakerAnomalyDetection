@@ -1,82 +1,53 @@
-"""Child startup boundaries through real capture/worker paths and fake hardware."""
-import os
+"""Direct startup timing through capture and worker paths with fake hardware."""
+import logging
 import queue
 import threading
 import time
-
 import numpy as np
 import pytest
-
-from base.log_manager import LogManager
 from base.recording_capture import RecordingCapture
 from base.recording_process_protocol import RecordingEvent, RecordingFailure
-from base.recording_startup_trace import RecordingStartupTrace
 from base.streaming_file_writer import StreamingWavWriter
 from unit_test.base.recording_process_fakes import FakeBackend, FakeStatus
 from unit_test.base.test_recording_capture import request
-from unit_test.base.test_recording_startup_trace import ManualClockNs, events, project
 
 
-def selected(project, event, stage=None):
-    return [r for r in events(project) if r['event'] == event
-            and (stage is None or r['stage'] == stage)]
+def records(caplog, request_id=None):
+    rows = [dict(part.split('=', 1) for part in row.getMessage().split()[2:])
+            for row in caplog.records if row.getMessage().startswith('Recording timing ')]
+    return rows if request_id is None else [r for r in rows if r.get('request') == request_id]
 
 
-def test_real_writer_delay_is_attributed_to_open_wav(project, tmp_path):
+def test_wav_duration_and_first_usable_data_are_consumer_observations(tmp_path, monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    clock = [10.0]
+    monkeypatch.setattr('base.recording_capture.time.perf_counter', lambda: clock[0])
     def writer(*args, **kwargs):
-        time.sleep(2.2)
+        clock[0] += 2.2
         return StreamingWavWriter(*args, **kwargs)
-
     capture = RecordingCapture(request(tmp_path), backend=FakeBackend(), writer_factory=writer)
-    capture.start()
-    try:
-        assert capture.started.wait(5)
-    finally:
-        capture.cancel()
-        capture.wait(3)
-        assert capture.join(3)
-    opened, = selected(project, 'end', 'open_wav')
-    stream, = selected(project, 'end', 'stream_start')
-    assert float(opened['elapsed_ms']) >= 2100
-    assert float(stream['elapsed_ms']) < 1000
-    summary, = selected(project, 'summary')
-    assert summary['outcome'] == 'started'
-    assert summary['first_delivered_block'] == 'not_observed'
-    assert summary['resource_task_id'] == summary['reuse_result'] == 'not_applicable'
-    assert summary['sample_rate'] == '100' and summary['channel_count'] == '2'
-    assert summary['target_samples'] == '9' and summary['startup_trim_samples'] == '2'
-    assert summary['export_mode'] == 'unknown'
-
-
-def test_callback_only_saves_first_delivery_then_trim_retention_is_distinct(project, tmp_path, monkeypatch):
-    clock = ManualClockNs()
-    trace = RecordingStartupTrace(project.logger, process='child', clock_ns=clock, request_id='capture-1')
-    capture = RecordingCapture(request(tmp_path), backend=FakeBackend(), startup_trace=trace)
-    monkeypatch.setattr('base.recording_capture.time.perf_counter_ns', clock)
     capture._open()
-    trace.finish('started', domain='worker_sender')
-    baseline = len(events(project))
-    clock.advance(10_000_000)
-    capture._input_callback(np.ones((2, 3)), 2, None, FakeStatus())
-    delivered_at = clock.now
-    assert len(events(project)) == baseline  # No trace/logger work in callback.
-    clock.advance(10_000_000)
-    capture._consume(capture._pop_block())
-    assert not selected(project, 'first_retained_block')
-    capture._input_callback(np.ones((2, 3)), 2, None, FakeStatus())
-    clock.advance(10_000_000)
-    capture._consume(capture._pop_block())
-    first, = selected(project, 'first_delivered_block')
-    retained, = selected(project, 'first_retained_block')
-    assert int(first['timestamp_ns']) == delivered_at
-    assert int(retained['timestamp_ns']) > delivered_at
-    assert first['domain'] == 'audio_callback' and retained['domain'] == 'capture_owner'
-    capture._close_stream()
-    capture._close_writer()
+    try:
+        opened, = [r for r in records(caplog) if r['stage'] == 'wav_open' and r.get('event') == 'end']
+        assert float(opened['seconds']) == pytest.approx(2.2)
+        baseline = len(caplog.records)
+        capture._input_callback(np.ones((2, 3)), 2, None, FakeStatus())
+        assert len(caplog.records) == baseline
+        capture._consume(capture._pop_block())
+        assert not [r for r in records(caplog) if r['stage'] == 'first_data']  # trim only
+        for _ in range(2):
+            capture._input_callback(np.ones((2, 3)), 2, None, FakeStatus())
+            capture._consume(capture._pop_block())
+        first, = [r for r in records(caplog) if r['stage'] == 'first_data']
+        assert first['request'] == capture.request.request_id and first['process'] == 'child'
+    finally:
+        capture._close_stream()
+        capture._close_writer()
 
 
 @pytest.mark.parametrize('cancel', [False, True])
-def test_startup_terminal_without_data_is_truthful(project, tmp_path, cancel):
+def test_open_failure_or_prestart_cancel_preserves_outcome(tmp_path, caplog, cancel):
+    caplog.set_level(logging.INFO)
     def writer(*args, **kwargs):
         raise OSError('writer-open-probe')
     capture = RecordingCapture(request(tmp_path), backend=FakeBackend(), writer_factory=writer)
@@ -85,23 +56,35 @@ def test_startup_terminal_without_data_is_truthful(project, tmp_path, cancel):
     capture.start()
     capture.wait(3)
     assert capture.join(3)
-    summary, = selected(project, 'summary')
-    assert summary['outcome'] == ('cancelled' if cancel else 'failed')
-    assert summary['first_delivered_block'] == summary['first_retained_block'] == 'not_observed'
+    rows = records(caplog)
+    assert not [r for r in rows if r['stage'] == 'first_data']
     if not cancel:
         assert isinstance(capture.outcome, RecordingFailure)
         assert capture.outcome.message == 'writer-open-probe'
-        ended, = selected(project, 'end', 'open_wav')
-        assert ended['outcome'] == 'failed' and ended['error_type'] == 'OSError'
+        assert any(r['stage'] == 'wav_open' and r.get('event') == 'begin' for r in rows)
+        assert not any(r['stage'] == 'wav_open' and r.get('event') == 'end' for r in rows)
+    else:
+        assert not capture.started.is_set()
 
 
 @pytest.mark.parametrize('retry', [False, True])
-def test_worker_real_capture_records_request_boundaries_and_reuses_worker(project, tmp_path, monkeypatch, retry):
+def test_worker_real_capture_records_request_boundaries_and_reuses_worker(tmp_path, monkeypatch, caplog, retry):
+    caplog.set_level(logging.INFO)
     from base import recording_worker as module
     backend = FakeBackend()
+    clock = [10.0]
+    monkeypatch.setattr(module.time, 'perf_counter', lambda: clock[0])
+    native_capture = module.RecordingCapture
+    def build_capture(*args, **kwargs):
+        clock[0] += 2.2
+        return native_capture(*args, **kwargs)
+    monkeypatch.setattr(module, 'RecordingCapture', build_capture)
+    def prepare_backend():
+        clock[0] += 3.3
+        return backend
     commands, sent = queue.Queue(), []
     monkeypatch.setattr(module.multiprocessing, 'parent_process', lambda: None)
-    monkeypatch.setattr(module, 'sounddevice_backend', lambda: backend)
+    monkeypatch.setattr(module, 'sounddevice_backend', prepare_backend)
     backend._terminate = lambda: None
     backend._initialize = lambda: None
     native_open = backend.InputStream
@@ -136,30 +119,39 @@ def test_worker_real_capture_records_request_boundaries_and_reuses_worker(projec
     module.recording_worker(Connection(), Connection(), 7, None, {}, .5)
     assert [e.request_id for e in sent if e.kind == 'completed'] == ['A', 'B']
     for identity in ('A', 'B'):
-        records = [r for r in events(project) if r['request_id'] == identity]
-        assert {'worker_command_received', 'capture_thread_enter', 'capture_started', 'started_sent',
-                'first_delivered_block', 'first_retained_block', 'summary'} <= {r['event'] for r in records}
-        stream_stage = 'stream_start_attempt_2' if retry and identity == 'A' else 'stream_start'
-        assert {'session_build', 'worker_validate', 'open_wav', 'adapter_create', stream_stage} <= {
-            r['stage'] for r in records if r['event'] == 'end'}
-        summary, = [r for r in records if r['event'] == 'summary']
-        assert summary['generation'] == '7' and summary['worker_pid'] == str(os.getpid())
-        assert summary['completion_boundary'] == 'started_send'
-        assert summary['dropped_events'] == '0' and len(records) <= 32
-        if retry and identity == 'A':
-            assert {'open_wav_attempt_2', 'adapter_create_attempt_2', 'stream_start_attempt_2'} <= {
-                r['stage'] for r in records if r['event'] == 'end'}
-            failed, = [r for r in records if r['event'] == 'end' and r['outcome'] == 'failed']
-            assert failed['stage'] == 'adapter_create'
-            assert len({r['trace_id'] for r in records}) == 1
-            assert summary['outcome'] == 'started'
-    assert LogManager.flush(timeout=2)
-    assert 'event=started_sent' in project.path.read_text(encoding='utf-8')
+        rows = records(caplog, identity)
+        assert {'start_receive', 'session_build', 'backend_prepare', 'wav_open',
+                'bind', 'start', 'started_send', 'first_data'} <= {r['stage'] for r in rows}
+        built, = [r for r in rows if r['stage'] == 'session_build' and r.get('event') == 'end']
+        assert float(built['seconds']) == pytest.approx(2.2)
+        prepared, = [r for r in rows if r['stage'] == 'backend_prepare' and r.get('event') == 'end']
+        assert float(prepared['seconds']) == pytest.approx(3.3 if identity == 'A' else 0.0)
+    assert len(attempts) == (3 if retry else 2)
+
+@pytest.mark.parametrize('failure', [False, True])
+def test_started_log_follows_actual_send_without_queue_envelope(caplog, failure):
+    from base.recording_worker import _send_loop
+    caplog.set_level(logging.INFO)
+    outgoing = queue.Queue()
+    payload = RecordingEvent(7, 'A', 'started', None)
+    outgoing.put(payload)
+    outgoing.put(None)
+    broken = threading.Event()
+    class Connection:
+        def send(self, event):
+            assert event is payload
+            assert not [r for r in records(caplog) if r['stage'] == 'started_send']
+            if failure:
+                raise OSError('sender-probe')
+    _send_loop(Connection(), outgoing, broken)
+    assert bool([r for r in records(caplog) if r['stage'] == 'started_send']) is not failure
+    assert broken.is_set() is failure
 
 
-def test_ve_first_and_reused_capture_keep_existing_task_identity(project, tmp_path):
+def test_ve_resource_reuse_keeps_binding_and_start_observations(tmp_path, caplog):
     from base.ve3668n_resource import VeResourceController
     from unit_test.base.ve3668n_fakes import CaptureSDK, capture_request
+    caplog.set_level(logging.INFO)
     sdk = CaptureSDK()
     controller = VeResourceController(sdk_factory=lambda: sdk, bind_timeout=1, detach_timeout=1)
     try:
@@ -168,18 +160,16 @@ def test_ve_first_and_reused_capture_keep_existing_task_identity(project, tmp_pa
                                        ve_stream_factory=controller.stream)
             capture.start()
             capture.wait(3)
-            assert capture.join(3)
-        summaries = selected(project, 'summary')
-        assert len(summaries) == 2 and all(r['outcome'] == 'started' for r in summaries)
-        assert [r['reuse_result'] for r in summaries] == ['created', 'reused']
-        assert summaries[0]['resource_task_id'].startswith('VE_')
-        assert summaries[0]['resource_task_id'] == summaries[1]['resource_task_id']
+            assert capture.join(3) and capture.started.is_set()
+            rows = records(caplog, identity)
+            assert {'wav_open', 'bind', 'start', 'first_data'} <= {r['stage'] for r in rows}
+            assert len([r for r in rows if r['stage'] == 'first_data']) == 1
         assert controller.lifecycle_counts.task_create == controller.lifecycle_counts.task_start == 1
     finally:
         assert controller.release(1).success
 
 
-def test_cancel_during_native_start_preserves_existing_started_signal(project, tmp_path):
+def test_cancel_during_native_start_keeps_existing_started_signal(tmp_path):
     backend = FakeBackend()
     capture = RecordingCapture(request(tmp_path), backend=backend)
     native_open = backend.InputStream
@@ -191,77 +181,4 @@ def test_cancel_during_native_start_preserves_existing_started_signal(project, t
     capture.start()
     capture.wait(3)
     assert capture.join(3)
-    assert capture.started.is_set()  # Original stream.start return publishes started.
-
-
-@pytest.mark.parametrize('failure', [False, True])
-def test_started_summary_waits_for_actual_sender_and_keeps_ipc_payload(project, failure):
-    from base.recording_worker import _send_loop, _StartupSend
-    trace = RecordingStartupTrace(project.logger, process='child', request_id='A')
-    commands = queue.Queue()
-    payload = RecordingEvent(7, 'A', 'started', None)
-    commands.put(_StartupSend(payload, trace))
-    commands.put(None)
-    entered, release, broken = threading.Event(), threading.Event(), threading.Event()
-    class Connection:
-        def send(self, event):
-            assert event is payload
-            entered.set()
-            assert release.wait(3)
-            if failure:
-                raise OSError('sender-probe')
-    thread = threading.Thread(target=_send_loop, args=(Connection(), commands, broken))
-    thread.start()
-    try:
-        assert entered.wait(2)
-        assert not selected(project, 'summary')
-    finally:
-        release.set()
-        thread.join(3)
-    summary, = selected(project, 'summary')
-    assert summary['outcome'] == ('failed' if failure else 'started')
-    assert bool(selected(project, 'started_sent')) is not failure
-    assert broken.is_set() is failure
-
-
-def test_worker_session_construction_failure_has_one_failed_summary(project, tmp_path, monkeypatch):
-    from base import recording_worker as module
-    monkeypatch.setattr(module.multiprocessing, 'parent_process', lambda: None)
-    def capture(*args, **kwargs):
-        raise OSError('session-build-probe')
-    monkeypatch.setattr(module, 'RecordingCapture', capture)
-    commands = queue.Queue()
-    commands.put(RecordingEvent(7, 'capture-1', 'start', request(tmp_path)))
-    class Connection:
-        def poll(self, timeout):
-            return not commands.empty()
-        def recv(self):
-            return commands.get_nowait()
-        def send(self, event):
-            pass
-        def close(self):
-            pass
-    module.recording_worker(Connection(), Connection(), 7, None, {}, .5)
-    ended, = selected(project, 'end', 'session_build')
-    summary, = selected(project, 'summary')
-    assert ended['outcome'] == summary['outcome'] == 'failed'
-    assert ended['error_type'] == 'OSError'
-    assert summary['sample_rate'] == '100' and summary['target_samples'] == '9'
-
-
-def test_ve_handled_bind_failure_is_not_reported_as_success(project, tmp_path):
-    from base.ve3668n_resource import VeResourceController
-    from unit_test.base.ve3668n_fakes import CaptureSDK, capture_request
-    sdk = CaptureSDK(failures=('create_task',))
-    controller = VeResourceController(sdk_factory=lambda: sdk, bind_timeout=1, detach_timeout=1)
-    capture = RecordingCapture(capture_request(tmp_path / 'failure.wav'), ve_stream_factory=controller.stream)
-    try:
-        capture.start()
-        assert isinstance(capture.wait(3), RecordingFailure)
-        assert capture.join(3)
-        ended, = selected(project, 'end', 'device_bind')
-        summary, = selected(project, 'summary')
-        assert ended['outcome'] == summary['outcome'] == 'failed'
-        assert summary['first_delivered_block'] == 'not_observed'
-    finally:
-        controller.release(1)
+    assert capture.started.is_set()
