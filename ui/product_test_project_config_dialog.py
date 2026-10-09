@@ -495,10 +495,6 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
 
         self.result_root_input.setReadOnly(True)
         self.result_root_input.setPlaceholderText("请选择测试结果根目录")
-        self.select_result_root_btn.setIcon(
-            QIcon(DEFAULT_DIR + "ui/assets/folder-outline.svg")
-        )
-        self.select_result_root_btn.setIconSize(QSize(18, 18))
         self.select_result_root_btn.setToolTip("选择测试结果根目录")
 
         result_content = QWidget()
