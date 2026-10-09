@@ -36,6 +36,7 @@ from consts.running_consts import DEFAULT_DIR, PRODUCT_TEST_REPORT_DIR
 from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.config_dialog_base import ConfigDialogBase
 from ui.dialog_enter_policy import install_dialog_enter_policy
+from ui.queue_display import queue_display_options
 from ui.path_selector_utils import load_path_selector_folder_icon
 
 
@@ -400,8 +401,10 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         queue_names = self._queue_option_names()
         if queue_names:
             combobox.addItem("请选择", "")
-            for queue_name in queue_names:
-                combobox.addItem(queue_name, queue_name)
+            for label, queue_name in queue_display_options(
+                self.queue_catalog, queue_names, current_queue
+            ):
+                combobox.addItem(label, queue_name)
         else:
             combobox.addItem(NO_QUEUE_TEXT, "")
 
