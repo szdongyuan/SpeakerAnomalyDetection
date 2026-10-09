@@ -103,6 +103,11 @@ class AnalysisMultichannelResultWindow(QWidget):
         self.setWindowTitle(title)
         self.setMinimumSize(760, 520)
         self._build_ui()
+        if parent is not None:
+            # Keep Qt ownership for cleanup, but allow a separate taskbar entry
+            # instead of Windows minimizing an owned window to a title bar.
+            self.winId()
+            self.windowHandle().setTransientParent(None)
 
     @property
     def channel_combo(self):

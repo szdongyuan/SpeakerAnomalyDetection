@@ -183,6 +183,7 @@ def _render_spectrogram(figure, axis, payload):
     )
     figure.colorbar(image, ax=axis, label="dB")
     _finish_axis(axis, payload)
+    axis.grid(False, which="both")
 
 
 def _render_values(axis, payload):
