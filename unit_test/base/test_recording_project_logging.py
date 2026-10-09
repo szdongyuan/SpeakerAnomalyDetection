@@ -426,11 +426,14 @@ def test_discovery_callback_failure_reaches_project_file(tmp_path, monkeypatch, 
 def test_worker_fatal_and_sender_exit_cleanup_reach_project_file(
         tmp_path, monkeypatch, caplog, blocked_preview):
     from base import recording_worker as worker_module
+    from base.recording_worker_pipeline import WorkerCaptureState
+    from base.recording_startup_trace import RecordingStartupTrace
 
     done = threading.Event()
     done.set()
-    capture = SimpleNamespace(done=done, cancel=Mock(), join=lambda timeout=0: True)
-    pipeline = SimpleNamespace(shutdown_snapshot=lambda: [SimpleNamespace(capture=capture)])
+    capture = SimpleNamespace(done=done, cancel=Mock(), join=lambda timeout=0: True, outcome=None)
+    capture_state = WorkerCaptureState('fatal-cleanup', capture)
+    pipeline = SimpleNamespace(shutdown_snapshot=lambda: [capture_state])
     monkeypatch.setattr(worker_module, "WorkerCapturePipeline", lambda: pipeline)
     controller = SimpleNamespace(close=Mock(return_value=SimpleNamespace(success=True)))
     monkeypatch.setattr(worker_module, "VeResourceController", lambda **kwargs: controller)
@@ -456,6 +459,8 @@ def test_worker_fatal_and_sender_exit_cleanup_reach_project_file(
     monkeypatch.setattr(worker_module, "threading",
                         SimpleNamespace(Thread=ControlledThread, Event=threading.Event))
     with isolated_project_logger(tmp_path, monkeypatch) as state:
+        capture_state.startup_trace = RecordingStartupTrace(
+            LogManager.set_log_handler('core'), process='child', request_id='fatal-cleanup')
         worker_module.recording_worker(control, preview, 7, None, {})
         control.close.assert_called_once_with()
         preview.close.assert_called_once_with()

@@ -8,6 +8,7 @@ import os
 from time import perf_counter_ns
 from datetime import datetime
 
+from base.log_manager import LogManager
 from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_result_reader import RecordingAudio
 from base.recording_waveform_preparation import prepare_waveform_display_data
@@ -82,7 +83,7 @@ def _waveform_diagnostics(host):
             _finish_waveform_diagnostics(host)
         diagnostic = RecordingDiagnostics(
             _WaveformDiagnosticLogger(
-                getattr(host, "default_logger", None) or logging.getLogger(__name__),
+                getattr(host, "default_logger", None) or LogManager.set_log_handler(__name__),
                 {"waveform_generation": waveform_generation}),
             categories=("gui_projection", "gui_callback_wait"),
             request=request, generation=generation, perf_ns=perf_counter_ns)

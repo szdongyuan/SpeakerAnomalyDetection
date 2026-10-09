@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from uuid import uuid4
 from collections import deque
 from time import perf_counter
+from contextlib import nullcontext
+from itertools import islice
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication, QMessageBox
@@ -13,6 +15,51 @@ from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
 from base.raw_audio_csv_protocol import CsvFailure, CsvExportRequest
 from base.raw_audio_csv_zip import raw_csv_zip_path
 from base.analysis_artifact_paths import build_raw_audio_csv_path, storage_context_from_metadata
+from base.recording_startup_trace import RecordingStartupTrace
+from consts.recording_startup_consts import EVENT_REJECTED
+
+
+def recording_startup_background(host):
+    """Read bounded GUI-owned state only; never query a service for telemetry."""
+    active = getattr(host, "_analysis_active_request", "unknown")
+    queued = getattr(host, "_analysis_task_queue", None)
+    instances = getattr(active, "instances", ())
+    items = ",".join(item.analysis_type for item in islice(instances, 8)
+                     if isinstance(getattr(item, "analysis_type", None), str))
+    csv = getattr(host, "_raw_audio_csv_cached_snapshot", None)
+    return dict(analysis_active="unknown" if active == "unknown" else active is not None,
+                analysis_queued=len(queued) if queued is not None else "unknown",
+                analysis_task_id=getattr(active, "task_id", "unknown"),
+                analysis_items=items or "unknown",
+                csv_active=getattr(csv, "active", "unknown"),
+                csv_queued=getattr(csv, "queued", "unknown"))
+
+
+class RecordingStartupAttempt:
+    """Synchronous GUI boundary; transfer the trace explicitly to the next owner."""
+    def __init__(self, host, trace=None):
+        self.trace = trace
+        self.host = host
+        self.transferred = False
+        self.outcome = "rejected"
+
+    def __enter__(self):
+        if self.trace is None:
+            self.trace = RecordingStartupTrace(self.host.default_logger, process="parent")
+            self.trace.set_context(start_boundary="gui_entry", completion_boundary="qt_callback_return")
+            self.trace.mark("gui_entry", domain="GUI", **recording_startup_background(self.host))
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        if exc_type is not None or not self.transferred:
+            self.trace.finish("failed" if exc_type is not None else self.outcome, domain="GUI")
+
+    def reject(self, reason):
+        # A completed guard stage means its code returned normally, not that
+        # admission succeeded. This explicit decision carries the reason into
+        # the summary without throwing a synthetic business exception.
+        self.trace.set_context(rejection_reason=reason)
+        self.trace.mark(EVENT_REJECTED, domain="GUI")
 
 
 def record_gui_stage(host, stage, started, *, request=None):
@@ -37,13 +84,26 @@ class CsvRecordingAdmission:
 
 class CsvRecordingAdmissionScope:
     """Roll back only this attempt until a recording context takes ownership."""
-    def __init__(self, host):
+    def __init__(self, host, *, startup_trace=None):
         self.host = host
+        self.startup_trace = startup_trace
         self.admission = None
         self.keep = False
         self.allowed = True
+        self.rejection_reason = "csv_reservation_denied"
+
+    def _set_rejection_reason(self, reason):
+        self.rejection_reason = reason
 
     def __enter__(self):
+        with (self.startup_trace.stage("csv_admission", domain="GUI")
+              if self.startup_trace is not None else nullcontext()):
+            result = self._enter()
+        if self.startup_trace is not None and self.admission is not None:
+            self.startup_trace.link_request(self.admission.recording_id, domain="GUI")
+        return result
+
+    def _enter(self):
         reserve = getattr(self.host, "_reserve_raw_audio_csv_recording", None)
         if callable(reserve):
             # Qt can deliver another start while the admitted invocation is
@@ -54,8 +114,9 @@ class CsvRecordingAdmissionScope:
                     "_recording_publication_in_progress"))
                     or getattr(self.host, "_recording_process_contexts", None)):
                 self.allowed = False
+                self.rejection_reason = "csv_workflow_busy"
                 return self
-            self.admission = reserve()
+            self.admission = reserve(on_rejected=self._set_rejection_reason)
             self.allowed = self.admission is not None
             if self.admission is not None and self.admission.scope_owner is None:
                 self.admission.scope_owner = self
@@ -90,9 +151,12 @@ class SequenceWidgetRawCsvOpsMixin:
             self._on_raw_audio_csv_service_event, owner=self)
 
     def _raw_audio_csv_snapshot(self):
-        return self.raw_audio_csv_service.snapshot()
+        snapshot = self.raw_audio_csv_service.snapshot()
+        self._raw_audio_csv_cached_snapshot = snapshot
+        return snapshot
 
     def _on_raw_audio_csv_service_event(self, event):
+        self._raw_audio_csv_cached_snapshot = event.snapshot
         self._refresh_raw_audio_csv_admission()
         presented = getattr(self, "_presented_raw_audio_csv_tasks", None)
         if presented is None:
@@ -140,6 +204,7 @@ class SequenceWidgetRawCsvOpsMixin:
         if not enabled:
             return ""
         snapshot = self.raw_audio_csv_service.snapshot()
+        self._raw_audio_csv_cached_snapshot = snapshot
         if snapshot.phase != "open":
             return "原始音频 CSV 服务正在关闭或不可用，请稍后重试。"
         if snapshot.outstanding >= snapshot.capacity:
@@ -151,8 +216,10 @@ class SequenceWidgetRawCsvOpsMixin:
         if not (getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", False):
             QMessageBox.warning(self, "录音暂不可用", reason)
 
-    def _reserve_raw_audio_csv_recording(self):
+    def _reserve_raw_audio_csv_recording(self, *, on_rejected=None):
         if getattr(self, "_close_in_progress", False) or getattr(self, "_recording_closed", False):
+            if on_rejected is not None:
+                on_rejected("window_closing")
             return None
         pending = getattr(self, "_pending_raw_audio_csv_recording", None)
         if pending is not None:
@@ -164,6 +231,9 @@ class SequenceWidgetRawCsvOpsMixin:
         if enabled:
             admission = self.raw_audio_csv_service.reserve(recording_id)
             if admission.status != "accepted":
+                if on_rejected is not None:
+                    on_rejected("csv_capacity_full" if admission.status == "full"
+                                else "csv_service_unavailable")
                 reason = ("原始音频 CSV 保存队列已满（16 份），请等待保存完成后重新触发录音。"
                           if admission.status == "full" else
                           "原始音频 CSV 服务正在关闭或不可用，请稍后重试。")

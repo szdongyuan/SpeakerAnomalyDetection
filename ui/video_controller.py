@@ -1,6 +1,5 @@
 """Qt video bridge and application controller, including settings and device probing."""
 
-import logging
 import multiprocessing
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -132,6 +131,7 @@ class VideoController(VideoServiceBridge):
         self._probe_running = False
         self._unreaped_probe = None
         self._logger = LogManager.set_log_handler("core")
+        self._video_logger = LogManager.set_log_handler("core.video")
         self._saving = False
         self._save_preview_only = False
         self._activated = False
@@ -450,7 +450,7 @@ class VideoController(VideoServiceBridge):
         try:
             save_config(self.config_path, config)
         except PermissionError:
-            logging.getLogger("core.video").warning("Video settings save denied", exc_info=True)
+            self._video_logger.warning("Video settings save denied", exc_info=True)
             error = "无法更新配置文件，请检查文件占用或写入权限。"
         except (OSError, ValueError) as exc:
             error = str(exc)

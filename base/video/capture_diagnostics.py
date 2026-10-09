@@ -4,13 +4,13 @@ from collections import deque
 from datetime import datetime, timezone
 import hashlib
 import json
-import logging
 from pathlib import Path
 import time
 from uuid import uuid4
 
+from base.log_manager import LogManager
 
-logger = logging.getLogger("core.video")
+
 PACKET_BYTE_LIMIT = 4 * 1024**2
 PACKET_COUNT_LIMIT = 16
 FAILURE_SAMPLE_LIMIT = 3
@@ -18,6 +18,7 @@ FAILURE_SAMPLE_LIMIT = 3
 
 class CaptureDiagnostics:
     def __init__(self, config):
+        self._logger = LogManager.set_log_handler("core.video")
         self.config = config
         self.run = uuid4().hex[:12]
         self.attempt = 0
@@ -39,7 +40,7 @@ class CaptureDiagnostics:
         self.packet_number = 0
         self.actual = {}
         self.logs.clear()
-        logger.info(
+        self._logger.info(
             "Video capture attempt: run=%s attempt=%s device=%s requested=%sx%s fps=%s/%s input=%s",
             self.run, self.attempt, hashlib.sha256(self.config.device_id.encode()).hexdigest()[:12],
             self.config.width, self.config.height, self.config.fps_num, self.config.fps_den,
@@ -55,7 +56,7 @@ class CaptureDiagnostics:
             "average_rate": str(stream.average_rate), "time_base": str(stream.time_base),
             "thread_count": codec.thread_count, "thread_type": str(codec.thread_type),
         }
-        logger.info("Video capture opened: run=%s attempt=%s actual=%s", self.run, self.attempt, self.actual)
+        self._logger.info("Video capture opened: run=%s attempt=%s actual=%s", self.run, self.attempt, self.actual)
 
     def add_logs(self, logs):
         for level, component, message in logs:
@@ -78,7 +79,7 @@ class CaptureDiagnostics:
 
     def first_frame(self):
         elapsed = None if self.outage_since is None else time.monotonic() - self.outage_since
-        logger.info("Video capture first frame: run=%s attempt=%s outage_seconds=%s",
+        self._logger.info("Video capture first frame: run=%s attempt=%s outage_seconds=%s",
                     self.run, self.attempt, elapsed)
         self.outage_since = None
 
@@ -86,7 +87,7 @@ class CaptureDiagnostics:
         if self.outage_since is None:
             self.outage_since = time.monotonic()
         # str(FFmpegError) may include a global last-error log from another thread.
-        logger.warning(
+        self._logger.warning(
             "Video capture failure: run=%s attempt=%s stage=%s error_type=%s errno=%s "
             "message=%s packet=%s local_ffmpeg_logs=%s retry_delay_seconds=%s",
             self.run, self.attempt, self.stage, type(exc).__name__, getattr(exc, "errno", None),
@@ -97,7 +98,7 @@ class CaptureDiagnostics:
             try:
                 self._save_sample(exc)
             except OSError:
-                logger.exception("Video capture evidence write failed: run=%s attempt=%s; retry continues",
+                self._logger.exception("Video capture evidence write failed: run=%s attempt=%s; retry continues",
                                  self.run, self.attempt)
 
     def _save_sample(self, exc):
@@ -113,7 +114,7 @@ class CaptureDiagnostics:
             destination = candidate
             break
         if destination is None:
-            logger.warning("Video capture evidence limit reached: directory=%s limit=%s; logs continue",
+            self._logger.warning("Video capture evidence limit reached: directory=%s limit=%s; logs continue",
                            root, FAILURE_SAMPLE_LIMIT)
             return
         report = {
@@ -136,5 +137,5 @@ class CaptureDiagnostics:
         (destination / "result.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8",
         )
-        logger.warning("Video capture evidence saved: run=%s attempt=%s directory=%s bytes=%s packets=%s",
+        self._logger.warning("Video capture evidence saved: run=%s attempt=%s directory=%s bytes=%s packets=%s",
                        self.run, self.attempt, destination, self.history_bytes, len(self.history))

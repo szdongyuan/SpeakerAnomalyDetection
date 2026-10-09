@@ -397,7 +397,7 @@ class _WorkflowHost(SequenceWidgetAnalysisOpsMixin, SequenceWidgetStreamingOpsMi
     def update_player_btn_is_playing(self):
         return None
 
-    def reset_work_pram(self, label, count=None):
+    def reset_work_pram(self, label, count=None, *, startup_trace=None):
         return self._recorded_dict, 48_000
 
     def _should_use_streaming_recording(self):

@@ -1,6 +1,5 @@
 """Instance-owned CSV supervisor. Public operations only change memory and wake it."""
 
-import logging
 from collections import deque
 import multiprocessing
 from multiprocessing.connection import wait
@@ -10,6 +9,7 @@ import threading
 import time
 from uuid import uuid4
 
+from base.log_manager import LogManager
 from base.raw_audio_csv_protocol import (
     CsvExportCommand, CsvExportRequest, CsvFailure, CsvResult, CsvServiceEvent, CsvTiming,
 )
@@ -47,6 +47,7 @@ class RawAudioCsvService:
                  worker_args=(), ready_timeout=RAW_AUDIO_CSV_READY_TIMEOUT_SECONDS,
                  shutdown_timeout=RAW_AUDIO_CSV_SHUTDOWN_TIMEOUT_SECONDS,
                  clock=time.monotonic):
+        self._logger = LogManager.set_log_handler(__name__)
         self._ledger = CsvTaskLedger()
         self._context = context or multiprocessing.get_context("spawn")
         self._worker_target = worker_target
@@ -147,7 +148,7 @@ class RawAudioCsvService:
                 # Report the exact scope; the ledger's finally releases its
                 # permit. Internal supervisor errors still reach the fatal gate.
                 detail = f"{'; '.join(paths)}: {type(error).__name__}: {str(error)[:1000]}"
-                logging.getLogger(__name__).warning("CSV deferred mutation failed: %s", detail)
+                self._logger.warning("CSV deferred mutation failed: %s", detail)
                 self._emit("mutation_failed", detail=detail)
 
         result = self._ledger.defer_mutation(paths, run_mutation, ready=ready)
@@ -173,7 +174,7 @@ class RawAudioCsvService:
             except Exception:
                 # External consumer boundary: any subscriber can fail. Ledger
                 # transitions are owned here, never delegated to a consumer.
-                logging.getLogger(__name__).exception("CSV event consumer failed kind=%s", event.kind)
+                self._logger.exception("CSV event consumer failed kind=%s", event.kind)
 
     def _drain_observations(self):
         with self._observation_lock:
@@ -192,7 +193,7 @@ class RawAudioCsvService:
                 # Outermost supervisor boundary covers process creation, IPC,
                 # filesystem and deferred user callbacks. Preserve live leases
                 # and stop dispatch; only proven death can release active work.
-                logging.getLogger(__name__).exception("CSV supervisor failed generation=%s", self._generation)
+                self._logger.exception("CSV supervisor failed generation=%s", self._generation)
                 self._unavailable(f"{type(error).__name__}: {error}"[:1000])
                 self._terminate()
 

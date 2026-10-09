@@ -828,7 +828,7 @@ def permanently_blocked_video_worker(channel, mailbox, generation, config):
     manager = configure(Path(config.recording_root) / "logs")
     tail_logger = manager.set_log_handler("core")
     # Isolate exactly three ordinary accepted records at the forced-exit edge.
-    runtime_module.logger.disabled = True
+    manager.set_log_handler("core.video").disabled = True
     sink_entered = threading.Event()
     if config.device_name == "blocked-log-sink":
         def blocked_write(sink, message):

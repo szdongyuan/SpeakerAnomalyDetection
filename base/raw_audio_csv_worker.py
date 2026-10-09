@@ -6,13 +6,13 @@ Parent sends CsvExportCommand or the string ``shutdown``. Child sends
 Only a terminal response confirms that the exporter has closed its handles.
 """
 
-import logging
 import os
 from pathlib import Path
 from time import perf_counter
 
 import soundfile as sf
 
+from base.log_manager import LogManager
 from base.raw_audio_csv_exporter import export_raw_audio_csv
 from base.raw_audio_csv_zip import archive_raw_audio_csv
 from base.raw_audio_csv_protocol import CsvExportCommand, CsvFailure, CsvResult
@@ -21,6 +21,7 @@ from consts.raw_audio_csv_consts import RAW_AUDIO_CSV_PROTOCOL_VERSION
 
 def _export(command, temporary_created=None):
     """Normalize failures at the one external per-task boundary."""
+    logger = LogManager.set_log_handler(__name__)
     request = command.request
     started = perf_counter()
     stage = "protocol"
@@ -74,7 +75,7 @@ def _export(command, temporary_created=None):
         # Soundfile, CSV formatting and filesystem operations have distinct error
         # types. The exporter closes/cleans its own resources before this boundary;
         # diagnostics let the parent release the task and keep this worker alive.
-        logging.getLogger(__name__).exception(
+        logger.exception(
             "CSV task failed task_id=%s generation=%s pid=%s stage=%s elapsed=%.6f",
             command.task_id, command.generation, os.getpid(), stage,
             perf_counter() - started,
@@ -91,6 +92,7 @@ def _export(command, temporary_created=None):
 
 def raw_audio_csv_worker(control):
     """Run one command at a time, closing the pipe on shutdown/disconnect."""
+    logger = LogManager.set_log_handler(__name__)
     try:
         control.send(("ready", RAW_AUDIO_CSV_PROTOCOL_VERSION, os.getpid()))
         while True:
@@ -107,6 +109,6 @@ def raw_audio_csv_worker(control):
             control.send(_export(command, temporary_created))
     except (EOFError, BrokenPipeError, ConnectionResetError):
         # The controller has gone away; no task can be accepted or acknowledged.
-        logging.getLogger(__name__).info("CSV worker controller disconnected pid=%s", os.getpid())
+        logger.info("CSV worker controller disconnected pid=%s", os.getpid())
     finally:
         control.close()

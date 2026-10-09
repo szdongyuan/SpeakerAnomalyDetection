@@ -1,5 +1,4 @@
 """Recording UI diagnostics use the real project file logger."""
-import ast
 import logging
 from pathlib import Path
 import re
@@ -109,6 +108,12 @@ for name in (
     "base.ve3668n_discovery",
     "ui.recording_service_bridge",
     "ui.sequence.analysis_report_snapshot",
+    "base.raw_audio_csv_service",
+    "base.raw_audio_csv_worker",
+    "base.raw_audio_csv_exporter",
+    "base.recording_defaults",
+    "ui.raw_audio_csv_service_bridge",
+    "ui.sequence.sequence_widget_streaming_ops",
 ):
     importlib.import_module(name)
 """
@@ -122,27 +127,52 @@ for name in (
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_csv_bridge_consumer_fault_preserves_delivery(ui_qapp, tmp_path, monkeypatch, caplog):
+    from ui.raw_audio_csv_service_bridge import RawAudioCsvServiceBridge
+    from unit_test.ui.test_raw_audio_csv_bridge import EventService, terminal
+    from unit_test.base.test_business_project_logging import assert_project_record
+
+    error = RuntimeError("csv-ui-probe")
+    received = []
+
+    def broken(event):
+        raise error
+
+    with isolated_project_logger(tmp_path, monkeypatch) as state:
+        service = EventService()
+        bridge = RawAudioCsvServiceBridge(service)
+        try:
+            bridge.subscribe(broken)
+            bridge.subscribe(received.append)
+            value = terminal()
+            service.emit(value)
+            service.emit(value)
+            ui_qapp.processEvents()
+            assert received == [value]
+            assert received[0].result is value.result
+            assert_project_record(state, caplog, "CSV UI consumer failed for terminal",
+                                  "raw_audio_csv_service_bridge.py", logging.ERROR, error)
+        finally:
+            bridge.close_delivery()
+
+
+def test_waveform_fallback_logger_writes_summary(tmp_path, monkeypatch, caplog):
+    from ui.sequence import sequence_widget_streaming_ops as ops
+    from unit_test.base.test_business_project_logging import assert_project_record
+
+    host = SimpleNamespace(_streaming_waveform_generation=12)
+    with isolated_project_logger(tmp_path, monkeypatch) as state:
+        diagnostic = ops._waveform_diagnostics(host)
+        assert ops._waveform_diagnostics(host) is diagnostic
+        diagnostic.observe("gui_projection", 100)
+        ops._finish_waveform_diagnostics(host)
+        ops._finish_waveform_diagnostics(host)
+        assert_project_record(state, caplog, "gui_waveform_summary",
+                              "recording_diagnostics.py", logging.INFO)
+        assert "waveform_generation=12" in state.path.read_text(encoding="utf-8")
+
+
 def test_tracked_production_modules_use_project_logging_imports():
-    root = Path(__file__).resolve().parents[2]
-    result = subprocess.run(
-        ["git", "ls-files", "-z", "--", "*.py"],
-        cwd=root,
-        capture_output=True,
-        check=True,
-        timeout=30,
-    )
-    violations = []
-    for path in result.stdout.decode("utf-8").split("\0"):
-        if not path or path == "base/log_manager.py" or path.startswith("unit_test/"):
-            continue
-        tree = ast.parse((root / path).read_text(encoding="utf-8-sig"), filename=path)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                uses_logging = any(alias.name.split(".")[0] == "logging" for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                uses_logging = node.level == 0 and (node.module or "").split(".")[0] == "logging"
-            else:
-                continue
-            if uses_logging:
-                violations.append(f"{path}:{node.lineno}")
-    assert not violations, "Direct standard logging imports: " + ", ".join(violations)
+    from unit_test.base.test_project_logging_entrypoints import production_logging_violations
+    violations = production_logging_violations(Path(__file__).resolve().parents[2])
+    assert not violations, "Raw business logging calls: " + ", ".join(violations)
