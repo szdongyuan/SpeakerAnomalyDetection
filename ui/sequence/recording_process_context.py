@@ -30,3 +30,4 @@ class RecordingProcessContext:
     csv_reservation: object = None
     csv_enabled_snapshot: bool = False
     csv_path_permit: object = None
+    startup_trace: object = None

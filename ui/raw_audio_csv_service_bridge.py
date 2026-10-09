@@ -1,5 +1,4 @@
 """Small queued CSV events; the service never retains a window or Qt consumer."""
-import logging
 import threading
 import weakref
 import time
@@ -7,6 +6,8 @@ from dataclasses import replace
 
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
 from PyQt5.QtWidgets import QApplication
+
+from base.log_manager import LogManager
 
 
 class _EventRelay(QObject):
@@ -50,8 +51,8 @@ class RawAudioCsvServiceBridge(QObject):
         if app is None or QThread.currentThread() is not app.thread():
             raise RuntimeError("CSV bridge must be created on the QApplication thread")
         super().__init__(parent)
+        self._logger = LogManager.set_log_handler(__name__)
         self.service = service
-        self._logger = logging.getLogger(__name__)
         self._callbacks = {}
         self._terminal_generations = {}
         self._service_closed = service.closed.is_set()

@@ -3,7 +3,7 @@
 import logging
 import time
 
-logger = logging.getLogger("core.video")
+from base.log_manager import LogManager
 
 
 def _jpeg_end(data):
@@ -43,6 +43,7 @@ class MjpegDecoder:
     def __init__(self, codec, config, *, clock=time.monotonic):
         import av
 
+        self._logger = LogManager.set_log_handler("core.video")
         self.codec = codec
         self.clock = clock
         self.max_bytes = max(4 * 1024**2, config.width * config.height * 3)
@@ -67,7 +68,7 @@ class MjpegDecoder:
     def _log(self, now, *, force=False):
         counts = (self.fragmented_inputs, self.discarded)
         if counts != self.logged_counts and (force or now - self.last_log >= 5):
-            logger.log(logging.WARNING if self.discarded > self.logged_counts[1] else logging.INFO,
+            self._logger.log(logging.WARNING if self.discarded > self.logged_counts[1] else logging.INFO,
                        "Video MJPEG framing: fragmented_inputs=%s discarded_units=%s pending_bytes=%s "
                        "byte_limit=%s; isolated input damage does not reconnect camera",
                        self.fragmented_inputs, self.discarded, self.pending_bytes, self.max_bytes)

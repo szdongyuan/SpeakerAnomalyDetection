@@ -18,6 +18,10 @@ import numpy as np
 import soundfile as sf
 
 from base.log_manager import LogManager
+from base.recording_startup_trace import RecordingStartupTrace
+from consts.recording_startup_consts import (
+    EVENT_CAPTURE_STARTED, EVENT_CAPTURE_THREAD_ENTER, FIRST_DELIVERED_BLOCK, FIRST_RETAINED_BLOCK,
+)
 from base.multichannel_waveform_session import MultichannelWaveformSession
 from base.recording_input_device import validate_input_device
 from base.recording_process_protocol import (
@@ -81,7 +85,8 @@ class RecordingCapture:
                  ve_stream_factory=None, startup_budget=None, on_retry=None,
                  writer_factory=StreamingWavWriter,
                  metadata_appender=append_owned_recording_calibration_metadata_result,
-                 blocksize=2048, queue_seconds=2.0, diagnostics=None):
+                 blocksize=2048, queue_seconds=2.0, diagnostics=None,
+                 startup_trace=None, startup_attempt=1):
         self.request = request
         self.input_device = request.device
         self._backend = backend
@@ -138,6 +143,23 @@ class RecordingCapture:
         self._warnings = []
         self._status_warning = None
         self._logger = LogManager.set_log_handler("core")
+        self._owns_startup_trace = startup_trace is None
+        self.startup_trace = startup_trace or RecordingStartupTrace(
+            self._logger, process="child", request_id=request.request_id)
+        self.startup_attempt = startup_attempt
+        self.startup_trace.set_context(
+            backend=request.device.get("backend", "sounddevice"),
+            sample_rate=request.sample_rate, channel_count=len(request.channels),
+            target_samples=request.target_samples,
+            target_duration_seconds=request.target_samples / request.sample_rate,
+            startup_trim_samples=request.trim_samples, export_mode="unknown",
+            resource_task_id="unknown" if self._is_ve else "not_applicable",
+            reuse_result="unknown" if self._is_ve else "not_applicable")
+        if self._owns_startup_trace:
+            self.startup_trace.set_context(completion_boundary="capture_started")
+        self._first_delivery = None
+        self._first_delivery_emitted = False
+        self._first_retained_emitted = False
         self._effective_trim = request.trim_samples if request.purpose == "main" else 0
         # For a known overlarge trim, finalization retains all audio too.
         if self._effective_trim >= request.target_samples:
@@ -322,6 +344,11 @@ class RecordingCapture:
                 or (self._is_ve and type(frames) is not int)):
             self._fail("capture", "driver input shape does not match frame/channel contract")
             return None
+        if self._first_delivery is None:
+            # Real-time callback: save source identity/time only. The existing
+            # capture consumer emits this observation, never the callback.
+            self._first_delivery = (time.perf_counter_ns(), threading.get_ident(),
+                                    threading.current_thread().name)
         with self._queue_lock:
             if self._stop_requested.is_set():
                 return None
@@ -363,7 +390,8 @@ class RecordingCapture:
             from base.ve3668n_capture import Ve3668nInputStream
 
             self._stage = "open_wav"
-            self._writer = self._writer_factory(req.path, sample_rate=req.sample_rate, channels=len(req.channels))
+            with self._startup_stage("open_wav"):
+                self._writer = self._writer_factory(req.path, sample_rate=req.sample_rate, channels=len(req.channels))
             self._stage = "device"
             factory = self._ve_stream_factory or Ve3668nInputStream
             startup_options = {}
@@ -371,31 +399,66 @@ class RecordingCapture:
                 startup_options["startup_budget"] = self._startup_budget
             if self._on_retry is not None:
                 startup_options["on_retry"] = self._on_retry
-            self._stream = self._native_stream = factory(
-                request=req, callback=self._input_callback, fail=self._fail,
-                stop_event=self._stop_requested, **startup_options,
-            )
-            if not self._cancelled.is_set() and self._stream.start():
-                self.started.set()
+            with self._startup_stage("adapter_create"):
+                self._stream = self._native_stream = factory(
+                    request=req, callback=self._input_callback, fail=self._fail,
+                    stop_event=self._stop_requested, **startup_options,
+                )
+            with self._startup_stage("device_bind") as observation:
+                succeeded = not self._cancelled.is_set() and self._stream.start()
+                self.startup_trace.set_context(
+                    resource_task_id=getattr(self._stream, "startup_resource_task_id", "unknown"),
+                    reuse_result=getattr(self._stream, "startup_reuse_result", "unknown"))
+                if not succeeded:
+                    observation.observe("cancelled" if self._cancelled.is_set() else "failed",
+                                        reason="bind_not_started")
+            if succeeded:
+                self._publish_started()
             return
         if self._backend is None:
             self._backend = sounddevice_backend()
         self.input_device = validate_input_device(self._backend, self.input_device, req.channels)
         self._stage = "open_wav"
-        self._writer = self._writer_factory(req.path, sample_rate=req.sample_rate, channels=len(req.channels))
+        with self._startup_stage("open_wav"):
+            self._writer = self._writer_factory(req.path, sample_rate=req.sample_rate, channels=len(req.channels))
         self._stage = "device"
         config = dict(samplerate=req.sample_rate, dtype="float32", blocksize=self._blocksize)
         try:
-            self._stream = self._backend.InputStream(**config, channels=max(req.channels) + 1,
-                                                     device=self.input_device["index"], callback=self._input_callback)
-            if not self._cancelled.is_set():
-                self._stream.start()
-                self.started.set()
+            with self._startup_stage("adapter_create"):
+                self._stream = self._backend.InputStream(**config, channels=max(req.channels) + 1,
+                                                         device=self.input_device["index"], callback=self._input_callback)
+            with self._startup_stage("stream_start") as observation:
+                start_requested = not self._cancelled.is_set()
+                if start_requested:
+                    self._stream.start()
+                else:
+                    observation.observe("cancelled")
+            if start_requested:
+                self._publish_started()
         except Exception:
             # Native open/start may raise backend-specific exceptions. Record the
             # source, then let the capture boundary diagnose and close all handles.
             self._native_start_failed = True
             raise
+
+    def _startup_stage(self, name):
+        # Existing sounddevice refresh has at most one replacement capture.
+        if self.startup_attempt > 1:
+            name = f"{name}_attempt_{self.startup_attempt}"
+        return self.startup_trace.stage(name, domain="capture_owner")
+
+    def _publish_started(self):
+        self.startup_trace.mark(EVENT_CAPTURE_STARTED, domain="capture_owner")
+        self.started.set()
+        if self._owns_startup_trace:
+            self.startup_trace.finish("started", domain="capture_owner")
+
+    def _flush_first_delivery(self):
+        saved = self._first_delivery
+        if saved is not None and not self._first_delivery_emitted:
+            self._first_delivery_emitted = True
+            self.startup_trace.mark(FIRST_DELIVERED_BLOCK, domain="audio_callback",
+                                    timestamp_ns=saved[0], thread_id=saved[1], thread_name=saved[2])
 
     def _pop_block(self):
         with self._queue_lock:
@@ -406,6 +469,7 @@ class RecordingCapture:
             return block
 
     def _consume(self, block):
+        self._flush_first_delivery()
         lane = self._consume_lane
         if lane is None:
             self._consume_block(block)
@@ -442,6 +506,9 @@ class RecordingCapture:
         self.consumed_frames += len(block)
         retained = block[skip:]
         if len(retained):
+            if not self._first_retained_emitted:
+                self._first_retained_emitted = True
+                self.startup_trace.mark(FIRST_RETAINED_BLOCK, domain="capture_owner")
             if lane is None:
                 quantized = self._writer.write_chunk(retained)
             else:
@@ -600,6 +667,9 @@ class RecordingCapture:
             self._queued_frames = 0
 
     def _run(self):
+        self.startup_trace.mark(
+            EVENT_CAPTURE_THREAD_ENTER if self.startup_attempt == 1 else f"{EVENT_CAPTURE_THREAD_ENTER}_attempt_2",
+            domain="capture_owner", attempt=self.startup_attempt)
         try:
             if not self._cancelled.is_set():
                 self._open()
@@ -667,6 +737,10 @@ class RecordingCapture:
                                                   self.raw_frames, self._final_frames,
                                                   handles_released=self._handles_released,
                                                   cleanup_paths=tuple(sorted(self._owned_temporary_paths)))
+            self._flush_first_delivery()
+            if self._owns_startup_trace and not self.started.is_set():
+                self.startup_trace.finish(
+                    "failed" if self._failure is not None else "cancelled", domain="capture_owner")
             self.done.set()
             if self._consume_lane is not None:
                 self._consume_lane.close()

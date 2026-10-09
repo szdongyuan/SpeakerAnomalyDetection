@@ -15,8 +15,9 @@ import shutil
 import threading
 import time
 
+from base.log_manager import LogManager
 
-logger = logging.getLogger("core.video")
+
 PROGRESS_LOG_INTERVAL_SECONDS = 600
 PENDING_MEDIA_BYTE_LIMIT = 16 * 1024**2
 
@@ -562,6 +563,7 @@ class RecordingSession:
     def __init__(self, config, session_id):
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", session_id):
             raise ValueError("invalid recording session identity")
+        self._logger = LogManager.set_log_handler("core.video")
         self.config, self.session_id = config, session_id
         self.diagnostics = VideoDiagnostics()
         root = Path(config.recording_root) / "video"
@@ -597,7 +599,7 @@ class RecordingSession:
             "state": "starting", "frames": 0, "segments": 0, "gaps": 0,
             "elapsed_seconds": 0, "current_segment": None, "error": "",
         }
-        logger.info(
+        self._logger.info(
             "Video session created: session=%s directory=%s requested_size=%sx%s "
             "requested_fps=%s/%s codec=%s target_bitrate_bps=%s",
             session_id, self.directory, config.width, config.height,
@@ -605,7 +607,7 @@ class RecordingSession:
         )
 
     def _log_statistics(self, event, *, level=logging.INFO):
-        logger.log(
+        self._logger.log(
             level, "Video %s: session=%s directory=%s state=%s elapsed_seconds=%.3f "
             "frames=%d segments=%d gaps=%d file=%s bytes=%d error=%s media_validation=not_performed",
             event, self.session_id, self.directory.name, self.summary["state"],
@@ -625,7 +627,7 @@ class RecordingSession:
             path = self.directory / f"{self.directory.name}_{self._segment_sequence:03d}.recording.mp4"
             self.summary["current_segment"] = path.name
             self._last_file_name, self._last_file_bytes = path.name, 0
-            logger.info(
+            self._logger.info(
                 "Video segment preparing: session=%s file=%s", self.session_id, path.name,
             )
             with self.diagnostics.stage("open_segment"):
@@ -707,12 +709,12 @@ class RecordingSession:
             try:
                 segment_writer.abandon()
             except (OSError, ValueError):
-                logger.exception("Video resource cleanup failed: session=%s", self.session_id)
+                self._logger.exception("Video resource cleanup failed: session=%s", self.session_id)
             raise
         self.summary["segments"] += 1
         self.summary["current_segment"] = None
         self._last_file_name, self._last_file_bytes = final.name, final.stat().st_size
-        logger.info(
+        self._logger.info(
             "Video segment completed: session=%s file=%s frames=%d elapsed_seconds=%.3f bytes=%d",
             self.session_id, final.name, segment_writer.frames,
             segment_writer.last_time - segment_writer.first_time, self._last_file_bytes,
@@ -722,7 +724,7 @@ class RecordingSession:
         self.summary["gaps"] += 1
         self.summary["state"] = "recovering"
         self._pending_gap = True
-        logger.warning(
+        self._logger.warning(
             "Video capture interrupted: session=%s directory=%s detected_at=%s "
             "elapsed_seconds=%.3f frames=%d reason=%s",
             self.session_id, self.directory.name, disconnected_at or utc_now(),
@@ -736,7 +738,7 @@ class RecordingSession:
         try:
             self._finish_segment()
         except Exception as exc:
-            logger.exception(
+            self._logger.exception(
                 "Video finalization failed: session=%s directory=%s", self.session_id, self.directory.name,
             )
             error = f"{error}; 收尾失败：{exc}".strip("; ")

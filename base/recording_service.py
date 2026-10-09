@@ -10,7 +10,7 @@ terminal result. It is not permission to reuse, move or delete that path.
 Failure/cancellation may also precede release. Always use that exact session's
 released continuation, never a mutable current-recording path, for file actions.
 """
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import asdict, dataclass, replace
 import logging
 import math
@@ -27,6 +27,10 @@ from time import perf_counter, perf_counter_ns, monotonic as diagnostic_monotoni
 from base.log_manager import LogManager
 from base.log_exit import ProcessLogDrain, run_with_log_drain
 from base.recording_timing_logger import RecordingTimingLogger
+from base.recording_startup_trace import RecordingStartupTrace
+from consts.recording_startup_consts import (
+    EVENT_SERVICE_ACCEPT, EVENT_SERVICE_SUBMIT, EVENT_WORKER_SELECTED, EVENT_COMMAND_ENQUEUE, EVENT_COMMAND_DEQUEUE, EVENT_PARENT_STARTED,
+)
 from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_process_protocol import (
     CaptureSlotReleased, FrozenConfig, RecordingCancelled, RecordingEvent,
@@ -146,6 +150,11 @@ class RecordingSession:
         self.service, self.request, self.callbacks = service, request, callbacks
         self.state = "starting"
         self.generation = self.worker_pid = None
+        self.startup_trace = None
+        self._startup_gui_delivery = False
+        self._startup_ready_stage = None
+        self._startup_ready_observation = None
+        self._startup_callback_failed = False
         self._startup_timing_lock = threading.Lock()
         self._startup_timing = RecordingStartupTiming(request.request_id)
         self.released = threading.Event()
@@ -433,7 +442,7 @@ class RecordingService:
     def _path_key(path):
         return os.path.normcase(os.path.abspath(path))
 
-    def start(self, request, callbacks=None):
+    def start(self, request, callbacks=None, *, startup_trace=None):
         if not isinstance(request, RecordingRequest):
             raise TypeError("start requires a RecordingRequest")
         with self._lock:
@@ -449,6 +458,22 @@ class RecordingService:
             accepted_at = perf_counter()
             session = RecordingSession(self, request, callbacks or RecordingCallbacks())
             session._startup_timing = replace(session._startup_timing, accepted_seconds=accepted_at)
+            session._startup_gui_delivery = getattr(session.callbacks.started, "_recording_qt_callback", False) is True
+            session.startup_trace = startup_trace or RecordingStartupTrace(self._logger, process="parent")
+            trace = session.startup_trace
+            trace.set_context(completion_boundary=("qt_callback_return" if session._startup_gui_delivery
+                                                   else "service_callback_return"))
+            trace.link_request(request.request_id, domain="service_caller")
+            if startup_trace is None:
+                trace.set_context(start_boundary="service_accept",
+                    backend=request.device.get("backend", "unknown"), sample_rate=request.sample_rate,
+                    channel_count=len(request.channels), target_samples=request.target_samples,
+                    target_duration_seconds=request.target_samples / request.sample_rate,
+                    startup_trim_samples=request.trim_samples)
+                trace.mark(EVENT_SERVICE_SUBMIT, domain="service_caller", analysis_active="unknown",
+                    analysis_queued="unknown", analysis_task_id="unknown", analysis_items="unknown",
+                    csv_active="unknown", csv_queued="unknown")
+            trace.mark(EVENT_SERVICE_ACCEPT, domain="service_caller")
             session._lease_key = key
             if key is not None:
                 self._leases[key] = session
@@ -756,6 +781,8 @@ class RecordingService:
             session = self._session(request_id)
             if session is not None and not session._terminal and not session.cancel_requested:
                 session.cancel_requested = True
+                if session.startup_trace is not None:
+                    session.startup_trace.finish("cancelled", domain="service_caller")
                 self._clear_unsent_preparing_release(session)
                 self._inbox.put_nowait(("cancel", session))
 
@@ -794,6 +821,9 @@ class RecordingService:
                 self._shutdown_callbacks.append(callback)
             if not self._closing:
                 self._closing = True
+                for session in self._sessions.values():
+                    if session.startup_trace is not None:
+                        session.startup_trace.finish("cancelled", domain="service_caller")
                 self._inbox.put_nowait(("shutdown",))
         if callback is not None and already_reported:
             # Preserve asynchronous notification even after the supervisor exits.
@@ -930,18 +960,30 @@ class RecordingService:
             )
     def _notify(self, session, kind, payload=None):
         callback = getattr(session.callbacks, kind)
-        if callback is None:
-            return
-        with self._measured("callback_" + kind, session, lifecycle=kind == "released"):
-            self._notify_callback(session, kind, payload, callback)
+        if kind == "started" and session.startup_trace is not None and not session._startup_gui_delivery:
+            with session.startup_trace.stage("service_callback", domain="service_supervisor") as observation:
+                if callback is not None:
+                    with self._measured("callback_" + kind, session):
+                        self._notify_callback(session, kind, payload, callback, startup_observation=observation)
+            session.startup_trace.finish("failed" if session._startup_callback_failed else "started",
+                                         domain="service_supervisor")
+        elif callback is not None:
+            with self._measured("callback_" + kind, session, lifecycle=kind == "released"):
+                self._notify_callback(session, kind, payload, callback)
 
-    def _notify_callback(self, session, kind, payload, callback):
+    def _notify_callback(self, session, kind, payload, callback, *, startup_observation=None):
         try:
             if kind in ("started", "finalizing", "released"):
                 callback(session)
             else:
                 callback(session, payload)
         except Exception as exc:
+            if startup_observation is not None:
+                startup_observation.observe("failed", error_type=type(exc).__name__, reason="callback_failed")
+            if kind == "started":
+                session._startup_callback_failed = True
+                if session.startup_trace is not None and session._startup_gui_delivery:
+                    session.startup_trace.finish("failed", domain="service_supervisor")
             # User callback boundary: diagnose rather than kill the supervisor or
             # silently accept a result. Presentation failure doesn't invalidate WAV.
             self._logger.exception("Recording %s callback failed", kind)
@@ -1028,7 +1070,13 @@ class RecordingService:
                     event = worker.outgoing.get(timeout=.05)
                 except queue.Empty:
                     continue
-                worker.control.send(event)
+                session = self._session(event.request_id) if event.kind == "start" else None
+                trace = (session.startup_trace if session is not None
+                         and session.generation == worker.generation else None)
+                if trace is not None:
+                    trace.mark(EVENT_COMMAND_DEQUEUE, domain="service_sender")
+                with (trace.stage("command_send", domain="service_sender") if trace is not None else nullcontext()):
+                    worker.control.send(event)
         except (EOFError, OSError) as exc:
             if not worker.stop.is_set():
                 self._inbox.put(("broken", worker, str(exc)))
@@ -1037,6 +1085,8 @@ class RecordingService:
         worker = self._worker
         if (worker is not None and not worker.retiring
                 and (session is None or session.generation == worker.generation)):
+            if kind == "start" and session is not None and session.startup_trace is not None:
+                session.startup_trace.mark(EVENT_COMMAND_ENQUEUE, domain="service_supervisor")
             worker.outgoing.put_nowait(RecordingEvent(worker.generation,
                 session.request.request_id if session else "", kind, payload,
                 startup_budget=(session._startup_budget if kind == "start" and session else None)))
@@ -1054,10 +1104,27 @@ class RecordingService:
             with self._lock:
                 self._leases[session._lease_key] = session
                 session._lease_keys.add(session._lease_key)
+        trace = session.startup_trace
+        if trace is not None:
+            trace.mark(EVENT_WORKER_SELECTED, domain="service_supervisor",
+                       worker_mode="cold" if self._worker is None else "reused")
+            session._startup_ready_stage = trace.stage("worker_ready", domain="service_supervisor")
+            session._startup_ready_observation = session._startup_ready_stage.__enter__()
         if self._worker is None:
-            self._spawn()
+            try:
+                self._spawn()
+            except BaseException as error:
+                # Spawn owns external process/pipe setup. End this diagnostic
+                # interval with the original error, then leave all recovery to
+                # the existing supervisor boundary without changing ownership.
+                self._end_startup_ready(session, error, reason="spawn_failed")
+                raise
         session.generation = self._worker.generation
         session.worker_pid = self._worker.process.pid
+        if trace is not None:
+            trace.set_context(generation=session.generation, worker_pid=session.worker_pid)
+        if self._worker.ready:
+            self._end_startup_ready(session)
         pending = self._pending_ve_release
         if pending is not None and pending.preparing is session:
             pending.generation = self._worker.generation
@@ -1136,10 +1203,29 @@ class RecordingService:
         if cancelled_before_send:
             self._cancelled(session)
 
+    def _end_startup_ready(self, session, error=None, *, outcome="ok", reason="unknown"):
+        stage = session._startup_ready_stage
+        if stage is not None:
+            if outcome == "ok" and error is None and (session.cancel_requested or self._closing):
+                outcome = "cancelled"
+                reason = "shutdown_requested" if self._closing else "cancel_requested"
+            session._startup_ready_observation.observe(outcome, reason=reason)
+            session._startup_ready_stage = session._startup_ready_observation = None
+            stage.__exit__(type(error) if error is not None else None,
+                           error, error.__traceback__ if error is not None else None)
+
+    def _finish_startup(self, session, outcome, *, reason):
+        self._end_startup_ready(session, outcome=outcome, reason=reason)
+        if session.startup_trace is not None:
+            session.startup_trace.set_context(generation=session.generation, worker_pid=session.worker_pid)
+            session.startup_trace.finish(outcome, domain="service_supervisor")
+
     def _request_cancel(self, session):
         if session._terminal:
             return
         session.cancel_requested = True
+        self._finish_startup(session, "cancelled",
+                             reason="shutdown_requested" if self._closing else "cancel_requested")
         if self._clear_unsent_preparing_release(session):
             session._deadline = None
             session._child_released = True
@@ -1161,6 +1247,8 @@ class RecordingService:
             self._cancelled(session)
 
     def _cancelled(self, session):
+        self._finish_startup(session, "cancelled",
+                             reason="shutdown_requested" if self._closing else "cancelled")
         if not session._terminal:
             session._terminal = True
             session.state = "cancelled"
@@ -1170,6 +1258,7 @@ class RecordingService:
         self._release(session)
 
     def _fail(self, session, stage, message, failure=None):
+        self._finish_startup(session, "failed", reason=stage)
         if not session._terminal:
             session._terminal = True
             session.state = "failed"
@@ -1573,6 +1662,8 @@ class RecordingService:
                 return
             worker.ready = True
             worker.deadline = None
+            if capture is not None:
+                self._end_startup_ready(capture)
             pending = self._pending_ve_release
             if (pending_prewarm is not None
                     and pending_prewarm.generation == worker.generation
@@ -1712,6 +1803,10 @@ class RecordingService:
                         session.request.sample_rate, session.request.target_samples, event.payload,
                         clock=self._clock)
                 session._observe_capture_started()
+                if session.startup_trace is not None:
+                    timing = session.startup_timing
+                    session.startup_trace.mark(EVENT_PARENT_STARTED, domain="service_supervisor",
+                        request_to_capture_ms=timing.request_to_capture_seconds * 1000)
                 if is_ve:
                     self._retained_ve_signature = self._request_signature(session.request)
                     if (self._retained_lifecycle_counts is None

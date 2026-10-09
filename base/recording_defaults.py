@@ -2,12 +2,12 @@
 
 from collections.abc import Mapping
 import json
-import logging
 import math
 import os
 from pathlib import Path
 import tempfile
 
+from base.log_manager import LogManager
 from base.recording_preview_config import validate_recording_preview_time_mode
 from base.ve3668n_input import validate_range_index, validate_sample_rate
 from consts.recording_preview_consts import RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
@@ -68,6 +68,7 @@ def validated_recording_profile(profile_key, detail):
 
 class RecordingDefaultsStore:
     def __init__(self, path=None):
+        self._logger = LogManager.set_log_handler(__name__)
         self.path = Path(path) if path is not None else self.default_path()
 
     @staticmethod
@@ -115,7 +116,7 @@ class RecordingDefaultsStore:
                 try:
                     temp_path.unlink(missing_ok=True)
                 except OSError as exc:
-                    logging.getLogger(__name__).warning(
+                    self._logger.warning(
                         "Failed to clean up recording defaults temporary file %s: %s",
                         temp_path, exc,
                     )

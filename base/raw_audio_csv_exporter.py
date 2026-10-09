@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import csv
-import logging
 import os
 from pathlib import Path
 import sys
 import tempfile
 
 import soundfile as sf
+
+from base.log_manager import LogManager
 
 
 DEFAULT_BLOCK_FRAMES = 8192
@@ -26,6 +27,7 @@ def export_raw_audio_csv(
     temporary_created=None,
 ):
     """Export a finalized WAV without exposing a partially written CSV."""
+    logger = LogManager.set_log_handler(__name__)
     source_path = Path(wav_path)
     target_path = Path(csv_path)
     channels = tuple(raw_channels)
@@ -120,7 +122,7 @@ def export_raw_audio_csv(
                     temp_path.unlink()
                 except OSError as cleanup_error:
                     if cleanup_failed is None:
-                        logging.getLogger(__name__).warning(
+                        logger.warning(
                             "CSV temporary cleanup failed: %s", temp_path, exc_info=True
                         )
                     else:

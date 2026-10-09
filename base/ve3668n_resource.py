@@ -101,6 +101,9 @@ class VeRecordingAdapter:
         self._deadline = None
         self._pending_started_at = None
         self._progress = VeCaptureProgress(None, 0, None)
+        # Request-local diagnostic snapshot, published before bind confirmation.
+        self.startup_resource_task_id = "unknown"
+        self.startup_reuse_result = "unknown"
 
     def start(self):
         with self._lock:
@@ -448,6 +451,8 @@ class VeResourceController:
             if self._startup_attempt is not None:
                 raise RuntimeError("VE resource initialization already in progress")
             budgeted = self._owner is None and self._startup_attempt is None
+            adapter.startup_reuse_result = "created" if self._owner is None else "reused"
+            adapter.startup_resource_task_id = self._task or "unknown"
             if budgeted and adapter.startup_budget is None:
                 adapter.startup_budget = VeStartupBudget.create(self._clock())
         if budgeted:
@@ -1004,6 +1009,7 @@ class VeResourceController:
 
     def _set_diagnostic_request(self, adapter, *, reset=False, association="active"):
         request = adapter.request
+        adapter.startup_resource_task_id = self._task or "unknown"
         config = request.device["input_config"]
         self._resource_diagnostics.context(
             reset=reset, task=self._task,

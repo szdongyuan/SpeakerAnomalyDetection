@@ -7,6 +7,7 @@ import threading
 import time
 
 from base.log_exit import exit_with_log_drain
+from base.log_manager import LogManager
 from base.video.models import CommandKind, Event, EventKind
 from base.video.recording import (
     RecordingRootLease, RecordingSession, VideoDiagnostics, FrameEncoder,
@@ -14,8 +15,6 @@ from base.video.recording import (
 )
 from base.video.usb_capture import CapturePump
 
-
-logger = logging.getLogger("core.video")
 
 RAW_FRAME_BYTE_LIMIT = 640 * 1024**2
 SHEDDING_START_PRESSURE = .8
@@ -132,6 +131,7 @@ class VideoRuntime:
         self, channel, mailbox, generation, config, *,
         capture_factory=CapturePump, session_factory=RecordingSession,
     ):
+        self._logger = LogManager.set_log_handler("core.video")
         self.channel, self.mailbox = channel, mailbox
         self.generation, self.config = generation, config
         self.session_factory = session_factory
@@ -186,7 +186,7 @@ class VideoRuntime:
             self.connection_epoch += 1
             self.online = ready
             if ready != was_online or detail:
-                logger.info("Video connection ready=%s: %s", ready, detail)
+                self._logger.info("Video connection ready=%s: %s", ready, detail)
             self.post(EventKind.READY if ready else EventKind.OFFLINE, detail=detail)
             if not ready and was_online and (self.accept_frames or self.start_pending):
                 # USB gaps are not part of a run of software-skipped frames.
@@ -410,7 +410,7 @@ class VideoRuntime:
                     return
                 except Exception as exc:
                     detail = "压缩数据缓冲已满，录像不完整" if isinstance(exc, queue.Full) else str(exc)
-                    logger.exception("Video encoding failed: session=%s operation=%s", active_id, kind)
+                    self._logger.exception("Video encoding failed: session=%s operation=%s", active_id, kind)
                     with self.gate:
                         if active_id == self.session_id:
                             self._failure_locked(detail)
@@ -480,7 +480,7 @@ class VideoRuntime:
                     session is None or message_session_id != active_id
                 ):
                     if kind != "frame":
-                        logger.info(
+                        self._logger.info(
                             "Ignored stale video command: kind=%s session=%s detail=%s",
                             kind, message_session_id, value,
                         )
@@ -535,7 +535,7 @@ class VideoRuntime:
                         return
             except Exception as exc:
                 # Encoder/filesystem boundary: retain files and deliver a visible failure.
-                logger.exception("Video writer failed (%s): %s", kind, active_id)
+                self._logger.exception("Video writer failed (%s): %s", kind, active_id)
                 self._finish_failed(session, active_id, str(exc))
                 session = None
                 active_id = ""
@@ -551,14 +551,14 @@ class VideoRuntime:
             if self.session_id == active_id:
                 self._failure_locked(detail)
                 detail = self.session_error
-        logger.error("Video recording failed (%s): %s", active_id, detail)
+        self._logger.error("Video recording failed (%s): %s", active_id, detail)
         self._log_admission(active_id, final=True)
         if session is not None:
             try:
                 with self.diagnostics.stage("failure_finalize"):
                     session.finish(error=detail)
             except Exception:
-                logger.exception("Video failure finalization: session=%s; first error retained", active_id)
+                self._logger.exception("Video failure finalization: session=%s; first error retained", active_id)
         with self.gate:
             if self.session_id != active_id:
                 return
@@ -579,11 +579,11 @@ class VideoRuntime:
         if report is not None:
             report["thread"] = "writer"
             report["compressed"] = compressed
-            logger.warning("Video diagnostic: %s", report)
+            self._logger.warning("Video diagnostic: %s", report)
         report = self.encode_diagnostics.take_report(self.work.qsize(), self.frame_capacity)
         if report is not None:
             report["thread"] = "encoder"
-            logger.warning("Video encoder diagnostic: %s", report)
+            self._logger.warning("Video encoder diagnostic: %s", report)
 
     def _log_admission(self, identity, *, final=False):
         with self.gate:
@@ -591,7 +591,7 @@ class VideoRuntime:
                 return
             report = self.admission.report(time.monotonic(), final=final)
         if report is not None:
-            logger.log(logging.WARNING if report["dropped"] else logging.INFO,
+            self._logger.log(logging.WARNING if report["dropped"] else logging.INFO,
                        "Video frame admission: %s", report)
 
     def _check_progress(self, now):
@@ -668,11 +668,10 @@ class VideoRuntime:
 
 
 def usb_video_worker(channel, mailbox, generation, config):
+    logger = LogManager.set_log_handler("core.video")
     runtime = None
     try:
         config.validate_capture()
-        from base.log_manager import LogManager
-        LogManager.set_log_handler("core")
         with RecordingRootLease(config.recording_root):
             runtime = VideoRuntime(channel, mailbox, generation, config)
             try:

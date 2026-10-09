@@ -1,6 +1,5 @@
 """Nonblocking GUI-facing supervisor for one independently owned video process."""
 
-import logging
 import multiprocessing
 import queue
 import threading
@@ -9,11 +8,9 @@ from dataclasses import replace
 from uuid import uuid4
 
 from base.log_exit import ProcessLogDrain, run_with_log_drain
+from base.log_manager import LogManager
 from base.video.preview import PreviewMailbox
 from base.video.models import Command, CommandKind, Event, EventKind, VideoState
-
-
-logger = logging.getLogger("core.video")
 
 
 class VideoService:
@@ -25,6 +22,7 @@ class VideoService:
         initial_preview_enabled=True,
         preview_size=(640, 360),
     ):
+        self._logger = LogManager.set_log_handler("core.video")
         # No default fake backend: callers must explicitly select a worker.
         self._worker_target = worker_target
         self._worker_options = worker_options
@@ -150,7 +148,7 @@ class VideoService:
         return True
 
     def _fail(self, detail):
-        logger.error("Video supervisor failure: %s", detail)
+        self._logger.error("Video supervisor failure: %s", detail)
         with self._lock:
             self._state.fail(detail, time.monotonic())
 
@@ -251,7 +249,7 @@ class VideoService:
                 time.sleep(0.01)
         except Exception as exc:
             # External process/IPC boundary: expose failure, don't lose the thread silently.
-            logger.exception("Video supervisor failed")
+            self._logger.exception("Video supervisor failed")
             self._fail(f"视频服务异常：{type(exc).__name__}: {exc}")
         finally:
             if process is not None and process.pid is not None:
@@ -274,7 +272,7 @@ class VideoService:
                 else:
                     # Keep both owners until a later non-GUI wait confirms death.
                     self._unreaped = (process, log_drain)
-                    logger.error("Video process death unconfirmed pid=%s", process.pid)
+                    self._logger.error("Video process death unconfirmed pid=%s", process.pid)
             elif log_drain is not None:
                 log_drain.close()
             if channel is not None:
@@ -288,6 +286,7 @@ class VideoService:
     def _report_log_drain(pid, drain, result):
         if (result.status in ("timeout", "drained-with-errors")
                 or (result.status == "already-dead" and result.detail is not None)):
+            logger = LogManager.set_log_handler("core.video")
             logger.error(
                 "Video log drain pid=%s reason=%s status=%s pending=%s stats=%s detail=%s",
                 pid, drain.reason or "self-exit", result.status,
