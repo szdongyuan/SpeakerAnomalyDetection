@@ -909,7 +909,10 @@ def test_worker_log_routes_successful_instance_detail_to_debug_only():
 
 
 @pytest.mark.parametrize("segmented", [True, False])
-def test_manual_analysis_opens_only_owned_plot_windows(ui_qapp, tmp_path, segmented):
+@pytest.mark.parametrize("cleanup", ["individual", "main_exit", "owner_delete"])
+def test_manual_analysis_opens_taskbar_windows_with_qt_ownership(
+    ui_qapp, tmp_path, segmented, cleanup,
+):
     from dataclasses import replace
     import sys
 
@@ -952,25 +955,36 @@ def test_manual_analysis_opens_only_owned_plot_windows(ui_qapp, tmp_path, segmen
     for plot in plots:
         assert plot.parentWidget() is host
         assert plot.isWindow() and plot.isVisible() and not plot.isMinimized()
-        assert plot.windowHandle().transientParent() is main.windowHandle()
-    if sys.platform == "win32":
+        assert plot.windowHandle().transientParent() is None
+    if sys.platform == "win32" and ui_qapp.platformName() == "windows":
         import ctypes
 
         get_window = ctypes.windll.user32.GetWindow
         get_window.argtypes = [ctypes.c_void_p, ctypes.c_uint]
         get_window.restype = ctypes.c_void_p
         for plot in plots:
-            previous = get_window(int(plot.winId()), 3)  # GW_HWNDPREV
-            above = []
-            while previous:
-                above.append(previous)
-                previous = get_window(previous, 3)
-            assert int(main.winId()) not in above
-    for plot in plots:
-        plot.close()
+            assert not get_window(int(plot.winId()), 4)  # GW_OWNER
+    from PyQt5 import sip
+
+    plots[0].showMinimized()
+    ui_qapp.processEvents()
+    if cleanup == "individual":
+        for plot in plots:
+            plot.close()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-    assert not host.analysis_window
-    main.close()
+        assert not host.analysis_window
+    elif cleanup == "main_exit":
+        from main_window import MainWindow
+
+        MainWindow._close_all_subwindows(main)
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        assert not host.analysis_window
+    else:
+        main.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert all(sip.isdeleted(plot) for plot in plots)
+    if not sip.isdeleted(main):
+        main.close()
 
 
 def test_worker_log_keeps_compact_task_completion_in_main():

@@ -204,3 +204,92 @@ def test_manual_spl_keeps_whole_curve_without_segment_marks(ui_qapp, segment_cou
         page.setXRange(0.25, 0.75, padding=0)
         assert plot.vb.viewRange()[0] == [0.25, 0.75]
     window.close()
+
+
+@pytest.mark.parametrize("maximized", [False, True])
+def test_windows_taskbar_minimize_restore_keeps_result_state(ui_qapp, maximized):
+    import ctypes
+    import sys
+    import time
+    from ctypes.wintypes import BOOL, HWND, UINT, WPARAM, LPARAM
+
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QMainWindow, QWidget
+
+    if sys.platform != "win32" or ui_qapp.platformName() != "windows":
+        pytest.skip("Requires the Windows native window backend")
+
+    user32 = ctypes.WinDLL("user32")
+    user32.GetWindow.argtypes = [HWND, UINT]
+    user32.GetWindow.restype = HWND
+    user32.GetWindowLongW.argtypes = [HWND, ctypes.c_int]
+    user32.GetWindowLongW.restype = ctypes.c_long
+    user32.SendMessageW.argtypes = [HWND, UINT, WPARAM, LPARAM]
+    user32.SendMessageW.restype = ctypes.c_ssize_t
+    user32.ShowWindow.argtypes = [HWND, ctypes.c_int]
+    user32.ShowWindow.restype = BOOL
+
+    main = QMainWindow()
+    host = QWidget(main)
+    main.setCentralWidget(host)
+    windows = [
+        AnalysisMultichannelResultWindow(
+            name, [_result(0, "OK"), _result(2, "NG")], parent=host,
+        )
+        for name in ("SPL 1", "SPL 2")
+    ]
+    window, other = windows
+
+    def wait_for(predicate):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            ui_qapp.processEvents()
+            if predicate():
+                return
+            QTest.qWait(10)
+        pytest.fail("Native window did not reach the expected state")
+
+    try:
+        main.show()
+        for plot in windows:
+            plot.resize(800, 560)
+            plot.show()
+        window.move(80, 80)
+        window.channel_combo.setCurrentIndex(1)
+        ui_qapp.processEvents()
+        normal_geometry = window.geometry()
+        page = window._content.currentWidget()
+        if maximized:
+            window.showMaximized()
+            wait_for(window.isMaximized)
+        geometry = window.geometry()
+        main_geometry = main.geometry()
+        other_geometry = other.geometry()
+        hwnd = int(window.winId())
+        for _ in range(2):
+            assert not user32.GetWindow(hwnd, 4)  # GW_OWNER
+            assert not (user32.GetWindowLongW(hwnd, -20) & 0x80)  # WS_EX_TOOLWINDOW
+            # The title-bar minimize button dispatches SC_MINIMIZE.
+            user32.SendMessageW(hwnd, 0x0112, 0xF020, 0)
+            wait_for(window.isMinimized)
+            assert main.isVisible() and not main.isMinimized()
+            assert main.geometry() == main_geometry
+            assert other.isVisible() and not other.isMinimized()
+            assert other.geometry() == other_geometry
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE, as used by the taskbar.
+            wait_for(lambda: not window.isMinimized() and window.geometry() == geometry)
+            assert window.isMaximized() == maximized
+            assert window.normalGeometry() == normal_geometry
+            assert window.channel_combo.currentIndex() == 1
+            assert window._content.currentWidget() is page
+            assert int(window.winId()) == hwnd
+        window.hide()
+        window.show()
+        ui_qapp.processEvents()
+        assert not user32.GetWindow(hwnd, 4)
+        assert window.parentWidget() is host
+    finally:
+        for plot in windows:
+            plot.close()
+        main.close()
+        main.deleteLater()
