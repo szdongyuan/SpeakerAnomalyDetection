@@ -209,15 +209,13 @@ class ConfigDeleteDialog(ConfigDialogBase):
         retained_count = len(targets) - file_count - missing_count
         actions = []
         if file_count:
-            actions.append(f"删除 {file_count} 个配置文件。")
+            preserved = "测试队列和测试数据" if self.kind == "product" else "录音和测试结果"
+            actions.append(f"删除 {file_count} 个配置文件，保留{preserved}。")
         if missing_count:
             actions.append(f"清理 {missing_count} 条失效记录（配置文件不存在）。")
         if retained_count:
             actions.append(f"移除 {retained_count} 条列表记录，保留原文件。")
-        message = f"已选 {len(targets)} 项：" + "\n".join(actions)
-        if file_count:
-            message += ("\n保留测试队列和测试数据。" if self.kind == "product"
-                        else "\n保留录音和测试结果。")
+        message = "\n".join(actions)
         has_unsaved_changes = any(self.unsaved(target) for target in targets)
         if self.kind == "product" and any(
             target.key == self.current_product_file for target in targets

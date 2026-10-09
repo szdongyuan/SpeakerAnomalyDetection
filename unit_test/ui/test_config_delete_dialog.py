@@ -479,7 +479,7 @@ def test_multiselect_mixes_internal_deletion_and_external_removal(files, ui_qapp
     choose(dialog, "outside")
     assert not dialog.config_list.currentItem().data(STATUS_ROLE)
     assert dialog.delete_button.text() == "移除"
-    assert dialog.details.toPlainText() == "已选 1 项：移除 1 条列表记录，保留原文件。"
+    assert dialog.details.toPlainText() == "移除 1 条列表记录，保留原文件。"
     for index in range(dialog.config_list.count()):
         dialog.config_list.item(index).setCheckState(Qt.Checked)
     assert dialog.delete_button.text() == "删除"
@@ -627,7 +627,7 @@ def test_product_editor_multiselect_clears_current_only_after_success(files, ui_
         choose(dialog, "A")
         choose(dialog, "B")
         assert dialog.details.toPlainText() == (
-            "已选 2 项：删除 2 个配置文件。\n保留测试队列和测试数据。\n"
+            "删除 2 个配置文件，保留测试队列和测试数据。\n"
             "删除当前配置将丢弃未保存的修改，并返回主界面。"
         )
         dialog.delete_button.click()
@@ -800,11 +800,13 @@ def test_missing_file_summary(files, ui_qapp, kind):
     dialog = ConfigDeleteDialog(service, kind)
     choose(dialog, name)
     assert dialog.delete_button.text() == "移除"
-    assert dialog.details.toPlainText() == "已选 1 项：清理 1 条失效记录（配置文件不存在）。"
+    assert dialog.details.toPlainText() == "清理 1 条失效记录（配置文件不存在）。"
     choose(dialog, normal)
     assert dialog.delete_button.text() == "删除"
-    assert dialog.details.toPlainText().startswith(
-        "已选 2 项：删除 1 个配置文件。\n清理 1 条失效记录（配置文件不存在）。\n"
+    preserved = "测试队列和测试数据" if kind == "product" else "录音和测试结果"
+    assert dialog.details.toPlainText() == (
+        f"删除 1 个配置文件，保留{preserved}。\n"
+        "清理 1 条失效记录（配置文件不存在）。"
     )
     assert "保留原文件" not in dialog.details.toPlainText()
     dialog.close()
@@ -844,7 +846,7 @@ def test_many_checked_items_keep_compact_summary(files, ui_qapp):
     for index in range(dialog.config_list.count()):
         dialog.config_list.item(index).setCheckState(Qt.Checked)
     assert dialog.details.toPlainText() == (
-        "已选 25 项：删除 25 个配置文件。\n保留录音和测试结果。"
+        "删除 25 个配置文件，保留录音和测试结果。"
     )
     dialog.close()
 
@@ -859,10 +861,9 @@ def test_mixed_file_states_have_separate_counts(files, ui_qapp):
     for name in ("Q", "external", "missing"):
         choose(dialog, name)
     assert dialog.details.toPlainText() == (
-        "已选 3 项：删除 1 个配置文件。\n"
+        "删除 1 个配置文件，保留录音和测试结果。\n"
         "清理 1 条失效记录（配置文件不存在）。\n"
-        "移除 1 条列表记录，保留原文件。\n"
-        "保留录音和测试结果。"
+        "移除 1 条列表记录，保留原文件。"
     )
     dialog.delete_button.click()
     assert not target.exists() and external.exists() and not missing.exists()
