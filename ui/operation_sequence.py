@@ -31,6 +31,7 @@ from base.config_deletion import ConfigDeletionService
 from base.product_test_project_config import ProductTestProjectConfigManager
 from base.ve3668n_recording_config import resolve_ve_recording_config
 from consts.ve3668n_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY
+from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.shared_queue_save_dialog import SharedQueueSaveDialog
 from base.recording_preview_config import resolve_recording_preview_time_mode
 from consts import model_consts, ui_style_const
@@ -317,7 +318,7 @@ class AnalysisModelSelect(ConfigDialogBase):
             return True
         if not self.dirty:
             return True
-        choice = QMessageBox.question(
+        choice = ConfirmationMessageBox.question(
             self, "未保存的测试队列", "测试队列有未保存的修改，是否保存？",
             QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
             QMessageBox.Cancel,

@@ -33,6 +33,7 @@ from base.product_test_program_config import (
 )
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR, PRODUCT_TEST_REPORT_DIR
+from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.config_dialog_base import ConfigDialogBase
 from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.path_selector_utils import load_path_selector_folder_icon
@@ -836,7 +837,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
     def _confirm_discard_changes(self):
         if not self._dirty:
             return True
-        result = QMessageBox.question(
+        result = ConfirmationMessageBox.question(
             self,
             "放弃修改",
             "当前配置尚未保存，确定放弃修改吗？",

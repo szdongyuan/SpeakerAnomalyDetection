@@ -5,6 +5,7 @@ import os
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QLabel, QMessageBox, QPlainTextEdit, QSizePolicy, QStyle
 
+from ui.confirmation_message_box import set_confirmation_button_order
 from ui.dialog_enter_policy import install_dialog_enter_policy
 
 
@@ -24,6 +25,7 @@ class SharedQueueSaveDialog(QMessageBox):
         self.setText(introduction)
         self.setInformativeText("此队列的修改将同时影响以上所有工况。建议另存为后重新选择。")
         self.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        set_confirmation_button_order(self)
         self.save_button = self.button(QMessageBox.Ok)
         self.save_button.setText("确认")
         self.cancel_button = self.button(QMessageBox.Cancel)

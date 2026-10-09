@@ -145,7 +145,7 @@ class TestRecentSessionModeSwitch(unittest.TestCase):
         widget = _DummyConditionModeWidget(incomplete_round=True)
 
         with patch(
-            "ui.sequence.sequence_widget_ui_ops.QMessageBox.question",
+            "ui.sequence.sequence_widget_ui_ops.ConfirmationMessageBox.question",
             return_value=QMessageBox.No,
         ) as question:
             widget.on_condition_mode_combobox_changed("标记")
@@ -159,7 +159,7 @@ class TestRecentSessionModeSwitch(unittest.TestCase):
         widget = _DummyConditionModeWidget(incomplete_round=True)
 
         with patch(
-            "ui.sequence.sequence_widget_ui_ops.QMessageBox.question",
+            "ui.sequence.sequence_widget_ui_ops.ConfirmationMessageBox.question",
             return_value=QMessageBox.Yes,
         ) as question:
             widget.on_condition_mode_combobox_changed("标记")
