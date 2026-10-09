@@ -497,6 +497,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self.result_root_input.setReadOnly(True)
         self.result_root_input.setPlaceholderText("请选择测试结果根目录")
         self.select_result_root_btn.setToolTip("选择测试结果根目录")
+        self.select_result_root_btn.setFixedHeight(28)
 
         result_content = QWidget()
         result_layout = QFormLayout(result_content)
@@ -537,7 +538,6 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             button.setDefault(False)
 
         for button in (
-            self.select_result_root_btn,
             self.new_project_btn,
             self.import_project_btn,
             self.save_as_btn,
