@@ -440,7 +440,9 @@ def test_cancelled_capture_skips_optional_success_timing_io(tmp_path, monkeypatc
     capture = RecordingCapture(request(tmp_path), backend=backend, writer_factory=Writer)
     original_info = capture._logger.info
     def reject_success_timing(message, *args, **kwargs):
-        assert "Recording timing" not in message
+        # Startup observations precede cancellation; success-only tail records do not.
+        assert not any(f"stage={stage}" in message for stage in (
+            "target_samples", "drain_file_close", "metadata", "descriptor_ready"))
         return original_info(message, *args, **kwargs)
     monkeypatch.setattr(capture._logger, "info", reject_success_timing)
     capture.start()

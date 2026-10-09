@@ -1,9 +1,11 @@
-"""Parent service startup boundaries using the real spawn/fake-device path."""
+"""Direct parent logs at existing service boundaries."""
 import logging
+from types import SimpleNamespace
 import pytest
-
-from base.recording_service import RecordingCallbacks, RecordingService
+from base.recording_service import RecordingCallbacks, RecordingService, _Worker
+from base.recording_process_protocol import RecordingEvent
 from unit_test.base.test_recording_service import request
+from unit_test.base.test_recording_capture_startup_timing import records
 
 
 def test_startup_continues_with_blocked_project_sink_and_bounded_queue(tmp_path, monkeypatch):
@@ -20,8 +22,8 @@ def test_startup_continues_with_blocked_project_sink_and_bounded_queue(tmp_path,
         assert release.wait(20)
         return native_write(sink, entries)
 
-    monkeypatch.setattr(log_manager._BatchFileHandler, 'write_batch', blocked)
     with isolated_project_logger(tmp_path, monkeypatch):
+        monkeypatch.setattr(log_manager._BatchFileHandler, 'write_batch', blocked)
         logger = log_manager.LogManager.set_log_handler('core')
         service = RecordingService(backend_factory='unit_test.base.recording_process_fakes:process_dependencies',
                                    backend_options={'trace_dir': str(tmp_path)})
@@ -42,157 +44,47 @@ def test_startup_continues_with_blocked_project_sink_and_bounded_queue(tmp_path,
             assert service.closed.wait(10)
 
 
-def records(caplog, request_id=None):
-    rows = [dict(part.split("=", 1) for part in row.message.split()[1:])
-            for row in caplog.records if row.message.startswith("recording_startup ")]
-    return rows if request_id is None else [r for r in rows if r["request_id"] == request_id]
-
-
-def test_service_cold_and_reused_start_boundaries(tmp_path, caplog):
+def test_readiness_enqueue_send_and_receipt_have_request_identity(tmp_path, monkeypatch, caplog):
     caplog.set_level(logging.INFO)
-    service = RecordingService(backend_factory="unit_test.base.recording_process_fakes:process_dependencies",
-                               backend_options={"trace_dir": str(tmp_path)})
-    seen = []
-    try:
-        for name in ("one", "two"):
-            session = service.start(request(tmp_path, request_id=name), RecordingCallbacks(
-                started=lambda s: seen.append(s.request.request_id),
-                result_ready=lambda s, audio: s.accept_result()))
-            assert session.released.wait(15)
-            rows = records(caplog, name)
-            events = [r["event"] for r in rows]
-            expected = ["service_accept", "worker_selected", "command_enqueue", "command_dequeue", "parent_started"]
-            assert all(event in events for event in expected)
-            assert [events.index(event) for event in expected] == sorted(events.index(event) for event in expected)
-            summary, = [r for r in rows if r["event"] == "summary"]
-            assert summary["outcome"] == "started"
-            assert summary["completion_boundary"] == "service_callback_return"
-            assert summary["start_boundary"] == "service_accept"
-            assert summary["generation"] == str(session.generation)
-            assert summary["worker_pid"] == str(session.worker_pid)
-            selected = next(r for r in rows if r["event"] == "worker_selected")
-            assert selected["worker_mode"] == ("cold" if name == "one" else "reused")
-            assert next(r for r in rows if r["event"] == "command_dequeue")["domain"] == "service_sender"
-            assert next(r for r in rows if r["event"] == "service_submit")["csv_active"] == "unknown"
-            assert next(r for r in rows if r["stage"] == "command_send" and r["event"] == "end")["outcome"] == "ok"
-            assert summary["dropped_events"] == "0"
-        assert seen == ["one", "two"]
-    finally:
-        service.shutdown()
-        assert service.closed.wait(10)
-
-
-def test_service_started_callback_failure_is_not_success(tmp_path, caplog):
-    caplog.set_level(logging.INFO)
-    service = RecordingService(backend_factory="unit_test.base.recording_process_fakes:process_dependencies",
-                               backend_options={"trace_dir": str(tmp_path)})
-    def broken(session):
-        raise ValueError("callback failed")
-    try:
-        session = service.start(request(tmp_path), RecordingCallbacks(started=broken,
-            result_ready=lambda s, audio: s.accept_result()))
-        assert session.released.wait(15)
-        summary, = [r for r in records(caplog, "one") if r["event"] == "summary"]
-        assert summary["outcome"] == "failed"
-        end, = [r for r in records(caplog, "one")
-                if r["event"] == "end" and r["stage"] == "service_callback"]
-        assert (end["outcome"], end["error_type"], end["reason"]) == (
-            "failed", "ValueError", "callback_failed")
-        assert session.state == "completed"
-    finally:
-        service.shutdown()
-        assert service.closed.wait(10)
-
-
-@pytest.mark.parametrize("intent", ["cancel", "shutdown"])
-def test_cancel_intent_precedes_queued_started_and_stale_requests(tmp_path, monkeypatch, caplog, intent):
-    from types import SimpleNamespace
-    from base.recording_service import _Worker
-    from base.recording_process_protocol import RecordingEvent
-    caplog.set_level(logging.INFO)
-    monkeypatch.setattr(RecordingService, "_start_thread", lambda *a, **k: None)
+    monkeypatch.setattr(RecordingService, '_start_thread', lambda *a, **k: None)
+    clock = [10.0]
+    monkeypatch.setattr('base.recording_service.perf_counter', lambda: clock[0])
     service = RecordingService()
-    worker = _Worker(1, SimpleNamespace(pid=123), None, None, None)
-    worker.ready = True
-    service._worker = worker
+    worker = _Worker(7, SimpleNamespace(pid=123), None, None, None)
+    monkeypatch.setattr(service, '_spawn', lambda: setattr(service, '_worker', worker))
     called = []
-    session = service.start(request(tmp_path), RecordingCallbacks(started=lambda s: called.append(s)))
+    session = service.start(request(tmp_path), RecordingCallbacks(started=called.append))
     service._dispatch(service._inbox.get_nowait())
-    service.cancel("one") if intent == "cancel" else service.shutdown()
-    service._event(worker, RecordingEvent(1, "one", "started"))
-    summary, = [r for r in records(caplog, "one") if r["event"] == "summary"]
-    assert summary["outcome"] == "cancelled"
-    # Business callback behavior stays unchanged, but cannot revive the trace.
-    service._event(worker, RecordingEvent(1, "old-request", "started"))
-    service._event(worker, RecordingEvent(2, "one", "started"))
-    assert len([r for r in records(caplog, "one") if r["event"] == "summary"]) == 1
+    assert any(r['stage'] == 'worker_ready' and r.get('event') == 'begin' for r in records(caplog))
+    clock[0] += 2.2
+    service._event(worker, RecordingEvent(7, '', 'ready'))
+    ready, = [r for r in records(caplog) if r['stage'] == 'worker_ready' and r.get('event') == 'end']
+    assert float(ready['seconds']) == pytest.approx(2.2)
+    def send(event):
+        assert event.kind == 'start'
+        assert not [r for r in records(caplog) if r['stage'] == 'start_send']
+        worker.stop.set()
+    worker.control = SimpleNamespace(send=send)
+    service._send(worker)
+    service._event(worker, RecordingEvent(7, 'one', 'started'))
+    assert called == [session]
+    assert {'worker_ready', 'start_enqueue', 'start_send', 'started_receive'} <= {r['stage'] for r in records(caplog, 'one')}
 
 
-def test_start_failure_closes_ready_interval(tmp_path, monkeypatch, caplog):
+@pytest.mark.parametrize('terminal', ['failed', 'cancelled'])
+def test_readiness_failure_and_cancellation_preserve_terminal_state(tmp_path, monkeypatch, caplog, terminal):
     caplog.set_level(logging.INFO)
-    monkeypatch.setattr(RecordingService, "_start_thread", lambda *a, **k: None)
-    service = RecordingService()
-    session = service.start(request(tmp_path))
-    monkeypatch.setattr(service, "_spawn", lambda: (_ for _ in ()).throw(OSError("spawn denied")))
-    with pytest.raises(OSError) as error:
-        service._begin(session)
-    service._handle_supervisor_exception(error.value)
-    rows = records(caplog, "one")
-    summary, = [r for r in rows if r["event"] == "summary"]
-    assert summary["outcome"] == "failed"
-    end, = [r for r in rows if r["event"] == "end" and r["stage"] == "worker_ready"]
-    assert end["outcome"] == "failed"
-
-
-def test_supplied_standalone_trace_with_mock_callback_finishes_locally(tmp_path, monkeypatch, caplog):
-    from types import SimpleNamespace
-    from unittest.mock import Mock
-    from base.recording_startup_trace import RecordingStartupTrace
-    from base.recording_service import _Worker
-    from base.recording_process_protocol import RecordingEvent
-    caplog.set_level(logging.INFO)
-    monkeypatch.setattr(RecordingService, "_start_thread", lambda *a, **k: None)
+    monkeypatch.setattr(RecordingService, '_start_thread', lambda *a, **k: None)
     service = RecordingService()
     worker = _Worker(1, SimpleNamespace(pid=123), None, None, None)
-    worker.ready = True
-    service._worker = worker
-    trace = RecordingStartupTrace(service._logger, process="parent")
-    started = Mock()
-    session = service.start(request(tmp_path), RecordingCallbacks(started=started), startup_trace=trace)
-    service._dispatch(service._inbox.get_nowait())
-    service._event(worker, RecordingEvent(1, "one", "started"))
-    started.assert_called_once_with(session)
-    summary, = [r for r in records(caplog, "one") if r["event"] == "summary"]
-    assert summary["completion_boundary"] == "service_callback_return"
-    assert summary["outcome"] == "started"
-
-
-@pytest.mark.parametrize("terminal,reason", [
-    ("timeout", "ready_timeout"), ("failed", "worker"),
-    ("cancelled", "cancel_requested"),
-])
-def test_worker_ready_terminal_records_actual_outcome(tmp_path, monkeypatch, caplog, terminal, reason):
-    from types import SimpleNamespace
-    from base.recording_service import _Worker
-    caplog.set_level(logging.INFO)
-    monkeypatch.setattr(RecordingService, "_start_thread", lambda *a, **k: None)
-    service = RecordingService(monotonic=lambda: 100.0)
-    process = SimpleNamespace(pid=123, is_alive=lambda: True, terminate=lambda: None)
-    worker = _Worker(1, process, None, None, 101.0)
-    monkeypatch.setattr(service, "_spawn", lambda: setattr(service, "_worker", worker))
+    monkeypatch.setattr(service, '_spawn', lambda: setattr(service, '_worker', worker))
     session = service.start(request(tmp_path))
     service._dispatch(service._inbox.get_nowait())
-    if terminal == "timeout":
-        worker.deadline = 99.0
-        service._tick()
-    elif terminal == "failed":
-        service._fail(session, "worker", "worker failed before ready")
+    if terminal == 'failed':
+        service._fail(session, 'worker', 'worker failed before ready')
     else:
-        service.cancel("one")
+        service.cancel('one')
         service._dispatch(service._inbox.get_nowait())
-    end, = [r for r in records(caplog, "one")
-            if r["event"] == "end" and r["stage"] == "worker_ready"]
-    expected = "cancelled" if terminal == "cancelled" else "failed"
-    assert (end["outcome"], end["error_type"], end["reason"]) == (expected, "unknown", reason)
-    assert session.state == expected
-    assert session._startup_ready_stage is None
+    assert session.state == terminal
+    end, = [r for r in records(caplog, 'one') if r['stage'] == 'worker_ready' and r.get('event') == 'end']
+    assert end['outcome'] == terminal

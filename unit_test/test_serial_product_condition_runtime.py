@@ -60,8 +60,8 @@ class _Logger:
     def __init__(self):
         self.messages = []
 
-    def info(self, message):
-        self.messages.append(("info", message))
+    def info(self, message, *args):
+        self.messages.append(("info", message % args if args else message))
 
     def warning(self, message):
         self.messages.append(("warning", message))

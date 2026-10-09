@@ -204,7 +204,7 @@ class _RecordingBoundaryHost(SequenceWidgetAnalysisOpsMixin):
     def update_player_btn_is_paused(self):
         return None
 
-    def reset_work_pram(self, label, count=None, *, startup_trace=None):
+    def reset_work_pram(self, label, count=None):
         from unit_test.base.recording_process_fakes import device_info
         return {"device": device_info(), "num_frames": 4800}, 48_000
 

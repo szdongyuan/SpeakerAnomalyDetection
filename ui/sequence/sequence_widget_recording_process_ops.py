@@ -1,7 +1,7 @@
 """Main-recording adapter: request snapshots, envelopes and accepted results."""
-from ui.sequence.sequence_widget_raw_csv_ops import record_gui_stage, recording_startup_background
+from ui.sequence.sequence_widget_raw_csv_ops import record_gui_stage
 import os
-from contextlib import nullcontext
+from time import perf_counter
 import copy
 from dataclasses import dataclass
 from base.analysis_segments import normalize_segmented_analysis, recording_duration, segment_count
@@ -13,9 +13,6 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
 
 from base.play_and_record import resolve_startup_trim_samples
-from consts.recording_startup_consts import (
-    EVENT_SERVICE_SUBMIT,
-)
 from base.recording_preview_config import resolve_recording_preview_time_mode
 from base.recording_process_protocol import RecordingFailure, RecordingRequest
 from base.recording_result_reader import RecordingAudio
@@ -257,55 +254,48 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
             self._owns_recording_bridge = True
         return bridge
 
-    def _start_process_recording(self, recorded_dict, sample_rate, *, startup_trace=None):
+    def _start_process_recording(self, recorded_dict, sample_rate):
         if getattr(self, "_close_in_progress", False) or getattr(self, "_recording_closed", False):
             raise RuntimeError("录音窗口正在关闭")
         if (any(not context.cancelled and not context.cleanup_owned
                 for context in self._recording_contexts().values())
                 or getattr(self, "_recording_publication_in_progress", False)):
             raise RuntimeError("previous recording publication has not entered the analysis queue")
-        with (startup_trace.stage("request_build", domain="GUI") if startup_trace is not None else nullcontext()):
-            detail = self._resolve_recording_acq_detail()
-            analysis_task_config = {
-                "condition_config": copy.deepcopy(getattr(self, "_active_product_condition_config", None) or {}),
-                "sequence_config": copy.deepcopy(getattr(self, "sequence_config", []) or []),
-                "analysis_config": copy.deepcopy(getattr(self, "analysis_config", {}) or {}),
-                "channel_labels": copy.deepcopy(getattr(getattr(self, "channel_workspace", None), "channel_layout", {}) or {}),
-            }
-            segment_settings = normalize_segmented_analysis(analysis_task_config["condition_config"])
-            if segment_settings["mode"] != "none":
-                segment_count(segment_settings, recording_duration(analysis_task_config["sequence_config"]))
-            preview_time_mode = resolve_recording_preview_time_mode(detail)
-            if recorded_dict["device"].get("backend") == VE_BACKEND:
-                request_rate = validate_sample_rate(sample_rate)
-            else:
-                request_rate = int(sample_rate)
-            channels = tuple(self._recording_input_channels)
-            # Normalize the former mute field only at the legacy dictionary boundary.
-            if "startup_trim_samples" in recorded_dict:
-                startup_trim_samples = recorded_dict["startup_trim_samples"]
-            elif "monitor_mute_leading_samples" in recorded_dict:
-                startup_trim_samples = recorded_dict["monitor_mute_leading_samples"]
-            else:
-                startup_trim_samples = resolve_startup_trim_samples(detail, sample_rate)
-            csv_admission = getattr(self, "_pending_raw_audio_csv_recording", None)
-            request = RecordingRequest(
-                csv_admission.recording_id if csv_admission is not None else uuid4().hex, "main", request_rate, int(recorded_dict["num_frames"]),
-                channels, recorded_dict["device"], os.path.abspath(self.recorded_path),
-                bool(self._should_use_streaming_recording()),
-                startup_trim_samples, {},
-                getattr(self, "_recording_wav_calibration_metadata", None),
-                merge_audio_validation_thresholds(detail),
-                preview_time_mode)
-        if startup_trace is not None:
-            startup_trace.link_request(request.request_id, domain="GUI")
-            startup_trace.set_context(
-                backend=request.device.get("backend", "soundcard"),
-                sample_rate=request.sample_rate, channel_count=len(request.channels),
-                target_samples=request.target_samples,
-                target_duration_seconds=request.target_samples / request.sample_rate,
-                startup_trim_samples=request.trim_samples,
-                export_mode="wav_csv" if csv_admission and csv_admission.csv_enabled_snapshot else "wav")
+        started = perf_counter()
+        detail = self._resolve_recording_acq_detail()
+        analysis_task_config = {
+            "condition_config": copy.deepcopy(getattr(self, "_active_product_condition_config", None) or {}),
+            "sequence_config": copy.deepcopy(getattr(self, "sequence_config", []) or []),
+            "analysis_config": copy.deepcopy(getattr(self, "analysis_config", {}) or {}),
+            "channel_labels": copy.deepcopy(getattr(getattr(self, "channel_workspace", None), "channel_layout", {}) or {}),
+        }
+        segment_settings = normalize_segmented_analysis(analysis_task_config["condition_config"])
+        if segment_settings["mode"] != "none":
+            segment_count(segment_settings, recording_duration(analysis_task_config["sequence_config"]))
+        preview_time_mode = resolve_recording_preview_time_mode(detail)
+        if recorded_dict["device"].get("backend") == VE_BACKEND:
+            request_rate = validate_sample_rate(sample_rate)
+        else:
+            request_rate = int(sample_rate)
+        channels = tuple(self._recording_input_channels)
+        # Normalize the former mute field only at the legacy dictionary boundary.
+        if "startup_trim_samples" in recorded_dict:
+            startup_trim_samples = recorded_dict["startup_trim_samples"]
+        elif "monitor_mute_leading_samples" in recorded_dict:
+            startup_trim_samples = recorded_dict["monitor_mute_leading_samples"]
+        else:
+            startup_trim_samples = resolve_startup_trim_samples(detail, sample_rate)
+        csv_admission = getattr(self, "_pending_raw_audio_csv_recording", None)
+        request = RecordingRequest(
+            csv_admission.recording_id if csv_admission is not None else uuid4().hex, "main", request_rate, int(recorded_dict["num_frames"]),
+            channels, recorded_dict["device"], os.path.abspath(self.recorded_path),
+            bool(self._should_use_streaming_recording()),
+            startup_trim_samples, {},
+            getattr(self, "_recording_wav_calibration_metadata", None),
+            merge_audio_validation_thresholds(detail),
+            preview_time_mode)
+        self.default_logger.info("Recording timing request=%s process=parent stage=request_build seconds=%.6f",
+                                 request.request_id, perf_counter() - started)
         previous_recent_owner = self._recent_session_owner_snapshot()
         attempt_recent_owner = None
         recent_placeholder_attempted = False
@@ -314,8 +304,10 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
             direction = self._resolve_active_recording_waveform_direction(fallback="")
             # The placeholder and UI token exist before any callback can be delivered.
             recent_placeholder_attempted = True
-            with (startup_trace.stage("recent_session", domain="GUI") if startup_trace is not None else nullcontext()):
-                self._begin_recent_session_for_current_run()
+            started = perf_counter()
+            self._begin_recent_session_for_current_run()
+            self.default_logger.info("Recording timing request=%s process=parent stage=recent_session seconds=%.6f",
+                                     request.request_id, perf_counter() - started)
             candidate_recent_owner = self._recent_session_owner_snapshot()
             if self._recent_session_owner_changed(
                     previous_recent_owner, candidate_recent_owner):
@@ -334,7 +326,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
                 workflow_token=getattr(self, "_recording_workflow_token", None),
                 csv_reservation=(csv_admission.csv_reservation if csv_admission else None),
                 csv_enabled_snapshot=bool(csv_admission and csv_admission.csv_enabled_snapshot),
-                startup_trace=startup_trace,
             )
             validate_workspace = getattr(
                 self, "_validate_final_waveform_workspace", None)
@@ -371,21 +362,14 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         try:
             csv_service = getattr(self, "raw_audio_csv_service", None)
             if csv_service is not None:
-                with (startup_trace.stage("csv_path_permit", domain="GUI") if startup_trace is not None else nullcontext()):
-                    context.csv_path_permit = csv_service.try_acquire_mutation((request.path,))
-                    if context.csv_path_permit is None:
-                        raise RuntimeError("录音路径正在保存 CSV 或清理，请稍后重试。")
+                context.csv_path_permit = csv_service.try_acquire_mutation((request.path,))
+                if context.csv_path_permit is None:
+                    raise RuntimeError("录音路径正在保存 CSV 或清理，请稍后重试。")
                 paths = getattr(self, "_raw_audio_csv_recording_paths", None)
                 if paths is None:
                     paths = self._raw_audio_csv_recording_paths = set()
                 paths.add(request.path)
-            bridge = self._get_recording_bridge()
-            if startup_trace is None:
-                session = bridge.start(request, callbacks)
-            else:
-                startup_trace.mark(EVENT_SERVICE_SUBMIT, domain="GUI", **recording_startup_background(self))
-                with startup_trace.stage("service_start", domain="GUI"):
-                    session = bridge.start(request, callbacks, startup_trace=startup_trace)
+            session = self._get_recording_bridge().start(request, callbacks)
             if self._recording_contexts().get(request.request_id) is not context:
                 # A synchronous terminal callback already performed exact-owner
                 # cleanup. Do not reinstall aliases or a processor afterward.
@@ -786,8 +770,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         context = self._recording_context_for_session(session)
         if context is None:
             return
-        if context.startup_trace is not None:
-            context.startup_trace.finish("failed", domain="GUI")
         self.default_logger.error(
             f"Recording failed request={session.request.request_id} "
             f"stage={failure.stage} path={session.request.path} "
@@ -835,8 +817,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         context = self._recording_context_for_session(session)
         if context is None or context.cleanup_owned:
             return
-        if context.startup_trace is not None:
-            context.startup_trace.finish("cancelled", domain="GUI")
         self._finish_process_recording_status(context, "待检测", "等待开始", "pending")
         context.final = True
         context.cancelled = True
@@ -867,8 +847,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         context = self._recording_context_for_session(session)
         if context is None:
             return
-        if context.startup_trace is not None:
-            context.startup_trace.finish("cancelled", domain="GUI")
         self._finish_process_recording_status(context, "待检测", "等待开始", "pending")
         context.preview_enabled = False
         context.final = True
