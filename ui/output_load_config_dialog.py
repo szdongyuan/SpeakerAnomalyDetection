@@ -78,7 +78,7 @@ class OutputLoadConfigDialog(ConfigDialogBase):
         interval_row.addWidget(self.interval_input)
         interval_row.addWidget(self.time_unit_input)
         self.duration_input = QDoubleSpinBox()
-        analysis_seconds = settings.get("analysis_seconds", 10)
+        analysis_seconds = settings.get("analysis_seconds", 30)
         self.duration_input.setDecimals(config_number_decimals(analysis_seconds, 2))
         self.duration_input.setRange(min(0.01, analysis_seconds), max(86400, analysis_seconds))
         self.duration_input.setSuffix(" 秒")
