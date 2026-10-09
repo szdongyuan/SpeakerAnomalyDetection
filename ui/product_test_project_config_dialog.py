@@ -58,6 +58,7 @@ from ui.config_dialog_base import ConfigDialogBase
 from ui.product_queue_conflict_dialog import ProductQueueConflictDialog
 from ui.config_delete_dialog import ConfigDeleteDialog
 from ui.dialog_enter_policy import install_dialog_enter_policy
+from ui.queue_display import queue_display_name, queue_display_options
 from ui.output_load_config_dialog import OutputLoadConfigDialog
 from base.analysis_segments import normalize_segmented_analysis, segment_condition_fields, segment_count
 
@@ -1150,14 +1151,17 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         queue_names = self._available_queue_names()
         if queue_names:
             combobox.addItem("请选择", "")
-            for queue_name in queue_names:
-                combobox.addItem(queue_name, queue_name)
+            for label, queue_name in queue_display_options(
+                self.queue_catalog, queue_names, current_queue
+            ):
+                combobox.addItem(label, queue_name)
         else:
             combobox.addItem(NO_QUEUE_TEXT, "")
         if current_queue and current_queue not in queue_names:
-            combobox.addItem(
-                f"{current_queue}{UNAVAILABLE_QUEUE_SUFFIX}", current_queue
+            label = queue_display_name(
+                current_queue, self.queue_catalog.get(current_queue, {}).get("path")
             )
+            combobox.addItem(f"{label}{UNAVAILABLE_QUEUE_SUFFIX}", current_queue)
         selected_index = combobox.findData(current_queue)
         combobox.setCurrentIndex(selected_index if selected_index >= 0 else 0)
         combobox.blockSignals(signals_blocked)

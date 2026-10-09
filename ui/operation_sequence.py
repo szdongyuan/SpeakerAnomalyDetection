@@ -43,6 +43,7 @@ from consts.running_consts import DEFAULT_DIR
 from ui.config_dialog_base import ConfigDialogBase
 from ui.config_delete_dialog import ConfigDeleteDialog
 from ui.dialog_enter_policy import install_dialog_enter_policy
+from ui.queue_display import is_default_queue_path
 from ui.acquisition_config_window import RecordConfigWindow
 
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
@@ -150,6 +151,8 @@ class AnalysisModelSelect(ConfigDialogBase):
         """
         try:
             using_path = (self.using_config_path or "").replace("\\", "/")
+            if is_default_queue_path(using_path):
+                return "默认配置"
             registry = LoadUiConfig._load_sequence_config_registry() or {}
             if using_path:
                 for k, v in registry.items():
