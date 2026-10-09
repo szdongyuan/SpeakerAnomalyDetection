@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QPu
 
 from base.load_config import LoadUiConfig
 from base.sequence_queue_references import QueueReferenceDraft, SequenceQueueReferenceScanner
+from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.acquisition_config_window import RecordConfigWindow
 from ui.operation_sequence import AnalysisModelSelect
 from unit_test.base.test_sequence_queue_references import project, write_json
@@ -290,7 +291,7 @@ def test_first_save_validates_before_selection(editor, monkeypatch, save_selecti
     else:
         window.select_list.config[0].detail["sample_rate"] = "invalid"
     calls = save_selection(None)
-    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.Save)
+    monkeypatch.setattr(ConfirmationMessageBox, "question", lambda *a: QMessageBox.Save)
     window.show()
     if prompt:
         window.close()
@@ -335,7 +336,7 @@ def test_first_save_transition_guards(editor, monkeypatch, tmp_path, operation, 
     selected = original if outcome == "shared_cancel" else tmp_path / "Chosen.json"
     calls, imports, confirmations = [], [], []
     monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", tmp_path.as_posix() + "/")
-    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.Save)
+    monkeypatch.setattr(ConfirmationMessageBox, "question", lambda *a: QMessageBox.Save)
     def execute(dialog):
         calls.append(dialog.windowTitle())
         if dialog.windowTitle() == "新建配置文件" or outcome == "selection_cancel":
@@ -645,7 +646,7 @@ def test_close_unsaved_draft(editor, monkeypatch, choice, confirm, closes):
     change(window)
     window.show()
     prompts, warnings = [], []
-    monkeypatch.setattr(QMessageBox, "question", lambda *a: prompts.append(a) or choice)
+    monkeypatch.setattr(ConfirmationMessageBox, "question", lambda *a: prompts.append(a) or choice)
     window.confirm_shared_save = lambda *a: warnings.append(a) or confirm
     window.close()
     assert window.isVisible() is not closes
@@ -669,7 +670,7 @@ def test_switch_unsaved_draft(editor, monkeypatch, operation, choice, confirm, p
     next_target = target.with_name("next.json")
     write_json(next_target, [])
     selected = []
-    monkeypatch.setattr(QMessageBox, "question", lambda *a: choice)
+    monkeypatch.setattr(ConfirmationMessageBox, "question", lambda *a: choice)
     window.confirm_shared_save = lambda *a: confirm
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: selected.append(True) or (str(next_target), ""))
     monkeypatch.setattr(QFileDialog, "exec_", lambda *a: selected.append(True) or QDialog.Accepted)
@@ -889,7 +890,7 @@ def test_clear_control_retains_unsaved_draft_boundary(editor, monkeypatch):
     assert window.dirty
     assert window.select_list.config == []
     window.show()
-    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.Cancel)
+    monkeypatch.setattr(ConfirmationMessageBox, "question", lambda *a: QMessageBox.Cancel)
     window.close()
     assert window.isVisible()
     assert target.read_bytes() == before

@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
 from base.load_config import LoadUiConfig
 from base.product_test_program_config import ProductTestProgramConfigManager
 from consts import error_code, ui_style_const
+from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.product_test_program_config_dialog import (
     NO_QUEUE_TEXT,
     ProductTestProgramConfigDialog,
@@ -414,7 +415,7 @@ def test_switching_clean_config_does_not_prompt_to_discard(
     def fail_if_prompted(*_args, **_kwargs):
         raise AssertionError("切换未修改的配置不应提示放弃修改")
 
-    monkeypatch.setattr(QMessageBox, "question", fail_if_prompted)
+    monkeypatch.setattr(ConfirmationMessageBox, "question", fail_if_prompted)
     dialog.config_combobox.setCurrentIndex(target_index)
     app.processEvents()
     dialog.config_combobox.activated.emit(target_index)
@@ -477,7 +478,7 @@ def test_new_program_button_keeps_current_program_when_discard_is_declined(
     current_file = dialog.current_file
     dialog.program_table.item(0, 1).setText("未保存工况")
     monkeypatch.setattr(
-        QMessageBox,
+        ConfirmationMessageBox,
         "question",
         lambda *_args, **_kwargs: QMessageBox.No,
     )

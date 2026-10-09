@@ -14,6 +14,7 @@ from base.product_test_project_config import ProductTestProjectConfigManager
 from consts.ve3668n_consts import VE_BACKEND
 from consts import ui_style_const
 from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
+from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.product_test_project_config_dialog import (
     ProductTestProjectConfigDialog,
 )
@@ -389,7 +390,7 @@ def test_acquisition_imported_draft_rejection_keeps_import_state(app, tmp_path, 
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(source), ""))
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: messages.append(args[2]))
     monkeypatch.setattr(QMessageBox, "information", lambda *args: pytest.fail("unexpected success"))
-    monkeypatch.setattr(QMessageBox, "question", lambda *args: pytest.fail("invalid import must fail before overwrite confirmation"))
+    monkeypatch.setattr(ConfirmationMessageBox, "question", lambda *args: pytest.fail("invalid import must fail before overwrite confirmation"))
     dialog.projects_changed.connect(lambda: changes.append(True))
     try:
         dialog._import_project()
@@ -487,7 +488,7 @@ def test_import_external_duplicate_stays_draft_until_save(app, tmp_path, monkeyp
         questions.append(args[1])
         return QMessageBox.No if action == "decline" else QMessageBox.Yes
 
-    monkeypatch.setattr(QMessageBox, "question", answer)
+    monkeypatch.setattr(ConfirmationMessageBox, "question", answer)
     try:
         dialog._import_project()
         assert dialog.current_file is None
@@ -561,7 +562,7 @@ def test_import_new_draft_validates_queue_only_on_save(app, tmp_path, monkeypatc
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(source), ""))
     monkeypatch.setattr(QMessageBox, "information", lambda *a: None)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a: warnings.append(a[2]))
-    monkeypatch.setattr(QMessageBox, "question", lambda *a: questions.append(a[1]))
+    monkeypatch.setattr(ConfirmationMessageBox, "question", lambda *a: questions.append(a[1]))
     try:
         dialog._import_project()
         assert dialog.project_name_input.text() == "外部项目"
@@ -595,7 +596,7 @@ def test_import_managed_file_also_confirms_overwrite(app, tmp_path, monkeypatch,
         questions.append(args[1])
         return QMessageBox.Yes if confirm_overwrite else QMessageBox.No
 
-    monkeypatch.setattr(QMessageBox, "question", answer)
+    monkeypatch.setattr(ConfirmationMessageBox, "question", answer)
     try:
         dialog._import_project()
         assert dialog.current_file is None
@@ -645,7 +646,7 @@ def test_case_variant_import_updates_one_project(app, tmp_path, monkeypatch, con
         return QMessageBox.Yes if confirm_overwrite else QMessageBox.No
 
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(source), ""))
-    monkeypatch.setattr(QMessageBox, "question", answer)
+    monkeypatch.setattr(ConfirmationMessageBox, "question", answer)
     monkeypatch.setattr(QMessageBox, "information", lambda *a: None)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a: warnings.append(a[2]))
     try:
@@ -1201,7 +1202,7 @@ def test_delete_condition_is_immediate_and_allows_empty_table(
     assert dialog.delete_condition_btn.isEnabled()
 
     monkeypatch.setattr(
-        QMessageBox,
+        ConfirmationMessageBox,
         "question",
         lambda *args, **kwargs: pytest.fail("删除工况不应弹出确认窗口"),
     )
@@ -1808,7 +1809,7 @@ def test_failed_load_reuses_existing_actions(app, tmp_path, monkeypatch, action,
     before = Path(manager.registry_path).read_bytes()
     monkeypatch.setattr(QMessageBox, "warning", lambda *_: None)
     monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
-    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.Yes)
+    monkeypatch.setattr(ConfirmationMessageBox, "question", lambda *_: QMessageBox.Yes)
     dialog = ProductTestProjectConfigDialog(manager)
     try:
         assert dialog.save_btn.isEnabled() is (damage == "missing")
@@ -1910,5 +1911,47 @@ def test_missing_file_blank_draft_cannot_silently_replace_old_registration(app, 
         assert Path(manager.program_dir, "Recovered.json").exists()
         assert manager.load_registry()["active_file"] == name
         assert not path.exists()
+    finally:
+        close_dialog(dialog)
+
+
+@pytest.mark.parametrize("action", ["confirm", "cancel", "enter", "escape"])
+def test_replace_conditions_real_confirmation_preserves_cancelled_target(app, tmp_path, action):
+    import copy
+    from PyQt5.QtCore import QTimer
+    from PyQt5.QtWidgets import QApplication
+
+    manager = make_manager(tmp_path)
+    prepare_project(manager, tmp_path)
+    dialog = ProductTestProjectConfigDialog(manager)
+    target = dialog.project_data["test_groups"][1]
+    target["test_conditions"] = [{"condition_name": "Keep target", "trigger_state": "",
+                                   "test_queue": "低噪声基础测试"}]
+    before = copy.deepcopy(target)
+    files_before = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    observed = []
+
+    def decide():
+        prompt = QApplication.activeModalWidget()
+        observed.append((prompt.windowTitle(), prompt.button(QMessageBox.Yes).text(),
+                         prompt.button(QMessageBox.No).text(),
+                         prompt.defaultButton() is prompt.button(QMessageBox.No),
+                         prompt.button(QMessageBox.No).mapTo(prompt, QPoint()).x() <
+                         prompt.button(QMessageBox.Yes).mapTo(prompt, QPoint()).x()))
+        if action in ("confirm", "cancel"):
+            QTest.mouseClick(prompt.button(QMessageBox.Yes if action == "confirm" else QMessageBox.No), Qt.LeftButton)
+        else:
+            QTest.keyClick(prompt, Qt.Key_Return if action == "enter" else Qt.Key_Escape)
+
+    try:
+        QTimer.singleShot(0, decide)
+        assert dialog._copy_conditions_to_groups([1]) is (action == "confirm")
+        assert observed == [("替换目标端口工况", "确认", "取消", True, True)]
+        if action == "confirm":
+            assert target != before
+            assert all(not item["trigger_state"] for item in target["test_conditions"])
+        else:
+            assert target == before
+        assert {path: path.read_bytes() for path in tmp_path.rglob("*.json")} == files_before
     finally:
         close_dialog(dialog)

@@ -1,3 +1,5 @@
+from ui.confirmation_message_box import set_confirmation_button_order
+
 from PyQt5.QtCore import QSize
 from PyQt5.QtGui import QFont, QFontMetrics
 from PyQt5.QtWidgets import (
@@ -265,6 +267,7 @@ class PlainTextEdit(QPlainTextEdit):
 class MessageBox(QMessageBox):
     def __init__(self, *args):
         super(MessageBox, self).__init__(*args)
+        set_confirmation_button_order(self)
         self.font_size = scale_size_px(20)
         self.font = QFont()
         self.font.setFamily("SimSun")

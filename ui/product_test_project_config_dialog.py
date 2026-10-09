@@ -53,6 +53,7 @@ from consts.product_test_project_consts import (
     TRIGGER_STATE_KEY,
 )
 from consts.running_consts import DEFAULT_DIR
+from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.config_dialog_base import ConfigDialogBase
 from ui.product_queue_conflict_dialog import ProductQueueConflictDialog
 from ui.config_delete_dialog import ConfigDeleteDialog
@@ -348,7 +349,8 @@ class _CopyConditionsDialog(ConfigDialogBase):
         scroll_area.setMinimumHeight(160)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
-        buttons.button(QDialogButtonBox.Ok).setText("确认复制")
+        buttons.setStyleSheet(f"QDialogButtonBox {{ button-layout: {QDialogButtonBox.GnomeLayout}; }}")
+        buttons.button(QDialogButtonBox.Ok).setText("确认")
         buttons.button(QDialogButtonBox.Cancel).setText("取消")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -1246,7 +1248,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         groups = self.project_data.setdefault(TEST_GROUPS_KEY, [])
         old_count = len(groups)
         if new_count < old_count:
-            result = QMessageBox.question(
+            result = ConfirmationMessageBox.question(
                 self,
                 "减少端口",
                 f"将删除最后 {old_count - new_count} 个端口及其工况，确定继续吗？",
@@ -1361,7 +1363,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         if confirm_replace and any(
             groups[index].get(TEST_CONDITIONS_KEY) for index in valid_targets
         ):
-            result = QMessageBox.question(
+            result = ConfirmationMessageBox.question(
                 self,
                 "替换目标端口工况",
                 "所选端口的现有工况将被整体替换，确定继续吗？",
@@ -1583,11 +1585,11 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             )
             return False
         if overwrite_file:
-            result = QMessageBox.question(
+            result = ConfirmationMessageBox.question(
                 self,
                 "覆盖已有配置",
                 f"项目“{os.path.splitext(overwrite_file)[0]}”已存在。是否用导入后的配置覆盖？\n"
-                "选择“否”可继续编辑，或使用“另存为配置”保存为另一份配置。",
+                "选择“取消”可继续编辑，或使用“另存为配置”保存为另一份配置。",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )

@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
 )
 
 from base.sequence_queue_references import SequenceQueueReferenceScanner
+from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.operation_sequence import AnalysisModelSelect
 from ui.product_test_project_config_dialog import (
     ProductTestProjectConfigDialog, _CopyConditionsDialog,
@@ -36,7 +37,7 @@ def isolate_prompts(monkeypatch):
     messages = []
     monkeypatch.setattr(QMessageBox, "information", lambda *a: messages.append(a[2]))
     monkeypatch.setattr(QMessageBox, "warning", lambda *a: messages.append(a[2]))
-    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.No)
+    monkeypatch.setattr(ConfirmationMessageBox, "question", lambda *a: QMessageBox.No)
     monkeypatch.setattr(QMessageBox, "exec_", lambda self: QMessageBox.Cancel)
     monkeypatch.setattr(QFileDialog, "exec_", lambda self: QDialog.Rejected)
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: ("", ""))

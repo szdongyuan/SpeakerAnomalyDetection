@@ -19,6 +19,7 @@ from base.save_data import save_recorded_data_to_json
 from base.utils.custom_signals import sign
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.vkinging_presentation import ve_failure_text
 
 
@@ -307,7 +308,7 @@ class SequenceWidgetUiOpsMixin:
         has_incomplete_round = getattr(self, "_has_incomplete_manual_product_condition_round", None)
         if not callable(has_incomplete_round) or not has_incomplete_round():
             return True
-        reply = QMessageBox.question(
+        reply = ConfirmationMessageBox.question(
             self,
             "切换模式",
             "本轮还未结束，是否切换模式？",
