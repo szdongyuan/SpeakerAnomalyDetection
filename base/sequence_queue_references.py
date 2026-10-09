@@ -74,6 +74,7 @@ class QueueReferenceIssue:
     product_name: str
     source: str
     message: str
+    blocks_deletion: bool = True
 
 
 @dataclass(frozen=True)
@@ -98,9 +99,10 @@ class SequenceQueueReferenceScanner:
 
         Sources are ``saved`` and/or ``draft``. ``display_names`` preserves each
         source's names, including names changed by an unsaved parent editor.
-        Any issue means the result may be incomplete. Missing registries are
-        empty on first use; missing registered files and unresolved nonempty
-        aliases are issues. Each call reads the current disk versions again.
+        All issues remain visible to shared-save confirmation. Only issues with
+        blocks_deletion=True make this target's deletion check incomplete.
+        Missing registries are empty on first use; missing registered files and
+        unresolved nonempty aliases are issues. Each call reads disk again.
         ``aliases`` also matches raw names when deletion must protect a missing
         registered path whose loading fallback resolves to a different file.
         """
@@ -121,7 +123,7 @@ class SequenceQueueReferenceScanner:
                         continue
                     if not isinstance(path, str) or not path.strip() or "\0" in path:
                         self._issue(issues, self.queue_registry_path, "", "saved",
-                                    f"Invalid queue path for {alias!r}")
+                                    f"Invalid queue path for {alias!r}", blocks_deletion=False)
                         # Preserve the invalid alias so it cannot be treated as a path.
                         catalog[alias] = None
                         continue
@@ -169,8 +171,8 @@ class SequenceQueueReferenceScanner:
         return QueueReferenceResult(tuple(references.values()), tuple(issues))
 
     @staticmethod
-    def _issue(issues, path, name, source, message):
-        issues.append(QueueReferenceIssue(path, name, source, message))
+    def _issue(issues, path, name, source, message, *, blocks_deletion=True):
+        issues.append(QueueReferenceIssue(path, name, source, message, blocks_deletion))
 
     def _read_json(self, path, issues, *, missing_ok=False, product_name=""):
         # This is the file/JSON boundary. Failures remain visible and no repair
@@ -220,12 +222,17 @@ class SequenceQueueReferenceScanner:
                 continue
             if queue in catalog:
                 key = catalog[queue]
+                if key is None:
+                    self._issue(issues, path, name, source,
+                                f"{location}: invalid registered queue path {queue!r}")
+                    continue
             elif (os.path.isabs(queue) or "/" in queue or "\\" in queue
                   or queue.lower().endswith(".json")):
                 key = self._queue_key(queue, os.path.dirname(self.queue_registry_path))
             else:
                 self._issue(issues, path, name, source,
-                            f"{location}: unresolved queue alias {queue!r}")
+                            f"{location}: unresolved queue alias {queue!r}",
+                            blocks_deletion=queue in aliases)
                 continue
             if key != target_key and queue not in aliases:
                 continue

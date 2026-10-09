@@ -225,6 +225,11 @@ class AnalysisModelSelect(ConfigDialogBase):
         finally:
             self._saving = False
 
+    @staticmethod
+    def _validate_queue_suffix(path):
+        if not os.fspath(path).lower().endswith(".json"):
+            raise ValueError("测试队列配置文件必须使用 .json 扩展名")
+
     def _save_queue_once(self, target_path, *, explicit, activate_default=False):
         self.dirty = True
         error = _recording_preview_validation_error(self.select_list.config)
@@ -237,6 +242,7 @@ class AnalysisModelSelect(ConfigDialogBase):
                 QMessageBox.warning(self, "警告", "没有配置测试内容")
             return "failed"
         try:
+            self._validate_queue_suffix(target_path)
             try:
                 with open(target_path, encoding="utf-8") as stream:
                     persisted = json.load(stream)
@@ -273,6 +279,7 @@ class AnalysisModelSelect(ConfigDialogBase):
         # Retry an incomplete registration without rewriting an unchanged queue.
         if self._deletion_is_blocked():
             raise ValueError("删除后的配置状态异常，请检查后重启软件")
+        self._validate_queue_suffix(target_path)
         registry_path = self.reference_scanner.queue_registry_path
         try:
             with open(registry_path, encoding="utf-8") as stream:
@@ -655,6 +662,11 @@ class AnalysisModelSelect(ConfigDialogBase):
         )
         if file_path:
             try:
+                self._validate_queue_suffix(file_path)
+            except ValueError as error:
+                QMessageBox.warning(self, "导入失败", str(error))
+                return
+            try:
                 file_path = file_path.replace("\\", "/")
                 self.select_list.load_model_config(file_path)
                 signals_blocked = self.auto_analysis_box.blockSignals(True)
@@ -711,6 +723,11 @@ class AnalysisModelSelect(ConfigDialogBase):
         # If user didn't type extension, default to .json
         if not os.path.splitext(file_path)[1]:
             file_path = file_path + ".json"
+        try:
+            self._validate_queue_suffix(file_path)
+        except ValueError as error:
+            QMessageBox.warning(self, "无法新建配置", str(error))
+            return
         file_path = file_path.replace("\\", "/")
 
         # Do NOT update main window registry here; only affect this dialog's save target.

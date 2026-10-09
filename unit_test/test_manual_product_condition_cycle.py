@@ -212,18 +212,25 @@ class TestManualProductConditionCycle(unittest.TestCase):
             ["uuid_6000", "uuid_7000", "uuid_8000"],
         )
 
-    def test_play_button_does_not_start_complete_status_code_config(self):
-        widget = _DummyManualCycleWidget()
-        widget.default_logger = logging.getLogger(__name__)
-        for index, condition in enumerate(widget.product_test_condition_configs, 1):
-            condition["trigger_state"] = f"0{index}"
-        widget._serial_trigger_config = {"enabled": False}
+    def test_play_button_with_complete_status_codes_respects_serial_enabled(self):
+        for serial_enabled in (False, True):
+            with self.subTest(serial_enabled=serial_enabled):
+                widget = _DummyManualCycleWidget()
+                widget.default_logger = logging.getLogger(__name__)
+                for index, condition in enumerate(widget.product_test_condition_configs, 1):
+                    condition["trigger_state"] = f"0{index}"
+                widget._serial_trigger_config = {"enabled": serial_enabled}
 
-        widget.on_clicked_player_btn()
+                widget.on_clicked_player_btn()
 
-        self.assertEqual(widget.loaded_queues, [])
-        self.assertEqual(widget.started, [])
-        self.assertEqual(widget._manual_product_condition_group_id, "")
+                if serial_enabled:
+                    self.assertEqual(widget.loaded_queues, [])
+                    self.assertEqual(widget.started, [])
+                    self.assertEqual(widget._manual_product_condition_group_id, "")
+                else:
+                    self.assertEqual(widget.loaded_queues, ["queue_6000"])
+                    self.assertEqual(widget.started, [("not_labeled", "q6000", "_6000")])
+                    self.assertTrue(widget._manual_product_condition_group_id)
 
     def test_mark_mode_allows_next_play_with_unlabeled_history(self):
         widget = _DummyManualCycleWidget()

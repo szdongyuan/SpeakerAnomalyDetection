@@ -166,8 +166,6 @@ class ConfigDeleteDialog(ConfigDialogBase):
                 name = " / ".join(target.names)
                 item = QListWidgetItem(name, self.config_list)
                 item.setData(Qt.UserRole, target)
-                if not target.remove_file:
-                    item.setData(STATUS_ROLE, "仅移除记录")
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
                 item.setCheckState(Qt.Unchecked)
                 item.setToolTip(" / ".join(target.names) + "\n" + target.path)
@@ -178,7 +176,9 @@ class ConfigDeleteDialog(ConfigDialogBase):
                         reason = "已引用" if error.references else "不可删除"
                         item.setData(STATUS_ROLE, reason)
                         item.setFlags(item.flags() & ~Qt.ItemIsUserCheckable)
-                        item.setData(Qt.UserRole + 1, self._error_message(target, error))
+                        detail = self._error_message(target, error)
+                        item.setData(Qt.UserRole + 1, detail)
+                        item.setToolTip(item.toolTip() + "\n" + detail)
             if not targets and not message:
                 message = "暂无可删除配置"
         except ConfigDeletionError as error:
@@ -205,19 +205,29 @@ class ConfigDeleteDialog(ConfigDialogBase):
         if not targets or self._blocked:
             self._show_details("")
             return
+        missing_count = sum(target.file_stamp is None for target in targets)
+        retained_count = len(targets) - file_count - missing_count
+        actions = []
         if file_count:
-            message = ("仅删除配置，保留队列和测试数据。" if self.kind == "product"
-                       else "仅删除配置，保留录音和结果。")
-            if file_count < len(targets):
-                message += "\n“仅移除记录”项保留原文件。"
-        else:
-            message = "仅移除列表记录，保留原文件。"
-        if any(self.unsaved(target) for target in targets):
-            message += "\n未保存的修改将丢弃。"
+            actions.append(f"删除 {file_count} 个配置文件。")
+        if missing_count:
+            actions.append(f"清理 {missing_count} 条失效记录（配置文件不存在）。")
+        if retained_count:
+            actions.append(f"移除 {retained_count} 条列表记录，保留原文件。")
+        message = f"已选 {len(targets)} 项：" + "\n".join(actions)
+        if file_count:
+            message += ("\n保留测试队列和测试数据。" if self.kind == "product"
+                        else "\n保留录音和测试结果。")
+        has_unsaved_changes = any(self.unsaved(target) for target in targets)
         if self.kind == "product" and any(
             target.key == self.current_product_file for target in targets
         ):
-            message += "\n删除当前配置后，将关闭产品测试配置窗口，返回主界面。"
+            message += (
+                "\n删除当前配置将丢弃未保存的修改，并返回主界面。"
+                if has_unsaved_changes else "\n删除当前配置将返回主界面。"
+            )
+        elif has_unsaved_changes:
+            message += "\n未保存的修改将丢弃。"
         try:
             for target in targets:
                 self._check(target)
@@ -230,7 +240,7 @@ class ConfigDeleteDialog(ConfigDialogBase):
     def _show_details(self, message):
         current = self.config_list.currentItem()
         reason = current.data(Qt.UserRole + 1) if current else None
-        self.details.setPlainText(reason or message)
+        self.details.setPlainText(message or reason or "")
 
     def _execute(self):
         targets = self.checked_targets()

@@ -46,8 +46,6 @@ from consts.product_test_project_consts import (
     OUTPUT_LOAD_KEY,
     PROJECT_NAME_KEY,
     REGISTRY_ACTIVE_FILE_KEY,
-    REGISTRY_CONFIGS_KEY,
-    REGISTRY_FILE_KEY,
     RESULT_ROOT_DIRECTORY_KEY,
     TEST_CONDITIONS_KEY,
     TEST_GROUPS_KEY,
@@ -401,6 +399,8 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self.deletion_error = deletion_error
         self._deletion_blocked = False
         self.current_file = None
+        self._has_editable_project = False
+        self.initial_load_error = ""
         self._imported_draft = False
         self.project_data = self.manager.default_project()
         self.queue_catalog = {}
@@ -435,7 +435,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
 
         self._init_ui()
         self._connect_signals()
-        self._load_initial_project()
+        self.initial_load_succeeded = self._load_initial_project()
         install_dialog_enter_policy(self, self.save_btn)
         self._deletion_is_blocked()
 
@@ -548,6 +548,13 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         ):
             button.setMinimumHeight(36)
         self.save_btn.setObjectName("productProgramPrimaryButton")
+        self.save_btn.setStyleSheet(
+            "QPushButton:disabled {"
+            f"background-color: {ui_style_const.COLOR_DISABLED_BG};"
+            f"color: {ui_style_const.COLOR_DISABLED_TEXT};"
+            f"border-color: {ui_style_const.COLOR_BORDER};"
+            "}"
+        )
 
         footer = QHBoxLayout()
         footer.setContentsMargins(10, 40, 10, 0)
@@ -568,6 +575,14 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 10, 0, 10)
         layout.setSpacing(8)
+        self._editor_sections = (
+            basic_content, self.condition_header, condition_table_container, result_content,
+        )
+        self.load_status_label = QLabel()
+        self.load_status_label.setWordWrap(True)
+        self.load_status_label.setContentsMargins(12, 0, 12, 0)
+        self.load_status_label.hide()
+        layout.addWidget(self.load_status_label)
         layout.addWidget(self._section_header("项目基础信息"))
         layout.addWidget(basic_content)
         layout.addWidget(self.condition_header)
@@ -737,27 +752,21 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         active_file = registry.get(REGISTRY_ACTIVE_FILE_KEY)
         if not active_file:
             self._show_project(self.manager.default_project(), None)
-            return
-        load_code, project_data = self.manager.load_project(active_file)
+            return True
+        load_code, project_data = self._read_project_for_editor(active_file)
         if load_code == error_code.OK:
             self._show_project(project_data, active_file)
-            return
+            return True
 
-        QMessageBox.warning(self, "加载失败", str(project_data))
-        missing_name = next(
-            (
-                item.get(PROJECT_NAME_KEY, "")
-                for item in registry.get(REGISTRY_CONFIGS_KEY, [])
-                if item.get(REGISTRY_FILE_KEY) == active_file
-            ),
-            "",
-        )
-        missing_project = self.manager.default_project()
-        missing_project[PROJECT_NAME_KEY] = str(missing_name or "")
-        self._show_project(missing_project, active_file)
+        self.initial_load_error = str(project_data)
+        if not os.path.exists(os.path.join(self.manager.program_dir, active_file)):
+            self._show_project(self.manager.default_project(), None)
+        else:
+            self._show_unloaded_project(self.initial_load_error)
+        return False
 
     def _load_project(self, file_name):
-        load_code, project_data = self.manager.load_project(file_name)
+        load_code, project_data = self._read_project_for_editor(file_name)
         if load_code != error_code.OK:
             QMessageBox.warning(self, "加载失败", str(project_data))
             return False
@@ -765,12 +774,59 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self._show_project(project_data, file_name)
         return True
 
+    def _read_project_for_editor(self, file_name):
+        load_code, project_data = self.manager.load_project(file_name)
+        if load_code != error_code.OK:
+            message = ("产品配置文件不存在。" if not os.path.isfile(
+                os.path.join(self.manager.program_dir, file_name)
+            ) else "产品配置无法读取，请检查文件。")
+            return load_code, message
+        # Validate only the shapes consumed by the editor, not save/test requirements.
+        groups = project_data.get(TEST_GROUPS_KEY, [])
+        if not isinstance(groups, list):
+            return error_code.INVALID_DATA_LOADING, "产品配置的端口列表格式错误。"
+        for group in groups:
+            if not isinstance(group, dict):
+                return error_code.INVALID_DATA_LOADING, "产品配置的端口格式错误。"
+            conditions = group.get(TEST_CONDITIONS_KEY, [])
+            if not isinstance(conditions, list):
+                return error_code.INVALID_DATA_LOADING, "产品配置的工况列表格式错误。"
+            for condition in conditions:
+                if not isinstance(condition, dict):
+                    return error_code.INVALID_DATA_LOADING, "产品配置的工况格式错误。"
+                try:
+                    normalize_segmented_analysis(condition)
+                except (TypeError, ValueError):
+                    return error_code.INVALID_DATA_LOADING, "产品配置的分段设置格式错误。"
+        return load_code, project_data
+
+    def _set_editor_enabled(self, enabled):
+        for section in self._editor_sections:
+            section.setEnabled(enabled)
+        self.save_btn.setEnabled(enabled and not self._deletion_blocked)
+        self.save_as_btn.setEnabled(enabled and not self._deletion_blocked)
+
+    def _show_unloaded_project(self, message):
+        self._show_project({TEST_GROUPS_KEY: []}, None)
+        self._has_editable_project = False
+        self._queue_reference_draft = None
+        self.project_name_input.setPlaceholderText("未加载配置")
+        self.port_count_spinbox.setSpecialValueText("—")
+        self._set_editor_enabled(False)
+        self.load_status_label.setText(f"未加载配置：{message}可新建、导入或删除登记。")
+        self.load_status_label.show()
+
     def _show_project(self, project_data, file_name):
         self._loading = True
         self.current_file = file_name
         self._current_project_deleted = False
-        self.save_btn.setEnabled(not self._deletion_blocked)
-        self.save_as_btn.setEnabled(not self._deletion_blocked)
+        self._has_editable_project = True
+        self._set_editor_enabled(True)
+        self.load_status_label.hide()
+        self.project_name_input.setPlaceholderText("请输入项目名称")
+        self.port_count_spinbox.setSpecialValueText("")
+        self.condition_table.setRowCount(0)
+        self.condition_section_title.setText("工况配置")
         self._imported_draft = False
         self.project_data = copy.deepcopy(project_data)
         self.project_name_input.setText(
@@ -1416,7 +1472,8 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self._set_dirty(True)
 
     def _save_project_as(self):
-        if self._deletion_is_blocked() or self._current_project_deleted:
+        if (not self._has_editable_project or self._deletion_is_blocked()
+                or self._current_project_deleted):
             return
         project_data = self.collect_project()
         name_dialog = QInputDialog(self)
@@ -1505,7 +1562,8 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         QMessageBox.warning(self, title, message.split("\n", 1)[0])
 
     def _save_project(self, close_dialog=True):
-        if self._deletion_is_blocked() or self._current_project_deleted:
+        if (not self._has_editable_project or self._deletion_is_blocked()
+                or self._current_project_deleted):
             return False
         project_data = self.collect_project()
         save_file = self.current_file
@@ -1546,8 +1604,16 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self.project_name_input.setText(project_data[PROJECT_NAME_KEY])
         self._set_dirty(False)
         self._emit_projects_changed()
+        active_file = self.manager.load_registry().get(REGISTRY_ACTIVE_FILE_KEY)
+        needs_selection = bool(active_file) and not os.path.isfile(
+            os.path.join(self.manager.program_dir, active_file)
+        )
         if validation["use_warnings"]:
             result_text = "配置已保存，部分测试队列不能自动输出 OK/NG。"
+            if needs_selection:
+                result_text += "\n请在主界面选择使用配置。"
+        elif needs_selection:
+            result_text = "配置已保存，请在主界面选择使用配置。"
         else:
             result_text = "产品测试配置已保存。"
         QMessageBox.information(self, "保存成功", result_text)

@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 import numpy as np
-from PyQt5.QtWidgets import QComboBox, QLineEdit, QPushButton, QWidget
+from PyQt5.QtWidgets import QComboBox, QLineEdit, QMessageBox, QPushButton, QWidget
 
 from consts import error_code
 from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
@@ -902,6 +902,8 @@ def test_main_window_connects_program_changes_before_opening_dialog():
             self.callback = callback
 
     class FakeDialog:
+        initial_load_succeeded = True
+
         def __init__(self, manager, queue_editor, parent, *, contextual_queue_editor_callback,
                      deletion_busy, deletion_completed, deletion_failed, deletion_error, input_device_provider):
             assert manager is None
@@ -964,6 +966,8 @@ def test_main_window_refreshes_button_after_exceptional_dialog_exit():
             return None
 
     class FakeDialog:
+        initial_load_succeeded = True
+
         def __init__(self, _manager, _queue_editor, _parent, *, contextual_queue_editor_callback,
                      deletion_busy, deletion_completed, deletion_failed, deletion_error, input_device_provider):
             assert contextual_queue_editor_callback is _queue_editor
@@ -1127,3 +1131,212 @@ def test_legacy_queue_switch_clears_wav_metadata(monkeypatch):
     assert host.data_struct.wav_calibration_metadata is None
     assert host.data_struct.wav_calibration_metadata_authoritative is False
     assert host.data_struct.wav_calibration_warning_shown is False
+
+
+@pytest.mark.parametrize("configuration", ["missing", "invalid_json", "valid", "empty"])
+def test_main_window_keeps_management_access_after_failed_initial_load(
+    refresh_host, monkeypatch, configuration,
+):
+    from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
+
+    host, _, _, _ = refresh_host
+    manager = host.product_program_manager
+    path = Path(manager.program_dir, "A.json")
+    if configuration == "missing":
+        path.replace(path.with_suffix(".moved"))
+    elif configuration == "invalid_json":
+        path.write_text("{", encoding="utf-8")
+    elif configuration == "empty":
+        registry = manager.load_registry()
+        registry["active_file"] = None
+        manager.save_registry(registry)
+    can_open = configuration in {"valid", "empty"}
+    before = {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()}
+    warnings = []
+    dialogs = []
+    opened = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    def make_dialog(_manager, queue_editor, _parent, **callbacks):
+        dialog = ProductTestProjectConfigDialog(manager, queue_editor, host, **callbacks)
+        monkeypatch.setattr(dialog, "exec", lambda: opened.append(dialog))
+        dialogs.append(dialog)
+        return dialog
+
+    window = SimpleNamespace(
+        sequence_window=host, _open_analysis_model_select=lambda *_: None,
+    )
+    open_editor = _load_main_window_method(
+        "on_product_test_program_config", {"ProductTestProjectConfigDialog": make_dialog},
+    )
+    open_editor(window)
+    assert warnings == []
+    assert len(dialogs) == 1 and not dialogs[0].isVisible()
+    assert opened == [dialogs[0]]
+    assert dialogs[0].initial_load_succeeded is can_open
+    assert dialogs[0].save_btn.isEnabled() is (configuration != "invalid_json")
+    if configuration == "missing":
+        assert dialogs[0].current_file is None
+        assert dialogs[0].project_name_input.text() == ""
+        assert dialogs[0].load_status_label.isHidden()
+    assert dialogs[0].new_project_btn.isEnabled()
+    assert dialogs[0].import_project_btn.isEnabled()
+    assert dialogs[0].delete_project_btn.isEnabled()
+    if not can_open:
+        assert host._product_config_refresh_state == "failed"
+        assert not host.player_btn.isEnabled()
+        assert not getattr(host, "_configuration_deletion_error", "")
+    assert not host._product_test_program_config_dialog_open
+    assert before == {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()}
+
+
+@pytest.mark.parametrize("missing_file", ["A.json", "B.json"])
+def test_selector_excludes_missing_files_without_changing_registration(refresh_host, missing_file):
+    host, project, _, _ = refresh_host
+    manager = host.product_program_manager
+    save_b(host, project)
+    path = Path(manager.program_dir, missing_file)
+    moved = path.with_suffix(".moved")
+    path.replace(moved)
+    before = Path(manager.registry_path).read_bytes()
+    host.update_using_file_combobox()
+    assert host.using_file_combobox.findData(missing_file) == -1
+    assert host.using_file_combobox.count() == 1
+    assert host.using_file_combobox.currentData() == (None if missing_file == "A.json" else "A.json")
+    assert Path(manager.registry_path).read_bytes() == before
+    moved.replace(path)
+    host.update_using_file_combobox()
+    assert host.using_file_combobox.findData(missing_file) >= 0
+    assert host.using_file_combobox.currentData() == (None if missing_file == "A.json" else "A.json")
+    assert Path(manager.registry_path).read_bytes() == before
+
+
+def test_select_valid_product_after_current_file_is_moved(refresh_host):
+    host, project, _, warnings = refresh_host
+    manager = host.product_program_manager
+    save_b(host, project)
+    path = Path(manager.program_dir, "A.json")
+    path.replace(path.with_suffix(".moved"))
+    registry_before = Path(manager.registry_path).read_bytes()
+
+    host.update_using_file_combobox()
+
+    assert host.using_file_combobox.currentIndex() == -1
+    assert host._product_config_refresh_state == "failed"
+    assert not host.player_btn.isEnabled()
+    assert Path(manager.registry_path).read_bytes() == registry_before
+    assert warnings == []
+
+    host.using_file_combobox.setCurrentIndex(host.using_file_combobox.findData("B.json"))
+
+    assert host._product_config_refresh_state == "ready"
+    assert host.player_btn.isEnabled()
+    assert host.active_product_program_file == "B.json"
+    registry = manager.load_registry()
+    assert registry["active_file"] == "B.json"
+    assert {item["file"] for item in registry["configs"]} == {"A.json", "B.json"}
+    assert warnings == []
+
+
+@pytest.mark.parametrize("failure", ["missing", "invalid_json"])
+def test_repaired_current_product_can_be_selected_again(refresh_host, failure):
+    host, _, _, warnings = refresh_host
+    manager = host.product_program_manager
+    path = Path(manager.program_dir, "A.json")
+    original = path.read_bytes()
+    if failure == "missing":
+        path.unlink()
+    else:
+        path.write_text("{", encoding="utf-8")
+    host._refresh_active_product_configuration()
+    assert host._product_config_refresh_state == "failed"
+    path.write_bytes(original)
+    registry_before = Path(manager.registry_path).read_bytes()
+    host.update_using_file_combobox()
+    assert host.using_file_combobox.currentIndex() == -1
+    assert Path(manager.registry_path).read_bytes() == registry_before
+    host.using_file_combobox.setCurrentIndex(host.using_file_combobox.findData("A.json"))
+    assert host._product_config_refresh_state == "ready"
+    assert host.player_btn.isEnabled()
+    assert host.active_product_program_file == "A.json"
+    assert Path(manager.registry_path).read_bytes() == registry_before
+
+
+def test_rejected_switch_clears_selection_when_current_file_is_missing(refresh_host):
+    host, project, _, warnings = refresh_host
+    manager = host.product_program_manager
+    save_b(host, project)
+    Path(manager.program_dir, "A.json").rename(Path(manager.program_dir, "A.moved"))
+    Path(manager.program_dir, "B.json").write_text("{", encoding="utf-8")
+    before = Path(manager.registry_path).read_bytes()
+    host.update_using_file_combobox()
+    host.using_file_combobox.setCurrentIndex(host.using_file_combobox.findData("B.json"))
+    assert warnings
+    assert host.using_file_combobox.currentIndex() == -1
+    assert host._product_config_refresh_state == "failed"
+    assert not host.player_btn.isEnabled()
+    assert Path(manager.registry_path).read_bytes() == before
+
+
+@pytest.mark.parametrize("action", ["save_new", "import_same", "delete_missing"])
+def test_missing_current_product_recovery_flow(refresh_host, monkeypatch, action):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QFileDialog
+    from ui.config_delete_dialog import ConfigDeleteDialog
+    from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
+
+    host, project, _, warnings = refresh_host
+    manager = host.product_program_manager
+    path = Path(manager.program_dir, "A.json")
+    backup = path.parent.parent / "A-backup.json"
+    path.rename(backup)
+    host.update_using_file_combobox()
+    messages = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[2]))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.Yes)
+    dialog = ProductTestProjectConfigDialog(
+        manager, parent=host, deletion_completed=host._configuration_deleted,
+    )
+    dialog.programs_changed.connect(host.on_product_test_program_updated)
+    try:
+        assert dialog.current_file is None
+        if action == "save_new":
+            dialog.project_name_input.setText("B")
+            dialog.result_root_input.setText(project["result_root_directory"])
+            combo, _ = dialog._queue_controls_for_row(0)
+            combo.setCurrentIndex(combo.findData("test"))
+            assert dialog._save_project(close_dialog=False)
+            assert Path(manager.program_dir, "B.json").exists()
+            assert manager.load_registry()["active_file"] == "A.json"
+            assert host.using_file_combobox.currentIndex() == -1
+            assert not host.player_btn.isEnabled()
+            assert messages == ["配置已保存，请在主界面选择使用配置。"]
+            assert warnings == []
+            host.using_file_combobox.setCurrentIndex(host.using_file_combobox.findData("B.json"))
+            assert host._product_config_refresh_state == "ready"
+            assert host.player_btn.isEnabled()
+            assert host.active_product_program_file == "B.json"
+        elif action == "import_same":
+            monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *_: (str(backup), ""))
+            dialog._import_project()
+            assert dialog._save_project(close_dialog=False)
+            assert path.exists()
+            assert host._product_config_refresh_state == "ready"
+            assert host.active_product_program_file == "A.json"
+            assert messages == ["产品测试配置已保存。"]
+        else:
+            def remove(window):
+                window.config_list.item(0).setCheckState(Qt.Checked)
+                window.delete_button.click()
+                return window.result()
+            monkeypatch.setattr(ConfigDeleteDialog, "exec_", remove)
+            dialog._delete_project()
+            assert manager.load_registry() == {"active_file": None, "configs": []}
+            assert host._product_config_refresh_state == "empty"
+            assert backup.exists()
+        assert warnings == []
+        assert not getattr(host, "_configuration_deletion_error", "")
+    finally:
+        dialog._dirty = False
+        dialog.close()
+        dialog.deleteLater()

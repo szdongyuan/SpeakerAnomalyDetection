@@ -82,15 +82,16 @@ class CaptureDiagnostics:
                     self.run, self.attempt, elapsed)
         self.outage_since = None
 
-    def failed(self, exc):
+    def failed(self, exc, *, retry_delay_seconds=None):
         if self.outage_since is None:
             self.outage_since = time.monotonic()
         # str(FFmpegError) may include a global last-error log from another thread.
         logger.warning(
             "Video capture failure: run=%s attempt=%s stage=%s error_type=%s errno=%s "
-            "message=%s packet=%s local_ffmpeg_logs=%s",
+            "message=%s packet=%s local_ffmpeg_logs=%s retry_delay_seconds=%s",
             self.run, self.attempt, self.stage, type(exc).__name__, getattr(exc, "errno", None),
             str(getattr(exc, "strerror", None) or exc)[:1000], self.packet, list(self.logs),
+            retry_delay_seconds,
         )
         if self.stage == "decode" and self.config.recording_root:
             try:
@@ -137,7 +138,3 @@ class CaptureDiagnostics:
         )
         logger.warning("Video capture evidence saved: run=%s attempt=%s directory=%s bytes=%s packets=%s",
                        self.run, self.attempt, destination, self.history_bytes, len(self.history))
-
-    def retry(self):
-        logger.info("Video capture closed; retry scheduled: run=%s attempt=%s delay_seconds=2",
-                    self.run, self.attempt)

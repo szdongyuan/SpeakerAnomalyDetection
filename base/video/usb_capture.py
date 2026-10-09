@@ -133,10 +133,10 @@ class CapturePump:
                     self.on_connection(False, message)
                     last_error = message
                 self.last_progress = time.monotonic()
-                self.diagnostics.failed(exc)
+                self.diagnostics.failed(
+                    exc, retry_delay_seconds=None if self.stop_event.is_set() else 2,
+                )
             self.last_progress = time.monotonic()
-            if not self.stop_event.is_set():
-                self.diagnostics.retry()
             self.stop_event.wait(2)
 
     def _decode(self, source):
