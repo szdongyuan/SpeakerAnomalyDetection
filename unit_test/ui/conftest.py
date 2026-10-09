@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5 import sip
 from PyQt5.QtCore import QCoreApplication, QEvent
-from PyQt5.QtWidgets import QApplication, QMenu
+from PyQt5.QtWidgets import QMenu
 
 
 @pytest.fixture(autouse=True)
@@ -19,11 +19,10 @@ def isolate_recording_defaults(tmp_path, monkeypatch):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def ui_qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
-    _close_test_windows(app.topLevelWidgets())
-    app.processEvents()
+def ui_qapp(qt_app):
+    yield qt_app
+    _close_test_windows(qt_app.topLevelWidgets())
+    qt_app.processEvents()
 
 
 def _close_test_windows(windows):

@@ -85,16 +85,34 @@ def test_unsaved_replacement_keeps_saved_reference(files):
         service.delete(queue_target(service), drafts=(QueueReferenceDraft(product(), products / "A.json"),))
 
 
-@pytest.mark.parametrize("missing", [True, False])
-def test_incomplete_product_inventory_blocks_queue(files, missing):
-    service, products, registry, _, target = files
-    if missing:
+@pytest.mark.parametrize("state", ["unregistered", "invalid", "missing_registry"])
+def test_unregistered_product_files_do_not_block_queue_deletion(files, state):
+    service, products, registry, queues, target = files
+    unregistered = products / "1.json"
+    write(unregistered, product("Q"))
+    if state == "invalid":
+        unregistered.write_text("{", encoding="utf-8")
+    if state == "missing_registry":
         registry.unlink()
+    before = {path.name: path.read_bytes() for path in products.iterdir()}
+    service.delete(queue_target(service))
+    assert not target.exists()
+    assert json.loads(queues.read_text()) == {"using_config_path": None}
+    assert before == {path.name: path.read_bytes() for path in products.iterdir()}
+
+
+@pytest.mark.parametrize("broken", ["registry", "registered_file", "missing_file"])
+def test_incomplete_registered_references_block_queue_deletion(files, broken):
+    service, products, registry, queues, target = files
+    if broken == "missing_file":
+        (products / "A.json").unlink()
     else:
-        write(products / "unregistered.json", product("Q"))
-    with pytest.raises(ConfigDeletionError, match="不完整"):
+        path = registry if broken == "registry" else products / "A.json"
+        path.write_text("{", encoding="utf-8")
+    before = queues.read_bytes()
+    with pytest.raises(ConfigDeletionError):
         service.delete(queue_target(service))
-    assert target.exists()
+    assert target.exists() and queues.read_bytes() == before
 
 
 def test_missing_queue_alias_is_blocked_even_when_loader_relocates(files):
@@ -130,6 +148,39 @@ def test_same_target_aliases_are_removed_together_and_selection_cleared(files):
     service.delete(selected)
     assert not target.exists() and other.exists()
     assert json.loads(queues.read_text()) == {"different": str(other), "using_config_path": None}
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_builtin_default_is_hidden_by_path_without_hiding_user_names(
+    files, tmp_path, monkeypatch, exists,
+):
+    service, _, _, queues, target = files
+    default = tmp_path / "ui" / "ui_config" / "sequence_config.json"
+    if exists:
+        write(default, [])
+    monkeypatch.setattr("base.config_deletion.DEFAULT_DIR", str(tmp_path))
+    service = ConfigDeletionService(service.manager)
+    same_filename = target.with_name("sequence_config.json")
+    write(same_filename, [])
+    registry = {
+        "builtin": str(default),
+        "builtin_alias": os.path.relpath(default, queues.parent),
+        "默认配置": str(target),
+        "sequence_config": str(same_filename),
+        "using_config_path": str(default),
+    }
+    write(queues, registry)
+    before = queues.read_bytes()
+    targets = service.list_targets("queue")
+    assert {item.names for item in targets} == {("默认配置",), ("sequence_config",)}
+    assert all(item.remove_file for item in targets)
+    assert queues.read_bytes() == before
+    service.delete(next(item for item in targets if "默认配置" in item.names))
+    registry.pop("默认配置")
+    assert json.loads(queues.read_text()) == registry
+    assert default.exists() is exists
+    if exists:
+        assert json.loads(default.read_text()) == []
 
 
 def test_external_target_only_removed(files, tmp_path):
@@ -215,8 +266,10 @@ def test_unreadable_file_is_not_treated_as_missing(files, monkeypatch):
         return real_lstat(path, *args, **kwargs)
     monkeypatch.setattr("base.config_deletion.os.lstat", denied)
     before = queues.read_bytes()
+    selected = queue_target(service)
+    assert selected.error and not selected.remove_file
     with pytest.raises(ConfigDeletionError):
-        service.list_targets("queue")
+        service.delete(selected)
     assert queues.read_bytes() == before
 
 

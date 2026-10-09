@@ -873,6 +873,9 @@ class ProductTestProjectConfigManager(object):
         info["acquisition_mode"] = acquisition_mode
         acquisition_detail = acquisition.get("detail", {})
         analysis_list = sequence_data.get("analysis_list", {})
+        if not isinstance(analysis_list, dict):
+            info["reason"] = "测试队列分析配置格式错误"
+            return info
         info["analysis_list"] = analysis_list
         try:
             validate_analysis_config(analysis_list)

@@ -3,9 +3,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PyQt5 import sip
 from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, Qt
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QComboBox, QFileDialog, QInputDialog, QLabel, QMessageBox
+from PyQt5.QtWidgets import QComboBox, QFileDialog, QInputDialog, QLabel, QMenu, QMessageBox
 
 from base.load_config import LoadUiConfig
 from base.sequence_queue_references import SequenceQueueReferenceScanner
@@ -22,15 +23,16 @@ from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 
 
 @pytest.fixture(scope="module")
-def app():
-    application = QApplication.instance() or QApplication([])
-    yield application
-    # Destroy deferred test dialogs before the module's QApplication is released.
-    windows = list(application.topLevelWidgets())
+def app(qt_app):
+    yield qt_app
+    # Leave Qt-owned widgets and pyqtgraph menus to their actual owners.
+    windows = [widget for widget in qt_app.topLevelWidgets()
+               if widget.parent() is None and sip.ispyowned(widget)
+               and not isinstance(widget, QMenu)]
     for window in windows:
         window.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-    application.processEvents()
+    qt_app.processEvents()
 
 
 def make_manager(tmp_path, *, input_device_provider=lambda: {"backend": VE_BACKEND}):
@@ -1654,7 +1656,9 @@ def test_unavailable_queue_opens_editor_in_new_mode(app, tmp_path):
     close_dialog(dialog)
 
 
-def test_main_selector_uses_project_name_from_registry(app):
+def test_main_selector_uses_project_name_from_registry(app, tmp_path):
+    manager = make_manager(tmp_path)
+    Path(manager.program_dir, "PB-A01充电宝.json").write_text("{}", encoding="utf-8")
     combobox = QComboBox()
     registry = {
         "active_file": "PB-A01充电宝.json",
@@ -1668,6 +1672,7 @@ def test_main_selector_uses_project_name_from_registry(app):
     host = SimpleNamespace(
         using_file_combobox=combobox,
         _get_product_program_registry=lambda: registry,
+        _get_product_program_manager=lambda: manager,
     )
 
     SequenceWidgetConfigOpsMixin.add_file_to_using_file_combobox(host)
@@ -1737,5 +1742,173 @@ def test_acquisition_late_manager_failure_routes_full_conflict(app, tmp_path, mo
         assert dialog.current_file == file_name and dialog._dirty
         assert dialog.collect_project() == contents and not accepted
         assert {p: p.read_bytes() for p in Path(manager.program_dir).glob("*.json")} == before
+    finally:
+        close_dialog(dialog)
+
+
+@pytest.mark.parametrize("damage", ["missing", "invalid_json", "groups_null", "group_scalar", "conditions_null", "condition_scalar", "segments_invalid"])
+def test_unreadable_project_keeps_management_access(app, tmp_path, monkeypatch, damage):
+    manager = make_manager(tmp_path)
+    name = prepare_project(manager, tmp_path)
+    path = Path(manager.program_dir, name)
+    if damage == "missing":
+        path.rename(path.with_suffix(".moved"))
+    elif damage == "invalid_json":
+        path.write_text("{", encoding="utf-8")
+    else:
+        data = manager.load_project(name)[1]
+        if damage == "groups_null":
+            data["test_groups"] = None
+        elif damage == "group_scalar":
+            data["test_groups"] = [1]
+        elif damage == "conditions_null":
+            data["test_groups"][0]["test_conditions"] = None
+        elif damage == "condition_scalar":
+            data["test_groups"][0]["test_conditions"] = [1]
+        else:
+            data["test_groups"][0]["test_conditions"][0]["segmented_analysis"] = {"mode": []}
+        assert LoadUiConfig.save_data_to_json(data, str(path))
+    before = {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()}
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    dialog = ProductTestProjectConfigDialog(manager)
+    try:
+        assert not dialog.initial_load_succeeded
+        assert dialog.current_file is None
+        assert dialog.project_name_input.text() == ""
+        blank_draft = damage == "missing"
+        assert dialog.condition_table.rowCount() == (1 if blank_draft else 0)
+        assert dialog.project_name_input.isEnabled() is blank_draft
+        assert dialog.save_btn.isEnabled() is blank_draft
+        assert dialog.save_as_btn.isEnabled() is blank_draft
+        assert dialog.load_status_label.isHidden() is blank_draft
+        assert dialog.new_project_btn.isEnabled()
+        assert dialog.import_project_btn.isEnabled()
+        assert dialog.delete_project_btn.isEnabled()
+        if not blank_draft:
+            assert dialog._save_project(close_dialog=False) is False
+        assert warnings == []
+        dialog.reject()
+        assert before == {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()}
+    finally:
+        close_dialog(dialog)
+
+
+@pytest.mark.parametrize("action", ["new", "import", "cancel_import", "delete"])
+@pytest.mark.parametrize("damage", ["missing", "invalid_json"])
+def test_failed_load_reuses_existing_actions(app, tmp_path, monkeypatch, action, damage):
+    from ui.config_delete_dialog import ConfigDeleteDialog
+    manager = make_manager(tmp_path)
+    name = prepare_project(manager, tmp_path)
+    path = Path(manager.program_dir, name)
+    moved = path.with_suffix(".moved")
+    path.rename(moved)
+    if damage == "invalid_json":
+        path.write_text("{", encoding="utf-8")
+    before = Path(manager.registry_path).read_bytes()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_: None)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.Yes)
+    dialog = ProductTestProjectConfigDialog(manager)
+    try:
+        assert dialog.save_btn.isEnabled() is (damage == "missing")
+        if action == "delete":
+            def remove_missing(window):
+                item = window.config_list.item(0)
+                assert item.data(Qt.UserRole).remove_file is (damage != "missing")
+                item.setCheckState(Qt.Checked)
+                window.delete_button.click()
+                return window.result()
+            monkeypatch.setattr(ConfigDeleteDialog, "exec_", remove_missing)
+            dialog.delete_project_btn.click()
+            assert manager.load_registry() == {"active_file": None, "configs": []}
+            assert moved.exists()
+            assert dialog.save_btn.isEnabled() is (damage == "missing")
+        elif action == "new":
+            dialog.new_project_btn.click()
+            assert dialog.current_file is None
+            assert dialog.project_name_input.isEnabled()
+            assert dialog.save_btn.isEnabled()
+            assert dialog.save_as_btn.isEnabled()
+            assert dialog.condition_table.rowCount() == 1
+            assert Path(manager.registry_path).read_bytes() == before
+        else:
+            monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *_: (str(moved) if action == "import" else "", ""))
+            dialog.import_project_btn.click()
+            assert Path(manager.registry_path).read_bytes() == before
+            if action == "import":
+                assert dialog.current_file is None and dialog._imported_draft
+                assert dialog.save_btn.isEnabled()
+                assert dialog._save_project(close_dialog=False)
+                assert path.exists()
+                assert manager.load_registry()["active_file"] == name
+            else:
+                assert dialog.save_btn.isEnabled() is (damage == "missing")
+                assert dialog.condition_table.rowCount() == (1 if damage == "missing" else 0)
+    finally:
+        close_dialog(dialog)
+
+
+def test_missing_queue_does_not_prevent_editing_product(app, tmp_path):
+    manager = make_manager(tmp_path)
+    name = prepare_project(manager, tmp_path)
+    assert LoadUiConfig.save_data_to_json({}, manager.queue_registry_path)
+    dialog = ProductTestProjectConfigDialog(manager)
+    try:
+        assert dialog.initial_load_succeeded
+        assert dialog.current_file == name
+        assert dialog.project_name_input.isEnabled()
+        assert dialog.save_btn.isEnabled()
+        assert dialog.condition_table.rowCount() > 0
+    finally:
+        close_dialog(dialog)
+
+
+def test_explicit_structurally_invalid_load_preserves_current_draft(app, tmp_path, monkeypatch):
+    manager = make_manager(tmp_path)
+    name = prepare_project(manager, tmp_path)
+    dialog = ProductTestProjectConfigDialog(manager)
+    try:
+        dialog.project_name_input.setText("Unsaved draft")
+        dialog._set_dirty(True)
+        bad = manager.default_project()
+        bad["test_groups"] = None
+        assert LoadUiConfig.save_data_to_json(bad, str(Path(manager.program_dir, "bad.json")))
+        warnings = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+        assert dialog._load_project("bad.json") is False
+        assert dialog.current_file == name
+        assert dialog.project_name_input.text() == "Unsaved draft"
+        assert dialog._dirty
+        assert len(warnings) == 1
+    finally:
+        close_dialog(dialog)
+
+
+def test_missing_file_blank_draft_cannot_silently_replace_old_registration(app, tmp_path, monkeypatch):
+    manager = make_manager(tmp_path)
+    name = prepare_project(manager, tmp_path)
+    path = Path(manager.program_dir, name)
+    path.rename(path.with_suffix(".moved"))
+    before = Path(manager.registry_path).read_bytes()
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+    dialog = ProductTestProjectConfigDialog(manager)
+    try:
+        assert dialog.current_file is None and not dialog._imported_draft
+        dialog.project_name_input.setText(Path(name).stem)
+        dialog.result_root_input.setText(str(tmp_path / "results"))
+        combo, _ = dialog._queue_controls_for_row(0)
+        combo.setCurrentIndex(1)
+        assert dialog._save_project(close_dialog=False) is False
+        assert "已存在" in warnings[-1]
+        assert not path.exists()
+        assert Path(manager.registry_path).read_bytes() == before
+        dialog.project_name_input.setText("Recovered")
+        assert dialog._save_project(close_dialog=False)
+        assert Path(manager.program_dir, "Recovered.json").exists()
+        assert manager.load_registry()["active_file"] == name
+        assert not path.exists()
     finally:
         close_dialog(dialog)

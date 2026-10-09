@@ -14,6 +14,10 @@ from consts.product_test_project_consts import (
 )
 
 
+class ProductTestConfigurationError(ValueError):
+    """The saved product cannot be used until its configuration is repaired."""
+
+
 @dataclass(frozen=True)
 class ProductTestRefreshSnapshot:
     active_file: str
@@ -32,18 +36,23 @@ def build_product_test_refresh_snapshot(manager, active_file):
 
     load_code, project = manager.load_project(active_file)
     if load_code != error_code.OK or not isinstance(project, dict):
-        raise ValueError(f"产品配置无法读取：{active_file}")
-    queue_names = {
-        str(condition.get(TEST_QUEUE_KEY) or "").strip()
-        for _, _, _, condition in iter_test_conditions(project)
-    }
+        raise ProductTestConfigurationError(f"产品配置无法读取：{active_file}")
+    try:
+        queue_names = {
+            str(condition.get(TEST_QUEUE_KEY) or "").strip()
+            for _, _, _, condition in iter_test_conditions(project)
+        }
+    except TypeError as error:
+        raise ProductTestConfigurationError(
+            f"产品配置的端口或工况列表格式错误：{active_file}"
+        ) from error
     catalog = manager.load_queue_catalog(queue_names=queue_names)
     validation = manager.validate_project(project, active_file, queue_catalog=catalog)
     if not validation["is_usable"]:
-        raise ValueError("\n".join(validation["use_errors"]) or "产品配置不可用")
+        raise ProductTestConfigurationError("\n".join(validation["use_errors"]) or "产品配置不可用")
     for name, info in catalog.items():
         if not isinstance(info["data"][0].get("seq1"), dict):
-            raise ValueError(f"测试队列缺少 seq1：{name}")
+            raise ProductTestConfigurationError(f"测试队列缺少 seq1：{name}")
 
     project = manager._normalize_project(project)
     conditions = flatten_test_conditions(project)

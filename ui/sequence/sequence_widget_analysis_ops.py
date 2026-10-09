@@ -1313,9 +1313,7 @@ class SequenceWidgetAnalysisOpsMixin(
             QMessageBox.warning(
                 self,
                 "提示",
-                "未找到可用配置。\n"
-                "请先在上方【使用配置】下拉框中选择配置；\n"
-                "如无可选项，请到【功能-测试队列】中保存或导入配置。",
+                self._missing_configuration_message(),
             )
             return
         manual_direction_fallback = getattr(self, "_is_manual_direction_fallback_active", None)
@@ -2305,9 +2303,7 @@ class SequenceWidgetAnalysisOpsMixin(
             QMessageBox.warning(
                 self,
                 "提示",
-                "未找到可用配置。\n"
-                "请先在上方【使用配置】下拉框中选择配置；\n"
-                "如无可选项，请到【功能-测试队列】中保存或导入配置。",
+                self._missing_configuration_message(),
             )
             return True
 

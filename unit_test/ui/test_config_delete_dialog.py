@@ -72,6 +72,24 @@ def test_reference_details_block_deletion(files, ui_qapp):
     dialog.close()
 
 
+def test_unregistered_product_does_not_disable_queue_deletion(files, ui_qapp):
+    service, products, registry, queues, target = files
+    unregistered = products / "1.json"
+    write(unregistered, product("Q"))
+    before = registry.read_bytes(), unregistered.read_bytes()
+    dialog = ConfigDeleteDialog(service, "queue")
+    item = dialog.config_list.item(0)
+    assert item.flags() & Qt.ItemIsUserCheckable
+    assert not item.data(STATUS_ROLE)
+    choose(dialog, "Q")
+    assert dialog.delete_button.isEnabled()
+    dialog.delete_button.click()
+    assert not target.exists()
+    assert json.loads(queues.read_text()) == {"using_config_path": None}
+    assert before == (registry.read_bytes(), unregistered.read_bytes())
+    dialog.close()
+
+
 @pytest.mark.parametrize("referenced", [False, True])
 def test_native_checkbox_click_and_space_respect_availability(files, ui_qapp, referenced):
     service, products, _, _, target = files
@@ -116,8 +134,10 @@ def test_referenced_row_does_not_block_deleting_other_checked_queues(files, ui_q
     blocked = dialog.config_list.item(0)
     assert not blocked.flags() & Qt.ItemIsUserCheckable
     choose(dialog, "other")
+    summary = dialog.details.toPlainText()
     dialog.config_list.setCurrentItem(blocked)
-    assert "A / A口 / 档位1" in dialog.details.toPlainText()
+    assert dialog.details.toPlainText() == summary
+    assert "A / A口 / 档位1" in blocked.toolTip()
     assert dialog.selection_count.text() == "已选 1 项"
     assert dialog.delete_button.isEnabled()
     dialog.delete_button.click()
@@ -222,7 +242,7 @@ def test_product_editor_keeps_other_draft_and_clears_deleted_draft(files, ui_qap
     def execute(dialog):
         choose(dialog, "A" if delete_current else "B")
         assert ("未保存的修改" in dialog.details.toPlainText()) is delete_current
-        assert ("关闭产品测试配置窗口" in dialog.details.toPlainText()) is delete_current
+        assert ("返回主界面" in dialog.details.toPlainText()) is delete_current
         dialog.delete_button.click()
         assert editor.isVisible()  # Close the owner only after the deletion dialog finishes.
         return dialog.result()
@@ -456,8 +476,14 @@ def test_multiselect_mixes_internal_deletion_and_external_removal(files, ui_qapp
     write(external, [])
     write(registry, {"Q": str(target), "outside": str(external), "using_config_path": str(target)})
     dialog = ConfigDeleteDialog(service, "queue")
+    choose(dialog, "outside")
+    assert not dialog.config_list.currentItem().data(STATUS_ROLE)
+    assert dialog.delete_button.text() == "移除"
+    assert dialog.details.toPlainText() == "已选 1 项：移除 1 条列表记录，保留原文件。"
     for index in range(dialog.config_list.count()):
         dialog.config_list.item(index).setCheckState(Qt.Checked)
+    assert dialog.delete_button.text() == "删除"
+    assert "移除 1 条列表记录，保留原文件。" in dialog.details.toPlainText()
     dialog.delete_button.click()
     assert dialog.result() == QDialog.Accepted
     assert not target.exists() and external.exists()
@@ -600,7 +626,10 @@ def test_product_editor_multiselect_clears_current_only_after_success(files, ui_
     def execute(dialog):
         choose(dialog, "A")
         choose(dialog, "B")
-        assert "未保存的修改" in dialog.details.toPlainText()
+        assert dialog.details.toPlainText() == (
+            "已选 2 项：删除 2 个配置文件。\n保留测试队列和测试数据。\n"
+            "删除当前配置将丢弃未保存的修改，并返回主界面。"
+        )
         dialog.delete_button.click()
         assert len(dialog.completed_targets) == 2
         assert editor.isVisible()
@@ -619,11 +648,11 @@ def test_product_delete_notice_follows_checked_current_config(files, ui_qapp):
     service, _, _, _, _ = files
     dialog = ConfigDeleteDialog(service, "product", current_product_file="A.json")
     choose(dialog, "B")
-    assert "关闭产品测试配置窗口" not in dialog.details.toPlainText()
+    assert "返回主界面" not in dialog.details.toPlainText()
     choose(dialog, "A")
-    assert "删除当前配置后，将关闭产品测试配置窗口，返回主界面。" in dialog.details.toPlainText()
+    assert "删除当前配置将返回主界面。" in dialog.details.toPlainText()
     dialog.config_list.currentItem().setCheckState(Qt.Unchecked)
-    assert "关闭产品测试配置窗口" not in dialog.details.toPlainText()
+    assert "返回主界面" not in dialog.details.toPlainText()
     dialog.close()
 
 
@@ -640,7 +669,7 @@ def test_product_editor_close_depends_on_edited_file_not_active_file(
 
     def execute(dialog):
         choose(dialog, target_name)
-        assert ("关闭产品测试配置窗口" in dialog.details.toPlainText()) is (target_name == "B")
+        assert ("返回主界面" in dialog.details.toPlainText()) is (target_name == "B")
         dialog.delete_button.click()
         return dialog.result()
 
@@ -755,3 +784,87 @@ def test_real_modal_product_delete_closes_editor_after_batch(files, ui_qapp):
     assert not editor.isVisible() and editor.result() == QDialog.Accepted
     assert not (products / "A.json").exists() and not (products / "B.json").exists()
     editor.close()
+
+
+@pytest.mark.parametrize("kind", ["product", "queue"])
+def test_missing_file_summary(files, ui_qapp, kind):
+    service, products, _, queues, target = files
+    if kind == "product":
+        missing, name, normal = products / "A.json", "A", "B"
+    else:
+        missing, name, normal = target, "Q", "other"
+        other = target.with_name("other.json")
+        write(other, [])
+        write(queues, {"Q": str(target), "other": str(other)})
+    missing.unlink()
+    dialog = ConfigDeleteDialog(service, kind)
+    choose(dialog, name)
+    assert dialog.delete_button.text() == "移除"
+    assert dialog.details.toPlainText() == "已选 1 项：清理 1 条失效记录（配置文件不存在）。"
+    choose(dialog, normal)
+    assert dialog.delete_button.text() == "删除"
+    assert dialog.details.toPlainText().startswith(
+        "已选 2 项：删除 1 个配置文件。\n清理 1 条失效记录（配置文件不存在）。\n"
+    )
+    assert "保留原文件" not in dialog.details.toPlainText()
+    dialog.close()
+
+
+def test_reference_focus_preserves_checked_summary(files, ui_qapp):
+    service, products, _, queues, target = files
+    blocked = target.with_name("blocked.json")
+    write(blocked, [])
+    write(queues, {"Q": str(target), "blocked": str(blocked)})
+    write(products / "A.json", product("blocked"))
+    dialog = ConfigDeleteDialog(service, "queue")
+    choose(dialog, "Q")
+    checked = dialog.config_list.currentItem()
+    message = dialog.details.toPlainText()
+    item = dialog.config_list.item(1)
+    dialog.config_list.setCurrentItem(item)
+    assert dialog.details.toPlainText() == message
+    assert dialog.delete_button.isEnabled()
+    assert [t.names for t in dialog.checked_targets()] == [("Q",)]
+    assert "A / A口 / 档位1" in item.toolTip()
+    checked.setCheckState(Qt.Unchecked)
+    assert "A / A口 / 档位1" in dialog.details.toPlainText()
+    assert not dialog.delete_button.isEnabled()
+    dialog.close()
+
+
+def test_many_checked_items_keep_compact_summary(files, ui_qapp):
+    service, _, _, queues, target = files
+    registry = {}
+    for index in range(25):
+        path = target.with_name(f"Q{index}.json")
+        write(path, [])
+        registry[f"名称较长的测试队列配置{index}"] = str(path)
+    write(queues, registry)
+    dialog = ConfigDeleteDialog(service, "queue")
+    for index in range(dialog.config_list.count()):
+        dialog.config_list.item(index).setCheckState(Qt.Checked)
+    assert dialog.details.toPlainText() == (
+        "已选 25 项：删除 25 个配置文件。\n保留录音和测试结果。"
+    )
+    dialog.close()
+
+
+def test_mixed_file_states_have_separate_counts(files, ui_qapp):
+    service, _, _, queues, target = files
+    external = target.parent.parent / "external.json"
+    missing = target.with_name("missing.json")
+    write(external, [])
+    write(queues, {"Q": str(target), "external": str(external), "missing": str(missing)})
+    dialog = ConfigDeleteDialog(service, "queue")
+    for name in ("Q", "external", "missing"):
+        choose(dialog, name)
+    assert dialog.details.toPlainText() == (
+        "已选 3 项：删除 1 个配置文件。\n"
+        "清理 1 条失效记录（配置文件不存在）。\n"
+        "移除 1 条列表记录，保留原文件。\n"
+        "保留录音和测试结果。"
+    )
+    dialog.delete_button.click()
+    assert not target.exists() and external.exists() and not missing.exists()
+    assert json.loads(queues.read_text()) == {}
+    dialog.close()

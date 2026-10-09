@@ -31,6 +31,7 @@ class DeletionTarget:
     file_stamp: tuple | None
     registry_stamp: str
     remove_file: bool
+    error: str = ""
 
     @property
     def action(self):
@@ -80,6 +81,7 @@ class ConfigDeletionService:
         self.protected_paths = {
             queue_path_key(path, DEFAULT_DIR) for path in (
                 self.manager.registry_path, self.manager.queue_registry_path,
+                os.path.join(DEFAULT_DIR, "ui", "ui_config", "sequence_config.json"),
             )
         }
 
@@ -103,20 +105,10 @@ class ConfigDeletionService:
                     or filename.casefold() in seen):
                 raise ConfigDeletionError("产品配置列表存在无效或重复记录")
             seen.add(filename.casefold())
-        active = registry.get("active_file")
-        if active is not None and (not isinstance(active, str)
-                                   or (active and active.casefold() not in seen)):
-            raise ConfigDeletionError("当前启用的产品配置记录无效")
         return registry
 
     def _queue_registry(self):
         registry = _read_registry(self.manager.queue_registry_path, missing={})
-        for name, path in registry.items():
-            if name == "using_config_path" and path is None:
-                continue
-            if not name.strip():
-                raise ConfigDeletionError("队列名称无效")
-            exact_path(path, os.path.dirname(self.manager.queue_registry_path))
         return registry
 
     def _target(self, kind, key, path, names, registry):
@@ -124,7 +116,7 @@ class ConfigDeletionService:
                 else os.path.dirname(self.manager.queue_registry_path))
         path = exact_path(path, root)
         identity = queue_path_key(path, root)
-        if identity in self.protected_paths or not path.lower().endswith(".json"):
+        if identity in self.protected_paths:
             raise ConfigDeletionError("内置模板或配置列表不能删除")
         try:
             info = os.lstat(path)
@@ -149,7 +141,7 @@ class ConfigDeletionService:
         )
         return DeletionTarget(
             kind, key, path, tuple(names), file_stamp, _stamp(registry),
-            info is not None and inside and not linked,
+            info is not None and inside and not linked and path.lower().endswith(".json"),
         )
 
     def list_targets(self, kind):
@@ -163,45 +155,47 @@ class ConfigDeletionService:
         registry = self._queue_registry()
         directory = os.path.dirname(self.manager.queue_registry_path)
         groups = {}
+        targets = []
         for name, value in registry.items():
             if name == "using_config_path":
                 continue
-            path = exact_path(value, directory)
-            groups.setdefault(os.path.normcase(path), (path, []))[1].append(name)
-        targets = []
-        for key, (path, names) in groups.items():
-            if queue_path_key(path, directory) in self.protected_paths:
+            try:
+                if not name.strip():
+                    raise ConfigDeletionError("队列名称无效")
+                path = exact_path(value, directory)
+            except ConfigDeletionError as error:
+                targets.append(DeletionTarget(
+                    kind, f"invalid:{name}", "", (name,), None, _stamp(registry),
+                    False, str(error),
+                ))
                 continue
-            targets.append(self._target(kind, key, path, names, registry))
+            groups.setdefault(os.path.normcase(path), (path, []))[1].append(name)
+        for key, (path, names) in groups.items():
+            try:
+                if queue_path_key(path, directory) in self.protected_paths:
+                    continue
+                targets.append(self._target(kind, key, path, names, registry))
+            except ConfigDeletionError as error:
+                targets.append(DeletionTarget(
+                    kind, key, path, tuple(names), None, _stamp(registry),
+                    False, str(error),
+                ))
         return targets
-
-    def _check_product_inventory(self):
-        registry = self._product_registry(allow_missing=True)
-        known = {entry["file"].casefold() for entry in registry["configs"]}
-        try:
-            with os.scandir(self.manager.program_dir) as entries:
-                unknown = [entry.name for entry in entries
-                           if entry.name.lower().endswith(".json")
-                           and os.path.normcase(entry.path) != os.path.normcase(self.manager.registry_path)
-                           and entry.name.casefold() not in known]
-        except FileNotFoundError:
-            unknown = []
-        except OSError as error:
-            raise ConfigDeletionError(f"无法检查产品配置目录：{error}") from error
-        if unknown:
-            raise ConfigDeletionError("产品配置列表不完整，请先检查未登记文件：" + "、".join(unknown))
 
     def check(self, target, *, drafts=()):
         current = next((item for item in self.list_targets(target.kind)
                         if item.key == target.key), None)
         if current != target:
             raise ConfigDeletionError("配置或文件已变化，请重新选择并确认")
+        if target.error:
+            raise ConfigDeletionError(target.error)
         if target.kind == "queue":
-            self._check_product_inventory()
+            # Registered products and editor drafts define queue references.
             result = self.scanner.find_references(target.path, drafts=drafts, aliases=target.names)
-            if result.issues:
+            blocking_issues = [issue for issue in result.issues if issue.blocks_deletion]
+            if blocking_issues:
                 names = list(dict.fromkeys(issue.product_name or os.path.basename(issue.path or "")
-                                           for issue in result.issues))
+                                           for issue in blocking_issues))
                 raise ConfigDeletionError("无法完整检查队列引用，请检查配置：" + "、".join(names))
             if result.references:
                 rows = list(dict.fromkeys(
@@ -223,15 +217,19 @@ class ConfigDeletionService:
         updated = copy.deepcopy(original)
         if target.kind == "product":
             updated["configs"] = [entry for entry in updated["configs"] if entry["file"] != target.key]
-            if str(updated.get("active_file") or "").casefold() == target.key.casefold():
+            active = updated.get("active_file")
+            remaining = {entry["file"].casefold() for entry in updated["configs"]}
+            if not isinstance(active, str) or active.casefold() not in remaining:
                 updated["active_file"] = None
         else:
             for name in target.names:
                 del updated[name]
             selection = updated.get("using_config_path")
             directory = os.path.dirname(registry_path)
-            if (selection and queue_path_key(selection, directory)
-                    == queue_path_key(target.path, directory)):
+            if selection is not None and (
+                not isinstance(selection, str) or not selection.strip() or "\0" in selection
+                or queue_path_key(selection, directory) == queue_path_key(target.path, directory)
+            ):
                 updated["using_config_path"] = None
         if not _write_registry(updated, registry_path):
             raise ConfigDeletionError("配置列表更新失败，未删除文件")

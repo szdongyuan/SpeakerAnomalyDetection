@@ -8,7 +8,10 @@ from PyQt5.QtWidgets import QApplication, QMessageBox, QLineEdit
 
 from base.load_config import LoadUiConfig
 from base.product_test_project_config import ProductTestProjectConfigManager
-from base.product_test_config_refresh import build_product_test_refresh_snapshot
+from base.product_test_config_refresh import (
+    ProductTestConfigurationError,
+    build_product_test_refresh_snapshot,
+)
 from consts import error_code
 from consts.product_test_project_consts import (
     EXPORT_RAW_AUDIO_CSV_KEY,
@@ -103,22 +106,43 @@ class SequenceWidgetConfigOpsMixin:
             self.sequence_config = []
             self.analysis_config = {}
 
-    def _product_configuration_apply_failed(self, error):
+    def _product_configuration_apply_failed(self, error, *, deleted_target=None, show_warning=True):
         self._product_config_refresh_state = "failed"
         self._product_config_refresh_error = str(error)
         self.default_logger.error("Product configuration apply failed: %s", error)
         self._refresh_test_mode_availability()
         self.update_player_btn_is_paused()
+        if not show_warning:
+            return
         first_error = str(error).split("\n", 1)[0]
+        title = "配置无法应用"
+        message = f"{first_error}\n请修正配置并保存，再开始新测试。"
+        if deleted_target is not None:
+            title = f"配置已{deleted_target.action}"
+            message = (
+                f"当前产品配置无效，暂不能测试：{first_error}\n"
+                "可修改或删除该产品配置。"
+            )
         dialog = QMessageBox(
-            QMessageBox.Warning, "配置无法应用",
-            f"{first_error}\n请修正配置并保存，再开始新测试。",
-            QMessageBox.Ok, self,
+            QMessageBox.Warning, title, message, QMessageBox.Ok, self,
         )
         dialog.button(QMessageBox.Ok).setText("确定")
         dialog.exec_()
 
-    def _refresh_active_product_configuration(self):
+    def _missing_configuration_message(self):
+        if self.using_file_combobox.count() == 0:
+            return "暂无可用配置。"
+        active_file = getattr(self, "active_product_program_file", None)
+        if active_file:
+            manager = self._get_product_program_manager()
+            if not os.path.isfile(os.path.join(manager.program_dir, active_file)):
+                return f"产品配置“{active_file}”不存在，请选择其他配置或恢复文件。"
+        error = str(getattr(self, "_product_config_refresh_error", "") or "").split("\n", 1)[0]
+        if error:
+            return f"{error}\n请选择其他产品配置，或检查当前配置。"
+        return "请先选择产品配置，或到【功能-产品测试配置】中新建或导入。"
+
+    def _refresh_active_product_configuration(self, *, deleted_target=None):
         """Compare before changing any runtime parameters, results or waveform state."""
         if getattr(self, "_configuration_deletion_error", ""):
             return False
@@ -126,10 +150,19 @@ class SequenceWidgetConfigOpsMixin:
         registry = manager.load_registry()
         try:
             snapshot = build_product_test_refresh_snapshot(manager, registry.get("active_file"))
+        except ProductTestConfigurationError as error:
+            # Invalid product data disables testing, but must remain repairable.
+            self._product_configuration_apply_failed(error, deleted_target=deleted_target)
+            return False
         except Exception as error:
             self._product_configuration_apply_failed(error)
+            if deleted_target is not None:
+                raise
             return False
-        return self._apply_product_test_snapshot(snapshot)
+        applied = self._apply_product_test_snapshot(snapshot)
+        if deleted_target is not None and self._product_config_refresh_state == "failed":
+            raise RuntimeError(self._product_config_refresh_error)
+        return applied
 
     def _apply_product_test_snapshot(self, snapshot):
         if getattr(self, "_configuration_deletion_error", ""):
@@ -225,9 +258,8 @@ class SequenceWidgetConfigOpsMixin:
             self.using_config_path = None
             self.sequence_config = []
             self.analysis_config = {}
-        self.on_product_test_program_updated()
-        if self._product_config_refresh_state == "failed":
-            raise RuntimeError(self._product_config_refresh_error)
+        self.update_using_file_combobox()
+        self._refresh_active_product_configuration(deleted_target=target)
 
     def _current_ve_recording_device(self, device):
         """Resolve the loaded queue, reading the injected profile only for a missing rate."""
@@ -729,10 +761,24 @@ class SequenceWidgetConfigOpsMixin:
             self.add_file_to_using_file_combobox()
         finally:
             self.using_file_combobox.blockSignals(was_blocked)
+        active_file = self.active_product_program_file
+        if (active_file and getattr(self, "_product_config_refresh_state", None) == "ready"
+                and not self._product_configuration_refresh_busy()
+                and not os.path.isfile(os.path.join(self._get_product_program_manager().program_dir, active_file))):
+            self._product_configuration_apply_failed(
+                f"产品配置文件不存在：{active_file}", show_warning=False,
+            )
 
     def on_product_test_program_updated(self, *_):
         """Saving another program changes only the selector unless a shared queue changed."""
         self.update_using_file_combobox()
+        # Saving another product must not repeat a known missing-current-file error.
+        active_file = self.active_product_program_file
+        if (active_file and self._product_config_refresh_state == "failed"
+                and not os.path.isfile(os.path.join(
+                    self._get_product_program_manager().program_dir, active_file,
+                ))):
+            return
         self._refresh_active_product_configuration()
 
     def add_file_to_using_file_combobox(self):
@@ -740,6 +786,7 @@ class SequenceWidgetConfigOpsMixin:
         Adds file to the using file combobox.
         """
         registry = self._get_product_program_registry()
+        manager = self._get_product_program_manager()
         active_file = str((registry or {}).get("active_file") or "")
         visible_count = 0
         was_blocked = self.using_file_combobox.blockSignals(True)
@@ -751,12 +798,19 @@ class SequenceWidgetConfigOpsMixin:
                 name = str(item.get("project_name") or "").strip()
                 if not file_name or not name:
                     continue
+                if not os.path.isfile(os.path.join(manager.program_dir, file_name)):
+                    continue
                 self.using_file_combobox.addItem(name, file_name)
                 visible_count += 1
             self.using_file_combobox.setPlaceholderText(
-                "请选择配置" if visible_count else "暂无配置"
+                "请选择配置" if visible_count else (
+                    "暂无可用配置" if registry.get("configs") else "暂无配置"
+                )
             )
-            idx = self.using_file_combobox.findData(active_file) if active_file else -1
+            # Failed configurations need an explicit selection to retry loading.
+            idx = (self.using_file_combobox.findData(active_file)
+                   if active_file and getattr(self, "_product_config_refresh_state", None) != "failed"
+                   else -1)
             self.using_file_combobox.setCurrentIndex(idx)
         finally:
             self.using_file_combobox.blockSignals(was_blocked)
@@ -878,11 +932,12 @@ class SequenceWidgetConfigOpsMixin:
                 or getattr(self, "using_config_path", None)
             )
         index = self.using_file_combobox.findData(active_file)
-        if index >= 0 or active_file is None:
-            was_blocked = self.using_file_combobox.blockSignals(True)
-            self.using_file_combobox.setCurrentIndex(index)
-            self.using_file_combobox.blockSignals(was_blocked)
-            self.default_logger.warning("已恢复到之前的配置选项")
+        if getattr(self, "_product_config_refresh_state", None) == "failed":
+            index = -1
+        was_blocked = self.using_file_combobox.blockSignals(True)
+        self.using_file_combobox.setCurrentIndex(index)
+        self.using_file_combobox.blockSignals(was_blocked)
+        self.default_logger.warning("已恢复到之前的配置选项")
 
     def get_sequence_config_from_json(self):
         """
@@ -922,9 +977,7 @@ class SequenceWidgetConfigOpsMixin:
                 QMessageBox.warning(
                     self,
                     "提示",
-                    (f"{result}\n" if isinstance(result, str) else "当前未找到可用配置文件。\n") +
-                    "请在上方【使用配置】下拉框中选择配置；\n"
-                    "如无可选项，请到【功能-测试队列】中保存或导入配置。",
+                    self._missing_configuration_message(),
                 )
                 self._missing_config_prompted = True
     def _set_sequence_config_available_state(self, available: bool):

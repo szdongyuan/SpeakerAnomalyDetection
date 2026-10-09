@@ -101,9 +101,7 @@ class SequenceWidgetUiOpsMixin:
             QMessageBox.warning(
                 self,
                 "提示",
-                "当前未找到可用配置文件。\n"
-                "请在上方【使用配置】下拉框中选择配置；\n"
-                "如无可选项，请到【功能-测试队列】中保存或导入配置。",
+                self._missing_configuration_message(),
             )
             self._missing_config_prompted = True
 

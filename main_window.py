@@ -715,6 +715,11 @@ class MainWindow(QMainWindow):
                 deletion_failed=lambda message: self.sequence_window._configuration_deletion_failed(message),
                 deletion_error=lambda: getattr(self.sequence_window, "_configuration_deletion_error", ""),
             )
+            if not dialog.initial_load_succeeded:
+                self.sequence_window._product_configuration_apply_failed(
+                    dialog.initial_load_error, show_warning=False,
+                )
+                self.sequence_window.update_using_file_combobox()
             dialog.programs_changed.connect(
                 self.sequence_window.on_product_test_program_updated
             )
