@@ -81,7 +81,7 @@ class RecordingCapture:
                  ve_stream_factory=None, startup_budget=None, on_retry=None,
                  writer_factory=StreamingWavWriter,
                  metadata_appender=append_owned_recording_calibration_metadata_result,
-                 blocksize=2048, queue_seconds=2.0, diagnostics=None):
+                 blocksize=2048, queue_seconds=None, diagnostics=None):
         self.request = request
         self.input_device = request.device
         self._backend = backend
@@ -100,6 +100,8 @@ class RecordingCapture:
         self._writer_factory = writer_factory
         self._metadata_appender = metadata_appender
         self._blocksize = blocksize
+        if queue_seconds is None:
+            queue_seconds = 30.0 if self._is_ve else 2.0
         self.queue_capacity_frames, self.queue_capacity_bytes = capture_queue_capacity(
             request.sample_rate, len(request.channels), blocksize=blocksize, seconds=queue_seconds)
         self.started = threading.Event()
