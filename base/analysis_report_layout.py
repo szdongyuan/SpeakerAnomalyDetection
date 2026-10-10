@@ -20,10 +20,15 @@ def report_page_layout():
 
 
 class MeasuredReportLayout:
-    def __init__(self, stylesheet, font_family, cancel_requested=None):
+    def __init__(
+        self, stylesheet, font_family, cancel_requested=None, *,
+        page_header="", first_page_header="",
+    ):
         self.stylesheet = stylesheet
         self.font_family = font_family
         self.cancel_requested = cancel_requested
+        self.page_header = page_header
+        self.first_page_header = first_page_header
         rect = report_page_layout().paintRectPixels(PDF_RESOLUTION)
         self.content_size = QSizeF(rect.width(), rect.height() - PDF_FOOTER_HEIGHT)
         self.pages = []
@@ -34,7 +39,10 @@ class MeasuredReportLayout:
         if callable(self.cancel_requested) and self.cancel_requested():
             raise InterruptedError("PDF 报告导出已取消")
 
-    def document(self, body):
+    def header_for_page(self, page_index):
+        return self.first_page_header if page_index == 0 else self.page_header
+
+    def document(self, body, *, page_index=None):
         self.check_cancelled()
         if self._document is None:
             document = QTextDocument()
@@ -51,7 +59,9 @@ class MeasuredReportLayout:
                 self.stylesheet,
             )
             document.setDefaultStyleSheet(stylesheet)
-        self._document.setHtml(_fix_table_columns(body))
+        if page_index is None:
+            page_index = len(self.pages)
+        self._document.setHtml(_fix_table_columns(self.header_for_page(page_index) + body))
         self._document.setTextWidth(self.content_size.width())
         return self._document
 
@@ -123,7 +133,9 @@ class MeasuredReportLayout:
         self.new_page()
 
     def to_html(self):
-        body = "<div class='page-break'></div>".join(self.pages)
+        body = "<div class='page-break'></div>".join(
+            self.header_for_page(index) + page for index, page in enumerate(self.pages)
+        )
         return (
             '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
             f"<style>{self.stylesheet}\n.page-break {{ page-break-before: always; }}"

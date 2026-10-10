@@ -26,6 +26,7 @@ from base.analysis_report_source import (
     ReportCandidate,
     split_segment_channel,
 )
+from base.report_branding import load_company_logo
 from base.spl_csv_schema import resolve_overall_spl_csv_columns
 
 
@@ -193,7 +194,17 @@ def _build_analysis_report_pages(
     cancel_requested=None,
 ):
     _ensure_qt_application()
-    layout = MeasuredReportLayout(_report_stylesheet(), _ensure_report_font(), cancel_requested)
+    logo_data, logo_width, logo_height = load_company_logo()
+    logo_encoded = base64.b64encode(logo_data).decode("ascii")
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_encoded}" '
+        f'width="{logo_width}" height="{logo_height}">'
+    )
+    layout = MeasuredReportLayout(
+        _report_stylesheet(), _ensure_report_font(), cancel_requested,
+        page_header=_build_report_header_html(logo_html),
+        first_page_header=_build_report_header_html(logo_html, first_page=True),
+    )
     prepared_by_item = {}
     for identity in selected_analysis_items:
         records = []
@@ -251,6 +262,9 @@ def _report_stylesheet():
   th, td {{ border: 1px solid #9ca8b4; padding: 4px 4px; vertical-align: middle; }}
   th {{ background: #eef2f5; font-weight: bold; text-align: center; }}
   td.center {{ text-align: center; }}
+  .report-header {{ margin: 0 0 8px 0; }}
+  .report-header td {{ border: none; padding: 0; padding-bottom: 12px; vertical-align: middle; }}
+  .report-header h1 {{ font-size: 17pt; margin: 0; }}
   .meta th {{ width: 16%; text-align: left; }}
   .meta td {{ width: 34%; }}
   .data-table {{ font-size: 8pt; }}
@@ -381,6 +395,20 @@ def _read_spl_csv(item):
 
 
 
+def _build_report_header_html(logo_html, *, first_page=False):
+    # Keep the same title line height on continuation pages without repeating it.
+    title = "声学测试分析报告" if first_page else "&nbsp;"
+    return f"""
+<table class="report-header" width="100%" cellspacing="0" cellpadding="0">
+  <tr>
+    <td width="28%">{logo_html}</td>
+    <td width="44%"><h1>{title}</h1></td>
+    <td width="28%"></td>
+  </tr>
+</table>
+"""
+
+
 def _build_summary_html(
     candidates,
     selected_items,
@@ -407,7 +435,6 @@ def _build_summary_html(
     )
     project = candidates[0].project if candidates else "—"
     return f"""
-<h1>声学测试分析报告</h1>
 <table class="meta" width="100%">
   <tr><th>项目</th><td>{_html(project)}</td><th>导出时间</th><td>{_html(generated_at.strftime('%Y-%m-%d %H:%M:%S'))}</td></tr>
   <tr><th>已选 WAV</th><td colspan="3">{len(candidates)}</td></tr>
@@ -909,7 +936,7 @@ def _render_html_pdf(file_path, layout):
             layout.check_cancelled()
             if page_index:
                 writer.newPage()
-            document = layout.document(page_html)
+            document = layout.document(page_html, page_index=page_index)
             if document.size().height() > content_size.height():
                 raise ValueError("报告排版高度发生变化，请重新导出")
             clip = QRectF(0.0, 0.0, content_size.width(), content_size.height())

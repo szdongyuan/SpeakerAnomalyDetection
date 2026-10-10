@@ -43,7 +43,7 @@ def test_chart_analysis_has_no_result_summary_or_placeholder_table(tmp_path, kin
     assert "测试总体判定" not in report
     assert "声学测试分析报告" in report and "分析项（1项）" in report
     assert "PORT-A" in report and "R0002" in report
-    assert ("data:image/png;base64," in report) == (mode == "values_and_charts")
+    assert ("<div class='figure'>" in report) == (mode == "values_and_charts")
     assert ("本次未包含分析图" in report) == (mode == "values_only")
     if mode == "values_and_charts":
         assert "CH1（前）" in report

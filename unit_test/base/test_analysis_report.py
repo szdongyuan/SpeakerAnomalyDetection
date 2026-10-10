@@ -130,7 +130,7 @@ def test_html_uses_exact_selected_item_and_channel_label_headings(tmp_path):
     )
 
     assert "custom_spl（SPL）" in report_html
-    summary = report_html.split('</table>', 1)[0]
+    summary = report_html.split('<table class="meta"', 1)[1].split('</table>', 1)[0]
     assert "分析项（1项）" in summary
     assert "已选分析项" not in summary and "具体分析项" not in summary
     assert "custom_spl（SPL）" not in summary
@@ -357,7 +357,8 @@ def test_data_section_uses_actual_space_instead_of_estimated_capacity(
             wav_path=str(tmp_path / f"large-{row}.wav"),
             port="P1",
         )
-        for row in range(18)
+        # Leave room for the company header and a following port section.
+        for row in range(16)
     ]
     candidates.append(
         replace(

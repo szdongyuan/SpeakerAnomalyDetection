@@ -99,7 +99,7 @@ def test_mixed_report_splits_modes_and_preserves_values_and_charts(tmp_path, lab
                 assert cells[4] == (" class='center'", values[position])
             assert cells[5 if heading else 4] == (" class='center'", f'{30 + index:.2f}')
     assert row_count == len(labels)
-    assert html.count('data:image/png;base64,') == len(candidates)
+    assert html.count("<div class='figure'>") == len(candidates)
 
 
 
