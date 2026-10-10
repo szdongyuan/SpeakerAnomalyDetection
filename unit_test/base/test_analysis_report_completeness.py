@@ -48,7 +48,8 @@ def test_six_warnings_for_one_wav_become_one_row_without_losing_reasons(tmp_path
     assert "无判定结果 1" in report
     pages = report.split("<div class='page-break'></div>")
     detail_page = next(page for page in pages if "<h2>缺失明细</h2>" in page)
-    assert detail_page.startswith("<h2>缺失明细</h2>")
+    assert detail_page.lstrip().startswith('<table class="report-header"')
+    assert detail_page.index("<h2>") == detail_page.index("<h2>缺失明细</h2>")
     assert "<table class='completeness-table'" in detail_page
 
 
