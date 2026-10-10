@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 from PyQt5 import sip
-from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, Qt
+from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, Qt
+from PyQt5.QtGui import QWheelEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QComboBox, QFileDialog, QInputDialog, QLabel, QMenu, QMessageBox
 
@@ -1137,6 +1138,101 @@ def test_port_name_can_be_edited_inline_from_selector(app, tmp_path):
     assert not dialog.add_condition_btn.autoDefault()
     assert dialog.collect_project()["test_groups"][0]["group_name"] == "USB-C PD"
     close_dialog(dialog)
+
+
+def _send_queue_wheel(widget, delta):
+    position = widget.rect().center()
+    event = QWheelEvent(
+        QPointF(position), QPointF(widget.mapToGlobal(position)),
+        QPoint(), QPoint(0, delta), Qt.NoButton, Qt.NoModifier,
+        Qt.NoScrollPhase, False,
+    )
+    QCoreApplication.sendEvent(widget, event)
+
+
+@pytest.fixture
+def scrollable_queue_dialog(app, tmp_path):
+    manager = make_manager(tmp_path)
+    queues = {name: register_queue(manager, name) for name in ("Queue A", "Queue B")}
+    assert LoadUiConfig.save_data_to_json(queues, manager.queue_registry_path)
+    dialog = ProductTestProjectConfigDialog(manager)
+    dialog._show_project(project_data(tmp_path, conditions=[
+        {"condition_name": f"档位{index + 1}", "test_queue": "Queue A"}
+        for index in range(30)
+    ]), None)
+    dialog.show()
+    app.processEvents()
+    dialog._dirty = False
+    yield dialog
+    dialog._dirty = False
+    dialog.close()
+
+
+@pytest.mark.parametrize("focused", [False, True])
+@pytest.mark.parametrize("delta", [-120, 120])
+def test_queue_wheel_scrolls_table_without_editing(scrollable_queue_dialog, app, focused, delta):
+    dialog = scrollable_queue_dialog
+    table = dialog.condition_table
+    combo, _ = dialog._queue_controls_for_row(15)
+    table.scrollToItem(table.item(15, 1), table.PositionAtCenter)
+    (combo if focused else dialog.project_name_input).setFocus()
+    app.processEvents()
+    scrollbar = table.verticalScrollBar()
+    before_scroll = scrollbar.value()
+    before_queue = combo.currentData()
+    changes = []
+    combo.currentIndexChanged.connect(changes.append)
+
+    _send_queue_wheel(combo, delta)
+    app.processEvents()
+
+    assert combo.currentData() == before_queue
+    assert changes == []
+    assert not dialog._dirty
+    assert (scrollbar.value() - before_scroll) * delta < 0
+
+
+@pytest.mark.parametrize("delta", [-120, 120])
+def test_queue_wheel_at_table_boundary_preserves_selection(scrollable_queue_dialog, app, delta):
+    dialog = scrollable_queue_dialog
+    table = dialog.condition_table
+    row = 0 if delta > 0 else table.rowCount() - 1
+    combo, _ = dialog._queue_controls_for_row(row)
+    combo.setFocus()
+    scrollbar = table.verticalScrollBar()
+    boundary = 0 if delta > 0 else scrollbar.maximum()
+    scrollbar.setValue(boundary)
+    app.processEvents()
+    before_queue = combo.currentData()
+
+    _send_queue_wheel(combo, delta)
+
+    assert combo.currentData() == before_queue
+    assert scrollbar.value() == boundary
+    assert not dialog._dirty
+
+
+def test_queue_keyboard_and_popup_selection_still_work(scrollable_queue_dialog, app):
+    dialog = scrollable_queue_dialog
+    combo, _ = dialog._queue_controls_for_row(0)
+    combo.setFocus()
+    QTest.keyClick(combo, Qt.Key_Up)
+    assert combo.currentData() == ""
+    assert dialog._dirty
+
+    combo.showPopup()
+    QTest.qWait(app.doubleClickInterval())
+    view = combo.view()
+    assert view.isVisible()
+    before_scroll = dialog.condition_table.verticalScrollBar().value()
+    _send_queue_wheel(view.viewport(), -120)
+    assert dialog.condition_table.verticalScrollBar().value() == before_scroll
+    index = combo.model().index(combo.findData("Queue A"), 0)
+    view.scrollTo(index)
+    app.processEvents()
+    QTest.mouseClick(view.viewport(), Qt.LeftButton, pos=view.visualRect(index).center())
+    assert combo.currentData() == "Queue A"
+    assert not view.isVisible()
 
 
 def test_queue_duration_summary_and_operation_are_derived(app, tmp_path):

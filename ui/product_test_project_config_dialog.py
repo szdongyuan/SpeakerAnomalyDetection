@@ -5,7 +5,7 @@ from base.sequence_queue_references import QueueReferenceDraft
 from base.config_deletion import ConfigDeletionService
 from base.config_number_format import format_config_number
 
-from PyQt5.QtCore import QEvent, QSize, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QCoreApplication, QEvent, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -68,13 +68,19 @@ UNAVAILABLE_QUEUE_SUFFIX = "（不可用）"
 
 
 class _RefreshingQueueComboBox(QComboBox):
-    def __init__(self, refresh_callback, parent=None):
+    def __init__(self, refresh_callback, scroll_viewport, parent=None):
         super().__init__(parent)
         self._refresh_callback = refresh_callback
+        self._scroll_viewport = scroll_viewport
 
     def showPopup(self):
         self._refresh_callback()
         super().showPopup()
+
+    def wheelEvent(self, event):
+        # Route wheel input to the table; popup list events remain independent.
+        QCoreApplication.sendEvent(self._scroll_viewport, event)
+        event.accept()
 
 
 class _PortSelectorBar(QWidget):
@@ -994,7 +1000,9 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         trigger_input.textEdited.connect(self._on_row_widget_changed)
         self.condition_table.setCellWidget(row, 2, trigger_input)
 
-        queue_combobox = _RefreshingQueueComboBox(self._refresh_queue_options)
+        queue_combobox = _RefreshingQueueComboBox(
+            self._refresh_queue_options, self.condition_table.viewport()
+        )
         queue_combobox.setStyleSheet(self.CONDITION_CONTROL_FONT_STYLE)
         queue_combobox.setFixedHeight(self.CONDITION_CONTROL_HEIGHT)
         self._populate_queue_combobox(
