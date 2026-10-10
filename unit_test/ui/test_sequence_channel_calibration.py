@@ -934,7 +934,7 @@ def test_preflight_keeps_finalization_when_executable_judging_item_remains(chann
         "OK",
         update_recent_session=True,
     )
-    sequence.count_board.set_test_result_file.assert_called_once_with("OK")
+    sequence.count_board.set_test_result_file.assert_not_called()
 
 
 class RuntimeAnalysis:
@@ -1175,7 +1175,7 @@ def test_streaming_completion_queues_analysis_and_advances_recording_workflow():
     assert "advance_condition" in host.events
     assert "condition_completed" in host.events
     assert host._manual_product_condition_completed_keys == {"condition-1"}
-    assert host.count_updates == 1
+    assert host.count_updates == 0
     assert host._serial_product_condition_executing is False
     assert host._serial_product_session_started is False
     assert host._record_workflow_busy is False

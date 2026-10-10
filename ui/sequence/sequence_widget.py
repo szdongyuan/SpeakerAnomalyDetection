@@ -78,7 +78,6 @@ class SequenceWindow(
         self.analysis_window = []
         self._analysis_result_summary_window = None
 
-        self.init_result_files()
         self._prepare_initial_product_configuration()
         self.init_data_struct_stimulus_config()
         self.init_fft_and_stft_flag()
@@ -97,7 +96,7 @@ class SequenceWindow(
         self._init_round_reset()
         self._refresh_test_mode_availability()
         self.player_status_flag = False
-        # True while a record run is still processing (record -> analysis -> save -> count updates).
+        # True while a record run is still processing (record -> analysis -> save).
         # Used to prevent starting a new recording before the full workflow completes.
         self._record_workflow_busy = False
         self.recorded_signal_info = {}
@@ -138,8 +137,6 @@ class SequenceWindow(
         self._manual_direction_fallback_next_direction = "forward"
         self._direction_cycle_started_at = ""
         self._current_cycle_first_direction = ""
-        self._mark_cycle_direction_labels = {"forward": "not_labeled", "reverse": "not_labeled"}
-        self._mark_cycle_summary_label = ""
         self._direction_waveform_cache = {"forward": None, "reverse": None}
         self._condition_record_cache = {}
         self._waveform_display_override_direction = ""
@@ -215,9 +212,6 @@ class SequenceWindow(
         self._analysis_window_geometry_dirty = False
 
         self.hw_manager = UnifiedHardwareManager()
-
-        # Startup statistics are daily; keep same-day counters and only roll over on a new date.
-        self.reset_statistics_on_startup()
 
         # Restore persisted mode before UI callbacks are registered to avoid startup side effects.
         self._restore_last_sequence_mode()

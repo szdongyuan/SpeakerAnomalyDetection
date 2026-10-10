@@ -292,57 +292,6 @@ class SequenceWidgetBarcodeOpsMixin:
             return "forward"
         return ""
 
-    @staticmethod
-    def _normalize_mark_cycle_label(label: str) -> str:
-        lowered = str(label or "").strip().lower()
-        if lowered == "ok":
-            return "OK"
-        if lowered == "ng":
-            return "NG"
-        if lowered in ("not_labeled", "not labeled", "none", "-", "null"):
-            return "not_labeled"
-        return "not_labeled"
-
-    def _reset_mark_cycle_summary_state(self) -> None:
-        self._mark_cycle_direction_labels = {"forward": "not_labeled", "reverse": "not_labeled"}
-        self._mark_cycle_summary_label = ""
-
-    def _resolve_mark_cycle_summary_label(self, forward_label: str, reverse_label: str) -> str:
-        forward = self._normalize_mark_cycle_label(forward_label)
-        reverse = self._normalize_mark_cycle_label(reverse_label)
-        if "NG" in (forward, reverse):
-            return "NG"
-        if forward == "OK" and reverse == "OK":
-            return "OK"
-        return "not_labeled"
-
-    def _on_mark_cycle_direction_recorded(self, label: str) -> None:
-        append_mark_result_file = getattr(self.count_board, "append_mark_result_file", None)
-        if not callable(append_mark_result_file):
-            return
-
-        normalized_label = self._normalize_mark_cycle_label(label)
-        serial_enabled = bool((getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", False))
-        direction = self._normalize_trigger_direction(getattr(self, "_current_trigger_direction", ""))
-
-        if serial_enabled and direction in ("forward", "reverse"):
-            labels = dict(getattr(self, "_mark_cycle_direction_labels", {}) or {})
-            labels.setdefault("forward", "not_labeled")
-            labels.setdefault("reverse", "not_labeled")
-            labels[direction] = normalized_label
-            self._mark_cycle_direction_labels = labels
-            if direction != "reverse":
-                return
-            summary_label = self._resolve_mark_cycle_summary_label(labels.get("forward"), labels.get("reverse"))
-            append_mark_result_file(summary_label)
-            self.count_board.set_mark_text()
-            self._mark_cycle_summary_label = summary_label
-            return
-
-        append_mark_result_file(normalized_label)
-        self.count_board.set_mark_text()
-        self._mark_cycle_summary_label = normalized_label
-
     def _set_active_recording_direction(self, direction: str) -> str:
         normalized = self._normalize_trigger_direction(direction)
         self._active_recording_direction = normalized
@@ -375,7 +324,6 @@ class SequenceWidgetBarcodeOpsMixin:
             self._suppress_barcode_commits_temporarily(1500, reason="test_directional_cycle_teardown")
         self._current_trigger_direction = ""
         self._clear_active_recording_direction()
-        self._reset_mark_cycle_summary_state()
         self._manual_direction_fallback_next_direction = "forward"
         self._direction_cycle_started_at = ""
         self._current_cycle_first_direction = ""
@@ -394,7 +342,6 @@ class SequenceWidgetBarcodeOpsMixin:
     def _reset_direction_cycle_panel_state(self):
         self._direction_cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._current_cycle_first_direction = ""
-        self._reset_mark_cycle_summary_state()
         clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
         if callable(clear_all_direction_waveforms):
             clear_all_direction_waveforms()
@@ -851,11 +798,6 @@ class SequenceWidgetBarcodeOpsMixin:
         ):
             QMessageBox.warning(self, "警告", "请先录制声音！")
             return
-        previous_label = (
-            self.recorded_signal_info.get("labels", "not_labeled")
-            if isinstance(self.recorded_signal_info, dict)
-            else "not_labeled"
-        )
         self.update_audio_label_info()
         save_code, save_msg = self.update_recorded_signal_info_to_db()
         if save_code != error_code.OK:
@@ -867,7 +809,6 @@ class SequenceWidgetBarcodeOpsMixin:
             pass
         self._close_analysis_windows()
 
-        self.mark_result(previous_label=previous_label)
         self.data_struct.store_wave_data = None
         self.data_struct.store_wave_data_multi = None
         clear_wav_calibration_state = getattr(
@@ -920,37 +861,6 @@ class SequenceWidgetBarcodeOpsMixin:
             except Exception:
                 pass
         self.update_player_btn_is_paused()
-
-    def mark_result(self, previous_label: str = "not_labeled"):
-        button = self.sender()
-        new_label = ""
-        if button == self.count_board.ok_btn:
-            new_label = "OK"
-        elif button == self.count_board.ng_btn:
-            new_label = "NG"
-        if new_label:
-            serial_enabled = bool((getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", False))
-            direction = self._normalize_trigger_direction(getattr(self, "_current_trigger_direction", ""))
-            if serial_enabled and direction in ("forward", "reverse"):
-                labels = dict(getattr(self, "_mark_cycle_direction_labels", {}) or {})
-                labels.setdefault("forward", "not_labeled")
-                labels.setdefault("reverse", "not_labeled")
-                labels[direction] = new_label
-                self._mark_cycle_direction_labels = labels
-                previous_summary_raw = str(getattr(self, "_mark_cycle_summary_label", "") or "").strip()
-                if previous_summary_raw:
-                    previous_summary = self._normalize_mark_cycle_label(previous_summary_raw)
-                    new_summary = self._resolve_mark_cycle_summary_label(
-                        labels.get("forward"),
-                        labels.get("reverse"),
-                    )
-                    self.count_board.update_mark_result_file_on_relabel(previous_summary, new_summary)
-                    self.count_board.set_mark_text()
-                    self._mark_cycle_summary_label = new_summary
-                return
-
-            self.count_board.update_mark_result_file_on_relabel(previous_label, new_label)
-            self.count_board.set_mark_text()
 
     def _finalize_test_run(self, label: str, update_recent_session: bool = True):
         """
