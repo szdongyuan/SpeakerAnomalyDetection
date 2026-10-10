@@ -11,7 +11,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QMessageBox
 
 from base.analysis_result_summary import failed_analysis_task_result
-from base.analysis_service import AnalysisProcessService
+from base.analysis_service import AnalysisProcessService, log_analysis_startup_stage
 from base.log_manager import LogManager
 from consts import error_code
 from ui.analysis_multichannel_result_window import (
@@ -332,11 +332,12 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             return False
         request = queue.popleft()
         self._analysis_active_request = request
-        self._set_condition_analysis_stage(
-            request.condition_key,
-            "分析中",
-            "running",
-        )
+        with log_analysis_startup_stage(self.default_logger, request, "gui_state_update"):
+            self._set_condition_analysis_stage(
+                request.condition_key,
+                "分析中",
+                "running",
+            )
         try:
             pid = service.start(request)
         except (OSError, RuntimeError, ValueError) as error:

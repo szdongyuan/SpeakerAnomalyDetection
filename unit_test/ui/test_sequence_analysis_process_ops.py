@@ -1,5 +1,6 @@
 from base.recording_process_protocol import FrozenConfig
 from types import SimpleNamespace
+from collections import deque
 
 import pytest
 
@@ -1039,3 +1040,48 @@ def test_worker_log_keeps_save_failure_in_main_and_full_detail_in_debug():
         )
     ]
     assert len(host._analysis_debug_logger.messages) == 1
+
+
+@pytest.mark.parametrize("fail_update", [False, True])
+def test_queued_start_times_gui_state_before_starting_process(monkeypatch, fail_update):
+    from base import analysis_service
+
+    clock = [0.0]
+    monkeypatch.setattr(analysis_service, "perf_counter", lambda: clock[0])
+    request = SimpleNamespace(
+        task_id="gui-timing", source="自动分析", condition_key="condition-1", wav_path="record.wav",
+    )
+    failure = ValueError("GUI update probe")
+    starts = []
+
+    class Host(SequenceWidgetAnalysisProcessOpsMixin):
+        def __init__(self):
+            self.default_logger = _Logger()
+            self._analysis_task_queue = deque([request])
+            self._analysis_active_request = None
+            self._analysis_process_service = SimpleNamespace(active=False, start=self.start)
+
+        def _set_condition_analysis_stage(self, *args):
+            assert "stage=gui_state_update event=begin" in self.default_logger.messages[-1][1]
+            clock[0] += 1.25
+            if fail_update:
+                raise failure
+
+        def start(self, task):
+            assert "seconds=1.250000 outcome=success" in self.default_logger.messages[-1][1]
+            starts.append(task)
+            return 4321
+
+    host = Host()
+    if fail_update:
+        with pytest.raises(ValueError) as caught:
+            host._start_next_queued_analysis()
+        assert caught.value is failure
+        assert starts == []
+    else:
+        assert host._start_next_queued_analysis()
+        assert starts == [request]
+    timings = [text for _level, text in host.default_logger.messages if "analysis_startup_timing " in text]
+    assert len(timings) == 2
+    outcome = "failed" if fail_update else "success"
+    assert f"event=end seconds=1.250000 outcome={outcome}" in timings[-1]

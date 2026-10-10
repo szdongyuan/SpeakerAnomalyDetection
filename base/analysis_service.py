@@ -3,15 +3,38 @@
 from __future__ import annotations
 
 import multiprocessing
+from contextlib import contextmanager
 from queue import Empty
+from time import perf_counter
 
 from base.analysis_process_protocol import AnalysisWorkerFailure
 from base.analysis_worker import analysis_worker_main
+from base.log_manager import LogManager
+
+
+@contextmanager
+def log_analysis_startup_stage(logger, request, stage):
+    """Bracket synchronous startup work so a stalled stage retains its begin log."""
+    prefix = (
+        f"analysis_startup_timing task_id={request.task_id} "
+        f"source={request.source} condition={request.condition_key} "
+        f"process=parent stage={stage}"
+    )
+    logger.info(f"{prefix} event=begin")
+    started = perf_counter()
+    outcome = "failed"
+    try:
+        yield
+        outcome = "success"
+    finally:
+        elapsed = perf_counter() - started
+        logger.info(f"{prefix} event=end seconds={elapsed:.6f} outcome={outcome}")
 
 
 class AnalysisProcessService:
     def __init__(self, *, worker_target=analysis_worker_main):
         self._context = multiprocessing.get_context("spawn")
+        self._logger = LogManager.set_log_handler("core")
         self._worker_target = worker_target
         self._process = None
         self._event_queue = None
@@ -30,16 +53,20 @@ class AnalysisProcessService:
     def start(self, request):
         if self.active:
             raise RuntimeError("已有分析进程正在运行")
-        self._event_queue = self._context.Queue()
-        self._log_queue = self._context.Queue()
+        with log_analysis_startup_stage(self._logger, request, "event_queue_create"):
+            self._event_queue = self._context.Queue()
+        with log_analysis_startup_stage(self._logger, request, "log_queue_create"):
+            self._log_queue = self._context.Queue()
         self._request = request
         self._terminal_event_seen = False
-        self._process = self._context.Process(
-            target=self._worker_target,
-            args=(request, self._event_queue, self._log_queue),
-            name=f"analysis-{request.task_id[:8]}",
-        )
-        self._process.start()
+        with log_analysis_startup_stage(self._logger, request, "process_create"):
+            self._process = self._context.Process(
+                target=self._worker_target,
+                args=(request, self._event_queue, self._log_queue),
+                name=f"analysis-{request.task_id[:8]}",
+            )
+        with log_analysis_startup_stage(self._logger, request, "process_start"):
+            self._process.start()
         return self._process.pid
 
     def poll(self):
