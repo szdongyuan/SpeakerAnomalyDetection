@@ -1,5 +1,6 @@
 """Exercise the real constructor ordering with hardware and persistent UI state isolated."""
 
+import builtins
 import logging
 from pathlib import Path
 from unittest.mock import Mock
@@ -10,7 +11,6 @@ from PyQt5.QtWidgets import QApplication, QMessageBox, QWidget
 
 from ui.sequence import sequence_widget as sequence_module
 from ui.sequence.sequence_widget import SequenceWindow
-from ui.sequence.sequencement_count_board import SequenceCountBoard
 from unit_test.base.test_product_test_config_refresh import make_refresh_manager
 
 
@@ -31,19 +31,26 @@ def test_startup_prepares_once_before_widgets_and_registers_after_ui(
     monkeypatch.setattr(SequenceWindow, "get_sequence_config_from_registry",
                         lambda self: (str(queue_path), {}))
     monkeypatch.setattr(SequenceWindow, "_load_analysis_window_geometry", lambda self: {})
-    for name in ("init_result_files", "reset_statistics_on_startup", "restore_scanner_checkbox_state",
+    for name in ("restore_scanner_checkbox_state",
                  "_restore_last_sequence_mode", "init_lineedit_text", "bind_hw_signals"):
         monkeypatch.setattr(SequenceWindow, name, lambda self: None)
     monkeypatch.setattr(SequenceWindow, "closeEvent",
                         lambda self, event: QWidget.closeEvent(self, event))
-    for name in ("set_test_text", "set_mark_text"):
-        monkeypatch.setattr(SequenceCountBoard, name, lambda self: None)
     monkeypatch.setattr(sequence_module.LoadUiConfig, "load_last_recorded_info", lambda _: {})
     monkeypatch.setattr(sequence_module, "UnifiedHardwareManager", Mock())
     monkeypatch.setattr(sequence_module.LogManager, "set_log_handler", lambda _: logging.getLogger("startup-test"))
     warnings = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
     registry_before = Path(manager.registry_path).read_bytes()
+    original_open = builtins.open
+
+    def no_statistics_open(file, *args, **kwargs):
+        name = str(file).replace("\\", "/")
+        assert not name.endswith("/mark_result.json")
+        assert "/test_result_log/" not in name
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", no_statistics_open)
     window = SequenceWindow()
     try:
         expected = {"valid": "ready", "empty": "empty", "invalid": "failed", "missing": "failed"}[configuration]

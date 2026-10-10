@@ -268,8 +268,6 @@ class SequenceWidgetUiOpsMixin:
         self.serial_trigger_btn.clicked.connect(self.on_serial_trigger_btn_clicked)
         self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
         self.count_board.ng_btn.clicked.connect(self.clicked_ok_or_ng)
-        # “重置统计”按钮：重置测试计数 + 恢复重播/分析按钮状态
-        self.count_board.reset_btn.clicked.connect(self.on_reset_statistics_clicked)
         self.count_board.mark_btn.clicked.connect(self.on_mark_btn_clicked)
         if hasattr(self.using_file_combobox, "before_show_popup"):
             self.using_file_combobox.before_show_popup = self.update_using_file_combobox

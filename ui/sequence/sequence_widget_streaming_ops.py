@@ -30,7 +30,7 @@ from base.file_ops import FileOps
 from base.load_config import LoadUiConfig
 from base.playback_controller import PlaybackController
 from base.recording_management import RecordingManager
-from base.save_data import ensure_test_result_file, save_audio_simple
+from base.save_data import save_audio_simple
 from base.wav_pcm24 import quantize_pcm24
 from base.soundcard_calibration_manager import (
     MicCalibrationFormatError,
@@ -514,13 +514,6 @@ class SequenceWidgetStreamingOpsMixin:
                 if current_path and os.path.abspath(current_path) == os.path.abspath(old_abs_path):
                     self.recorded_path = new_path
                     self.recorded_signal_info = dict(updated_info or {})
-                update_group_count = getattr(self, "_update_manual_product_mark_group_count_for_session", None)
-                group_count_handled = callable(update_group_count) and update_group_count(session_id)
-                if not group_count_handled:
-                    update_count = getattr(self.count_board, "update_mark_result_file_on_relabel", None)
-                    if callable(update_count):
-                        update_count(previous_label, normalized_label)
-                        self.count_board.set_mark_text()
             else:
                 recorded_signal_info["labels"] = normalized_label
                 self._condition_record_cache[key] = {
@@ -1163,42 +1156,6 @@ class SequenceWidgetStreamingOpsMixin:
         for item_name in model_item_list:
             self.data_struct.add_stft_or_fft_count(self.analysis_config[item_name]["type"])
 
-    def init_result_files(self):
-        current_time = datetime.now().strftime("%Y-%m-%d")
-        # Ensure daily test result file exists (no model field).
-        try:
-            ensure_test_result_file(self.analysis_config or {})
-        except Exception:
-            test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-            if not os.path.exists(test_result_path):
-                os.makedirs(os.path.dirname(test_result_path), exist_ok=True)
-                with open(test_result_path, "w") as f:
-                    f.write(
-                        f"total: 0\n"
-                        f"ok: 0\n"
-                        f"ng: 0\n"
-                        f"not_labels: 0\n"
-                        f"ok_percent: 0%\n"
-                        f"datatime: {current_time}\n"
-                    )
-
-        mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-        mark_result_template = {"total": 0, "ok": 0, "ng": 0, "not_labels": 0, "datatime": current_time}
-        if not os.path.exists(mark_result_path):
-            os.makedirs(os.path.dirname(mark_result_path), exist_ok=True)
-            with open(mark_result_path, "w") as f:
-                json.dump(mark_result_template, f, indent=4)
-        else:
-            self.init_mark_result_file(mark_result_path, mark_result_template)
-
-    def init_mark_result_file(self, mark_result_path, mark_result_template):
-        with open(mark_result_path, "r") as f:
-            data = json.load(f)
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        if data["datatime"] != current_date:
-            with open(mark_result_path, "w") as f:
-                json.dump(mark_result_template, f, indent=4)
-
     def closeEvent(self, event):
         # MainWindow initializes its embedded sequence with a hidden close.
         # That UI reset must not cancel reservations or stop hardware listeners.
@@ -1250,126 +1207,6 @@ class SequenceWidgetStreamingOpsMixin:
                 self.setWindowTitle(self._raw_audio_csv_saved_title)
                 del self._raw_audio_csv_saved_title
 
-    def reset_test_reord(self):
-        """
-        Reset today's test counters (total/ok/ng/not_labels/ok_percent) and refresh UI texts.
-        """
-        current_time = datetime.now().strftime("%Y-%m-%d")
-        ensure_test_result_file(self.analysis_config)
-        test_result_path = DEFAULT_DIR + f"log/test_result_log/{current_time}.dat"
-        lines = [
-            "total: 0\n",
-            "ok: 0\n",
-            "ng: 0\n",
-            "not_labels: 0\n",
-            "ok_percent: 0%\n",
-            f"datatime: {current_time}\n",
-        ]
-        with open(test_result_path, "w") as f:
-            f.writelines(lines)
-        # Refresh displayed counters
-        try:
-            self.count_board.set_test_text()
-        except Exception:
-            pass
-        try:
-            self.count_board.set_mark_text()
-        except Exception:
-            pass
-
-    def on_reset_statistics_clicked(self):
-        """
-        Handler for count-board “重置统计” button.
-
-        Expected behavior (用户期望):
-        - Reset test counters (统计面板显示归零)
-        - Reset related runtime UI states (重播/分析按钮回到禁用)
-        """
-        try:
-            self.reset_test_reord()
-        except Exception as e:
-            try:
-                self.default_logger.error(f"reset_statistics_error: {e}")
-            except Exception:
-                pass
-
-        # Reset replay/analyze buttons and related runtime flags
-        try:
-            self.last_play_count = None
-        except Exception:
-            pass
-        try:
-            self.player_status_flag = False
-        except Exception:
-            pass
-        try:
-            self.clicked_player_flag = False
-        except Exception:
-            pass
-        try:
-            self._awaiting_ok_ng = False
-            self._sn_clear_on_next_scan = False
-        except Exception:
-            pass
-        reset_manual_product_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
-        if callable(reset_manual_product_cycle):
-            reset_manual_product_cycle(clear_waveforms=True)
-        try:
-            # Clear cached wave so “分析”不会对旧数据误操作
-            if hasattr(self.data_struct, "store_wave_data"):
-                self.data_struct.store_wave_data = None
-                self.data_struct.store_wave_data_multi = None
-                clear_wav_calibration_state = getattr(
-                    self,
-                    "_clear_audio_source_analysis_state",
-                    None,
-                )
-                if callable(clear_wav_calibration_state):
-                    clear_wav_calibration_state()
-                else:
-                    self.data_struct.wav_calibration_metadata = None
-                    self.data_struct.wav_calibration_metadata_authoritative = False
-                    self.data_struct.wav_calibration_warning_shown = False
-        except Exception:
-            pass
-        try:
-            self.replayer_btn.setDisabled(True)
-        except Exception:
-            pass
-        try:
-            self.data_btn.setDisabled(True)
-        except Exception:
-            pass
-        try:
-            # Restore player UI to idle state
-            self.update_player_btn_is_paused()
-        except Exception:
-            pass
-
-    def reset_statistics_on_startup(self):
-        """
-        Keep same-day summary counters at startup.
-
-        Statistics are daily: launching the app again on the same date must read
-        existing counters, while a new date gets a fresh result file from
-        init_result_files().
-        """
-        try:
-            self.init_result_files()
-        except Exception as e:
-            try:
-                self.default_logger.error(f"init_statistics_on_startup_error: {e}")
-            except Exception:
-                pass
-        try:
-            self.count_board.set_test_text()
-            self.count_board.set_mark_text()
-        except Exception as e:
-            try:
-                self.default_logger.error(f"refresh_statistics_on_startup_error: {e}")
-            except Exception:
-                pass
-
     def update_recorded_signal_info_to_db(self):
         if self.recorded_signal_info["labels"] == "not_labeled":
             return error_code.OK, ""
@@ -1418,34 +1255,6 @@ class SequenceWidgetStreamingOpsMixin:
         reset_manual_product_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
         if callable(reset_manual_product_cycle):
             reset_manual_product_cycle(clear_waveforms=True)
-
-    def _reset_statistics_for_mode(self, mode: str):
-        try:
-            if mode == "test":
-                self.reset_test_reord()
-            elif mode == "mark":
-                self._reset_mark_record()
-        except Exception as e:
-            try:
-                self.default_logger.error(f"reset_statistics_on_mode_switch_error: {e}")
-            except Exception:
-                pass
-
-    def _reset_mark_record(self):
-        mark_result_path = DEFAULT_DIR + "ui/ui_config/mark_result.json"
-        data = {
-            "total": 0,
-            "ok": 0,
-            "ng": 0,
-            "not_labels": 0,
-            "datatime": datetime.now().strftime("%Y-%m-%d"),
-        }
-        with open(mark_result_path, "w") as f:
-            json.dump(data, f, indent=4)
-        try:
-            self.count_board.set_mark_text()
-        except Exception:
-            pass
 
     def update_audio_label_info(self):
         button = self.sender()
@@ -2231,15 +2040,6 @@ class SequenceWidgetStreamingOpsMixin:
             manual_product_cycle_was_active = (
                 callable(is_manual_product_cycle_active) and is_manual_product_cycle_active()
             )
-            if str(getattr(self.count_board, "mode", "") or "") == "mark" and not manual_product_cycle_was_active:
-                on_mark_cycle_direction_recorded = getattr(self, "_on_mark_cycle_direction_recorded", None)
-                if callable(on_mark_cycle_direction_recorded):
-                    on_mark_cycle_direction_recorded(current_label)
-                else:
-                    append_mark_result_file = getattr(self.count_board, "append_mark_result_file", None)
-                    if callable(append_mark_result_file):
-                        append_mark_result_file(current_label)
-                        self.count_board.set_mark_text()
             # 更稳的体验：录音结束后让下一次扫码直接覆盖旧 S/N（避免拼接）。
             # 在串口 directional 循环中 S/N 被 pinned（readOnly + lock），
             # 不应抢焦点和 selectAll —— 否则只读状态下的"高亮选中"会让
@@ -2285,19 +2085,6 @@ class SequenceWidgetStreamingOpsMixin:
                 )
                 if callable(mark_manual_product_complete):
                     mark_manual_product_complete()
-                update_group_count = getattr(
-                    self,
-                    "_update_manual_product_mark_group_count",
-                    None,
-                )
-                if callable(update_group_count):
-                    update_group_count(
-                        getattr(
-                            self,
-                            "_manual_product_condition_group_id",
-                            "",
-                        )
-                    )
 
             finalize_serial_condition = getattr(
                 self,

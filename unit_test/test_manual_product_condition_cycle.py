@@ -715,7 +715,7 @@ class TestManualProductConditionCycle(unittest.TestCase):
         self.assertEqual(widget.left_panel.final_results[-1], ("待判定", "pending"))
         self.assertEqual(widget.cleared_waveforms, 2)
 
-    def test_manual_product_mark_result_counts_once_after_full_group(self):
+    def test_manual_product_mark_summary_survives_statistics_retirement(self):
         widget = _DummyManualCycleWidget()
         widget.count_board.mode = "mark"
         widget.recent_test_session_by_id = {
@@ -742,16 +742,11 @@ class TestManualProductConditionCycle(unittest.TestCase):
             },
         }
 
-        self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_1"))
-        self.assertEqual(widget.count_board.mark_results, ["NG"])
+        self.assertEqual(widget._manual_product_group_result_state("group_1"), (True, "NG"))
 
         widget.recent_test_session_by_id["recent_3"]["result_label"] = "ok"
         widget.recent_test_session_by_id["recent_3"]["recorded_signal_info"]["labels"] = "OK"
-        self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_3"))
-        self.assertEqual(widget.count_board.mark_results, ["NG"])
-        self.assertEqual(widget.count_board.mark_relabels, [])
-        self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_3"))
-        self.assertEqual(widget.count_board.mark_results, ["NG"])
+        self.assertEqual(widget._manual_product_group_result_state("group_1"), (True, "NG"))
 
     def test_single_condition_mark_result_uses_product_group_summary(self):
         widget = _DummyManualCycleWidget()
@@ -769,18 +764,13 @@ class TestManualProductConditionCycle(unittest.TestCase):
             },
         }
 
-        self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_1"))
-        self.assertEqual(widget.count_board.mark_results, ["not_labeled"])
-
-        self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_1"))
-        self.assertEqual(widget.count_board.mark_results, ["not_labeled"])
+        self.assertEqual(widget._manual_product_group_result_state("group_1"), (True, "not_labeled"))
 
         widget.recent_test_session_by_id["recent_1"]["result_label"] = "ng"
         widget.recent_test_session_by_id["recent_1"]["recorded_signal_info"]["labels"] = "NG"
-        self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_1"))
-        self.assertEqual(widget.count_board.mark_relabels, [("not_labeled", "NG")])
+        self.assertEqual(widget._manual_product_group_result_state("group_1"), (True, "NG"))
 
-    def test_manual_product_group_count_rolls_back_when_label_returns_to_not_labeled(self):
+    def test_manual_product_summary_updates_when_label_returns_to_not_labeled(self):
         widget = _DummyManualCycleWidget()
         widget.count_board.mode = "mark"
         widget.recent_test_session_by_id = {
@@ -807,18 +797,15 @@ class TestManualProductConditionCycle(unittest.TestCase):
             },
         }
 
-        self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_1"))
-        self.assertEqual(widget.count_board.mark_results, ["OK"])
+        self.assertEqual(widget._manual_product_group_result_state("group_1"), (True, "OK"))
 
         widget.recent_test_session_by_id["recent_1"]["result_label"] = "not labeled"
         widget.recent_test_session_by_id["recent_1"]["recorded_signal_info"]["labels"] = "not_labeled"
-        self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_1"))
-        self.assertEqual(widget.count_board.mark_relabels[-1], ("OK", "not_labeled"))
+        self.assertEqual(widget._manual_product_group_result_state("group_1"), (True, "not_labeled"))
 
         widget.recent_test_session_by_id["recent_1"]["result_label"] = "ok"
         widget.recent_test_session_by_id["recent_1"]["recorded_signal_info"]["labels"] = "OK"
-        self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_1"))
-        self.assertEqual(widget.count_board.mark_relabels[-1], ("not_labeled", "OK"))
+        self.assertEqual(widget._manual_product_group_result_state("group_1"), (True, "OK"))
 
 
 class _CanonicalHistoryHost(SequenceWidgetAnalysisOpsMixin):

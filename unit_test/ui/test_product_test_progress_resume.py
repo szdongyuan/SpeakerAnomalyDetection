@@ -891,12 +891,6 @@ def test_complete_round_preserves_count_without_restoring_obsolete_close_wait(fa
     assert not reopened._serial_product_waiting_for_close
     assert reopened._manual_product_condition_completed_keys == {"a", "b", "c"}
     assert reopened.left_panel.result_panel.stage_text == "本轮完成"
-    reopened.count_board.append_mark_result_file = Mock()
-    reopened.count_board.update_mark_result_file_on_relabel = Mock()
-    reopened.count_board.set_mark_text = Mock()
-    assert reopened._update_manual_product_mark_group_count(group_id)
-    reopened.count_board.append_mark_result_file.assert_not_called()
-    reopened.count_board.update_mark_result_file_on_relabel.assert_not_called()
     reopened._save_product_test_progress_before_exit()
     state = reopened._product_progress_store.load()
     assert state["counted_result"] == "NG"

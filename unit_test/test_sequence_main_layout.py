@@ -1403,18 +1403,18 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertAlmostEqual(left_width / total_width, 0.30, delta=0.03)
         self.assertAlmostEqual(right_width / total_width, 0.70, delta=0.03)
 
-    def test_count_board_keeps_test_summary_visible_in_mark_mode(self):
+    def test_mode_switch_remains_available_without_summary_widgets(self):
         board = SequenceCountBoard({})
 
         board.on_mark_btn_clicked()
 
         self.assertEqual(board.mode, "mark")
-        self.assertEqual(board.stacked_widget.currentIndex(), 0)
+        self.assertFalse(hasattr(board, "stacked_widget"))
 
         board.on_test_btn_clicked()
 
         self.assertEqual(board.mode, "test")
-        self.assertEqual(board.stacked_widget.currentIndex(), 0)
+        self.assertFalse(hasattr(board, "stacked_widget"))
 
     def test_count_board_rejects_test_mode_with_condition_threshold_prompt(self):
         reason = (
@@ -1422,23 +1422,18 @@ class TestSequenceMainLayout(unittest.TestCase):
             "- 7000 rpm 未启用可自动输出 OK/NG 的规则阈值：queue_7000\n"
             "请启用所有工况的阈值，或使用标记模式。"
         )
-        with patch.object(SequenceCountBoard, "set_test_text"), patch.object(
-            SequenceCountBoard,
-            "set_mark_text",
-        ):
-            board = SequenceCountBoard({})
-            board.on_mark_btn_clicked()
-            board.set_test_available(False, reason)
+        board = SequenceCountBoard({})
+        board.on_mark_btn_clicked()
+        board.set_test_available(False, reason)
 
-            with patch(
-                "ui.sequence.sequencement_count_board.QMessageBox.information"
-            ) as information:
-                board.on_test_btn_clicked()
+        with patch(
+            "ui.sequence.sequencement_count_board.QMessageBox.information"
+        ) as information:
+            board.on_test_btn_clicked()
 
         information.assert_called_once_with(board, "提示", reason)
         self.assertEqual(board.mode, "mark")
         self.assertFalse(board.test_btn.isEnabled())
-
 
     def test_using_config_combobox_reads_product_project_registry(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -2021,20 +2016,3 @@ class TestSequenceMainLayout(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-# These layout tests use actual count widgets; keep their storage independent
-# of ignored operator configuration files absent from a Git archive.
-import pytest
-
-@pytest.fixture(autouse=True)
-def _isolated_layout_count_storage(tmp_path, monkeypatch):
-    from ui.sequence import sequencement_count_board as board_module
-    from base import save_data
-    root = str(tmp_path).replace("\\", "/") + "/"
-    config = tmp_path / "ui" / "ui_config"
-    config.mkdir(parents=True)
-    (config / "mark_result.json").write_text(
-        '{"total": 0, "ok": 0, "ng": 0, "not_labels": 0}', encoding="utf-8")
-    monkeypatch.setattr(board_module, "DEFAULT_DIR", root)
-    monkeypatch.setattr(save_data, "DEFAULT_DIR", root)

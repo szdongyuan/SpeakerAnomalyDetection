@@ -839,8 +839,6 @@ def test_read_failure_keeps_test_mode_and_results_with_real_count_board(refresh_
     from ui.sequence.sequencement_count_board import SequenceCountBoard
 
     host, _, _, warnings = refresh_host
-    monkeypatch.setattr(SequenceCountBoard, "set_test_text", lambda _: None)
-    monkeypatch.setattr(SequenceCountBoard, "set_mark_text", lambda _: None)
     board = SequenceCountBoard(host.analysis_config, host)
     board.on_test_btn_clicked()
     host.count_board = board

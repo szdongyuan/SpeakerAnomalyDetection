@@ -943,64 +943,6 @@ class SequenceWidgetAnalysisOpsMixin(
             return label
         return None
 
-    def _manual_product_group_count_label(self, group_id: str):
-        complete, label = self._manual_product_group_result_state(group_id)
-        if complete and label in ("OK", "NG", "not_labeled"):
-            return label
-        return None
-
-    def _update_manual_product_mark_group_count(self, group_id: str) -> bool:
-        if str(getattr(getattr(self, "count_board", None), "mode", "") or "") != "mark":
-            return False
-        if not self._manual_product_condition_keys():
-            return False
-
-        group_id = str(group_id or "").strip()
-        if not group_id:
-            return False
-
-        final_label = self._manual_product_group_count_label(group_id)
-        counted_groups = dict(getattr(self, "_manual_product_condition_counted_group_labels", {}) or {})
-        previous_label = counted_groups.get(group_id)
-        if final_label not in ("OK", "NG", "not_labeled"):
-            return True
-
-        if previous_label == final_label:
-            try:
-                self.count_board.set_mark_text()
-            except Exception:
-                pass
-            return True
-
-        count_board = getattr(self, "count_board", None)
-        if count_board is None:
-            return True
-        try:
-            if previous_label in ("OK", "NG", "not_labeled"):
-                update_count = getattr(count_board, "update_mark_result_file_on_relabel", None)
-                if callable(update_count):
-                    update_count(previous_label, final_label)
-            else:
-                append_count = getattr(count_board, "append_mark_result_file", None)
-                if callable(append_count):
-                    append_count(final_label)
-            count_board.set_mark_text()
-        except Exception as e:
-            logger = getattr(self, "default_logger", None)
-            if logger is not None:
-                logger.warning(f"count_manual_product_mark_group_failed[{group_id}]: {e}")
-            return True
-
-        counted_groups[group_id] = final_label
-        self._manual_product_condition_counted_group_labels = counted_groups
-        return True
-
-    def _update_manual_product_mark_group_count_for_session(self, session_id: str) -> bool:
-        session_record = self._resolve_recent_session(session_id)
-        if not isinstance(session_record, dict):
-            return False
-        return self._update_manual_product_mark_group_count(session_record.get("group_id"))
-
     def _prepare_next_manual_product_condition_recording(self):
         from ui.sequence.sequence_widget_raw_csv_ops import CsvRecordingAdmissionScope
         with CsvRecordingAdmissionScope(self) as csv_scope:
@@ -2443,15 +2385,10 @@ class SequenceWidgetAnalysisOpsMixin(
                     if auto_label not in supported_auto_labels:
                         auto_label = None
                     if auto_label is None:
-                        # Directional cycle should only be counted/finalized after the reverse leg
+                        # Directional cycle should only be finalized after the reverse leg
                         # produces the final combined judgment.
                         pass
                     else:
-                        try:
-                            self.count_board.set_test_result_file(auto_label)
-                            self.count_board.set_test_text()
-                        except Exception:
-                            pass
                         if manual_product_cycle_active:
                             self._awaiting_ok_ng = False
                             self._sn_clear_on_next_scan = False
