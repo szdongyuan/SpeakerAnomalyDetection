@@ -292,6 +292,7 @@ class MotorResultPanel(QWidget):
             condition_channels = self._condition_channels(item)
             button = QPushButton()
             button.setObjectName("testTaskConditionButton")
+            button.setStyleSheet(ui_style_const.motor_condition_button_style)
             button.setMinimumHeight(40)
             button.setCursor(Qt.PointingHandCursor)
             button.clicked.connect(lambda checked=False, key=item["key"]: self.select_condition(key, show_detail=True))
@@ -303,14 +304,16 @@ class MotorResultPanel(QWidget):
             progress_label.setFixedWidth(100)
             progress_label.setToolTip("本档位分析通道中已获得 OK/NG 判定的数量，不表示依次录音。")
             result_label = QLabel("待检测")
+            result_label.setObjectName("testTaskConditionResult")
             result_label.setFixedWidth(60)
             for label in (name_label, progress_label, result_label):
                 label.setAttribute(Qt.WA_TransparentForMouseEvents)
                 label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            for label in (name_label, progress_label):
                 label.setStyleSheet(self._row_label_style())
             progress_label.setAlignment(Qt.AlignCenter)
             result_label.setAlignment(Qt.AlignCenter)
-            result_label.setStyleSheet(self._row_result_style("pending"))
+            result_label.setStyleSheet(ui_style_const.motor_condition_result_style)
             button_layout.addWidget(name_label, stretch=1)
             button_layout.addWidget(progress_label)
             button_layout.addWidget(result_label)
@@ -383,8 +386,8 @@ class MotorResultPanel(QWidget):
         row["channel_count"] = len(self._condition_channels(row))
 
     def reset(self):
-        self._set_default_condition_results()
         self.viewed_key = ""
+        self._set_default_condition_results()
         if self.conditions:
             self.select_condition(
                 self.conditions[0]["key"],
@@ -401,6 +404,7 @@ class MotorResultPanel(QWidget):
     ):
         if key not in self.rows:
             return
+        previous_viewed_key = self.viewed_key
         row_group = str(self.rows[key].get("group") or "")
         if row_group and row_group != self.current_port:
             port_index = self.current_port_combo.findData(row_group)
@@ -409,7 +413,8 @@ class MotorResultPanel(QWidget):
         self.selected_key = key
         if user_view:
             self.viewed_key = key
-        self._refresh_row_styles()
+        for affected_key in dict.fromkeys((previous_viewed_key, key)):
+            self._refresh_row_style(affected_key)
         self._rebuild_channel_table(key)
         self._render_channel_results(key)
         self._update_task_meta()
@@ -485,6 +490,7 @@ class MotorResultPanel(QWidget):
         key = self._resolve_key(condition)
         if not key:
             return False
+        previous_viewed_key = self.viewed_key
         detail_was_visible = not self.detail_frame.isHidden()
         previous_detail_owner = self._detail_owner_key
         result = str(result_text or "--")
@@ -528,7 +534,9 @@ class MotorResultPanel(QWidget):
             if detail_was_visible and previous_detail_owner != key:
                 self._show_detail_under_row(key)
         self._update_row_button(key)
-        self._refresh_row_styles()
+        self._refresh_row_style(key)
+        if previous_viewed_key != self.viewed_key and previous_viewed_key != key:
+            self._refresh_row_style(previous_viewed_key)
         if key == self.selected_key:
             self._rebuild_channel_table(key)
             self._render_channel_results(key)
@@ -705,6 +713,7 @@ class MotorResultPanel(QWidget):
         self._refresh_port_view()
 
     def _refresh_port_view(self):
+        previous_viewed_key = self.viewed_key
         visible_keys = []
         for item in self.conditions:
             key = item["key"]
@@ -732,23 +741,38 @@ class MotorResultPanel(QWidget):
         self.port_index_label.setText(
             f"第{port_index + 1}/{port_total}个" if port_index >= 0 and port_total else "第0/0个"
         )
-        self._refresh_row_styles()
+        if previous_viewed_key != self.viewed_key:
+            self._refresh_row_style(previous_viewed_key)
         self._update_task_meta()
         self._update_port_summary()
         if self.selected_key:
             self.condition_selected.emit(self.selected_key)
 
     def _refresh_row_styles(self):
-        for key, row in self.rows.items():
-            selected = key == self.viewed_key
-            recording = str(row.get("result") or "") == "采集中"
-            row["button"].setStyleSheet(
-                self._row_style(
-                    row["tone"],
-                    selected=selected,
-                    recording=recording,
-                )
-            )
+        for key in self.rows:
+            self._refresh_row_style(key)
+
+    def _refresh_row_style(self, key):
+        row = self.rows.get(key)
+        if row is None:
+            return
+        if row["result"] == "采集中":
+            state = "recording"
+        elif key == self.viewed_key:
+            state = "viewed"
+        else:
+            state = "normal"
+        self._set_style_property(row["button"], "visualState", state)
+
+    @staticmethod
+    def _set_style_property(widget, name, value):
+        if widget.property(name) == value:
+            return
+        widget.setProperty(name, value)
+        style = widget.style()
+        style.unpolish(widget)
+        style.polish(widget)
+        widget.update()
 
     def _update_task_meta(self):
         self.round_list_label.setText(
@@ -779,7 +803,9 @@ class MotorResultPanel(QWidget):
                 f"通道判定：{int(row.get('completed_channels', 0))}/{int(row.get('channel_count', len(self.channel_labels)))}"
             )
             labels["result"].setText(str(row.get("result") or "待检测"))
-            labels["result"].setStyleSheet(self._row_result_style(row.get("tone")))
+            tone = row.get("tone")
+            visual_tone = tone if tone in ("ok", "ng", "running") else "pending"
+            self._set_style_property(labels["result"], "resultTone", visual_tone)
             # Processing text is longer than the ordinary OK/NG state.
             labels["result"].setFixedWidth(
                 max(60, labels["result"].fontMetrics().horizontalAdvance("数据保存中") + 12)
@@ -1178,44 +1204,10 @@ class MotorResultPanel(QWidget):
         return "未判定", "pending"
 
     @staticmethod
-    def _row_style(tone, selected=False, recording=False):
-        if recording:
-            bg, border = "#EAF2FB", "#2F80C9"
-            hover_bg, hover_border = "#E3EEF9", "#286EAE"
-        elif selected:
-            bg, border = "#E1EFFF", "#1877C9"
-            hover_bg, hover_border = "#D7E9FC", "#1269B2"
-        else:
-            bg, border = "#F4F8FC", "#B8C8DA"
-            hover_bg, hover_border = "#EDF4FC", "#6FA8DC"
-        return (
-            "QPushButton {"
-            f"background:{bg}; color:#1F2937; border:1px solid {border}; border-radius:5px;"
-            "padding:0;"
-            "}"
-            "QPushButton:hover {"
-            f"background:{hover_bg}; border-color:{hover_border};"
-            "}"
-        )
-
-    @staticmethod
     def _row_label_style():
         return (
             "QLabel { background:transparent; border:none; color:#1F2937; "
             f"font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; font-size:13px; }}"
-        )
-
-    @staticmethod
-    def _row_result_style(tone):
-        color = {
-            "ok": "#16864B",
-            "ng": "#D94343",
-            "running": "#2F6FB4",
-        }.get(str(tone or ""), "#64748B")
-        return (
-            "QLabel { background:transparent; border:none; "
-            f"color:{color}; font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; "
-            "font-size:13px; font-weight:bold; }"
         )
 
     @staticmethod
