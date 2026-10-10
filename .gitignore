@@ -31,6 +31,3 @@ build/
 recording_interval_launcher.py
 unit_test/test_recording_interval_launcher.py
 tools
-dist_onedir/
-build_onedir.py
-recording_interval_launcher.spec
