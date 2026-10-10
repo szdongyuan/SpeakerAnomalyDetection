@@ -5,10 +5,7 @@
 /models
 /configs
 /ui/ui_config
-/ui/ui_pic/*
-!/ui/ui_pic/logo_pic/
-/ui/ui_pic/logo_pic/*
-!/ui/ui_pic/logo_pic/公司-LOGO.png
+/ui/ui_pic
 /database
 test.py
 ui/readme.md
