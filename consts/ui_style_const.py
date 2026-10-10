@@ -651,6 +651,41 @@ motor_port_combo_style = _style("""
             }
 """)
 
+motor_condition_button_style = """
+QPushButton#testTaskConditionButton {
+    color:#1F2937; border:1px solid #B8C8DA; border-radius:5px; padding:0;
+}
+QPushButton#testTaskConditionButton[visualState="normal"] {
+    background:#F4F8FC; border-color:#B8C8DA;
+}
+QPushButton#testTaskConditionButton[visualState="normal"]:hover {
+    background:#EDF4FC; border-color:#6FA8DC;
+}
+QPushButton#testTaskConditionButton[visualState="viewed"] {
+    background:#E1EFFF; border-color:#1877C9;
+}
+QPushButton#testTaskConditionButton[visualState="viewed"]:hover {
+    background:#D7E9FC; border-color:#1269B2;
+}
+QPushButton#testTaskConditionButton[visualState="recording"] {
+    background:#EAF2FB; border-color:#2F80C9;
+}
+QPushButton#testTaskConditionButton[visualState="recording"]:hover {
+    background:#E3EEF9; border-color:#286EAE;
+}
+"""
+
+motor_condition_result_style = _style("""
+QLabel#testTaskConditionResult {
+    background:transparent; border:none;
+    font-family:$MAIN_UI_SMALL_FONT_FAMILY; font-size:13px; font-weight:bold;
+}
+QLabel#testTaskConditionResult[resultTone="ok"] { color:#16864B; }
+QLabel#testTaskConditionResult[resultTone="ng"] { color:#D94343; }
+QLabel#testTaskConditionResult[resultTone="running"] { color:#2F6FB4; }
+QLabel#testTaskConditionResult[resultTone="pending"] { color:#64748B; }
+""")
+
 motor_left_panel_scroll_area_style = """
             QScrollArea {
                 border: none;

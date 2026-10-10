@@ -75,6 +75,7 @@ class _SpyCountBoard:
 
 class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
     def __init__(self):
+        self.default_logger = logging.getLogger(__name__)
         self.product_test_condition_configs = [
             {"key": "q6000", "condition_name": "6000", "test_queue": "queue_6000"},
             {"key": "q7000", "condition_name": "7000", "test_queue": "queue_7000"},

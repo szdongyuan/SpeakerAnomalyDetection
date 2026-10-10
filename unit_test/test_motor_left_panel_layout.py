@@ -2,7 +2,8 @@ import unittest
 from unittest.mock import patch
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QComboBox, QFrame, QLabel, QWidget
+from PyQt5.QtGui import QImage, QPainter, QPalette
+from PyQt5.QtWidgets import QApplication, QComboBox, QFrame, QLabel, QStyle, QStyleOptionButton, QWidget
 
 from base.load_config import LoadUiConfig
 from consts import error_code
@@ -18,6 +19,26 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def assert_row_visual_state(self, panel, key, state):
+        button = panel.rows[key]["button"]
+        self.assertEqual(button.property("visualState"), state)
+        button.ensurePolished()
+        option = QStyleOptionButton()
+        button.initStyleOption(option)
+        option.state &= ~QStyle.State_MouseOver
+        image = QImage(button.size(), QImage.Format_ARGB32)
+        image.fill(Qt.transparent)
+        painter = QPainter(image)
+        button.style().drawControl(QStyle.CE_PushButton, option, painter, button)
+        painter.end()
+        background, border = {
+            "normal": ("#f4f8fc", "#b8c8da"),
+            "viewed": ("#e1efff", "#1877c9"),
+            "recording": ("#eaf2fb", "#2f80c9"),
+        }[state]
+        self.assertEqual(image.pixelColor(image.width() // 2, 3).name(), background)
+        self.assertEqual(image.pixelColor(image.width() // 2, 0).name(), border)
 
     def test_left_panel_uses_video_monitor_instead_of_summary(self):
         summary_widget = QWidget()
@@ -167,8 +188,8 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(panel.count_label.text(), "档位进度：0/2")
         self.assertNotIn("index", panel.rows["01"]["labels"])
         self.assertEqual(panel.rows["01"]["labels"]["name"].text(), "0.1")
-        self.assertNotIn("#2F80C9", panel.rows["01"]["button"].styleSheet())
-        self.assertNotIn("#2F80C9", panel.rows["02"]["button"].styleSheet())
+        self.assert_row_visual_state(panel, "01", "normal")
+        self.assert_row_visual_state(panel, "02", "normal")
         self.assertIn(
             ui_style_const.MAIN_UI_SMALL_FONT_FAMILY,
             panel.stage_label.styleSheet(),
@@ -184,8 +205,8 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
 
         self.assertEqual(panel.viewed_key, "")
         self.assertFalse(hasattr(panel, "current_test_label"))
-        self.assertNotIn("#2F80C9", panel.rows["01"]["button"].styleSheet())
-        self.assertNotIn("#2F80C9", panel.rows["02"]["button"].styleSheet())
+        self.assert_row_visual_state(panel, "01", "normal")
+        self.assert_row_visual_state(panel, "02", "normal")
 
     def test_automatic_recording_selection_does_not_become_user_view(self):
         panel = MotorResultPanel(
@@ -200,12 +221,11 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertEqual(panel.selected_key, "02")
         self.assertEqual(panel.viewed_key, "")
         self.assertFalse(hasattr(panel, "current_test_label"))
-        self.assertIn("#EAF2FB", panel.rows["02"]["button"].styleSheet())
+        self.assert_row_visual_state(panel, "02", "recording")
 
         panel.set_condition_result("02", "待判定", tone="pending")
 
-        self.assertNotIn("#EAF2FB", panel.rows["02"]["button"].styleSheet())
-        self.assertNotIn("#2F80C9", panel.rows["02"]["button"].styleSheet())
+        self.assert_row_visual_state(panel, "02", "normal")
         self.assertIn(
             ui_style_const.UI_FONT_FAMILY,
             panel.current_port_combo.styleSheet(),
@@ -399,8 +419,8 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertTrue(panel.rows["01"]["button"].isHidden())
         self.assertFalse(panel.rows["02"]["button"].isHidden())
         self.assertFalse(hasattr(panel, "current_test_label"))
-        self.assertNotIn("#2F80C9", panel.rows["02"]["button"].styleSheet())
-        self.assertNotIn("#2F80C9", panel.rows["01"]["button"].styleSheet())
+        self.assert_row_visual_state(panel, "02", "normal")
+        self.assert_row_visual_state(panel, "01", "normal")
         self.assertEqual(panel.port_index_label.text(), "第2/2个")
 
     def test_port_rows_show_gear_names_without_global_sequence_numbers(self):
@@ -457,9 +477,11 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         self.assertIn("background:#FDECEC", panel.port_result_value.styleSheet())
         self.assertIn("background:#FDECEC", panel.round_result_value.styleSheet())
         self.assertEqual(panel.rows["02"]["labels"]["result"].text(), "NG")
-        self.assertIn("#D94343", panel.rows["02"]["labels"]["result"].styleSheet())
-        self.assertIn("background:#F4F8FC", panel.rows["01"]["button"].styleSheet())
-        self.assertNotIn("background:#FCE8E8", panel.rows["02"]["button"].styleSheet())
+        self.assertEqual(panel.rows["02"]["labels"]["result"].property("resultTone"), "ng")
+        panel.rows["02"]["labels"]["result"].ensurePolished()
+        self.assertEqual(panel.rows["02"]["labels"]["result"].palette().color(QPalette.WindowText).name(), "#d94343")
+        self.assert_row_visual_state(panel, "01", "normal")
+        self.assert_row_visual_state(panel, "02", "normal")
 
     def test_channel_results_update_selected_channel_table(self):
         panel = MotorResultPanel(
@@ -578,19 +600,13 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         panel.set_channels([0, 1])
 
         panel.set_condition_result("02", "采集中", tone="running")
-        combined_style = panel.rows["02"]["button"].styleSheet()
+        self.assert_row_visual_state(panel, "02", "recording")
         panel.select_condition("01")
         panel.set_condition_result("02", "采集中", tone="running")
 
         self.assertEqual(panel.selected_key, "01")
-        self.assertIn("#EAF2FB", combined_style)
-        self.assertIn("#2F80C9", combined_style)
-        self.assertIn("background:#E1EFFF", panel.rows["01"]["button"].styleSheet())
-        self.assertIn("border:1px solid #1877C9", panel.rows["01"]["button"].styleSheet())
-        self.assertNotIn("#F3F0F8", panel.rows["01"]["button"].styleSheet())
-        self.assertNotIn("#7A6C9D", panel.rows["01"]["button"].styleSheet())
-        self.assertIn("#EAF2FB", panel.rows["02"]["button"].styleSheet())
-        self.assertIn("#2F80C9", panel.rows["02"]["button"].styleSheet())
+        self.assert_row_visual_state(panel, "01", "viewed")
+        self.assert_row_visual_state(panel, "02", "recording")
         self.assertNotIn("selection_marker", panel.rows["01"])
         self.assertNotIn("recording_marker", panel.rows["02"])
 
@@ -606,7 +622,7 @@ class TestMotorLeftPanelLayout(unittest.TestCase):
         panel.set_condition_result("02", "分析中", tone="running")
 
         self.assertEqual(panel.selected_key, "01")
-        self.assertIn("#B8C8DA", panel.rows["02"]["button"].styleSheet())
+        self.assert_row_visual_state(panel, "02", "normal")
 
     def test_automatic_results_survive_legacy_pending_refresh_per_port(self):
         configs = []
