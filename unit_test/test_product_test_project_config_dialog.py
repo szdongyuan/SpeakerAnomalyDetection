@@ -20,7 +20,6 @@ from ui.product_test_project_config_dialog import (
     ProductTestProjectConfigDialog,
 )
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
-from ui.sequence.recent_session_panel import RecentSessionPanel
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 
 
@@ -1792,13 +1791,9 @@ def test_project_condition_display_uses_group_and_composite_key():
     ]
 
     waveform_conditions = DirectionWaveformPanel._normalize_conditions(conditions)
-    recent_conditions = RecentSessionPanel._normalize_conditions(conditions)
 
     assert waveform_conditions == [
         {"key": "group_1:condition_1", "name": "USB-C输出口 / 档位1", "test_queue": "低噪声基础测试"}
-    ]
-    assert recent_conditions == [
-        {"key": "group_1:condition_1", "name": "USB-C输出口 / 档位1"}
     ]
 
 

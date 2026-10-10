@@ -24,7 +24,6 @@ def startup_host(tmp_path, enabled=False):
     host.product_test_project_context = {EXPORT_RAW_AUDIO_CSV_KEY: enabled}
     host._csv_admission_notice = Mock()
     host.recent_test_sessions = []
-    host.recent_session_panel = None
     return host
 
 

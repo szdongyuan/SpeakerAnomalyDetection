@@ -7,7 +7,6 @@ import pytest
 from base.recording_channel_selection import RecordingChannelSelectionError
 from consts.recording_preview_consts import PREVIEW_TIME_MODE_CUMULATIVE
 from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
-from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
 
@@ -42,7 +41,6 @@ class _SelectionHost(SequenceWidgetUiOpsMixin):
         self._pending_configured_input_channels = None
         self._channel_selection_error = ""
         self._active_input_channels = [0]
-        self._waveform_presentation_owner = "hardware"
 
     def _end_streaming_waveform_session(self):
         self.events.append(("release_live_display",))
@@ -224,18 +222,6 @@ def test_refresh_during_recording_updates_pending_only():
     assert host.events == []
 
 
-def test_refresh_during_temporary_recent_view_updates_pending_only():
-    host = _SelectionHost(channels=(2, 0))
-    host._configured_input_channels = (0,)
-    host._waveform_presentation_owner = "recent"
-    host._active_input_channels = [3]
-
-    host.refresh_channel_windows()
-
-    assert host._configured_input_channels == (0, 2)
-    assert host._pending_configured_input_channels == (0, 2)
-    assert host._active_input_channels == [3]
-    assert host.events == []
 
 
 def test_terminal_cleanup_applies_different_pending_selection_once_and_clears_plots():
@@ -578,37 +564,3 @@ def test_final_projection_restores_real_cumulative_preview_after_second_channel_
     workspace.close()
     workspace.deleteLater()
     ui_qapp.processEvents()
-
-
-def test_presentation_snapshot_restores_exact_channel_plot_states():
-    host = _ProjectionHost((0, 2))
-    host.default_logger = logging.getLogger(__name__)
-    original_columns = (
-        np.asarray([1.0, 2.0], dtype=np.float32),
-        np.asarray([10.0, 20.0], dtype=np.float32),
-    )
-    time_axis = np.asarray([0.0, 0.5])
-    for window, column in zip(
-        host.channel_workspace.all_subwindows(),
-        original_columns,
-    ):
-        window.set_data(time_axis, column)
-    states = SequenceWidgetAnalysisOpsMixin._snapshot_channel_workspace_plot_states(
-        host
-    )
-    host.channel_workspace.set_channels((3, 4))
-
-    restored = SequenceWidgetAnalysisOpsMixin._restore_channel_workspace_plot_states(
-        host,
-        (0, 2),
-        states,
-    )
-
-    assert restored is True
-    for window, column in zip(
-        host.channel_workspace.all_subwindows(),
-        original_columns,
-    ):
-        restored_time, restored_column = window.current_data
-        np.testing.assert_array_equal(restored_time, time_axis)
-        np.testing.assert_array_equal(restored_column, column)

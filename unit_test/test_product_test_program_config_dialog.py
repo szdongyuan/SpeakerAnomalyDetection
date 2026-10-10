@@ -143,8 +143,6 @@ def test_dialog_uses_unified_sections_and_right_aligned_table_actions(
     assert close_trigger_layout.count() == 3
     assert dialog.close_trigger_label.text() == "关闭测试报文："
     assert dialog.close_trigger_label.objectName() == ""
-    assert dialog.close_trigger_label.font() == dialog.pdf_report_checkbox.font()
-    assert dialog.close_trigger_label.font() == dialog.pdf_save_dir_label.font()
     assert dialog.close_trigger_input.minimumWidth() == 360
     assert dialog.close_trigger_input.maximumWidth() == 520
     assert dialog.close_trigger_input.placeholderText() == (
@@ -153,19 +151,6 @@ def test_dialog_uses_unified_sections_and_right_aligned_table_actions(
     assert dialog.close_trigger_input.toolTip() == (
         "工装关闭测试按钮对应的完整十六进制报文，需包含CRC。"
     )
-    pdf_report_layout = dialog.layout().itemAt(4).layout()
-    assert pdf_report_layout.itemAt(0).widget() is dialog.pdf_report_checkbox
-    assert pdf_report_layout.itemAt(1).spacerItem() is not None
-    assert pdf_report_layout.itemAt(2).widget() is dialog.pdf_save_dir_label
-    assert pdf_report_layout.itemAt(3).widget() is dialog.pdf_save_dir_input
-    assert pdf_report_layout.count() == 4
-    assert dialog.pdf_report_checkbox.text() == "测试完成后生成 PDF 报告"
-    assert dialog.pdf_save_dir_label.text() == "保存目录："
-    assert dialog.pdf_save_dir_input.placeholderText() == "audio_data/reports"
-    assert not dialog.pdf_select_dir_action.icon().isNull()
-    assert dialog.pdf_select_dir_action.toolTip() == "选择 PDF 报告保存目录"
-    assert not hasattr(dialog, "pdf_default_dir_btn")
-    assert not hasattr(dialog, "pdf_reset_dir_action")
     button_layout = dialog.layout().itemAt(1).layout()
     assert button_layout.itemAt(0).widget() is dialog.section_title_label
     assert button_layout.itemAt(1).spacerItem() is not None
@@ -175,7 +160,7 @@ def test_dialog_uses_unified_sections_and_right_aligned_table_actions(
     assert dialog.save_btn.objectName() == "productProgramPrimaryButton"
     assert dialog.delete_btn.text() == "删除配置"
     assert dialog.delete_btn.objectName() == ""
-    bottom_button_layout = dialog.layout().itemAt(6).layout()
+    bottom_button_layout = dialog.layout().itemAt(5).layout()
     assert bottom_button_layout.itemAt(0).widget() is dialog.new_btn
     assert bottom_button_layout.itemAt(1).widget() is dialog.clear_btn
     assert bottom_button_layout.itemAt(2).widget() is dialog.import_btn
@@ -188,62 +173,42 @@ def test_dialog_uses_unified_sections_and_right_aligned_table_actions(
     dialog.close()
 
 
-def test_dialog_collects_top_level_pdf_report_config(tmp_path):
+def test_dialog_ignores_legacy_pdf_report_and_saves_normal_edits(tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     manager = make_manager(tmp_path)
     prepare_program(manager)
+    file_name = manager.load_registry()["active_file"]
+    load_code, program = manager.load_program(file_name)
+    assert load_code == error_code.OK
+    program["pdf_report"] = {"enabled": "yes", "save_dir": []}
+    program_path = Path(manager.program_dir) / file_name
+    assert LoadUiConfig.save_data_to_json(program, str(program_path))
+    original_bytes = program_path.read_bytes()
     dialog = ProductTestProgramConfigDialog(manager)
-
-    assert not dialog.pdf_report_checkbox.isChecked()
-    assert dialog.pdf_save_dir_label.isHidden()
-    assert dialog.pdf_save_dir_input.isHidden()
-    dialog.show()
-    app.processEvents()
-    collapsed_table_height = dialog.program_table.height()
-    collapsed_report_height = dialog.layout().itemAt(4).layout().geometry().height()
-
-    report_dir = tmp_path / "reports"
-    dialog.pdf_report_checkbox.setChecked(True)
-    dialog.pdf_save_dir_input.setText(str(report_dir))
     app.processEvents()
 
-    assert not dialog.pdf_save_dir_label.isHidden()
-    assert not dialog.pdf_save_dir_input.isHidden()
-    assert dialog.program_table.height() == collapsed_table_height
-    assert dialog.layout().itemAt(4).layout().geometry().height() == (
-        collapsed_report_height
-    )
-    assert dialog.collect_program()["pdf_report"] == {
-        "enabled": True,
-        "save_dir": str(report_dir),
-    }
-    assert dialog.pdf_save_dir_input.toolTip() == os.path.abspath(str(report_dir))
-    dialog._dirty = False
-    dialog.close()
+    assert not hasattr(dialog, "pdf_report_checkbox")
+    assert not hasattr(dialog, "pdf_save_dir_input")
+    assert not hasattr(dialog, "pdf_save_dir_label")
+    assert not hasattr(dialog, "pdf_select_dir_action")
+    assert "pdf_report" not in dialog.collect_program()
+    assert program_path.read_bytes() == original_bytes
+    assert not dialog._dirty
 
-
-def test_dialog_loads_saved_pdf_report_config(tmp_path):
-    app = QApplication.instance() or QApplication([])
-    manager = make_manager(tmp_path)
-    report_dir = tmp_path / "reports"
-    program = {
-        "name": "PDF配置",
-        "pdf_report": {
-            "enabled": True,
-            "save_dir": str(report_dir),
-        },
-        "sub_configs": [],
-    }
-    success, file_name = manager.save_program(None, program)
-    assert success
-
-    dialog = ProductTestProgramConfigDialog(manager)
-    dialog._load_program(file_name)
+    dialog.program_table.item(0, 1).setText("Edited condition")
+    assert dialog._dirty
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
+    dialog._save_program()
     app.processEvents()
 
-    assert dialog.pdf_report_checkbox.isChecked()
-    assert dialog.pdf_save_dir_input.text() == os.path.abspath(str(report_dir))
-    assert dialog.pdf_save_dir_input.toolTip() == os.path.abspath(str(report_dir))
+    assert dialog.result() == QDialog.Accepted
+    load_code, saved = manager.load_program(file_name)
+    assert load_code == error_code.OK
+    assert "pdf_report" not in saved
+    assert saved["name"] == program["name"]
+    assert saved["sub_configs"] == [
+        {**program["sub_configs"][0], "condition_name": "Edited condition"}
+    ]
     dialog.close()
 
 

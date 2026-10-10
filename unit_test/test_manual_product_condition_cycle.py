@@ -105,7 +105,6 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
         self._current_run_recording_token = ""
         self.last_play_count = None
         self._token_seq = 0
-        self.pdf_export_calls = []
 
     def _load_sequence_config_for_product_condition(self, condition_config):
         queue_name = condition_config["test_queue"]
@@ -136,8 +135,6 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
         self.started.append((label, self._active_product_condition_key, self._resolve_recording_name_suffix()))
 
 
-    def _maybe_export_product_test_pdf(self, group_id, overall_result):
-        self.pdf_export_calls.append((group_id, overall_result))
 
 
 class TestManualProductConditionCycle(unittest.TestCase):
@@ -273,51 +270,39 @@ class TestManualProductConditionCycle(unittest.TestCase):
         widget.on_clicked_player_btn()
         self.assertEqual(widget._update_manual_product_condition_result_after_analysis("OK"), "NG")
         self.assertEqual(widget.left_panel.final_results[-1], ("NG", "ng"))
-        self.assertEqual(widget.pdf_export_calls[-1], ("token_1", "NG"))
 
-    def test_recent_session_update_skips_duplicate_pdf_fallback_after_refresh(self):
+    def test_recent_session_update_refreshes_group_once(self):
         widget = _DummyManualCycleWidget()
-        widget.recent_session_panel = None
         widget.recent_test_session_by_id = {
             "session-1": {"group_id": "group-1"}
         }
         refresh_calls = []
-        fallback_calls = []
         widget._refresh_manual_product_condition_results_from_group = (
             lambda group_id: None
         )
         widget._refresh_current_manual_product_final_from_group = (
             lambda group_id: refresh_calls.append(group_id) or "OK"
         )
-        widget._try_export_product_test_pdf = (
-            lambda group_id: fallback_calls.append(group_id)
-        )
 
         widget._update_recent_session("session-1", result_label="OK")
 
         self.assertEqual(refresh_calls, ["group-1"])
-        self.assertEqual(fallback_calls, [])
 
-    def test_recent_session_update_uses_pdf_fallback_when_group_is_not_displayed(self):
+    def test_recent_session_update_preserves_undisplayed_group_result(self):
         widget = _DummyManualCycleWidget()
-        widget.recent_session_panel = None
         widget.recent_test_session_by_id = {
             "session-1": {"group_id": "history-group"}
         }
-        fallback_calls = []
         widget._refresh_manual_product_condition_results_from_group = (
             lambda group_id: None
         )
         widget._refresh_current_manual_product_final_from_group = (
             lambda group_id: None
         )
-        widget._try_export_product_test_pdf = (
-            lambda group_id: fallback_calls.append(group_id)
-        )
 
         widget._update_recent_session("session-1", result_label="OK")
 
-        self.assertEqual(fallback_calls, ["history-group"])
+        self.assertEqual(widget.recent_test_session_by_id["session-1"]["result_label"], "OK")
 
     def test_left_panel_analysis_details_syncs_runtime_metrics(self):
         widget = _DummyManualCycleWidget()
@@ -732,7 +717,6 @@ class TestManualProductConditionCycle(unittest.TestCase):
     def test_manual_product_mark_result_counts_once_after_full_group(self):
         widget = _DummyManualCycleWidget()
         widget.count_board.mode = "mark"
-        widget.recent_session_panel = None
         widget.recent_test_session_by_id = {
             "recent_1": {
                 "session_id": "recent_1",
@@ -771,7 +755,6 @@ class TestManualProductConditionCycle(unittest.TestCase):
     def test_single_condition_mark_result_uses_product_group_summary(self):
         widget = _DummyManualCycleWidget()
         widget.count_board.mode = "mark"
-        widget.recent_session_panel = None
         widget.product_test_condition_configs = [
             {"key": "q6000", "condition_name": "6000", "test_queue": "queue_6000"},
         ]
@@ -799,7 +782,6 @@ class TestManualProductConditionCycle(unittest.TestCase):
     def test_manual_product_group_count_rolls_back_when_label_returns_to_not_labeled(self):
         widget = _DummyManualCycleWidget()
         widget.count_board.mode = "mark"
-        widget.recent_session_panel = None
         widget.recent_test_session_by_id = {
             "recent_1": {
                 "session_id": "recent_1",
@@ -836,6 +818,145 @@ class TestManualProductConditionCycle(unittest.TestCase):
         widget.recent_test_session_by_id["recent_1"]["recorded_signal_info"]["labels"] = "OK"
         self.assertTrue(widget._update_manual_product_mark_group_count_for_session("recent_1"))
         self.assertEqual(widget.count_board.mark_relabels[-1], ("not_labeled", "OK"))
+
+
+class _CanonicalHistoryHost(SequenceWidgetAnalysisOpsMixin):
+    def __init__(self):
+        self.recent_test_sessions = []
+        self.recent_test_session_by_id = {}
+        self._recent_session_max_items = 20
+        self._condition_record_cache = {}
+        self._manual_product_condition_group_id = "active"
+        self._manual_product_condition_results = {"01": "NG", "03": "NG"}
+        self._manual_product_condition_completed_keys = {"03", "04"}
+
+    def _product_condition_sequence(self):
+        return [{"key": key} for key in ("01", "02", "03", "04")]
+
+    def _product_condition_runtime_key(self, condition, index=0):
+        return condition["key"]
+
+    def _build_recent_session_record(self, result_label):
+        return dict(self.next_record, result_label=result_label)
+
+
+def test_canonical_history_aggregation_precedence_and_metadata_without_panel():
+    host = _CanonicalHistoryHost()
+    host.recent_test_session_by_id = {
+        "old": {"group_id": "active", "condition_key": "01", "result_label": "NG"},
+        "latest": {"group_id": "active", "condition_key": "01", "result_label": "OK",
+                   "barcode": "SN1", "product_model": "M1", "time_text": "now"},
+        "other": {"group_id": "other", "condition_key": "02", "result_label": "NG"},
+    }
+    host._condition_record_cache = {
+        "01": {"group_id": "active", "condition_key": "01", "source_type": "imported", "result_label": "NG"},
+        "02": {"group_id": "active", "condition_key": "02", "source_type": "restored", "result_label": "OK"},
+        "ignored": {"group_id": "active", "condition_key": "ignored", "source_type": "recorded", "result_label": "NG"},
+    }
+    group = host._collect_product_condition_records("active")
+    assert group["records"]["01"] is host.recent_test_session_by_id["latest"]
+    assert group["results"] == {"01": "OK", "02": "OK", "03": "NG", "04": "not_labeled"}
+    assert (group["barcode"], group["product_model"], group["time_text"]) == ("SN1", "M1", "now")
+    assert host._product_group_result_state("active") == (True, "NG")
+    assert host._product_group_result_state("other") == (False, None)
+    assert host._collect_product_condition_records("missing") is None
+    host._condition_record_cache["02"]["source_type"] = "imported"
+    assert host._collect_product_condition_records("active")["results"]["02"] == "OK"
+
+
+def test_canonical_history_retains_twenty_records_and_evicts_same_or_other_groups():
+    for same_group in (False, True):
+        host = _CanonicalHistoryHost()
+        for index in range(21):
+            host.next_record = {"session_id": str(index), "group_id": "kept" if same_group or index else "evicted",
+                                "condition_key": "01" if index == 0 else "02"}
+            host._append_recent_session_from_current_run("OK")
+        assert len(host.recent_test_sessions) == len(host.recent_test_session_by_id) == 20
+        assert host.recent_test_sessions == [str(index) for index in range(20, 0, -1)]
+        assert "0" not in host.recent_test_session_by_id
+        assert host._current_recent_session_id == "20"
+        assert host._pending_recent_session_append is False
+        assert host._collect_product_condition_records("evicted") is None
+        assert host._collect_product_condition_records("kept")["results"] == {"02": "OK"}
+
+
+class _GroupMetadataHistoryHost(_CanonicalHistoryHost):
+    def _product_condition_sequence(self):
+        return [{"key": "01", "condition_name": "Low"},
+                {"key": "02", "condition_name": "High"}]
+
+    def append_record(self, index, group_id="group", condition_key="01"):
+        self.next_record = {
+            "session_id": str(index), "group_id": group_id,
+            "condition_key": condition_key, "mode": condition_key,
+            "created_at": f"2026-10-09T10:{index:02d}:00",
+            "time_text": f"2026-10-09 10:{index:02d}:00",
+            "barcode": f"SN{index}", "product_model": f"Model{index}",
+            "recorded_path": f"D:/audio/{index}.wav", "sample_rate": 48000,
+            "recorded_signal_info": {"labels": "OK"},
+            "analysis_result_dict": {}, "config_snapshot": {},
+        }
+        self._append_recent_session_from_current_run("OK")
+
+    def _refresh_manual_product_condition_results_from_group(self, group_id):
+        return None
+
+    def _refresh_current_manual_product_final_from_group(self, group_id):
+        return None
+
+
+def test_group_metadata_retest_preserves_first_time_and_latest_upsert():
+    host = _GroupMetadataHistoryHost()
+    host.append_record(0)
+    host.append_record(1, condition_key="02")
+    host.append_record(2)
+
+    group = host._collect_product_condition_records("group")
+    assert group["time_text"] == "2026-10-09 10:00:00"
+    assert (group["barcode"], group["product_model"]) == ("SN2", "Model2")
+    assert group["records"]["01"] is host.recent_test_session_by_id["2"]
+    assert group["records"]["01"]["time_text"] == "2026-10-09 10:02:00"
+
+
+def test_group_metadata_older_record_update_uses_upsert_order_without_changing_time():
+    host = _GroupMetadataHistoryHost()
+    host.append_record(0)
+    host.append_record(1, condition_key="02")
+    host.append_record(2)
+    host._update_recent_session("0", barcode="Corrected", product_model="Revised",
+                                time_text="2026-10-09 11:00:00")
+
+    group = host._collect_product_condition_records("group")
+    assert (group["barcode"], group["product_model"]) == ("Corrected", "Revised")
+    assert group["time_text"] == "2026-10-09 10:00:00"
+    assert group["records"]["01"] is host.recent_test_session_by_id["2"]
+    assert host.recent_test_session_by_id["0"]["time_text"] == "2026-10-09 11:00:00"
+    host._update_recent_session("1", barcode="", product_model="")
+    group = host._collect_product_condition_records("group")
+    assert (group["barcode"], group["product_model"]) == ("Corrected", "Revised")
+
+
+def test_group_metadata_survives_same_and_cross_group_eviction_then_expires():
+    for same_group in (True, False):
+        host = _GroupMetadataHistoryHost()
+        for index in range(21):
+            group_id = "group" if same_group or index < 2 else "other"
+            host.append_record(index, group_id, "01" if index % 2 == 0 else "02")
+
+        group = host._collect_product_condition_records("group")
+        assert len(host.recent_test_session_by_id) == len(host.recent_test_sessions) == 20
+        assert "0" not in host.recent_test_session_by_id
+        assert group["time_text"] == "2026-10-09 10:00:00"
+        latest = 20 if same_group else 1
+        assert (group["barcode"], group["product_model"]) == (f"SN{latest}", f"Model{latest}")
+        assert host.recent_test_session_by_id["1"]["time_text"] == "2026-10-09 10:01:00"
+        if not same_group:
+            host.append_record(21, "other")
+            assert host._collect_product_condition_records("group") is None
+            host.append_record(22)
+            group = host._collect_product_condition_records("group")
+            assert group["time_text"] == "2026-10-09 10:22:00"
+            assert (group["barcode"], group["product_model"]) == ("SN22", "Model22")
 
 
 if __name__ == "__main__":

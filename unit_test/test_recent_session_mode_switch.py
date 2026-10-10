@@ -28,26 +28,8 @@ from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOps
 from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
 
 
-class _DummyRecentSessionPanel:
-    def __init__(self):
-        self.editable_states = []
-        self.reset_count = 0
-        self.conditions = None
-
-    def set_result_editable(self, editable: bool):
-        self.editable_states.append(bool(editable))
-
-    def reset_sessions(self):
-        self.reset_count += 1
-
-    def set_conditions(self, condition_configs):
-        self.conditions = list(condition_configs or [])
-        self.reset_sessions()
-
-
 class _DummySequenceWidget(SequenceWidgetStreamingOpsMixin):
     def __init__(self):
-        self.recent_session_panel = _DummyRecentSessionPanel()
         self.recent_test_sessions = ["recent_1", "recent_2"]
         self.recent_test_session_by_id = {"recent_1": {"session_id": "recent_1"}, "recent_2": {"session_id": "recent_2"}}
         self._current_recent_session_id = "recent_2"
@@ -56,14 +38,16 @@ class _DummySequenceWidget(SequenceWidgetStreamingOpsMixin):
         self.product_test_condition_configs = [{"key": "01", "condition_name": "6000"}]
         self.statistics_reset_calls = []
         self.manual_reset_calls = []
+        self.waveform_modes = []
+        self.persisted_modes = []
+        self._apply_condition_mode_to_waveforms = self.waveform_modes.append
+        self._persist_sequence_page_state = self.persisted_modes.append
 
-    def _clear_recent_session_history(self, reset_panel=True):
+    def _clear_recent_session_history(self):
         self.recent_test_sessions = []
         self.recent_test_session_by_id = {}
         self._current_recent_session_id = None
         self._pending_recent_session_append = False
-        if reset_panel:
-            self.recent_session_panel.reset_sessions()
 
     def _reset_statistics_for_mode(self, mode: str):
         self.statistics_reset_calls.append(mode)
@@ -120,8 +104,8 @@ class TestRecentSessionModeSwitch(unittest.TestCase):
 
         widget._on_recent_session_mode_changed({"mode": "test"})
 
-        self.assertEqual(widget.recent_session_panel.editable_states, [False])
-        self.assertEqual(widget.recent_session_panel.reset_count, 1)
+        self.assertEqual(widget.waveform_modes, ["test"])
+        self.assertEqual(widget.persisted_modes, ["test"])
         self.assertEqual(widget.recent_test_sessions, [])
         self.assertEqual(widget.recent_test_session_by_id, {})
         self.assertIsNone(widget._current_recent_session_id)
@@ -135,8 +119,8 @@ class TestRecentSessionModeSwitch(unittest.TestCase):
 
         widget._on_recent_session_mode_changed({"mode": "mark"})
 
-        self.assertEqual(widget.recent_session_panel.editable_states, [True])
-        self.assertEqual(widget.recent_session_panel.reset_count, 0)
+        self.assertEqual(widget.waveform_modes, ["mark"])
+        self.assertEqual(widget.persisted_modes, ["mark"])
         self.assertEqual(widget.recent_test_sessions, ["recent_1", "recent_2"])
         self.assertEqual(widget._last_recent_session_mode, "mark")
         self.assertEqual(widget.manual_reset_calls, [])

@@ -951,16 +951,6 @@ class MainWindow(QMainWindow):
                 # Best-effort: ignore any close errors
                 pass
 
-    def _shutdown_product_pdf_exporter_before_exit(self):
-        sequence_window = getattr(self, "sequence_window", None)
-        shutdown_product_pdf = getattr(
-            sequence_window,
-            "_shutdown_product_pdf_exporter",
-            None,
-        )
-        if callable(shutdown_product_pdf):
-            shutdown_product_pdf()
-
     def closeEvent(self, event):
         if getattr(self, "_exit_cleanup_complete", False):
             event.accept()
@@ -1040,7 +1030,6 @@ class MainWindow(QMainWindow):
                 close_sequence()
         self._close_all_subwindows()
 
-        self._shutdown_product_pdf_exporter_before_exit()
         self._exit_cleanup_complete = True
         event.accept()
 

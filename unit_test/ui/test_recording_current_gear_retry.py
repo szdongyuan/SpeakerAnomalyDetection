@@ -50,7 +50,6 @@ def product_host(tmp_path, *, serial=True, index=1):
     host._discard_current_recent_session = Analysis._discard_current_recent_session.__get__(host)
     host._reset_manual_product_condition_cycle = Analysis._reset_manual_product_condition_cycle.__get__(host)
     host._delete_serial_product_round_records = Mock()
-    host.recent_session_panel = None
     host.recent_test_sessions = [*"abc"[:index], "failed"]
     host.recent_test_session_by_id = {key: {"result": "OK"} for key in "abc"[:index]}
     host.recent_test_session_by_id["failed"] = {"result": "waiting"}

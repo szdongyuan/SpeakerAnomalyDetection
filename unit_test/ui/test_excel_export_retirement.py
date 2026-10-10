@@ -108,11 +108,11 @@ def test_close_waits_for_pending_csv_before_final_cleanup(ui_qapp, runtime, tmp_
         event = QCloseEvent()
         window.closeEvent(event)
         assert event.isAccepted() is (boundary == "hidden")
-        host._shutdown_product_pdf_exporter.assert_not_called()
+        host.hw_manager.stop.assert_not_called()
         gate.set()
         if boundary != "hidden":
             pump(ui_qapp, lambda: not window.isVisible())
-            host._shutdown_product_pdf_exporter.assert_called_once()
+            assert not hasattr(host, "_shutdown_product_pdf_exporter")
         else:
             assert service.snapshot().phase == "open"
         host.flush_excel_spool_build.assert_not_called()

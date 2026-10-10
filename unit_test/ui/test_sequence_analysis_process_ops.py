@@ -114,8 +114,8 @@ def test_automatic_admission_error_is_not_marked_result_incomplete():
         def _set_condition_analysis_stage(self, condition_key, text, tone):
             self.condition_updates.append((condition_key, text, tone))
 
-        def _record_analysis_admission_state(self, record, **state):
-            self.admission_updates.append((record, state))
+        def _record_analysis_admission_state(self, record):
+            self.admission_updates.append(record)
 
     host = Host()
 
@@ -123,16 +123,8 @@ def test_automatic_admission_error_is_not_marked_result_incomplete():
     assert host.condition_updates == [
         ("group_1:condition_1", "分析失败", "ng")
     ]
-    assert host.admission_updates == [
-        (
-            {"session_id": "session-1"},
-            {
-                "state": "failed",
-                "status": "分析失败",
-                "error": "缺少 CH5",
-            },
-        )
-    ]
+    assert host.admission_updates == [{"session_id": "session-1"}]
+    assert any("缺少 CH5" in message for _, message in host.default_logger.messages)
 
 
 def test_channel_results_keep_non_judging_spec_as_analysis_complete():
@@ -754,10 +746,9 @@ def test_artifact_failure_is_visible_without_changing_official_label():
     assert any("artifact_save_failed" in message for _, message in host.default_logger.messages)
 
 
-def test_task_level_failure_marks_report_snapshot_failed():
+def test_task_level_failure_publishes_canonical_error_without_pdf_fields():
     class Host(SequenceWidgetAnalysisProcessOpsMixin):
         def __init__(self):
-            self.product_test_pdf_report_config = {"enabled": True}
             self.analysis_config = {}
             self._analysis_active_request = None
             self.updated = None
@@ -793,13 +784,15 @@ def test_task_level_failure_marks_report_snapshot_failed():
 
     assert host.updated[0] == "session-1"
     changes = host.updated[1]
-    assert changes["analysis_report_state"] == "failed"
-    assert changes["analysis_report_items"][0]["error"] == "子进程异常退出"
+    assert changes["analysis_execution_status"] == "分析失败"
+    assert changes["analysis_error"] == "子进程异常退出"
+    assert changes["analysis_result_dict"] == {}
+    assert "analysis_report_state" not in changes
+    assert "analysis_report_items" not in changes
 
 
-def test_disabled_automatic_analysis_closes_report_wait_state():
+def test_disabled_automatic_analysis_clears_canonical_judgement():
     class Host(SequenceWidgetAnalysisProcessOpsMixin):
-        product_test_pdf_report_config = {"enabled": True}
 
         @staticmethod
         def _format_recent_session_result_label(label):
@@ -815,13 +808,13 @@ def test_disabled_automatic_analysis_closes_report_wait_state():
             "recorded_path": "C:/record.wav",
             "recorded_signal_info": {"labels": "not_labeled"},
         },
-        state="not_required",
-        status="未启用自动分析",
     )
 
     assert host.updated[0] == "session-2"
-    assert host.updated[1]["analysis_report_state"] == "not_required"
-    assert host.updated[1]["analysis_report_items"] == []
+    assert host.updated[1]["analysis_result_dict"] == {}
+    assert host.updated[1]["recorded_signal_info"]["labels"] == "not_labeled"
+    assert "analysis_report_state" not in host.updated[1]
+    assert "analysis_report_items" not in host.updated[1]
 
 
 def test_worker_log_keeps_compact_item_summary_in_main_and_raw_detail_in_debug():

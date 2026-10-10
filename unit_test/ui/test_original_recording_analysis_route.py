@@ -110,7 +110,7 @@ def test_completion_uses_original_task_builder_and_disabled_analysis_setting(ui_
         assert {item.analysis_type for item in task.instances} == set(types)
         assert len(host._analysis_task_records) == 1
     else:
-        assert host._record_analysis_admission_state.call_args.kwargs['state'] == 'not_required'
+        host._record_analysis_admission_state.assert_called_once_with(host._condition_record_cache["condition"])
     assert host._can_start_recording_workflow()
 
 

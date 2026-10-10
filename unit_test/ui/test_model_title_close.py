@@ -19,7 +19,6 @@ class TitleCloseWindow(MainWindow):
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.sequence_window = sequence
         self._close_all_subwindows = Mock()
-        self._shutdown_product_pdf_exporter_before_exit = Mock()
         self.setCentralWidget(sequence)
         layout = QVBoxLayout(sequence)
         layout.addLayout(self.set_title_btn())

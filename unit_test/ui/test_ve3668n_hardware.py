@@ -849,7 +849,6 @@ def _configure_main_calibration_admission(
     sequence.streaming_processor = processor
     sequence._condition_playback_controller = SimpleNamespace(
         is_audio_playing=lambda: playback)
-    sequence.recent_session_panel = None
     for name in (
         "_can_start_recording_workflow",
         "_can_start_calibration_workflow",

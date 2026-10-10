@@ -962,7 +962,6 @@ class StreamingAnalysisHost(
             "display_sequence": ["spl"],
             "spl": {"type": "SPL", "analysis_channel": 0},
         }
-        self.product_test_pdf_report_config = {"enabled": True}
         self.product_test_condition_configs = [
             {
                 "key": "condition-1",
@@ -1121,8 +1120,6 @@ class StreamingAnalysisHost(
     def _hide_analysis_window(self, _instance):
         return None
 
-    def _capture_current_analysis_report_snapshot(self, session_id=None):
-        self.events.append(("report_snapshot", session_id))
 
     def _update_recent_session(self, session_id, **fields):
         self.report_updates.append((session_id, fields))
@@ -1181,7 +1178,6 @@ def test_streaming_completion_queues_analysis_and_advances_recording_workflow():
     assert host.count_updates == 1
     assert host._serial_product_condition_executing is False
     assert host._serial_product_session_started is False
-    assert ("report_snapshot", "session-1") not in host.events
     assert host._record_workflow_busy is False
     assert host.events[-2:] == ["ui_cleanup", "drain_trigger"]
     assert any(

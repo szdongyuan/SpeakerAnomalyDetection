@@ -9,7 +9,6 @@ import pytest
 from base.data_struct.data_deal_struct import DataDealStruct
 from consts import error_code
 from ui.sequence.analysis_channel_preflight import AnalysisChannelSkip
-from ui.sequence.analysis_report_snapshot import build_analysis_report_items
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 from unit_test.ui.test_sequence_channel_calibration import StreamingAnalysisHost
@@ -191,12 +190,7 @@ def test_audio_lifecycle_reset_removes_stale_skip_from_okng_and_report_state():
     SequenceWidgetAnalysisOpsMixin._clear_audio_source_analysis_state(host)
 
     assert can_output_ok_ng() == (True, "")
-    assert build_analysis_report_items(
-        [],
-        config,
-        {},
-        host._analysis_preflight_skips,
-    ) == []
+    assert host._analysis_preflight_skips == {}
 
 
 class _Writer:

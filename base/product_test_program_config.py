@@ -13,7 +13,6 @@ from consts.running_consts import (
 
 PROGRAM_REGISTRY_FILE = "program_registry.json"
 DEFAULT_PROGRAM_NAME = "默认配置"
-PDF_REPORT_CONFIG_KEY = "pdf_report"
 CLOSE_TRIGGER_STATE_KEY = "close_trigger_state"
 PRODUCT_TRIGGER_MODE_MANUAL = "manual"
 PRODUCT_TRIGGER_MODE_SERIAL = "serial"
@@ -74,15 +73,6 @@ def normalize_optional_hex_frame(value):
         return normalized
 
 
-def normalize_pdf_report_config(value):
-    config = value if isinstance(value, dict) else {}
-    save_dir = str(config.get("save_dir", "") or "").strip()
-    return {
-        "enabled": bool(config.get("enabled", False)),
-        "save_dir": os.path.abspath(os.path.normpath(save_dir)) if save_dir else "",
-    }
-
-
 class ProductTestProgramValidator(object):
     @staticmethod
     def validate_test_queue_references(program_data, queue_catalog):
@@ -132,16 +122,6 @@ class ProductTestProgramValidator(object):
             return errors
         if classify_product_trigger_mode(sub_configs) == PRODUCT_TRIGGER_MODE_MIXED:
             errors.append("所有工况状态码必须全部配置或全部留空")
-
-        pdf_report = program_data.get(PDF_REPORT_CONFIG_KEY)
-        if pdf_report is not None:
-            if not isinstance(pdf_report, dict):
-                errors.append("pdf_report 必须是对象")
-            else:
-                if not isinstance(pdf_report.get("enabled", False), bool):
-                    errors.append("pdf_report.enabled 必须是布尔值")
-                if not isinstance(pdf_report.get("save_dir", ""), str):
-                    errors.append("pdf_report.save_dir 必须是字符串")
 
         close_trigger_state_value = program_data.get(CLOSE_TRIGGER_STATE_KEY, "")
         close_trigger_state = ""
@@ -242,7 +222,6 @@ class ProductTestProgramConfigManager(object):
         return {
             "name": DEFAULT_PROGRAM_NAME,
             CLOSE_TRIGGER_STATE_KEY: "",
-            PDF_REPORT_CONFIG_KEY: normalize_pdf_report_config(None),
             "sub_configs": [],
         }
 
@@ -564,9 +543,6 @@ class ProductTestProgramConfigManager(object):
             "name": normalize_config_name(program_data.get("name", "")),
             CLOSE_TRIGGER_STATE_KEY: normalize_optional_hex_frame(
                 program_data.get(CLOSE_TRIGGER_STATE_KEY, "")
-            ),
-            PDF_REPORT_CONFIG_KEY: normalize_pdf_report_config(
-                program_data.get(PDF_REPORT_CONFIG_KEY)
             ),
             "sub_configs": normalized_sub_configs,
         }
