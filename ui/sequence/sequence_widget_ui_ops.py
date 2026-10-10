@@ -141,15 +141,7 @@ class SequenceWidgetUiOpsMixin:
 
         self._configured_input_channels = tuple(channels)
         self._channel_selection_error = ""
-        presentation_owner = getattr(
-            self,
-            "_waveform_presentation_owner",
-            "hardware",
-        )
-        if (
-            getattr(self, "_recording_input_channels", None) is not None
-            or presentation_owner in ("recent", "recent_view")
-        ):
+        if getattr(self, "_recording_input_channels", None) is not None:
             self._pending_configured_input_channels = tuple(channels)
             return
 
@@ -192,7 +184,6 @@ class SequenceWidgetUiOpsMixin:
         )
         self._recording_input_channels = run_channels
         self._active_input_channels = list(run_channels)
-        self._waveform_presentation_owner = "hardware"
         recorded_dict["input_channels"] = list(run_channels)
         recorded_dict["channels"] = len(run_channels)
         workspace = getattr(self, "channel_workspace", None)
@@ -205,7 +196,6 @@ class SequenceWidgetUiOpsMixin:
         pending_channels = getattr(self, "_pending_configured_input_channels", None)
         self._recording_input_channels = None
         self._pending_configured_input_channels = None
-        self._waveform_presentation_owner = "hardware"
         if pending_channels is None or tuple(pending_channels) == tuple(run_channels or ()):
             return
         self._apply_input_channel_workspace_mapping(pending_channels)

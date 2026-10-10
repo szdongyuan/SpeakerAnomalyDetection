@@ -38,7 +38,6 @@ class ResetHost(SequenceWidgetRoundResetOpsMixin, _MetadataHost):
         self.player_btn = self.toolsbar.player_btn
         self.recent_test_sessions = []
         self.recent_test_session_by_id = {}
-        self.recent_session_panel = None
         self._condition_record_cache = {}
         self.raw_audio_csv_service = CsvTaskLedger()
         self._init_round_reset()

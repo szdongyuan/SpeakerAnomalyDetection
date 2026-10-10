@@ -282,8 +282,6 @@ class SequenceWidgetRoundResetOpsMixin:
             self.recent_test_session_by_id.pop(session_id)
             if session_id in self.recent_test_sessions:
                 self.recent_test_sessions.remove(session_id)
-            if self.recent_session_panel is not None:
-                self.recent_session_panel.remove_session(session_id)
 
     def _reset_round_presentation(self):
         serial_number = self.lineedit_s_or_n.text()

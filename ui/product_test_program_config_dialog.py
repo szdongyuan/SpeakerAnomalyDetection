@@ -5,7 +5,6 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -26,18 +25,15 @@ from base.hardware_trigger.serial_full_frame_matcher import normalize_hex_frame
 from base.product_test_program_config import (
     CLOSE_TRIGGER_STATE_KEY,
     DEFAULT_PROGRAM_NAME,
-    PDF_REPORT_CONFIG_KEY,
     ProductTestProgramConfigManager,
-    normalize_pdf_report_config,
     normalize_trigger_state,
 )
 from consts import error_code, ui_style_const
-from consts.running_consts import DEFAULT_DIR, PRODUCT_TEST_REPORT_DIR
+from consts.running_consts import DEFAULT_DIR
 from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.config_dialog_base import ConfigDialogBase
 from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.queue_display import queue_display_options
-from ui.path_selector_utils import load_path_selector_folder_icon
 
 
 NO_TRIGGER_TEXT = "未绑定"
@@ -75,9 +71,6 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self.section_title_label = QLabel("工况配置")
         self.close_trigger_label = QLabel("关闭测试报文：")
         self.close_trigger_input = QLineEdit()
-        self.pdf_report_checkbox = QCheckBox("测试完成后生成 PDF 报告")
-        self.pdf_save_dir_label = QLabel("保存目录：")
-        self.pdf_save_dir_input = QLineEdit()
         self.program_table = QTableWidget(0, 6)
         self.new_btn = QPushButton("新建")
         self.add_btn = QPushButton("+ 添加配置")
@@ -110,16 +103,6 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self.config_combobox.setFixedHeight(38)
         if self.config_combobox.lineEdit() is not None:
             self.config_combobox.lineEdit().setPlaceholderText("请输入配置名称")
-
-        self.pdf_save_dir_input.setReadOnly(True)
-        self.pdf_save_dir_input.setPlaceholderText("audio_data/reports")
-        self.pdf_select_dir_action = self.pdf_save_dir_input.addAction(
-            load_path_selector_folder_icon(),
-            QLineEdit.TrailingPosition,
-        )
-        self.pdf_select_dir_action.setToolTip("选择 PDF 报告保存目录")
-        self.pdf_report_checkbox.setMinimumHeight(38)
-        self.pdf_save_dir_input.setMinimumHeight(38)
 
         self.close_trigger_input.setObjectName("productProgramCloseTriggerInput")
         self.close_trigger_input.setMinimumHeight(38)
@@ -213,14 +196,6 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         bottom_button_layout.addWidget(self.cancel_btn)
         bottom_button_layout.addWidget(self.save_btn)
 
-        pdf_report_layout = QHBoxLayout()
-        pdf_report_layout.setContentsMargins(0, 8, 0, 0)
-        pdf_report_layout.setSpacing(10)
-        pdf_report_layout.addWidget(self.pdf_report_checkbox)
-        pdf_report_layout.addSpacing(12)
-        pdf_report_layout.addWidget(self.pdf_save_dir_label)
-        pdf_report_layout.addWidget(self.pdf_save_dir_input, 1)
-
         close_trigger_layout = QHBoxLayout()
         close_trigger_layout.setContentsMargins(0, 8, 0, 0)
         close_trigger_layout.setSpacing(10)
@@ -240,7 +215,6 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         layout.addLayout(table_button_layout)
         layout.addWidget(self.program_table, 1)
         layout.addLayout(close_trigger_layout)
-        layout.addLayout(pdf_report_layout)
         layout.addWidget(footer_separator)
         layout.addLayout(bottom_button_layout)
         self.setLayout(layout)
@@ -258,16 +232,7 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             self.config_combobox.lineEdit().textEdited.connect(
                 self._on_program_changed
             )
-        self.pdf_report_checkbox.toggled.connect(
-            self._on_pdf_report_enabled_changed
-        )
         self.close_trigger_input.textEdited.connect(self._on_program_changed)
-        self.pdf_save_dir_input.textChanged.connect(
-            self._on_pdf_save_dir_changed
-        )
-        self.pdf_select_dir_action.triggered.connect(
-            self._select_pdf_report_dir
-        )
         self.program_table.itemChanged.connect(self._on_table_item_changed)
         self.new_btn.clicked.connect(self._new_program)
         self.add_btn.clicked.connect(self._add_empty_row)
@@ -307,13 +272,6 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         self.close_trigger_input.setText(
             normalize_trigger_state(program_data.get(CLOSE_TRIGGER_STATE_KEY, ""))
         )
-        pdf_report = normalize_pdf_report_config(
-            program_data.get(PDF_REPORT_CONFIG_KEY)
-        )
-        self.pdf_report_checkbox.setChecked(pdf_report["enabled"])
-        self.pdf_save_dir_input.setText(pdf_report["save_dir"])
-        self._set_pdf_report_controls_visible(pdf_report["enabled"])
-        self._update_pdf_report_dir_tooltip(pdf_report["save_dir"])
         self.program_table.setRowCount(0)
         for sub_config in program_data.get("sub_configs", []):
             self._append_row(sub_config)
@@ -692,38 +650,6 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             message = f"配置已{action_text}，可以用于测试。"
         QMessageBox.information(self, title, message)
 
-    def _on_pdf_report_enabled_changed(self, enabled):
-        self._set_pdf_report_controls_visible(enabled)
-        self._on_program_changed()
-
-    def _set_pdf_report_controls_visible(self, visible):
-        visible = bool(visible)
-        self.pdf_save_dir_label.setVisible(visible)
-        self.pdf_save_dir_input.setVisible(visible)
-
-    def _on_pdf_save_dir_changed(self, save_dir):
-        self._update_pdf_report_dir_tooltip(save_dir)
-        self._on_program_changed()
-
-    def _select_pdf_report_dir(self):
-        current_dir = str(self.pdf_save_dir_input.text() or "").strip()
-        initial_dir = (
-            current_dir if os.path.isdir(current_dir) else PRODUCT_TEST_REPORT_DIR
-        )
-        selected_dir = QFileDialog.getExistingDirectory(
-            self,
-            "选择 PDF 报告保存目录",
-            initial_dir,
-        )
-        if selected_dir:
-            self.pdf_save_dir_input.setText(os.path.normpath(selected_dir))
-
-    def _update_pdf_report_dir_tooltip(self, save_dir):
-        effective_dir = str(save_dir or "").strip() or PRODUCT_TEST_REPORT_DIR
-        self.pdf_save_dir_input.setToolTip(
-            os.path.abspath(os.path.normpath(effective_dir))
-        )
-
     def _has_queue_editor(self):
         return callable(self.contextual_queue_editor_callback) or callable(self.queue_editor_callback)
 
@@ -766,10 +692,6 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
             CLOSE_TRIGGER_STATE_KEY: self._normalize_trigger_input(
                 self.close_trigger_input.text()
             ),
-            PDF_REPORT_CONFIG_KEY: {
-                "enabled": bool(self.pdf_report_checkbox.isChecked()),
-                "save_dir": str(self.pdf_save_dir_input.text() or "").strip(),
-            },
             "sub_configs": sub_configs,
         }
 

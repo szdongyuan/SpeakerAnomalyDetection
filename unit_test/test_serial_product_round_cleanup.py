@@ -18,14 +18,6 @@ class _Logger:
         self.warnings.append(message)
 
 
-class _RecentPanel:
-    def __init__(self):
-        self.removed = []
-
-    def remove_session(self, session_id):
-        self.removed.append(session_id)
-
-
 def test_discard_recent_session_group_removes_only_target_round_and_recordings(monkeypatch):
     deleted_paths = []
 
@@ -52,7 +44,6 @@ def test_discard_recent_session_group_removes_only_target_round_and_recordings(m
         },
         _current_recent_session_id="r1-2",
         _pending_recent_session_append=True,
-        recent_session_panel=_RecentPanel(),
         default_logger=_Logger(),
     )
 
@@ -65,7 +56,6 @@ def test_discard_recent_session_group_removes_only_target_round_and_recordings(m
     assert deleted_paths == ["one.wav", "two.wav", "map-only.wav"]
     assert host.recent_test_sessions == ["r2-1"]
     assert set(host.recent_test_session_by_id) == {"r2-1"}
-    assert host.recent_session_panel.removed == ["r1-1", "r1-2", "r1-map-only"]
     assert host._current_recent_session_id is None
     assert host._pending_recent_session_append is False
 
@@ -139,7 +129,7 @@ def test_serial_cleanup_waits_for_both_owners_and_preserves_old_scope(monkeypatc
     monkeypatch.setattr(serial_ops_module, 'RecordingManager', Manager)
     host = SimpleNamespace(raw_audio_csv_service=ledger, recording_bridge=SimpleNamespace(service=recording_service),
         recent_test_sessions=['old'], recent_test_session_by_id={'old': {'group_id': 'old-round', 'recorded_path': str(old)}},
-        default_logger=_Logger(), recent_session_panel=None)
+        default_logger=_Logger())
     assert SequenceWidgetSerialTriggerOpsMixin._delete_serial_product_round_records(host, 'old-round') == 1
     host.recent_test_session_by_id['new'] = {'group_id': 'new-round', 'recorded_path': str(other)}
     if release_order == 'recording_first':
@@ -182,7 +172,7 @@ def test_serial_cleanup_failure_is_logged_without_ui_consumer_and_service_recove
         raw_audio_csv_service=service,
         recent_test_sessions=['old'],
         recent_test_session_by_id={'old': {'group_id': 'old-round', 'recorded_path': str(old)}},
-        default_logger=_Logger(), recent_session_panel=None)
+        default_logger=_Logger())
     try:
         with caplog.at_level(logging.WARNING, logger='base.raw_audio_csv_service'):
             assert SequenceWidgetSerialTriggerOpsMixin._delete_serial_product_round_records(host, 'old-round') == 1
@@ -236,7 +226,7 @@ def test_serial_cleanup_waits_real_zip_then_recording_lease_and_only_deletes_old
     host = SimpleNamespace(raw_audio_csv_service=service,
         recording_bridge=SimpleNamespace(service=SimpleNamespace(is_path_leased=lambda path: path in leased)),
         recent_test_sessions=['old'], recent_test_session_by_id={'old': {'group_id': 'old-round', 'recorded_path': str(old)}},
-        default_logger=_Logger(), recent_session_panel=None)
+        default_logger=_Logger())
     try:
         assert service.commit(service.reserve(request.recording_id).reservation, request) == 'accepted'
         assert entered.wait(10)

@@ -33,18 +33,37 @@ class SequenceWidgetProductConditionResultOpsMixin:
                 return normalized
         return self._normalize_product_condition_result_label(label)
 
+    def _carry_recent_session_group_metadata(self, session_record):
+        """Keep first group time and latest upsert metadata with retained records."""
+        group_id = str(session_record.get("group_id") or "").strip()
+        if not group_id:
+            return
+        group_records = [
+            record for record in self.recent_test_session_by_id.values()
+            if isinstance(record, dict)
+            and str(record.get("group_id") or "").strip() == group_id
+        ]
+        metadata = next(
+            (record["_recent_group_metadata"] for record in group_records
+             if isinstance(record.get("_recent_group_metadata"), dict)
+             and record["_recent_group_metadata"].get("group_id") == group_id),
+            None,
+        )
+        if metadata is None:
+            metadata = {"group_id": group_id}
+            for record in group_records:
+                metadata["time_text"] = metadata.get("time_text") or record.get("time_text") or "-"
+                for field in ("barcode", "product_model"):
+                    metadata[field] = record.get(field) or metadata.get(field) or "-"
+        for field in ("barcode", "product_model"):
+            metadata[field] = session_record.get(field) or metadata.get(field) or "-"
+        for record in group_records:
+            record["_recent_group_metadata"] = metadata
+
     def _collect_product_condition_records(self, group_id):
         group_id = str(group_id or "").strip()
         if not group_id:
             return None
-
-        recent_panel = getattr(self, "recent_session_panel", None)
-        panel_groups = getattr(recent_panel, "group_records", None)
-        panel_group = None
-        if isinstance(panel_groups, dict):
-            candidate = panel_groups.get(group_id)
-            if isinstance(candidate, dict):
-                panel_group = candidate
 
         records = {}
         results = {}
@@ -53,25 +72,19 @@ class SequenceWidgetProductConditionResultOpsMixin:
             "records": records,
             "results": results,
         }
-        if panel_group:
-            for field in ("barcode", "product_model", "time_text"):
-                if panel_group.get(field):
-                    group_info[field] = panel_group.get(field)
 
         session_records = getattr(self, "recent_test_session_by_id", {}) or {}
-        if panel_group:
-            for condition_key, session_id in (
-                panel_group.get("session_ids") or {}
-            ).items():
-                record = session_records.get(session_id)
-                if isinstance(record, dict):
-                    records[str(condition_key)] = record
 
         for record in session_records.values():
             if not isinstance(record, dict):
                 continue
             if str(record.get("group_id") or "").strip() != group_id:
                 continue
+            metadata = record.get("_recent_group_metadata")
+            if isinstance(metadata, dict) and metadata.get("group_id") == group_id:
+                for field in ("barcode", "product_model", "time_text"):
+                    if metadata.get(field):
+                        group_info[field] = metadata[field]
             condition_key = str(
                 record.get("condition_key") or record.get("mode") or ""
             ).strip()
@@ -100,18 +113,6 @@ class SequenceWidgetProductConditionResultOpsMixin:
             for field in ("barcode", "product_model", "time_text"):
                 if not group_info.get(field) and record.get(field):
                     group_info[field] = record.get(field)
-
-        if panel_group:
-            for condition_key, label in (
-                panel_group.get("results") or {}
-            ).items():
-                key = str(condition_key or "").strip()
-                normalized = self._normalize_product_condition_result_label(
-                    label
-                )
-                if not key or not normalized:
-                    continue
-                results.setdefault(key, normalized)
 
         active_group_id = str(
             getattr(self, "_manual_product_condition_group_id", "") or ""

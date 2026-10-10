@@ -161,7 +161,7 @@ def test_history_analysis_does_not_change_live_task_status(host):
     before = (host.left_panel.stage_label.text(), row_text(host))
     host.count_board.mode = "view"
     host._run_analysis_impl = Mock()
-    host.run(show_windows=True, capture_product_report=False)
+    host.run(show_windows=True)
     assert (host.left_panel.stage_label.text(), row_text(host)) == before
 
 

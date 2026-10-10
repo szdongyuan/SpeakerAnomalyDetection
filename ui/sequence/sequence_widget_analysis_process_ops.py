@@ -21,9 +21,6 @@ from ui.sequence.analysis_task_builder import (
     AnalysisTaskBuildError,
     build_analysis_task_request,
 )
-from ui.sequence.analysis_report_snapshot import (
-    build_analysis_report_items_from_task_result,
-)
 
 
 _MAIN_ANALYSIS_SUMMARY_EVENTS = frozenset(
@@ -194,11 +191,7 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             condition_key = self._get_active_product_condition_key()
             record = self._resolve_condition_record(condition_key)
             self._set_condition_analysis_stage(condition_key, "待判定", "pending")
-            self._record_analysis_admission_state(
-                record,
-                state="not_required",
-                status="未启用自动分析",
-            )
+            self._record_analysis_admission_state(record)
             return True
         condition_key = self._get_active_product_condition_key()
         if not condition_key:
@@ -217,12 +210,7 @@ class SequenceWidgetAnalysisProcessOpsMixin:
                 "分析失败",
                 "ng",
             )
-            self._record_analysis_admission_state(
-                record,
-                state="failed",
-                status="分析失败",
-                error="所选档位的 WAV 文件不存在",
-            )
+            self._record_analysis_admission_state(record)
             return True
         try:
             request = self._build_process_analysis_request(
@@ -241,12 +229,7 @@ class SequenceWidgetAnalysisProcessOpsMixin:
                 "分析失败",
                 "ng",
             )
-            self._record_analysis_admission_state(
-                record,
-                state="failed",
-                status="分析失败",
-                error=str(error),
-            )
+            self._record_analysis_admission_state(record)
             return True
         self._analysis_task_records[request.task_id] = dict(record or {})
         track_request = getattr(self, "_track_round_analysis_request", None)
@@ -263,41 +246,12 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         self._refresh_analysis_action_state()
         return True
 
-    def _record_analysis_admission_state(
-        self,
-        record,
-        *,
-        state,
-        status,
-        error="",
-    ):
+    def _record_analysis_admission_state(self, record):
         if not isinstance(record, dict):
             return
         session_id = str(record.get("session_id") or "").strip()
         if not session_id:
             return
-        report_config = getattr(self, "product_test_pdf_report_config", {}) or {}
-        report_enabled = bool(
-            isinstance(report_config, dict)
-            and report_config.get("enabled", False)
-        )
-        if state == "failed" and report_enabled:
-            report_state = "failed"
-            report_items = [
-                {
-                    "name": "分析报告",
-                    "type": "",
-                    "state": "failed",
-                    "status": status,
-                    "deviation": "-",
-                    "error": str(error or status),
-                    "image_errors": [],
-                    "images": [],
-                }
-            ]
-        else:
-            report_state = "not_required"
-            report_items = []
         recorded_info = dict(record.get("recorded_signal_info", {}) or {})
         recorded_info["labels"] = "not_labeled"
         self._update_recent_session(
@@ -306,8 +260,6 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             recorded_path=record.get("recorded_path"),
             recorded_signal_info=recorded_info,
             analysis_result_dict={},
-            analysis_report_state=report_state,
-            analysis_report_items=report_items,
         )
 
     def _build_process_analysis_request(
@@ -664,53 +616,6 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             and active_request.task_id == result.task_id
             else getattr(self, "analysis_config", {}) or {}
         )
-        report_config = getattr(self, "product_test_pdf_report_config", {}) or {}
-        if isinstance(report_config, dict) and report_config.get("enabled", False):
-            try:
-                if not result.instance_results and result.execution_status != "分析完成":
-                    report_items = [
-                        {
-                            "name": "分析报告",
-                            "type": "",
-                            "state": "failed",
-                            "status": result.execution_status,
-                            "deviation": "-",
-                            "error": result.error_message or "分析子进程未返回结果",
-                            "image_errors": [],
-                            "images": [],
-                        }
-                    ]
-                else:
-                    report_items = build_analysis_report_items_from_task_result(
-                        result,
-                        analysis_config,
-                    )
-                report_state = (
-                    "failed"
-                    if any(item.get("state") == "failed" for item in report_items)
-                    else "completed"
-                )
-            except (OSError, TypeError, ValueError) as error:
-                self.default_logger.error(
-                    "analysis_report_snapshot_failed "
-                    f"task_id={result.task_id} error={error}"
-                )
-                report_items = [
-                    {
-                        "name": "分析报告",
-                        "type": "",
-                        "state": "failed",
-                        "status": "分析失败",
-                        "deviation": "-",
-                        "error": str(error),
-                        "image_errors": [],
-                        "images": [],
-                    }
-                ]
-                report_state = "failed"
-        else:
-            report_items = []
-            report_state = "not_required"
         recorded_info = dict(record.get("recorded_signal_info", {}) or {})
         recorded_info["labels"] = label
         segment_results = []
@@ -741,8 +646,6 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             recorded_path=record.get("recorded_path") or result.wav_path,
             recorded_signal_info=recorded_info,
             analysis_result_dict=analysis_result_dict,
-            analysis_report_state=report_state,
-            analysis_report_items=report_items,
             segment_results=segment_results,
             input_voltage=result.condition_snapshot.get("input_voltage", ""),
             segmented_analysis=result.condition_snapshot.to_dict().get("segmented_analysis", {}),

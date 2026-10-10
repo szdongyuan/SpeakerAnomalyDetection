@@ -34,10 +34,6 @@ def make_program(name="默认配置"):
     return {
         "name": name,
         "close_trigger_state": "",
-        "pdf_report": {
-            "enabled": False,
-            "save_dir": "",
-        },
         "sub_configs": [
             {
                 "condition_name": "6000 rpm",
@@ -106,19 +102,8 @@ def test_runtime_loader_does_not_treat_legacy_sub_configs_as_project_data(
     assert configs == []
 
 
-def test_load_pdf_report_config_defaults_to_disabled_for_legacy_program(tmp_path):
-    program_path = tmp_path / "legacy_program.json"
-    assert LoadUiConfig.save_data_to_json(
-        {"name": "legacy", "sub_configs": []},
-        str(program_path),
-    )
-
-    assert LoadUiConfig.load_product_test_program_pdf_report_config(
-        str(program_path)
-    ) == {
-        "enabled": False,
-        "save_dir": "",
-    }
+def test_default_program_omits_retired_pdf_report():
+    assert "pdf_report" not in ProductTestProgramConfigManager.default_program()
 
 
 def test_load_close_trigger_state_defaults_to_empty_for_legacy_program(tmp_path):
@@ -152,36 +137,69 @@ def test_save_product_program_normalizes_close_trigger_state(tmp_path):
     ) == "01 04 02 00 00 B9 30"
 
 
-def test_save_product_program_normalizes_top_level_pdf_report(tmp_path):
+@pytest.mark.parametrize(
+    "obsolete_value",
+    [
+        {"enabled": True, "save_dir": "old-reports"},
+        {"enabled": False, "save_dir": ""},
+        {"enabled": "yes", "save_dir": []},
+        ["malformed"],
+        "malformed",
+        None,
+    ],
+)
+def test_legacy_pdf_report_is_ignored_on_load_validation_and_save(
+    tmp_path, obsolete_value
+):
     manager = make_manager(tmp_path)
-    report_dir = tmp_path / "reports"
     program = make_program()
-    program["pdf_report"] = {
-        "enabled": True,
-        "save_dir": str(report_dir),
-    }
+    program["pdf_report"] = obsolete_value
+    file_name = "默认配置.json"
+    program_path = os.path.join(manager.program_dir, file_name)
+    assert LoadUiConfig.save_data_to_json(program, program_path)
+    with open(program_path, "rb") as stream:
+        original_bytes = stream.read()
 
-    success, file_name = manager.save_program(None, program)
-
-    assert success
-    load_code, saved_program = manager.load_program(file_name)
+    load_code, loaded = manager.load_program(file_name)
     assert load_code == error_code.OK
-    assert saved_program["pdf_report"] == {
-        "enabled": True,
-        "save_dir": os.path.abspath(str(report_dir)),
-    }
+    assert loaded["name"] == program["name"]
+    assert loaded["sub_configs"] == program["sub_configs"]
+    validation = manager.validate_program(loaded, file_name)
+    assert validation["can_save"]
+    assert validation["use_errors"] == []
+    with open(program_path, "rb") as stream:
+        assert stream.read() == original_bytes
+
+    success, saved_file = manager.save_program(file_name, loaded)
+    assert success, saved_file
+    with open(program_path, encoding="utf-8") as stream:
+        saved = json.load(stream)
+    assert saved == make_program()
 
 
-def test_validate_rejects_invalid_pdf_report_shape(tmp_path):
+@pytest.mark.parametrize(
+    "field,value,expected_error",
+    [
+        ("name", "", "配置名称不能为空"),
+        ("sub_configs", {}, "sub_configs 必须是列表"),
+        ("close_trigger_state", [], "close_trigger_state 必须是字符串"),
+        ("close_trigger_state", "not hex", "关闭测试报文格式错误"),
+    ],
+)
+def test_ignored_pdf_report_does_not_bypass_active_validation(
+    tmp_path, field, value, expected_error
+):
     manager = make_manager(tmp_path)
     program = make_program()
     program["pdf_report"] = {"enabled": "yes", "save_dir": []}
+    program[field] = value
 
-    validation = manager.validate_program(program, None, {})
+    success, message = manager.save_program(None, program)
 
-    assert not validation["can_save"]
-    assert "pdf_report.enabled 必须是布尔值" in validation["save_errors"]
-    assert "pdf_report.save_dir 必须是字符串" in validation["save_errors"]
+    assert not success
+    assert expected_error in message
+    assert "pdf_report" not in message
+    assert not os.path.exists(os.path.join(manager.program_dir, "默认配置.json"))
 
 
 def test_save_and_load_product_program(tmp_path):

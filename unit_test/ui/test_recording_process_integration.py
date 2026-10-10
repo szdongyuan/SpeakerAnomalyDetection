@@ -369,7 +369,7 @@ def test_main_close_invalidates_already_accepted_calibration_before_export_event
             QMainWindow.__init__(self)
             self.recording_bridge = widget.recording_bridge
             self.sequence_window = SimpleNamespace(_begin_raw_audio_csv_close=mock.Mock(),
-                _shutdown_product_pdf_exporter=mock.Mock(), _cancel_process_recording=mock.Mock())
+                _cancel_process_recording=mock.Mock())
             self._close_all_subwindows = mock.Mock()
     window = Window()
     try:
@@ -803,18 +803,18 @@ def test_main_close_waits_for_service_then_preserves_exports(ui_qapp, service, t
             QMainWindow.__init__(self)
             self.recording_bridge = RecordingServiceBridge(service)
             self.sequence_window = SimpleNamespace(_begin_raw_audio_csv_close=mock.Mock(),
-                _shutdown_product_pdf_exporter=mock.Mock())
+                close=mock.Mock())
             self._close_all_subwindows = mock.Mock()
 
     window = Window()
     window.show()
     window.close()
     assert window.isVisible()
-    window.sequence_window._shutdown_product_pdf_exporter.assert_not_called()
+    window.sequence_window.close.assert_not_called()
     pump(ui_qapp, lambda: not window.isVisible())
     assert service.closed.is_set()
     window.sequence_window._begin_raw_audio_csv_close.assert_called_once_with(application_exit=True)
-    window.sequence_window._shutdown_product_pdf_exporter.assert_called_once()
+    window.sequence_window.close.assert_called_once()
     window.deleteLater()
 
 
@@ -837,7 +837,6 @@ def test_main_close_driven_cancellation_retains_delivered_live_preview(
         RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
     ] = preview_mode
     host._begin_raw_audio_csv_close = mock.Mock()
-    host._shutdown_product_pdf_exporter = mock.Mock()
     host.judge_play_and_record()
     session = host._recording_process_session
     pump(ui_qapp, reader.entered.is_set)

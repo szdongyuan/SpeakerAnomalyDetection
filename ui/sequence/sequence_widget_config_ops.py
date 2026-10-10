@@ -95,7 +95,6 @@ class SequenceWidgetConfigOpsMixin:
         self.product_test_project_context = deepcopy(snapshot.context)
         self._product_queue_catalog = deepcopy(snapshot.queue_catalog)
         self.product_test_close_trigger_state = ""
-        self.product_test_pdf_report_config = {"enabled": False, "save_dir": ""}
         if snapshot.conditions:
             queue = self._product_queue_catalog[snapshot.conditions[0]["test_queue"]]
             self.using_config_path = queue["path"]
@@ -185,8 +184,7 @@ class SequenceWidgetConfigOpsMixin:
             self._reset_manual_product_condition_cycle(
                 clear_waveforms=True, refresh_display=False
             )
-            self._clear_recent_session_history(reset_panel=False)
-            self._reset_product_pdf_report_tracking()
+            self._clear_recent_session_history()
             self._direction_waveform_cache = {}
             self._condition_record_cache = {}
             self.recorded_path = None
@@ -211,7 +209,6 @@ class SequenceWidgetConfigOpsMixin:
             self._refresh_waveform_condition_metadata()
             self._apply_condition_mode_to_waveforms()
             self._sync_waveform_condition_from_left(self.left_panel.selected_condition_key)
-            self.recent_session_panel.set_conditions(self.product_test_condition_configs)
             if snapshot.active_file:
                 serial_result = self.refresh_serial_product_trigger_runtime()
                 if not serial_result["ok"]:
@@ -397,9 +394,6 @@ class SequenceWidgetConfigOpsMixin:
                 f"最终分类为 not_labeled：\n{details}",
             )
         return True, ""
-
-    def load_active_product_test_pdf_report_config(self):
-        return {"enabled": False, "save_dir": ""}
 
     def load_active_product_test_close_trigger_state(self):
         return ""

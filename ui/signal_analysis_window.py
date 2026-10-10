@@ -367,9 +367,6 @@ class AnalysisGraphWidget(QWidget):
         self.set_plot_font_size(20)
         self.init_ui()
 
-    def get_report_plot_widgets(self):
-        return [self.analysis_plot]
-
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
 
@@ -1694,16 +1691,6 @@ class Spectrogram(QWidget):
         self.stft_colorbar = None
         self.init_ui()
         self.setWindowTitle(title_name)
-
-    def get_report_plot_widgets(self):
-        plot_container = self.current_plot_widget
-        if isinstance(plot_container, pg.PlotWidget):
-            return [plot_container]
-        if plot_container is not None:
-            plot_widget = plot_container.findChild(pg.PlotWidget)
-            if isinstance(plot_widget, pg.PlotWidget):
-                return [plot_widget]
-        return []
 
     def init_ui(self):
         self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
@@ -3319,22 +3306,6 @@ class LoudnessAnalysis(AnalysisGraphWidget):
         self.roughness_plot = None
         self.title_name = title_name
         self.setWindowTitle(title_name)
-
-    def get_report_plot_widgets(self):
-        widgets = super().get_report_plot_widgets()
-        if isinstance(self.specific_loudness_profile_widget, pg.PlotWidget):
-            widgets.append(self.specific_loudness_profile_widget)
-
-        heatmap_container = self.specific_loudness_widget
-        if isinstance(heatmap_container, pg.PlotWidget):
-            heatmap_plot = heatmap_container
-        elif heatmap_container is not None:
-            heatmap_plot = heatmap_container.findChild(pg.PlotWidget)
-        else:
-            heatmap_plot = None
-        if isinstance(heatmap_plot, pg.PlotWidget):
-            widgets.append(heatmap_plot)
-        return widgets
 
     def calculate_loudness(self):
         config = self.analysis_config or {}

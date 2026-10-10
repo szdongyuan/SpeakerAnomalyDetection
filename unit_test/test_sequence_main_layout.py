@@ -147,18 +147,12 @@ class _DummySequenceWidget(QWidget, SequenceWidgetStreamingOpsMixin):
         self.count_board = _DummyCountBoard()
         self.left_panel = MotorDetectionLeftPanel(self.count_board)
         self.channel_workspace = None
-        self.recent_session_panel = None
         self.recent_test_session_by_id = {}
         self._last_recent_session_mode = ""
 
     def _resolve_recent_session(self, session_id: str):
         return None
 
-    def _show_recent_session_analysis_by_id(self, session_id: str):
-        return None
-
-    def _change_recent_session_result_by_id(self, session_id: str, label: str):
-        return None
 
     def _configure_direction_waveform_workspace(self):
         return None
@@ -181,7 +175,6 @@ class _RealisticSequenceWidget(_DummySequenceWidget):
         self.count_board = SequenceCountBoard({})
         self.left_panel = MotorDetectionLeftPanel(self.count_board)
         self.channel_workspace = None
-        self.recent_session_panel = None
         self._last_recent_session_mode = ""
 
 
@@ -387,7 +380,7 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(video.findChildren(QPushButton), [])
         self.assertIn("2K预览", [label.text() for label in video.findChildren(QLabel)])
         self.assertFalse(widget.count_board.isVisible())
-        self.assertFalse(widget.recent_session_panel.isVisible())
+        self.assertFalse(any(type(child).__name__ == "RecentSessionPanel" for child in widget.findChildren(QWidget)))
 
     def test_waveform_rows_support_dynamic_and_noncontiguous_channels(self):
         panel = AnalysisWaveformPanel()
@@ -483,7 +476,7 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertIs(left_sidebar_splitter.widget(1), widget.left_panel.video_monitor_panel)
         self.assertIs(main_splitter.widget(1), widget.channel_workspace)
         self.assertIsInstance(widget.channel_workspace, AnalysisWaveformPanel)
-        self.assertTrue(widget.recent_session_panel.isHidden())
+        self.assertFalse(any(type(child).__name__ == "RecentSessionPanel" for child in widget.findChildren(QWidget)))
 
     def test_common_window_size_keeps_waveform_and_history_readable(self):
         widget = _DummySequenceWidget()
@@ -495,7 +488,7 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertGreaterEqual(widget.channel_workspace.width(), 900)
         self.assertGreaterEqual(widget.channel_workspace.height(), 700)
         self.assertGreater(widget.channel_workspace.width(), widget.left_panel.result_panel.width())
-        self.assertTrue(widget.recent_session_panel.isHidden())
+        self.assertFalse(any(type(child).__name__ == "RecentSessionPanel" for child in widget.findChildren(QWidget)))
 
     def test_threshold_analyses_can_output_ok_ng(self):
         widget = _DummySequenceWidget()

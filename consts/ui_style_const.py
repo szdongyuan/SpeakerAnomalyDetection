@@ -1221,18 +1221,6 @@ count_board_container_style = _style("""
             }
 """)
 
-recent_session_card_title_style = _style("""
-            QLabel {
-                background-color: $COLOR_PRIMARY;
-                color: white;
-                font-family: $UI_FONT_FAMILY;
-                font-size: 18px;
-                font-weight: bold;
-                padding: 7px 10px;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-            }
-""")
 
 recent_session_table_style = _style("""
             QTableWidget {
@@ -1315,25 +1303,6 @@ product_test_program_table_style = recent_session_table_style + _style("""
             }
 """)
 
-recent_session_action_button_style = """
-            QToolButton {
-                border: 1px solid rgba(75, 85, 99, 0.24);
-                border-radius: 4px;
-                background-color: rgba(238, 243, 248, 0.95);
-                padding: 2px;
-            }
-            QToolButton:hover {
-                background-color: rgba(225, 234, 246, 0.95);
-            }
-            QToolButton:pressed {
-                background-color: rgba(212, 225, 242, 0.95);
-            }
-            QToolButton:disabled {
-                color: rgba(148, 163, 184, 0.42);
-                border-color: rgba(148, 163, 184, 0.14);
-                background-color: rgba(248, 250, 252, 0.42);
-            }
-"""
 
 waveform_frame_style = _style("""
             QFrame {

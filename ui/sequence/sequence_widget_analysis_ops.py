@@ -1,5 +1,4 @@
 import copy
-import os
 from time import perf_counter
 from datetime import datetime
 
@@ -36,19 +35,11 @@ from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.pre_processing.spl_runtime_config import calculate_overall_spl, resolve_spl_unit
 
 from base.streaming_file_writer import StreamingWavWriter
-from base.wav_calibration_metadata import (
-    WavCalibrationMetadataReadStatus,
-    inspect_wav_calibration_metadata,
-)
-from base.wav_channel_mapping import resolve_wav_plot_channels
-
-from consts.running_consts import DEFAULT_DIR
 
 from ui.sequence.analysis_channel_preflight import (
     MULTI_CHANNEL_ANALYSIS_TYPES,
     preflight_analysis_channels,
 )
-from ui.sequence.analysis_report_snapshot import build_analysis_report_items
 from ui.ui_analysis_config.config_normalization import (
     normalize_analysis_channel,
     normalize_analysis_channels,
@@ -539,10 +530,6 @@ class SequenceWidgetAnalysisOpsMixin(
         complete, label = self._product_group_result_state(target_group_id)
         if not complete or label not in ("OK", "NG", "not_labeled"):
             return None
-
-        maybe_export_pdf = getattr(self, "_maybe_export_product_test_pdf", None)
-        if callable(maybe_export_pdf):
-            maybe_export_pdf(target_group_id, label)
 
         left_panel = getattr(self, "left_panel", None)
         if left_panel is None:
@@ -1331,73 +1318,6 @@ class SequenceWidgetAnalysisOpsMixin(
         self.start_this_play(label)
 
 
-    @staticmethod
-    def _audio_column_count(audio_data) -> int:
-        audio_array = np.asarray(audio_data)
-        if audio_array.ndim == 1:
-            return 1
-        if audio_array.ndim == 2:
-            return int(audio_array.shape[1])
-        raise ValueError(f"不支持的音频数据维度: {audio_array.shape}")
-
-
-    def _snapshot_channel_workspace_plot_states(self):
-        try:
-            workspace = getattr(self, "channel_workspace", None)
-            all_subwindows = getattr(workspace, "all_subwindows", None)
-            if not callable(all_subwindows):
-                return None
-            windows = list(all_subwindows())
-            states = []
-            for window in windows:
-                snapshot_plot_state = getattr(
-                    window,
-                    "snapshot_plot_state",
-                    None,
-                )
-                if not callable(snapshot_plot_state):
-                    return None
-                states.append(snapshot_plot_state())
-            return tuple(states)
-        except Exception as error:
-            self.default_logger.warning(
-                f"Failed to snapshot waveform presentation: {error}"
-            )
-            return None
-
-    def _restore_channel_workspace_plot_states(
-        self,
-        mapping,
-        states,
-    ) -> bool:
-        if states is None:
-            return False
-        try:
-            workspace = getattr(self, "channel_workspace", None)
-            all_subwindows = getattr(workspace, "all_subwindows", None)
-            if workspace is None or not callable(all_subwindows):
-                return False
-            workspace.set_channels(mapping)
-            windows = list(all_subwindows())
-            if len(windows) != len(states):
-                return False
-            for window, state in zip(windows, states):
-                restore_plot_state = getattr(
-                    window,
-                    "restore_plot_state",
-                    None,
-                )
-                if not callable(restore_plot_state):
-                    return False
-                restore_plot_state(state)
-            return True
-        except Exception as error:
-            self.default_logger.warning(
-                f"Failed to restore waveform presentation snapshot: {error}"
-            )
-            return False
-
-
     def _clear_audio_source_analysis_state(self) -> None:
         self.data_struct.wav_calibration_metadata = None
         self.data_struct.wav_calibration_metadata_authoritative = False
@@ -1405,200 +1325,6 @@ class SequenceWidgetAnalysisOpsMixin(
         self._analysis_preflight_warning_shown = False
         self._analysis_preflight_skips = {}
         self._analysis_channel_local_columns = {}
-
-    def _decode_audio_file(
-        self,
-        file_path: str,
-        sample_rate: float | None = None,
-        *,
-        mono: bool = True,
-    ):
-        if not file_path:
-            raise ValueError("未选择音频文件")
-
-        target_sample_rate = sample_rate
-        if target_sample_rate is None:
-            acq_detail = (
-                self.sequence_config[0]["seq1"]["acq"]["detail"]
-                if self.sequence_config
-                else {}
-            )
-            target_sample_rate = acq_detail.get("sample_rate", 44100)
-
-        import librosa
-
-        audio_data, _ = librosa.load(
-            file_path,
-            sr=target_sample_rate,
-            mono=mono,
-        )
-        audio_data = np.asarray(audio_data, dtype=np.float32)
-        if audio_data.size <= 0:
-            raise ValueError("音频文件为空")
-        if mono:
-            audio_data = audio_data.reshape(-1)
-        else:
-            if audio_data.ndim == 1:
-                audio_data = audio_data.reshape(1, -1)
-            if audio_data.ndim != 2:
-                raise ValueError(
-                    f"不支持的音频数据维度: {audio_data.shape}"
-                )
-            audio_data = audio_data.T
-        return audio_data, target_sample_rate
-
-    def _apply_audio_to_data_struct(
-        self,
-        audio_data,
-        sample_rate: float,
-    ) -> None:
-        audio_data = np.asarray(audio_data, dtype=np.float32)
-        if audio_data.size <= 0:
-            raise ValueError("音频文件为空")
-        if audio_data.ndim == 1:
-            audio_multi = audio_data.reshape(-1, 1)
-        elif audio_data.ndim == 2:
-            audio_multi = audio_data
-        else:
-            raise ValueError(
-                f"不支持的音频数据维度: {audio_data.shape}"
-            )
-
-        self.data_struct.store_wave_data_multi = audio_multi
-        self.data_struct.store_wave_data = audio_multi.mean(axis=1).astype(
-            np.float32,
-            copy=False,
-        )
-        self.data_struct.sample_rate = sample_rate
-        self.data_struct.audio_lenth = int(audio_multi.shape[0])
-        channel_mapping = getattr(
-            self,
-            "_pending_wav_plot_channel_mapping",
-            None,
-        )
-
-        if self._is_manual_product_condition_cycle_active():
-            self._clear_plot_area()
-        else:
-            clear_all_direction_waveforms = getattr(
-                self,
-                "clear_all_direction_waveforms",
-                None,
-            )
-            if callable(clear_all_direction_waveforms):
-                clear_all_direction_waveforms()
-            else:
-                self._clear_plot_area()
-        if channel_mapping is None:
-            self.plot_waveform_to_workspace(
-                self.data_struct.store_wave_data_multi,
-                self.data_struct.sample_rate,
-            )
-        else:
-            self._plot_file_audio_to_workspace(
-                self.data_struct.store_wave_data_multi,
-                self.data_struct.sample_rate,
-                channel_mapping,
-            )
-
-    def _plot_file_audio_to_workspace(
-        self,
-        audio_multi,
-        sample_rate: float,
-        channel_mapping,
-    ) -> None:
-        """Rebuild file-backed plots without weakening final-run preflight."""
-        mapping = tuple(channel_mapping or ())
-        workspace = getattr(self, "channel_workspace", None)
-        all_subwindows = getattr(workspace, "all_subwindows", None)
-        normalize = getattr(self, "_normalize_final_recording_array", None)
-        validate = getattr(self, "_validate_final_waveform_workspace", None)
-        project = getattr(
-            self,
-            "_project_normalized_waveform_to_workspace",
-            None,
-        )
-
-        if all(
-            callable(method)
-            for method in (all_subwindows, normalize, validate, project)
-        ):
-            normalized = normalize(audio_multi, mapping)
-            actual_mapping = tuple(
-                getattr(window, "channel_index", None)
-                for window in all_subwindows()
-            )
-            if actual_mapping != mapping:
-                workspace.set_channels(mapping)
-            windows = validate(mapping)
-            project(normalized, sample_rate, windows)
-        else:
-            self.plot_waveform_to_workspace(
-                audio_multi,
-                sample_rate,
-                channel_mapping=mapping,
-            )
-
-        self._active_input_channels = list(mapping)
-
-    def _load_audio_file_to_data_struct(
-        self,
-        file_path: str,
-        sample_rate: float | None = None,
-        *,
-        saved_active_input_channels=None,
-        presentation_owner=None,
-    ):
-        if saved_active_input_channels is None:
-            saved_active_input_channels = getattr(
-                self,
-                "_pending_recent_saved_active_input_channels",
-                None,
-            )
-        if presentation_owner is None:
-            presentation_owner = getattr(
-                self,
-                "_pending_recent_presentation_owner",
-                None,
-            )
-        audio_data, target_sample_rate = self._decode_audio_file(
-            file_path,
-            sample_rate=sample_rate,
-            mono=False,
-        )
-        diagnostic = None
-        channel_mapping = None
-        if presentation_owner is not None:
-            diagnostic = inspect_wav_calibration_metadata(
-                file_path,
-                logger=self.default_logger,
-            )
-            channel_mapping = resolve_wav_plot_channels(
-                diagnostic,
-                column_count=self._audio_column_count(audio_data),
-                saved_active_input_channels=saved_active_input_channels,
-            )
-        self._clear_audio_source_analysis_state()
-        self._pending_wav_plot_channel_mapping = channel_mapping
-        try:
-            self._apply_audio_to_data_struct(
-                audio_data,
-                target_sample_rate,
-            )
-            if channel_mapping is not None:
-                self._active_input_channels = list(channel_mapping)
-        finally:
-            self._pending_wav_plot_channel_mapping = None
-        if diagnostic is not None:
-            self.data_struct.wav_calibration_metadata = (
-                diagnostic.metadata
-                if diagnostic.status
-                is WavCalibrationMetadataReadStatus.VALID
-                else None
-            )
-            self.data_struct.wav_calibration_metadata_authoritative = True
-        if presentation_owner is not None:
-            self._waveform_presentation_owner = presentation_owner
 
 
     def _resolve_recent_session_condition(self, direction: str):
@@ -1644,22 +1370,6 @@ class SequenceWidgetAnalysisOpsMixin(
             return self._product_condition_runtime_key(condition)
         return str(direction or "")
 
-    def _resolve_recent_session_path(self, session_record: dict | None):
-        if not isinstance(session_record, dict):
-            return None
-        candidate_paths = [session_record.get("recorded_path")]
-        recorded_signal_info = session_record.get("recorded_signal_info", {}) or {}
-        candidate_paths.append(recorded_signal_info.get("file_path"))
-        for candidate in candidate_paths:
-            if not candidate:
-                continue
-            normalized_candidate = str(candidate)
-            if not os.path.isabs(normalized_candidate):
-                normalized_candidate = os.path.join(DEFAULT_DIR, normalized_candidate).replace("\\", "/")
-            normalized_candidate = os.path.abspath(normalized_candidate)
-            if os.path.isfile(normalized_candidate):
-                return normalized_candidate
-        return None
 
     @staticmethod
     def _is_sequence_config_payload(sequence_config) -> bool:
@@ -1688,53 +1398,6 @@ class SequenceWidgetAnalysisOpsMixin(
             "active_input_channels": active_input_channels,
         }
 
-    def _apply_recent_session_config_for_view(self, session_record: dict):
-        snapshot = session_record.get("config_snapshot") if isinstance(session_record, dict) else None
-        if isinstance(snapshot, dict):
-            sequence_snapshot = snapshot.get("sequence_config")
-            if self._is_sequence_config_payload(sequence_snapshot):
-                self.sequence_config = copy.deepcopy(sequence_snapshot)
-                analysis_snapshot = snapshot.get("analysis_config")
-                if isinstance(analysis_snapshot, dict) and analysis_snapshot:
-                    self.analysis_config = copy.deepcopy(analysis_snapshot)
-                else:
-                    seq = self.sequence_config[0].get("seq1", {})
-                    self.analysis_config = copy.deepcopy(seq.get("analysis_list", {}) or {})
-                using_config_path = snapshot.get("using_config_path")
-                if using_config_path:
-                    self.using_config_path = str(using_config_path)
-                if getattr(self, "count_board", None) is not None:
-                    self.count_board.analysis_config = self.analysis_config
-                init_fft_and_stft_flag = getattr(self, "init_fft_and_stft_flag", None)
-                if callable(init_fft_and_stft_flag):
-                    init_fft_and_stft_flag()
-                return True, ""
-
-        condition_config = {}
-        if isinstance(snapshot, dict) and isinstance(snapshot.get("condition_config"), dict):
-            condition_config = snapshot.get("condition_config") or {}
-        if not condition_config:
-            condition_key = str(
-                session_record.get("condition_key")
-                or session_record.get("mode")
-                or session_record.get("mode_text")
-                or ""
-            )
-            condition_config = self._resolve_recent_session_condition(condition_key)
-        else:
-            condition_key = str(
-                condition_config.get("key")
-                or condition_config.get("trigger_state")
-                or condition_config.get("condition_name")
-                or ""
-            )
-
-        load_condition_config = getattr(self, "_load_sequence_config_for_product_condition", None)
-        if isinstance(condition_config, dict) and callable(load_condition_config):
-            return load_condition_config(condition_config)
-        if not condition_key and self._is_sequence_config_payload(getattr(self, "sequence_config", None)):
-            return True, ""
-        return False, "当前历史记录缺少对应工况的测试队列配置"
 
     def _build_recent_session_record(self, result_label: str):
         recorded_path = self.recorded_path
@@ -1769,19 +1432,6 @@ class SequenceWidgetAnalysisOpsMixin(
         if not group_id:
             group_id = session_id
 
-        report_config = getattr(self, "product_test_pdf_report_config", {}) or {}
-        analysis_config = getattr(self, "analysis_config", {}) or {}
-        display_sequence = (
-            analysis_config.get("display_sequence", [])
-            if isinstance(analysis_config, dict)
-            else []
-        )
-        analysis_report_state = (
-            "pending"
-            if report_config.get("enabled", False) and display_sequence
-            else "not_required"
-        )
-
         return {
             "session_id": session_id,
             "group_id": group_id,
@@ -1798,8 +1448,6 @@ class SequenceWidgetAnalysisOpsMixin(
             "recorded_path": recorded_path,
             "recorded_signal_info": recorded_signal_info,
             "analysis_result_dict": dict(getattr(self.data_struct, "analysis_result_dict", {}) or {}),
-            "analysis_report_state": analysis_report_state,
-            "analysis_report_items": [],
             "sample_rate": self.data_struct.sample_rate,
             "config_snapshot": self._build_recent_session_config_snapshot(),
         }
@@ -1812,16 +1460,13 @@ class SequenceWidgetAnalysisOpsMixin(
         session_id = session_record["session_id"]
         self.recent_test_sessions.insert(0, session_id)
         self.recent_test_session_by_id[session_id] = session_record
+        self._carry_recent_session_group_metadata(session_record)
         self._current_recent_session_id = session_id
         self._pending_recent_session_append = False
-        if self.recent_session_panel is not None:
-            self.recent_session_panel.upsert_session(session_record)
 
         while len(self.recent_test_sessions) > int(self._recent_session_max_items):
             removed_session_id = self.recent_test_sessions.pop()
             self.recent_test_session_by_id.pop(removed_session_id, None)
-            if self.recent_session_panel is not None:
-                self.recent_session_panel.remove_session(removed_session_id)
 
     def _update_recent_session(self, session_id: str, **fields):
         if not session_id:
@@ -1830,84 +1475,11 @@ class SequenceWidgetAnalysisOpsMixin(
         if not isinstance(session_record, dict):
             return
         session_record.update(fields)
-        if self.recent_session_panel is not None:
-            self.recent_session_panel.upsert_session(session_record)
+        self._carry_recent_session_group_metadata(session_record)
         self._refresh_manual_product_condition_results_from_group(session_record.get("group_id"))
         group_id = session_record.get("group_id")
-        final_label = self._refresh_current_manual_product_final_from_group(
+        self._refresh_current_manual_product_final_from_group(
             group_id
-        )
-        if final_label is None:
-            try_export_pdf = getattr(
-                self,
-                "_try_export_product_test_pdf",
-                None,
-            )
-            if callable(try_export_pdf):
-                try_export_pdf(group_id)
-
-    def _capture_current_analysis_report_snapshot(self, session_id=None):
-        report_config = getattr(self, "product_test_pdf_report_config", {}) or {}
-        if not isinstance(report_config, dict) or not report_config.get("enabled", False):
-            return
-
-        session_id = session_id or getattr(self, "_current_recent_session_id", None)
-        if not session_id:
-            return
-
-        try:
-            report_items = build_analysis_report_items(
-                list(getattr(self, "analysis_window", []) or []),
-                getattr(self, "analysis_config", {}) or {},
-                getattr(self.data_struct, "analysis_result_dict", {}) or {},
-                getattr(self, "_analysis_preflight_skips", {}) or {},
-            )
-            if not report_items:
-                report_state = "not_required"
-            elif any(item.get("state") == "failed" for item in report_items):
-                report_state = "failed"
-            else:
-                report_state = "completed"
-        except Exception as exc:
-            self.default_logger.error(f"capture_product_pdf_analysis_error: {exc}")
-            self._capture_analysis_report_failure(session_id, exc)
-            return
-
-        self._update_recent_session(
-            session_id,
-            analysis_report_state=report_state,
-            analysis_report_items=report_items,
-            analysis_result_dict=dict(
-                getattr(self.data_struct, "analysis_result_dict", {}) or {}
-            ),
-        )
-
-    def _capture_analysis_report_failure(self, session_id, error):
-        report_config = getattr(self, "product_test_pdf_report_config", {}) or {}
-        if not isinstance(report_config, dict) or not report_config.get("enabled", False):
-            return
-        if not session_id:
-            return
-
-        error_text = str(error or "未知分析错误")
-        self._update_recent_session(
-            session_id,
-            analysis_report_state="failed",
-            analysis_report_items=[
-                {
-                    "name": "分析报告",
-                    "type": "",
-                    "state": "failed",
-                    "status": "分析失败",
-                    "deviation": "-",
-                    "error": error_text,
-                    "image_errors": [],
-                    "images": [],
-                }
-            ],
-            analysis_result_dict=dict(
-                getattr(self.data_struct, "analysis_result_dict", {}) or {}
-            ),
         )
 
     def _update_current_recent_session_result(self, result_label: str):
@@ -1926,24 +1498,15 @@ class SequenceWidgetAnalysisOpsMixin(
             update_fields["config_snapshot"] = config_snapshot
         self._update_recent_session(session_id, **update_fields)
 
-    def _clear_recent_session_history(self, reset_panel=True):
+    def _clear_recent_session_history(self):
         self.recent_test_sessions = []
         self.recent_test_session_by_id = {}
         self._current_recent_session_id = None
         self._pending_recent_session_append = False
         self._current_run_recording_token = ""
-        recent_session_panel = getattr(self, "recent_session_panel", None)
-        if reset_panel and recent_session_panel is not None:
-            recent_session_panel.reset_sessions()
 
     def _discard_current_recent_session(self) -> None:
-        """Drop the placeholder recent-session row inserted at recording start.
-
-        Used when the recording is rejected before analysis (currently only by
-        the audio-quality validation gate) so the operator does not see a
-        stale "等待测试完成" row that will never resolve, and so the
-        directional cycle can be retried cleanly from scratch.
-        """
+        """Drop a rejected run's pending record so the cycle can be retried."""
         session_id = getattr(self, "_current_recent_session_id", None)
         self._pending_recent_session_append = False
         if not session_id:
@@ -1953,13 +1516,6 @@ class SequenceWidgetAnalysisOpsMixin(
         except ValueError:
             pass
         self.recent_test_session_by_id.pop(session_id, None)
-        if self.recent_session_panel is not None:
-            try:
-                self.recent_session_panel.remove_session(session_id)
-            except Exception as e:
-                self.default_logger.warning(
-                    f"remove_recent_session_panel_row_failed id={session_id} err={e}"
-                )
         self._current_recent_session_id = None
 
     def _begin_recent_session_for_current_run(self):
@@ -1976,265 +1532,6 @@ class SequenceWidgetAnalysisOpsMixin(
     def _resolve_recent_session(self, session_id: str):
         return self.recent_test_session_by_id.get(session_id)
 
-    def _change_recent_session_result_by_id(self, session_id: str, new_label: str):
-        if str(getattr(self.count_board, "mode", "") or "") != "mark":
-            return False
-
-        session_record = self._resolve_recent_session(session_id)
-        if not isinstance(session_record, dict):
-            return False
-
-        normalized_label = self._normalize_recent_session_storage_label(new_label)
-        if normalized_label not in ("OK", "NG", "not_labeled"):
-            return False
-
-        recorded_signal_info = dict(session_record.get("recorded_signal_info", {}) or {})
-        current_label = self._normalize_recent_session_storage_label(
-            recorded_signal_info.get("labels") or session_record.get("result_label")
-        )
-        if current_label == normalized_label:
-            return True
-
-        recorded_path = self._resolve_recent_session_path(session_record)
-        if not recorded_path:
-            QMessageBox.information(self, "提示", "当前记录音频文件不可用，无法修改结果。")
-            return False
-
-        save_code, msg, new_recorded_path, updated_signal_info = self._relabel_stored_audio_record(
-            recorded_path,
-            recorded_signal_info,
-            normalized_label,
-        )
-        if save_code != error_code.OK:
-            QMessageBox.warning(self, "提示", f"修改近期历史结果失败: {msg}")
-            return False
-
-        self._update_recent_session(
-            session_id,
-            result_label=self._format_recent_session_result_label(normalized_label),
-            recorded_path=new_recorded_path,
-            recorded_signal_info=updated_signal_info,
-        )
-        updated_session_record = self._resolve_recent_session(session_id)
-        if isinstance(updated_session_record, dict):
-            group_id = updated_session_record.get("group_id")
-            self._refresh_manual_product_condition_results_from_group(group_id, force_display=True)
-            self._refresh_current_manual_product_final_from_group(group_id)
-
-        update_group_count = getattr(self, "_update_manual_product_mark_group_count_for_session", None)
-        group_count_handled = callable(update_group_count) and update_group_count(session_id)
-        if not group_count_handled:
-            update_mark_result_file_on_relabel = getattr(self.count_board, "update_mark_result_file_on_relabel", None)
-            if callable(update_mark_result_file_on_relabel):
-                update_mark_result_file_on_relabel(current_label, normalized_label)
-
-        current_recorded_path = str(getattr(self, "recorded_path", "") or "")
-        if current_recorded_path and os.path.abspath(current_recorded_path) == os.path.abspath(recorded_path):
-            self.recorded_path = new_recorded_path
-            self.recorded_signal_info = dict(updated_signal_info or {})
-
-        condition_key = str(session_record.get("condition_key") or "")
-        cached_record = (getattr(self, "_condition_record_cache", {}) or {}).get(condition_key)
-        if (
-            isinstance(cached_record, dict)
-            and str(cached_record.get("session_id") or "") == str(session_id or "")
-        ):
-            cached_record.update(
-                recorded_path=new_recorded_path,
-                recorded_signal_info=dict(updated_signal_info or {}),
-            )
-            channel_workspace = getattr(self, "channel_workspace", None)
-            if channel_workspace is not None:
-                if hasattr(channel_workspace, "set_condition_result"):
-                    channel_workspace.set_condition_result(condition_key, normalized_label)
-                if hasattr(channel_workspace, "set_condition_audio_path"):
-                    channel_workspace.set_condition_audio_path(condition_key, new_recorded_path)
-        return True
-
-    def _show_recent_session_analysis_by_id(self, session_id: str):
-        session_record = self._resolve_recent_session(session_id)
-        if not isinstance(session_record, dict):
-            return
-
-        playback_path = self._resolve_recent_session_path(session_record)
-        if not playback_path:
-            QMessageBox.information(self, "提示", "当前记录音频文件不可用，无法查看分析结果。")
-            return
-
-        previous_recorded_path = self.recorded_path
-        previous_recorded_signal_info = dict(self.recorded_signal_info or {})
-        previous_sequence_config = copy.deepcopy(getattr(self, "sequence_config", []) or [])
-        previous_analysis_config = copy.deepcopy(getattr(self, "analysis_config", {}) or {})
-        previous_using_config_path = str(getattr(self, "using_config_path", "") or "")
-        previous_count_board_analysis_config = (
-            copy.deepcopy(getattr(self.count_board, "analysis_config", None))
-            if getattr(self, "count_board", None) is not None
-            else None
-        )
-        try:
-            previous_active_input_channels = [int(ch) for ch in (getattr(self, "_active_input_channels", []) or [])]
-        except Exception:
-            previous_active_input_channels = [0]
-        previous_store_wave_data = (
-            None if self.data_struct.store_wave_data is None else np.asarray(self.data_struct.store_wave_data).copy()
-        )
-        previous_store_wave_data_multi = (
-            None
-            if getattr(self.data_struct, "store_wave_data_multi", None) is None
-            else np.asarray(self.data_struct.store_wave_data_multi).copy()
-        )
-        previous_sample_rate = self.data_struct.sample_rate
-        previous_audio_length = getattr(self.data_struct, "audio_lenth", 0)
-        previous_analysis_result_dict = dict(getattr(self.data_struct, "analysis_result_dict", {}) or {})
-        previous_wav_calibration_metadata = copy.deepcopy(
-            getattr(self.data_struct, "wav_calibration_metadata", None)
-        )
-        previous_wav_calibration_metadata_authoritative = bool(
-            getattr(
-                self.data_struct,
-                "wav_calibration_metadata_authoritative",
-                False,
-            )
-        )
-        previous_wav_calibration_warning_shown = bool(
-            getattr(self.data_struct, "wav_calibration_warning_shown", False)
-        )
-        previous_analysis_preflight_warning_shown = bool(
-            getattr(self, "_analysis_preflight_warning_shown", False)
-        )
-        previous_analysis_preflight_skips = dict(
-            getattr(self, "_analysis_preflight_skips", {}) or {}
-        )
-        previous_analysis_channel_local_columns = dict(
-            getattr(self, "_analysis_channel_local_columns", {}) or {}
-        )
-        previous_mode = getattr(self.count_board, "mode", "")
-        previous_direction_waveform_cache = dict(getattr(self, "_direction_waveform_cache", {}) or {})
-        previous_waveform_display_override_direction = str(
-            getattr(self, "_waveform_display_override_direction", "") or ""
-        )
-        previous_workspace_plot_states = (
-            self._snapshot_channel_workspace_plot_states()
-        )
-        previous_waveform_presentation_owner = getattr(
-            self,
-            "_waveform_presentation_owner",
-            "hardware",
-        )
-
-        try:
-            self._waveform_presentation_owner = "recent_view"
-            self._close_analysis_windows()
-            applied_config, config_message = self._apply_recent_session_config_for_view(session_record)
-            if not applied_config:
-                raise RuntimeError(config_message or "无法加载该工况对应的测试队列配置")
-            self.recorded_path = playback_path
-            self.recorded_signal_info = dict(session_record.get("recorded_signal_info", {}) or {})
-            if not self.recorded_signal_info.get("file_path"):
-                self.recorded_signal_info["file_path"] = playback_path
-            self._waveform_display_override_direction = str(session_record.get("mode") or "")
-            config_snapshot = session_record.get("config_snapshot")
-            self._pending_recent_saved_active_input_channels = (
-                config_snapshot.get("active_input_channels")
-                if isinstance(config_snapshot, dict)
-                else None
-            )
-            self._pending_recent_presentation_owner = "recent_view"
-            try:
-                self._load_audio_file_to_data_struct(
-                    playback_path,
-                    sample_rate=session_record.get("sample_rate") or previous_sample_rate or None,
-                )
-            finally:
-                self._pending_recent_saved_active_input_channels = None
-                self._pending_recent_presentation_owner = None
-            self.count_board.mode = "view"
-            self.run(show_windows=True, capture_product_report=False)
-        except Exception as e:
-            QMessageBox.warning(self, "提示", f"查看近期测试结果失败: {e}")
-        finally:
-            self.count_board.mode = previous_mode
-            self.recorded_path = previous_recorded_path
-            self.recorded_signal_info = previous_recorded_signal_info
-            self.sequence_config = previous_sequence_config
-            self.analysis_config = previous_analysis_config
-            self.using_config_path = previous_using_config_path
-            self._active_input_channels = previous_active_input_channels
-            self._waveform_presentation_owner = (
-                previous_waveform_presentation_owner
-            )
-            if getattr(self, "count_board", None) is not None:
-                self.count_board.analysis_config = (
-                    previous_count_board_analysis_config
-                    if previous_count_board_analysis_config is not None
-                    else self.analysis_config
-                )
-            self.data_struct.store_wave_data = previous_store_wave_data
-            self.data_struct.store_wave_data_multi = previous_store_wave_data_multi
-            self.data_struct.sample_rate = previous_sample_rate
-            self.data_struct.audio_lenth = previous_audio_length
-            self.data_struct.analysis_result_dict = previous_analysis_result_dict
-            self.data_struct.wav_calibration_metadata = (
-                previous_wav_calibration_metadata
-            )
-            self.data_struct.wav_calibration_metadata_authoritative = (
-                previous_wav_calibration_metadata_authoritative
-            )
-            self.data_struct.wav_calibration_warning_shown = (
-                previous_wav_calibration_warning_shown
-            )
-            self._analysis_preflight_warning_shown = (
-                previous_analysis_preflight_warning_shown
-            )
-            self._analysis_preflight_skips = previous_analysis_preflight_skips
-            self._analysis_channel_local_columns = (
-                previous_analysis_channel_local_columns
-            )
-            self._direction_waveform_cache = previous_direction_waveform_cache
-            self._waveform_display_override_direction = previous_waveform_display_override_direction
-            pending_channels = getattr(
-                self,
-                "_pending_configured_input_channels",
-                None,
-            )
-            if pending_channels is not None:
-                self._pending_configured_input_channels = None
-                self._waveform_presentation_owner = "hardware"
-                apply_mapping = getattr(
-                    self,
-                    "_apply_input_channel_workspace_mapping",
-                    None,
-                )
-                mapping_changed = (
-                    apply_mapping(pending_channels)
-                    if callable(apply_mapping)
-                    else False
-                )
-                if not mapping_changed:
-                    self._active_input_channels = list(pending_channels)
-                    self._clear_plot_area()
-            else:
-                restored_plot_states = (
-                    self._restore_channel_workspace_plot_states(
-                        previous_active_input_channels,
-                        previous_workspace_plot_states,
-                    )
-                )
-                if not restored_plot_states:
-                    refresh_direction_waveform_workspace = getattr(self, "_refresh_direction_waveform_workspace", None)
-                    if callable(refresh_direction_waveform_workspace):
-                        refresh_direction_waveform_workspace()
-                    elif previous_store_wave_data_multi is not None:
-                        self.plot_waveform_to_workspace(
-                            previous_store_wave_data_multi,
-                            previous_sample_rate,
-                        )
-                    else:
-                        self._clear_plot_area()
-
-        self.data_btn.setEnabled(True)
-        # Viewing a historical record already runs analysis once with visible windows.
-        # Triggering a second silent run here clears those window references immediately.
 
     def start_this_play(self, label="not_labeled"):
         from ui.sequence.sequence_widget_raw_csv_ops import CsvRecordingAdmissionScope
@@ -2786,20 +2083,7 @@ class SequenceWidgetAnalysisOpsMixin(
             # Note: Don't enable buttons yet, that happens in _on_streaming_complete()
             return
 
-    def run(
-        self,
-        show_windows=True,
-        *,
-        report_session_id=None,
-        capture_product_report=True,
-    ):
-        target_session_id = ""
-        if capture_product_report:
-            target_session_id = str(
-                report_session_id
-                or getattr(self, "_current_recent_session_id", "")
-                or ""
-            ).strip()
+    def run(self, show_windows=True):
         mode = str(getattr(getattr(self, "count_board", None), "mode", ""))
         condition_key = self._get_active_product_condition_key() if mode in ("test", "mark") else ""
         previous_analysis_key = getattr(self, "_manual_product_analysis_key", "")
@@ -2809,10 +2093,8 @@ class SequenceWidgetAnalysisOpsMixin(
         try:
             result = self._run_analysis_impl(
                 show_windows=show_windows,
-                report_session_id=target_session_id,
             )
-        except Exception as exc:
-            self._capture_analysis_report_failure(target_session_id, exc)
+        except Exception:
             if condition_key and condition_key == self._get_active_product_condition_key():
                 self._set_active_product_condition_stage("分析失败", tone="ng")
             raise
@@ -2932,7 +2214,7 @@ class SequenceWidgetAnalysisOpsMixin(
         self._analysis_preflight_warning_shown = True
 
 
-    def _run_analysis_impl(self, show_windows=True, *, report_session_id=None):
+    def _run_analysis_impl(self, show_windows=True):
         """
         Executes the analysis tasks and optionally displays the analysis windows.
 
@@ -2997,8 +2279,6 @@ class SequenceWidgetAnalysisOpsMixin(
             for key in item_sort_list
         )
         if preflight.skipped and not has_executable_item:
-            if report_session_id:
-                self._capture_current_analysis_report_snapshot(report_session_id)
             return False
 
         if self._live_batch_requires_mic_calibration(item_sort_list):
@@ -3006,11 +2286,6 @@ class SequenceWidgetAnalysisOpsMixin(
                 self._prepare_live_mic_calibration_batch()
             except (MicCalibrationFormatError, MicCalibrationIOError) as error:
                 self._abort_live_mic_calibration_batch(error)
-                if report_session_id:
-                    self._capture_analysis_report_failure(
-                        report_session_id,
-                        error,
-                    )
                 return False
 
 
@@ -3027,12 +2302,8 @@ class SequenceWidgetAnalysisOpsMixin(
             for instance in self.analysis_window:
                 instance_key = getattr(instance, "_sequence_runtime_key", None)
                 window_key = getattr(instance, "_sequence_window_key", None)
-                setattr(instance, "_product_report_analysis_state", "running")
-                setattr(instance, "_product_report_analysis_error", "")
                 mismatch_info = getattr(instance, "_channel_mismatch_info", None)
                 if getattr(instance, "_channel_mismatch", False):
-                    setattr(instance, "_product_report_analysis_state", "failed")
-                    setattr(instance, "_product_report_analysis_error", "分析通道与录音通道不匹配")
                     if not getattr(instance, "_channel_preflighted", False):
                         self._show_channel_mismatch_warning(instance_key or "分析项", mismatch_info=mismatch_info)
                     continue
@@ -3040,20 +2311,14 @@ class SequenceWidgetAnalysisOpsMixin(
                     if hasattr(instance, "calculate_reference_spectrum"):
                         result = instance.calculate_reference_spectrum()
                         if not result:
-                            setattr(instance, "_product_report_analysis_state", "failed")
-                            setattr(instance, "_product_report_analysis_error", "未产生分析结果")
                             continue
                     elif hasattr(instance, "calculate_spl"):
                         result = instance.calculate_spl()
                         if not result:
-                            setattr(instance, "_product_report_analysis_state", "failed")
-                            setattr(instance, "_product_report_analysis_error", "未产生分析结果")
                             continue
                     elif hasattr(instance, "calculate_fr"):
                         result = instance.calculate_fr()
                         if not result:
-                            setattr(instance, "_product_report_analysis_state", "failed")
-                            setattr(instance, "_product_report_analysis_error", "未产生分析结果")
                             continue
                     elif hasattr(instance, "calculate_thd"):
                         instance.calculate_thd()
@@ -3070,31 +2335,20 @@ class SequenceWidgetAnalysisOpsMixin(
                     elif hasattr(instance, "calculate_fba"):
                         result = instance.calculate_fba()
                         if not result:
-                            setattr(instance, "_product_report_analysis_state", "failed")
-                            setattr(instance, "_product_report_analysis_error", "未产生分析结果")
                             continue
                     elif hasattr(instance, "calculate_loudness"):
                         result = instance.calculate_loudness()
                         if not result:
-                            setattr(instance, "_product_report_analysis_state", "failed")
-                            setattr(instance, "_product_report_analysis_error", "未产生分析结果")
                             continue
                     elif hasattr(instance, "calculate_fft"):
                         result = instance.calculate_fft()
                         if not result:
-                            setattr(instance, "_product_report_analysis_state", "failed")
-                            setattr(instance, "_product_report_analysis_error", "未产生分析结果")
                             continue
-                    setattr(instance, "_product_report_analysis_state", "completed")
                 except ValueError as e:
                     if self._is_channel_mismatch_error(e):
-                        setattr(instance, "_product_report_analysis_state", "failed")
-                        setattr(instance, "_product_report_analysis_error", str(e))
                         if not getattr(instance, "_channel_preflighted", False):
                             self._show_channel_mismatch_warning(instance_key or "分析项", err=e, mismatch_info=mismatch_info)
                         continue
-                    setattr(instance, "_product_report_analysis_state", "failed")
-                    setattr(instance, "_product_report_analysis_error", str(e))
                     raise
 
                 if show_windows:
@@ -3217,8 +2471,6 @@ class SequenceWidgetAnalysisOpsMixin(
         if show_windows:
             # Show summary window at the end (also in test mode), only if dict is not empty
             self._maybe_show_analysis_result_summary(width, height)
-        if report_session_id:
-            self._capture_current_analysis_report_snapshot(report_session_id)
         current_mode = str(getattr(self.count_board, "mode", "") or "")
         if current_mode not in ("test", "view"):
             result_label = self.recorded_signal_info.get("labels", "-") if isinstance(self.recorded_signal_info, dict) else "-"

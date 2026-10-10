@@ -18,7 +18,6 @@ from main_window import MainWindow
 from base.product_test_progress import ProductTestProgressStore
 from base.test_round_data import RoundDataRecord
 from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
-from ui.sequence.recent_session_panel import RecentSessionPanel
 from ui.sequence import sequence_widget_progress_ops as progress_ops
 from ui.sequence import sequence_widget_analysis_ops as analysis_ops
 from ui.sequence import sequence_widget_test_metadata_ops as metadata_ops
@@ -49,7 +48,6 @@ class ProgressHost(progress_ops.SequenceWidgetProgressOpsMixin, _MetadataHost):
             {"key": "c", "group_name": "USB-C", "condition_name": "高档", "test_queue": "q2"},
         ]
         self.left_panel = MotorDetectionLeftPanel(None, condition_configs=self.product_test_condition_configs)
-        self.recent_session_panel = RecentSessionPanel(condition_configs=self.product_test_condition_configs)
         self.channel_workspace = Mock()
         self.recent_test_session_by_id = {}
         self.recent_test_sessions = []
@@ -109,7 +107,6 @@ def factory(tmp_path, monkeypatch, ui_qapp):
     for host in hosts:
         if isinstance(host, ResumedResetHost):
             host._round_reset_timer.stop()
-        host.recent_session_panel.close()
         host.left_panel.close()
         host.toolsbar.close()
         host.close()
@@ -1557,7 +1554,6 @@ def test_second_restart_then_finish_keeps_original_result(factory):
     assert second._manual_product_condition_index == 2
     # Recent-history eviction must not erase already restored round results.
     second.recent_test_session_by_id.clear()
-    second.recent_session_panel.reset_sessions()
     assert second._prepare_next_manual_product_condition_recording() is True
     complete_condition(second, "c")
     second._advance_manual_product_condition_cycle_after_recording()

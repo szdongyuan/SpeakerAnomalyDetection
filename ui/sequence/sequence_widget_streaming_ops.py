@@ -48,7 +48,6 @@ from consts.recording_preview_consts import (
 from consts.running_consts import DEFAULT_DIR
 from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
 from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
-from ui.sequence.recent_session_panel import RecentSessionPanel
 from ui.sequence.multichannel_waveform_session import MultichannelWaveformSession
 from ui.vkinging_presentation import ve_failure_text
 
@@ -1087,16 +1086,7 @@ class SequenceWidgetStreamingOpsMixin:
         self.left_panel.condition_selected.connect(
             self._sync_waveform_condition_from_left
         )
-        self.recent_session_panel = RecentSessionPanel(
-            on_play_session=self._resolve_recent_session,
-            on_view_session=self._show_recent_session_analysis_by_id,
-            on_change_session_result=self._change_recent_session_result_by_id,
-            condition_configs=getattr(self, "product_test_condition_configs", []) or [],
-            parent=self,
-        )
-        self.recent_session_panel.hide()
         self._last_recent_session_mode = str(getattr(self.count_board, "mode", "") or "")
-        self.recent_session_panel.set_result_editable(self._last_recent_session_mode == "mark")
         if self.count_board is not None:
             self.count_board.register_mode_change_callback(self._on_recent_session_mode_changed)
         self._configure_direction_waveform_workspace()
@@ -1250,9 +1240,6 @@ class SequenceWidgetStreamingOpsMixin:
             timer.stop()
         if hasattr(self, "hw_manager"):
             self.hw_manager.stop()
-        shutdown_pdf = getattr(self, "_shutdown_product_pdf_exporter", None)
-        if not application_exit and callable(shutdown_pdf):
-            shutdown_pdf()
         self._sequence_close_finalized = True
         super().closeEvent(event)
         if not application_exit and not getattr(self, "_owns_raw_audio_csv_service", False):
@@ -1401,15 +1388,12 @@ class SequenceWidgetStreamingOpsMixin:
         return save_code, msg
 
     def _on_recent_session_mode_changed(self, state: dict | None):
-        if self.recent_session_panel is None:
-            return
         mode = str((state or {}).get("mode") or "")
         previous_mode = str(getattr(self, "_last_recent_session_mode", "") or "")
         if mode and previous_mode and mode != previous_mode:
             self._clear_recent_session_history()
             self._reset_runtime_state_for_mode_switch()
         self._last_recent_session_mode = mode
-        self.recent_session_panel.set_result_editable(mode == "mark")
         apply_mode = getattr(self, "_apply_condition_mode_to_waveforms", None)
         if callable(apply_mode):
             apply_mode(mode)

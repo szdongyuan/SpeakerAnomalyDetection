@@ -186,10 +186,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
                 "_streaming_cleanup_in_progress")):
             return False
         controllers = [getattr(self, "_condition_playback_controller", None)]
-        recent_panel = getattr(self, "recent_session_panel", None)
-        controllers.append(
-            getattr(recent_panel, "playback_controller", None)
-            if recent_panel is not None else None)
         for controller in controllers:
             if controller is not None and controller.is_audio_playing():
                 return False

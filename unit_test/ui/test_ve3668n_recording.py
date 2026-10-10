@@ -368,35 +368,6 @@ def test_busy_and_cancel_restore_channel_selection_without_new_request(host_fact
     host.run.assert_not_called()
 
 
-def test_recent_audio_keeps_rate_outside_ve_whitelist(host_factory, tmp_path):
-    host = host_factory()
-    path = tmp_path / "historical.wav"
-    samples = np.tile(np.float32([8.25, 2.5]), (320, 1))
-    sf.write(path, samples, 96000, subtype="FLOAT")
-    host._load_audio_file_to_data_struct(str(path), sample_rate=sf.info(path).samplerate, presentation_owner="recent_view")
-    assert host.data_struct.sample_rate == 96000
-    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, samples)
-
-
-@pytest.mark.parametrize("sources", [("none", "none"), ("measured", "none"),
-                                     ("none", "measured"), ("measured", "measured")])
-def test_recent_vk_wav_keeps_uncalibrated_provenance_and_voltage(host_factory, tmp_path, sources):
-    from base.wav_calibration_metadata import append_wav_calibration_metadata
-    from unit_test.base.ve3668n_fakes import wav_metadata
-
-    host = host_factory()
-    path = tmp_path / "existing-v1.wav"
-    samples = np.tile(np.float32([8.25, 2.5]), (320, 1))
-    sf.write(path, samples, 44100, subtype="FLOAT")
-    metadata = wav_metadata(sources)
-    assert append_wav_calibration_metadata(path, metadata)
-    original = path.read_bytes()
-    host._load_audio_file_to_data_struct(str(path), sample_rate=44100, presentation_owner="recent_view")
-    assert host.data_struct.wav_calibration_metadata == metadata
-    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, samples)
-    assert path.read_bytes() == original
-
-
 @pytest.mark.parametrize("failure", ["unavailable", "profile_io", "profile_type", "calibration_io", "snapshot_invalid"])
 def test_invalid_ve_initialization_is_actionable_and_restores_controls(host_factory, monkeypatch, failure):
     host = host_factory()
@@ -594,29 +565,6 @@ def test_current_product_rate_change_during_ve_wins_at_next_soundcard_admission(
     assert actual_rate == recorded["sr"] == recorded["sample_rate"] == 22050
     assert recorded["num_frames"] == int(.04 * 22050) + round(.01 * 22050)
     assert recorded["startup_trim_samples"] == round(.01 * 22050)
-
-
-@pytest.mark.parametrize("after_ve", [False, True])
-def test_soundcard_admission_uses_product_rate_after_recent_audio(host_factory, tmp_path, after_ve):
-    from unit_test.base.recording_process_fakes import device_info as soundcard
-    host = host_factory()
-    acq = host.sequence_config[0]["seq1"]["acq"]
-    acq["detail"]["sample_rate"] = 32000
-    if after_ve:
-        session, _, audio = started_audio(host)
-        finish_ve_capture(host, session, audio)
-    path = tmp_path / "recent.wav"
-    samples = np.full((320, 2), .05, dtype=np.float32)
-    sf.write(path, samples, 96000, subtype="FLOAT")
-    host._load_audio_file_to_data_struct(str(path), sample_rate=96000, presentation_owner="recent_view")
-    host.mic = soundcard()
-    host.mic_channels = [0, 1]
-    host.refresh_channel_windows()
-    assert host.data_struct.sample_rate == 96000
-    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, samples)
-    recorded, actual_rate = host.reset_work_pram("not_labeled")
-    assert actual_rate == recorded["sr"] == 32000
-    assert recorded["num_frames"] == 1600 and recorded["startup_trim_samples"] == 320
 
 
 @pytest.mark.parametrize("fault", [
@@ -826,8 +774,6 @@ def test_legacy_waveform_replacement_resets_only_ve_owned_tooltip(
     assert window.plot_item.getData()[0][-1] == pytest.approx(expected_endpoint)
     assert window.is_live_preview is (replacement == "preview")
     assert window.toolTip() == expected_hint
-
-
 
 
 @pytest.mark.parametrize("outcome", ["ordinary", "streaming", "cancel", "close", "metadata_false", "release_error"])

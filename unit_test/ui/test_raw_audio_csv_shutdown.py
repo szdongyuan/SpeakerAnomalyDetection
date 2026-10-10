@@ -38,7 +38,6 @@ class Sequence(SequenceWidgetRawCsvOpsMixin, SequenceWidgetStreamingOpsMixin,
         self.product_test_project_context = {EXPORT_RAW_AUDIO_CSV_KEY: True}
         self.default_logger = Mock()
         self.hw_manager = SimpleNamespace(stop=Mock())
-        self._shutdown_product_pdf_exporter = Mock()
         self._cleanup_streaming_resources = Mock()
         self._on_raw_audio_csv_export_failed = Mock()
         self._on_raw_audio_csv_export_succeeded = Mock()
@@ -106,11 +105,11 @@ def test_blocked_export_close_keeps_qt_alive_and_drains(ui_qapp, runtime, tmp_pa
         assert window.isVisible()
         assert service._process.pid == pid
         assert service.snapshot().outstanding == 1
-        sequence._shutdown_product_pdf_exporter.assert_not_called()
+        sequence.hw_manager.stop.assert_not_called()
         gate.set()
         pump(ui_qapp, lambda: not window.isVisible())
         assert not sequence._owned_raw_audio_csv_tasks
-        sequence._shutdown_product_pdf_exporter.assert_called_once()
+        assert not hasattr(sequence, "_shutdown_product_pdf_exporter")
         if boundary == 'borrowed':
             assert service.snapshot().phase == 'open'
             sequence.show()
@@ -209,7 +208,7 @@ def test_late_analysis_during_video_wait_still_blocks_exit(ui_qapp, runtime, mon
         ui_qapp.processEvents()
         assert window.isVisible()
         assert window.isEnabled()  # operator can retry close after analysis ends
-        sequence._shutdown_product_pdf_exporter.assert_not_called()
+        sequence.hw_manager.stop.assert_not_called()
         sequence._analysis_has_pending_tasks.return_value = False
         window.close()
         pump(ui_qapp, lambda: not window.isVisible())
@@ -237,7 +236,7 @@ def test_main_nested_sequence_cleanup_occurs_once_after_drain(ui_qapp, runtime, 
         assert not sequence.isVisible()
         sequence.hw_manager.stop.assert_called_once()
         sequence._cleanup_streaming_resources.assert_called_once()
-        sequence._shutdown_product_pdf_exporter.assert_called_once()
+        assert not hasattr(sequence, "_shutdown_product_pdf_exporter")
     finally:
         sip.delete(window)
         sip.delete(sequence)
@@ -417,7 +416,7 @@ def test_incomplete_recording_shutdown_does_not_fabricate_csv_release(ui_qapp, r
         assert not recording_closed.is_set()
         assert not bridge.service_closed
         assert service.paths_busy((path,))
-        sequence._shutdown_product_pdf_exporter.assert_not_called()
+        sequence.hw_manager.stop.assert_not_called()
         service.release_mutation(permit)
         pump(ui_qapp, lambda: not window.isVisible())
     finally:

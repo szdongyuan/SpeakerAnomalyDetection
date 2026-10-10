@@ -17,7 +17,6 @@ from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from base.load_config import LoadUiConfig
 from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
 from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
-from ui.sequence.recent_session_panel import RecentSessionPanel
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 from ui.sequence.sequence_widget_recording_process_ops import SequenceWidgetRecordingProcessOpsMixin
@@ -54,7 +53,6 @@ class ProductRefreshHost(SequenceWidgetConfigOpsMixin, SequenceWidgetStreamingOp
             store_wave_data=None, store_wave_data_multi=None,
             clear_fft_and_stft_flag=Mock(), add_stft_or_fft_count=Mock(),
         )
-        self._reset_product_pdf_report_tracking = Mock()
         self.refresh_serial_product_trigger_runtime = Mock(return_value={"ok": True})
         self.hw_manager = SimpleNamespace(stop_serial_discrete_input_listener=Mock())
         self.player_btn = QPushButton(self)
@@ -75,7 +73,6 @@ class ProductRefreshHost(SequenceWidgetConfigOpsMixin, SequenceWidgetStreamingOp
             channel_layout_path=str(Path(manager.program_dir) / "channel_layout.json"),
         )
         self.channel_workspace.set_channels([0])
-        self.recent_session_panel = RecentSessionPanel(self)
         self.update_using_file_combobox()
         self.using_file_combobox.currentTextChanged.connect(self.on_using_file_combobox_changed)
         self._finish_initial_product_configuration()
@@ -198,7 +195,6 @@ def test_hardware_sync_preserves_active_round_results_and_pending_task(refresh_h
     host.left_panel.set_condition_channel_results(first, [{"raw_channel": 0, "SPL": "NG", "result": "NG"}])
     wave = host.data_struct.store_wave_data
     cache = host._condition_record_cache
-    host._reset_product_pdf_report_tracking.reset_mock()
     host._apply_product_test_snapshot = Mock(side_effect=AssertionError("must not reload product"))
 
     assert host.synchronize_hardware_analysis_channels() is True
@@ -217,7 +213,6 @@ def test_hardware_sync_preserves_active_round_results_and_pending_task(refresh_h
     assert rows[first]["labels"]["progress"].text() == "通道判定：1/1"
     assert rows[host.product_test_condition_configs[1]["key"]]["channel_count"] == 3
     assert host._product_progress_round_signature == "new-channel-signature"
-    host._reset_product_pdf_report_tracking.assert_not_called()
 
 
 def test_hardware_sync_keeps_loaded_queue_parameters_and_identity(refresh_host):
@@ -252,7 +247,6 @@ def assert_old_result(host, old_snapshot, old_rows, old_wave):
     assert host.data_struct.store_wave_data is old_wave
     assert host.recent_test_sessions == ["old-session"]
     host.refresh_serial_product_trigger_runtime.assert_not_called()
-    host._reset_product_pdf_report_tracking.assert_not_called()
 
 
 @pytest.mark.parametrize("save_other", [False, True])
@@ -1004,21 +998,6 @@ def test_main_window_refreshes_button_after_exceptional_dialog_exit():
     assert refresh_states == [False]
 
 
-def test_main_window_shuts_down_product_pdf_exporter_before_exit():
-    shutdown_calls = []
-    window = SimpleNamespace(
-        sequence_window=SimpleNamespace(
-            _shutdown_product_pdf_exporter=lambda: shutdown_calls.append(True)
-        )
-    )
-    shutdown_before_exit = _load_main_window_method(
-        "_shutdown_product_pdf_exporter_before_exit",
-        {},
-    )
-
-    shutdown_before_exit(window)
-
-    assert shutdown_calls == [True]
 
 
 def test_active_project_context_exposes_result_storage_identity():

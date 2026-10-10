@@ -26,7 +26,6 @@ from ui.sequence.sequence_widget_analysis_process_ops import (
 )
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
-from ui.sequence.sequence_widget_product_pdf_ops import SequenceWidgetProductPdfOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 from ui.sequence.sequence_widget_raw_csv_ops import SequenceWidgetRawCsvOpsMixin
 
@@ -41,7 +40,6 @@ class SequenceWindow(
     SequenceWidgetAnalysisProcessOpsMixin,
     SequenceWidgetAnalysisOpsMixin,
     SequenceWidgetConfigOpsMixin,
-    SequenceWidgetProductPdfOpsMixin,
     SequenceWidgetStreamingOpsMixin,
     SequenceWidgetRawCsvOpsMixin,
     QWidget,
@@ -88,9 +86,6 @@ class SequenceWindow(
         self.product_test_close_trigger_state = (
             self.load_active_product_test_close_trigger_state()
         )
-        self.product_test_pdf_report_config = self.load_active_product_test_pdf_report_config()
-        self._product_pdf_report_states = {}
-        self._product_pdf_report_paths = {}
         self._initialize_raw_audio_csv_runtime(raw_audio_csv_bridge=raw_audio_csv_bridge)
         self.left_panel = MotorDetectionLeftPanel(
             self.count_board,
@@ -199,9 +194,7 @@ class SequenceWindow(
         self._pending_configured_input_channels = None
         self._channel_selection_error = ""
         self._active_input_channels = [0]
-        self._waveform_presentation_owner = "hardware"
         self.channel_workspace = None
-        self.recent_session_panel = None
         self.recent_test_sessions = []
         self.recent_test_session_by_id = {}
         self._recent_session_seq = 0

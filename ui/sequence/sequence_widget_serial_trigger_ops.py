@@ -888,15 +888,6 @@ class SequenceWidgetSerialTriggerOpsMixin:
             except ValueError:
                 pass
             records_by_id.pop(session_id, None)
-            recent_panel = getattr(self, "recent_session_panel", None)
-            if recent_panel is not None:
-                try:
-                    recent_panel.remove_session(session_id)
-                except Exception as error:
-                    self.default_logger.warning(
-                        "serial_product_round_panel_remove_failed "
-                        f"session_id={session_id} error={error}"
-                    )
 
         if getattr(self, "_current_recent_session_id", None) in session_ids:
             self._current_recent_session_id = None
