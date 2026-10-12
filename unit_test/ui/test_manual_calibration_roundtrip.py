@@ -45,7 +45,7 @@ def windows(ui_qapp):
     ui_qapp.processEvents()
 
 
-def _edit_and_blur(window, text, qapp):
+def _edit_and_blur(window, text, expected, qapp):
     panel = window.input_cal_wnd
     line = panel.v2pa_factor_lineedit
     assert line.isEnabled() and not line.isReadOnly()
@@ -57,7 +57,9 @@ def _edit_and_blur(window, text, qapp):
     panel.standard_spl_ii.setFocus()
     qapp.processEvents()
     assert not line.hasFocus()
-    assert float(line.text()) == float(text)
+    assert line.text() == format(expected, ".6f")
+    assert panel.saved_v2pa_factors[panel.current_channel] == expected
+    assert panel.coefficient_editor._factor == expected
     assert window.input_calibration_flag
     assert panel.streaming_processor is None
 
@@ -109,34 +111,39 @@ def test_mic_edit_round_trip_keeps_old_wav_snapshot(ui_qapp, tmp_path, monkeypat
     device = {"index": 7, "name": "Test Microphone", "hostapi": 3, "max_input_channels": 3}
     bridge = CalibrationBridgeFake(tmp_path)
     mic_store.save_mic_channel_calibration(
-        8.0, device, 0, 94, 48000, 10,
+        8.123456789012345, device, 0, 94, 48000, 10,
         calibrated_at="2026-10-07T15:00:00+08:00",
     )
     untouched = mic_store.load_mic_channel_calibrations(device)[0]
-    k1, k2 = 0.12345678901234567, 1.234567890123456e-12
+    input1, input2 = "0.12345678901234567", "1.234567890123456"
+    k1, k2 = 0.123457, 1.234568
     window = windows(device, [2, 0], bridge)
     assert window.input_cal_wnd.current_channel == 2
     assert window.input_cal_wnd.v2pa_factor_lineedit.text() == ""
-    _edit_and_blur(window, repr(k1), ui_qapp)
+    _edit_and_blur(window, input1, k1, ui_qapp)
     window.close()
     reopened = windows(device, [2, 0], bridge)
-    assert float(reopened.input_cal_wnd.v2pa_factor_lineedit.text()) == k1
+    assert reopened.input_cal_wnd.v2pa_factor_lineedit.text() == "0.123457"
     first = FrozenConfig.snapshot(build_recording_wav_calibration_metadata([2, 0], device))
     expected_first = first.to_dict()
     _write_recording(tmp_path / "a.wav", first, 48000)
     a_bytes = (tmp_path / "a.wav").read_bytes()
     _assert_file_factor(tmp_path / "a.wav", k1)
 
-    _edit_and_blur(reopened, repr(k2), ui_qapp)
+    _edit_and_blur(reopened, input2, k2, ui_qapp)
     second = FrozenConfig.snapshot(build_recording_wav_calibration_metadata([2, 0], device))
     assert second.to_dict()["recorded_channels"][0]["standard_spl"] is None
     _assert_history_and_new_recording(tmp_path, first, second, 48000, k1, k2, a_bytes, expected_first)
     records = mic_store.load_mic_channel_calibrations(device)
     assert records[0] == untouched
     assert records[2]["v2pa_factor"] == k2
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    stored_factor = payload["devices"][0]["channels"]["2"]["v2pa_factor"]
+    assert type(stored_factor) in (int, float)
+    assert stored_factor == reopened.input_cal_wnd.saved_v2pa_factors[2] == k2
     assert all(records[2][key] is None for key in
                ("standard_spl_db", "sample_rate_hz", "duration_seconds"))
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 3
+    assert payload["version"] == 3
     assert bridge.sessions == []
 
 
@@ -146,16 +153,17 @@ def test_ve_edit_round_trip_keeps_old_wav_snapshot(ui_qapp, tmp_path, windows):
     store = VECalibrationStore(tmp_path / "ve.json")
     profiles.set_sample_rate(device, 51200, store)
     untouched = store.save(
-        device, 3, v2pa_factor=8.0, standard_spl=94,
+        device, 3, v2pa_factor=8.123456789012345, standard_spl=94,
         calibration_sample_rate=51200, calibration_duration_seconds=10,
         calibrated_at="2026-10-07T15:00:00+08:00",
     )
     bridge = CalibrationBridgeFake(tmp_path)
-    k1, k2 = 0.12345678901234567, 1.234567890123456e-12
+    input1, input2 = "0.12345678901234567", "1.234567890123456"
+    k1, k2 = 0.123457, 1.234568
     window = windows(device, [7, 1], bridge, ve_profile_store=profiles, ve_calibration_store=store)
     assert window.input_cal_wnd.current_channel == 7
     assert window.input_cal_wnd.v2pa_factor_lineedit.text() == ""
-    _edit_and_blur(window, repr(k1), ui_qapp)
+    _edit_and_blur(window, input1, k1, ui_qapp)
     window.close()
     # Fresh store instances prove reopening reads persisted data, not a UI cache.
     store = VECalibrationStore(store.path)
@@ -166,7 +174,7 @@ def test_ve_edit_round_trip_keeps_old_wav_snapshot(ui_qapp, tmp_path, windows):
     combo.setCurrentIndex(combo.findData(7))
     ui_qapp.processEvents()
     assert reopened.input_cal_wnd.current_channel == 7
-    assert float(reopened.input_cal_wnd.v2pa_factor_lineedit.text()) == k1
+    assert reopened.input_cal_wnd.v2pa_factor_lineedit.text() == "0.123457"
     assert reopened.input_cal_wnd.channel_status_label.text() == "状态: 校准有效"
     first = FrozenConfig.snapshot(build_recording_wav_calibration_metadata(
         [7, 1], device, ve_calibration_store=store,
@@ -176,7 +184,7 @@ def test_ve_edit_round_trip_keeps_old_wav_snapshot(ui_qapp, tmp_path, windows):
     a_bytes = (tmp_path / "a.wav").read_bytes()
     _assert_file_factor(tmp_path / "a.wav", k1)
 
-    _edit_and_blur(reopened, repr(k2), ui_qapp)
+    _edit_and_blur(reopened, input2, k2, ui_qapp)
     second = FrozenConfig.snapshot(build_recording_wav_calibration_metadata(
         [7, 1], device, ve_calibration_store=store,
     ))
@@ -198,6 +206,10 @@ def test_ve_edit_round_trip_keeps_old_wav_snapshot(ui_qapp, tmp_path, windows):
         assert resolution.has_valid_metadata and not resolution.used_file_metadata
     assert store.get_record(device, 3) == untouched
     assert store.get_factor(device, 7) == k2
-    assert json.loads(store.path.read_text(encoding="utf-8"))["schema_version"] == 2
+    payload = json.loads(store.path.read_text(encoding="utf-8"))
+    stored_factor = payload["devices"][device["machine_id"]]["channels"]["7"]["v2pa_factor"]
+    assert type(stored_factor) in (int, float)
+    assert stored_factor == reopened.input_cal_wnd.saved_v2pa_factors[7] == k2
+    assert payload["schema_version"] == 2
     assert json.loads(profiles.path.read_text(encoding="utf-8"))["schema_version"] == 1
     assert bridge.sessions == []

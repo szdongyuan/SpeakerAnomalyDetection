@@ -71,7 +71,7 @@ def test_focus_out_commits_once_without_success_popup(host, ui_qapp):
     ui_qapp.processEvents()
     assert not host.line.hasFocus()
     assert host.saved == [(("device", 1), 2.5)]
-    assert host.line.text() == "2.5"
+    assert host.line.text() == "2.500000"
     assert host.errors == []
     host.other.clearFocus()
     ui_qapp.processEvents()
@@ -109,7 +109,7 @@ def test_failed_click_cancels_same_action_but_next_click_works(host, name, failu
     edit(host, "invalid" if failure == "input" else "2.5")
     QTest.mouseClick(button, Qt.LeftButton)
     assert host.actions == []
-    assert host.line.text() == "1.0"
+    assert host.line.text() == "1.000000"
     assert len(host.saved) == (0 if failure == "input" else 1)
     assert len(host.errors) == (1 if failure == "input" else 0)
     QTest.mouseClick(button, Qt.LeftButton)
@@ -156,7 +156,7 @@ def test_combo_click_saves_old_context_before_channel_signal(host, ui_qapp, save
     ui_qapp.processEvents()
     assert host.channel.currentIndex() == 1
     assert host.actions == [1]
-    assert host.line.text() == "7.0"
+    assert host.line.text() == "7.000000"
     assert host.saved == [(("device", 1), 2.5)]
 
 
@@ -167,7 +167,7 @@ def test_modal_failure_restores_before_nested_focus_and_cancels_click(host, fail
     reentrant_results = []
 
     def nested_dialog():
-        assert host.line.text() == "1.0"
+        assert host.line.text() == "1.000000"
         reentrant_results.append(host.editor.commit_pending())
         dialog = QDialog(host.window)
         layout = QVBoxLayout(dialog)
@@ -212,13 +212,13 @@ def test_exit_click_is_allowed_after_failed_save(host):
     assert not host.window.isVisible()
 
 
-@pytest.mark.parametrize("text", ["  2.5  ", "3.141592653589793", "2.5e-23", "5e-324"])
-def test_positive_numbers_round_trip_without_precision_loss(host, text):
+@pytest.mark.parametrize("text,expected", [("  2.5  ", 2.5), ("3.141592653589793", 3.141593), ("1e-6", 0.000001)])
+def test_positive_numbers_save_six_decimal_precision(host, text, expected):
     edit(host, text)
     QTest.keyClick(host.line, Qt.Key_Tab)
-    assert host.saved == [(("device", 1), float(text))]
-    assert float(host.line.text()) == float(text)
-    assert host.line.text() == repr(float(text))
+    assert host.saved == [(("device", 1), expected)]
+    assert host.editor._factor == expected
+    assert host.line.text() == format(expected, ".6f")
 
 
 @pytest.mark.parametrize("text", ["", "bad", "0", "-1", "nan", "inf", "1e9999", "1e-9999"])
@@ -231,7 +231,7 @@ def test_invalid_edited_value_restores_confirmed_value(host, text, original):
     QTest.keyClick(host.line, Qt.Key_Tab)
     assert host.saved == []
     assert len(host.errors) == 1
-    assert host.line.text() == ("" if original is None else repr(original))
+    assert host.line.text() == ("" if original is None else format(original, ".6f"))
 
 
 @pytest.mark.parametrize("original", [None, 1.2345678901234567, 5e-324])
@@ -240,14 +240,15 @@ def test_display_and_unedited_focus_do_not_save(host, original):
     QTest.keyClick(host.line, Qt.Key_Tab)
     assert host.saved == []
     assert host.errors == []
-    assert host.line.text() == ("" if original is None else repr(original))
+    assert host.editor._factor == original
+    assert host.line.text() == ("" if original is None else format(original, ".6f"))
 
 
 def test_same_numeric_value_normalizes_without_saving(host):
     edit(host, " 1e0 ")
     QTest.keyClick(host.line, Qt.Key_Tab)
     assert host.saved == []
-    assert host.line.text() == "1.0"
+    assert host.line.text() == "1.000000"
 
 
 def test_programmatic_text_change_does_not_create_draft(host):
@@ -269,7 +270,7 @@ def test_invalidation_before_focus_loss_drops_old_draft(host, invalidate):
     QTest.mouseClick(host.other, Qt.LeftButton)
     assert host.saved == []
     assert host.errors == []
-    assert host.line.text() == ("7.0" if invalidate == "new-context" else "1.0")
+    assert host.line.text() == ("7.000000" if invalidate == "new-context" else "1.000000")
 
 
 @pytest.mark.parametrize("key", [Qt.Key_Return, Qt.Key_Enter])
@@ -372,14 +373,14 @@ def test_backend_failure_keeps_baseline_until_later_success(host):
     host.save_ok = False
     edit(host, "2.5")
     QTest.keyClick(host.line, Qt.Key_Tab)
-    assert host.line.text() == "1.0"
+    assert host.line.text() == "1.000000"
     host.save_ok = True
     edit(host, "3.5")
     QTest.keyClick(host.line, Qt.Key_Tab)
-    assert host.line.text() == "3.5"
+    assert host.line.text() == "3.500000"
     edit(host, "bad")
     QTest.keyClick(host.line, Qt.Key_Tab)
-    assert host.line.text() == "3.5"
+    assert host.line.text() == "3.500000"
     assert host.saved == [(("device", 1), 2.5), (("device", 1), 3.5)]
 
 
@@ -413,6 +414,44 @@ def test_normal_owner_close_finishes_even_if_commit_fails(host, failure):
     edit(host, "bad" if failure == "input" else "2.5")
     host.window.close()
     assert not host.window.isVisible()
-    assert host.line.text() == "1.0"
+    assert host.line.text() == "1.000000"
     assert len(host.saved) == (1 if failure == "backend" else 0)
     assert len(host.errors) == (1 if failure == "input" else 0)
+
+
+def test_long_coefficient_saves_six_decimal_value(host):
+    edit(host, '38.645595158142605')
+    QTest.keyClick(host.line, Qt.Key_Tab)
+    assert host.saved == [(("device", 1), 38.645595)]
+    assert host.line.text() == '38.645595'
+
+
+@pytest.mark.parametrize("original,expected_saves", [(1.234568, []), (1.23456789, [(("device", 1), 1.234568)])])
+def test_explicit_edit_compares_normalized_value_to_original(host, original, expected_saves):
+    host.editor.show_value(("device", 1), original)
+    edit(host, "1.2345681")
+    QTest.keyClick(host.line, Qt.Key_Tab)
+    assert host.saved == expected_saves
+    assert host.editor._factor == 1.234568
+    assert host.line.text() == "1.234568"
+
+
+@pytest.mark.parametrize("text", ["2.5e-23", "5e-324"])
+def test_new_tiny_value_is_rejected_without_changing_original(host, text):
+    original = 1.23456789
+    host.editor.show_value(("device", 1), original)
+    edit(host, text)
+    QTest.keyClick(host.line, Qt.Key_Tab)
+    assert host.saved == []
+    assert host.editor._factor == original
+    assert host.line.text() == "1.234568"
+    assert host.errors == ["六位小数精度下校准系数必须大于零"]
+
+
+def test_save_callback_refresh_does_not_replace_normalized_confirmation(host):
+    host.on_save = lambda: host.editor.show_value(("device", 1), host.saved[-1][1])
+    edit(host, "38.645595158142605")
+    QTest.keyClick(host.line, Qt.Key_Tab)
+    assert host.saved == [(("device", 1), 38.645595)]
+    assert host.editor._factor == 38.645595
+    assert host.line.text() == "38.645595"
