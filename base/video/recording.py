@@ -178,7 +178,7 @@ class RecordingRootLease:
 
 
 def validate_volume(root):
-    """Two-hour segments can exceed 4 GiB at higher bitrates; require a suitable local filesystem."""
+    """Two-hour segments can exceed 4 GiB; reject filesystems with small file limits."""
     if os.name != "nt":
         return
     import ctypes
@@ -188,8 +188,6 @@ def validate_volume(root):
     volume = ctypes.create_unicode_buffer(261)
     if not kernel.GetVolumePathNameW(str(root), volume, len(volume)):
         raise ctypes.WinError(ctypes.get_last_error())
-    if kernel.GetDriveTypeW(volume.value) == 4:
-        raise ValueError("首版录像仅支持本地磁盘，不支持网络共享目录")
     filesystem = ctypes.create_unicode_buffer(261)
     serial, length, flags = wintypes.DWORD(), wintypes.DWORD(), wintypes.DWORD()
     if not kernel.GetVolumeInformationW(
@@ -198,7 +196,7 @@ def validate_volume(root):
     ):
         raise ctypes.WinError(ctypes.get_last_error())
     if filesystem.value.upper() in {"FAT", "FAT32"}:
-        raise ValueError("FAT/FAT32不支持所需的大文件，请选择NTFS或exFAT本地磁盘")
+        raise ValueError("FAT/FAT32不支持所需的大文件，请选择支持大文件的保存位置")
 
 
 @dataclass(frozen=True)
