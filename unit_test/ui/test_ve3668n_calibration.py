@@ -127,12 +127,12 @@ def test_manual_ve_focus_out_persists_current_physical_channel(setup):
     widget = setup.make()
     changes = []
     widget.calibration_state_changed.connect(changes.append)
-    _edit_manual(widget, "1.234567890123456e-12")
+    _edit_manual(widget, "1.234567890123456e0")
     widget.standard_spl_ii.setFocus()
     QApplication.processEvents()
     record = setup.calibrations.get_record(widget.input_device, 7)
     assert record is not None
-    assert record["v2pa_factor"] == 1.234567890123456e-12
+    assert record["v2pa_factor"] == 1.234568
     assert record["standard_spl"] is None
     assert record["calibration_sample_rate"] is None
     assert record["calibration_duration_seconds"] is None
@@ -162,7 +162,7 @@ def test_manual_ve_rechecks_context_before_save(setup, change):
     assert "changed-secret-id" not in str(widget.calibration_popup.call_args)
 
 
-@pytest.mark.parametrize("text", [None, "73.000", "2.123456789012345"])
+@pytest.mark.parametrize("text", [None, "73.000", "2.123456789012345", "2.5e-23"])
 def test_manual_ve_edit_and_same_value_preserve_expected_record(setup, text):
     from PyQt5.QtWidgets import QApplication
     widget = setup.make()
@@ -175,7 +175,8 @@ def test_manual_ve_edit_and_same_value_preserve_expected_record(setup, text):
     QApplication.processEvents()
     record = setup.calibrations.get_record(widget.input_device, 7)
     if text == "2.123456789012345":
-        assert record["v2pa_factor"] == float(text)
+        assert record["v2pa_factor"] == 2.123457
+        assert widget.saved_v2pa_factors[widget.current_channel] == 2.123457
         assert record["standard_spl"] is None
         assert record["calibration_sample_rate"] is None
         assert record["calibration_duration_seconds"] is None
@@ -184,6 +185,11 @@ def test_manual_ve_edit_and_same_value_preserve_expected_record(setup, text):
         assert setup.calibrations.path.read_bytes() == before
         assert record == old
         assert changed == []
+        assert widget.saved_v2pa_factors == {7: 73.0}
+        assert widget.coefficient_editor._factor == 73.0
+        if text == "2.5e-23":
+            assert widget.v2pa_factor_lineedit.text() == "73.000000"
+            assert "六位小数精度下校准系数必须大于零" in str(widget.calibration_popup.call_args)
 
 
 def test_manual_ve_atomic_failure_restores_old_record_and_display(setup, monkeypatch):
@@ -198,7 +204,7 @@ def test_manual_ve_atomic_failure_restores_old_record_and_display(setup, monkeyp
     assert setup.calibrations.path.read_bytes() == before
     assert widget._ve_calibration_records[7] == old
     assert widget.saved_v2pa_factors == {7: 73.0}
-    assert widget.v2pa_factor_lineedit.text() == "73.0"
+    assert widget.v2pa_factor_lineedit.text() == "73.000000"
     assert changed == []
     widget.calibration_popup.assert_called_once()
 
@@ -256,7 +262,7 @@ def test_manual_ve_invalid_live_queue_config_discards_draft_without_storage_io(s
             mock.patch.object(setup.calibrations, "save_factor") as save:
         QTest.qWait(200)
         assert widget.v2pa_factor_lineedit.isReadOnly()
-        assert widget.v2pa_factor_lineedit.text() == "73.0"
+        assert widget.v2pa_factor_lineedit.text() == "73.000000"
         assert widget.coefficient_editor.commit_pending()
         save.assert_not_called()
     assert setup.calibrations.path.read_bytes() == before
@@ -362,9 +368,7 @@ def test_ve_success_navigation_matches_popup(
     if next_label is not None:
         message += f'\n下次校准通道：{next_label}'
     else:
-        assert float(widget.v2pa_factor_lineedit.text()) == pytest.approx(
-            record['v2pa_factor'], abs=1e-6
-        )
+        assert widget.v2pa_factor_lineedit.text() == format(record["v2pa_factor"], ".6f")
     popup.assert_called_once_with(success_flag=True, message=message)
 
 
@@ -692,7 +696,7 @@ def test_ve_display_is_three_state_with_editable_pa_per_volt_and_reminder(setup)
     assert "更换麦克风后请清除该通道旧校准并重新校准" in labels
     old = seed_old(setup, widget)
     assert widget.channel_status_label.text() == "状态: 校准有效"
-    assert widget.v2pa_factor_lineedit.text() == "73.0"
+    assert widget.v2pa_factor_lineedit.text() == "73.000000"
     changed = deepcopy(widget.input_device)
     changed["input_config"]["unit"] = "g"
     with pytest.raises(ValueError):
@@ -726,7 +730,7 @@ def test_new_attempt_retains_old_valid_display_and_reenables_controls(setup, out
     seed_old(setup, widget)
     before = setup.calibrations.path.read_bytes()
     session, audio = offered(widget)
-    assert widget.v2pa_factor_lineedit.text() == "73.0"
+    assert widget.v2pa_factor_lineedit.text() == "73.000000"
     assert not widget.channel_combo_box.isEnabled()
     assert not widget.standard_spl_i.isEnabled() and not widget.standard_spl_ii.isEnabled()
     if outcome == "cancel":
@@ -740,7 +744,7 @@ def test_new_attempt_retains_old_valid_display_and_reenables_controls(setup, out
         release(widget, session)
     assert setup.calibrations.path.read_bytes() == before
     assert widget.saved_v2pa_factors == {7: 73.0}
-    assert widget.v2pa_factor_lineedit.text() == "73.0"
+    assert widget.v2pa_factor_lineedit.text() == "73.000000"
     assert widget.channel_status_label.text() == "状态: 校准有效"
     assert widget.channel_combo_box.isEnabled()
     assert widget.standard_spl_i.isEnabled() and widget.standard_spl_ii.isEnabled()
@@ -975,7 +979,7 @@ def test_reset_atomic_failure_preserves_valid_record_and_display(setup, monkeypa
     widget.reset_btn_clicked()
     assert setup.calibrations.path.read_bytes() == before
     assert not changed
-    assert widget.v2pa_factor_lineedit.text() == "73.0"
+    assert widget.v2pa_factor_lineedit.text() == "73.000000"
 
 
 def test_queued_events_after_dialog_close_done_and_reject_cannot_save(setup, ui_qapp):
@@ -1176,3 +1180,42 @@ def test_default_owned_real_service_destroy_reaps_active_worker(setup, ui_qapp, 
             sip.delete(widget)
         service.shutdown()
         pump(ui_qapp, service.closed.is_set)
+
+
+@pytest.mark.parametrize("raw,expected,text", [(38.645595158142605, 38.645595, "38.645595"), (9.9999996, 10.0, "10.000000"), (2.5, 2.5, "2.500000")])
+def test_ve_auto_precision_is_shared_by_storage_cache_popup_and_completed_channel(setup, monkeypatch, raw, expected, text):
+    widget = setup.make()
+    monkeypatch.setattr(widget, "calculate_v2pa_factor", lambda *_: raw)
+    session, audio = offered(widget)
+    with mock.patch.object(setup.calibrations, "save", wraps=setup.calibrations.save) as save:
+        accept(widget, session, audio)
+        release(widget, session)
+    assert save.call_args.kwargs["v2pa_factor"] == expected
+    assert setup.calibrations.get_factor(widget.input_device, 7) == expected
+    assert widget.saved_v2pa_factors == {7: expected}
+    assert widget.current_channel == 1
+    assert widget.calibration_popup.call_args.kwargs["message"] == f"校准成功\n本次校准结果：{text} Pa/V\n下次校准通道：In2"
+    widget._select_channel(7)
+    assert widget.v2pa_factor_lineedit.text() == text
+    assert widget.coefficient_editor._factor == expected
+
+
+def test_ve_auto_tiny_factor_never_saves_or_publishes_success(setup, monkeypatch):
+    widget = setup.make()
+    seed_old(setup, widget, factor=1.23456789)
+    before = setup.calibrations.path.read_bytes()
+    monkeypatch.setattr(widget, "calculate_v2pa_factor", lambda *_: 0.0000001)
+    changed, finished = [], []
+    widget.calibration_state_changed.connect(changed.append)
+    widget.calibration_finished.connect(finished.append)
+    session, audio = offered(widget)
+    with mock.patch.object(setup.calibrations, "save", wraps=setup.calibrations.save) as save:
+        accept(widget, session, audio)
+        release(widget, session)
+    save.assert_not_called()
+    assert setup.calibrations.path.read_bytes() == before
+    assert widget.saved_v2pa_factors == {7: 1.23456789}
+    assert widget.coefficient_editor._factor == 1.23456789
+    assert widget.current_channel == 7
+    assert changed == [] and finished == [False]
+    assert widget.calibration_popup.call_args.kwargs["success_flag"] is False

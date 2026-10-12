@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtWidgets import QMessageBox, QVBoxLayout, QPushButton, QSpacerItem
 from PyQt5.QtWidgets import QSizePolicy, QWidget, QRadioButton
 
+from base.calibration_precision import format_calibration_factor, normalize_calibration_factor
 from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.recording_process_protocol import RecordingRequest
@@ -588,7 +589,7 @@ class InputCalibration(QWidget):
     def _success_popup_message(self, factor, next_channel):
         message = (
             "校准成功\n"
-            f"本次校准结果：{float(factor):.6f} Pa/V"
+            f"本次校准结果：{format_calibration_factor(factor)} Pa/V"
         )
         if next_channel is not None:
             index = self.channel_combo_box.findData(next_channel)
@@ -987,6 +988,7 @@ class InputCalibration(QWidget):
             ):
                 raise ValueError("输入校准采样率无效")
 
+            v2pa_factor = normalize_calibration_factor(v2pa_factor)
             standard_spl_db = self._capture_standard_spl_db
             save_mic_channel_calibration(
                 v2pa_factor=v2pa_factor,
@@ -1076,6 +1078,7 @@ class InputCalibration(QWidget):
             factor = self.calculate_v2pa_factor(raw_level, context.standard_spl)
             if not np.isfinite(raw_level) or not np.isfinite(factor) or factor <= 0:
                 raise ValueError("输入校准计算结果无效")
+            factor = normalize_calibration_factor(factor)
             channel = request.channels[0]
             record = self.ve_calibration_store.save(
                 request.device, channel, v2pa_factor=float(factor),
@@ -1209,7 +1212,7 @@ class InputCalibration(QWidget):
             average_value (float): The average sound pressure level value used to calculate the v2pa_factor.
 
         Returns:
-            float: The calculated v2pa_factor value rounded to three decimal places.
+            float: The calculated v2pa_factor value before submission normalization.
         """
         if standard_spl_db is None:
             standard_spl_db = 94.0 if self.standard_spl_flag else 114.0

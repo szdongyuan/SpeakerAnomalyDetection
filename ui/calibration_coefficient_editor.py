@@ -1,21 +1,19 @@
 """A panel-owned coefficient draft; persistence remains in the panel adapter."""
 
-import math
-
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QObject, Qt
 from PyQt5.QtWidgets import QApplication
 
+from base.calibration_precision import format_calibration_factor, normalize_calibration_factor
+
 
 def parse_coefficient(text):
-    """Parse the existing floating-point Pa/V contract without rounding."""
+    """Parse and normalize a newly submitted Pa/V calibration factor."""
     try:
         value = float(text.strip())
     except (ValueError, OverflowError) as exc:
         raise ValueError("请输入大于零的有效校准系数") from exc
-    if not math.isfinite(value) or value <= 0:
-        raise ValueError("校准系数必须是大于零的有限数值")
-    return value
+    return normalize_calibration_factor(value)
 
 
 class CalibrationCoefficientEditor(QObject):
@@ -48,7 +46,7 @@ class CalibrationCoefficientEditor(QObject):
             self._dirty = True
 
     def _restore_text(self):
-        self._line.setText("" if self._factor is None else repr(float(self._factor)))
+        self._line.setText("" if self._factor is None else format_calibration_factor(self._factor))
 
     def show_value(self, context, factor):
         """Replace the context and confirmed value without creating a draft."""
