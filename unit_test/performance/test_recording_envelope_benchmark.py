@@ -10,7 +10,7 @@ import pytest
 def test_benchmark_runs_fresh_baseline_and_new_processes(tmp_path):
     output = tmp_path / 'profile.json'
     result = subprocess.run([
-        sys.executable, 'tools/benchmark_recording_final_envelope.py',
+        sys.executable, 'unit_test/performance/benchmark_recording_final_envelope.py',
         '--seconds', '.02', '.03', '--channels', '5', '--sample-rate', '1000',
         '--block-frames', '8', '--output', str(output),
     ], capture_output=True, text=True, timeout=90)
@@ -42,6 +42,6 @@ def test_benchmark_runs_fresh_baseline_and_new_processes(tmp_path):
 
 @pytest.mark.parametrize('target', [r'\\server\share\profile.json', '//server/share/profile.json'])
 def test_benchmark_rejects_network_output_before_io(target):
-    from tools.benchmark_recording_final_envelope import local_output_path
+    from unit_test.performance.benchmark_recording_final_envelope import local_output_path
     with pytest.raises(ValueError, match='local'):
         local_output_path(target)

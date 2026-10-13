@@ -233,7 +233,7 @@ def test_five_channel_long_payload_qt_publication_timing(ui_qapp, tmp_path, monk
     from base.recording_process_protocol import (
         RecordingFinalEnvelope, RecordingQualityEvidence, RecordingResult)
     from consts.recording_result_consts import RECORDING_FINAL_ENVELOPE_VERSION
-    from tools.benchmark_recording_final_envelope import request_for
+    from unit_test.performance.benchmark_recording_final_envelope import request_for
     from ui.sequence import sequence_widget_streaming_ops as stream
     from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
     from ui.sequence.recording_process_context import RecordingProcessContext

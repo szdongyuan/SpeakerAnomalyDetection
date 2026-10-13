@@ -20,7 +20,7 @@ import tempfile
 import threading
 import time
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -292,7 +292,7 @@ def run_route(args, root):
                 raise AssertionError('new main route constructed a ResultReader')
             metrics_path = root / 'child.json'
             service = RecordingService(
-                backend_factory='tools.benchmark_recording_final_envelope:capture_dependencies',
+                backend_factory='unit_test.performance.benchmark_recording_final_envelope:capture_dependencies',
                 backend_options=dict(frames=frames, channels=args.channels,
                                      block_frames=args.block_frames, metrics_path=str(metrics_path)),
                 reader_factory=forbidden_reader)
