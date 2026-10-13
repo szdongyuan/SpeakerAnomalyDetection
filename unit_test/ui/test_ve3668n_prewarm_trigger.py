@@ -21,6 +21,9 @@ class _StatusBar:
     def showMessage(self, message, *_args):
         self.messages.append(message)
 
+    def clearMessage(self):
+        self.messages.append("")
+
 
 class _Bridge:
     def __init__(self, status="accepted"):
@@ -192,6 +195,69 @@ def test_synchronous_service_terminal_cannot_restore_pending_ui():
     assert "VE 设备正在初始化…" not in window._status.messages
 
 
+def test_success_restores_visible_user_info_and_keeps_device_info(ui_qapp):
+    from PyQt5.QtWidgets import QLabel, QMainWindow, QStatusBar
+
+    window = _WindowHarness()
+    window.mic, window.mic_channels = device_info(), [7, 1]
+    window.user_name, window.access_lvl = "test-user", "Engineer"
+    host = QMainWindow()
+    window._status = QStatusBar(host)
+    window.user_label = QLabel()
+    window.device_label = QLabel()
+    window.update_statusbar = MainWindow.update_statusbar.__get__(window)
+    window.update_statusbar()
+    window._status.addWidget(window.user_label)
+    window._status.addPermanentWidget(window.device_label)
+    host.setStatusBar(window._status)
+    host.resize(1200, 200)
+    try:
+        host.show()
+        ui_qapp.processEvents()
+        assert window.user_label.isVisible()
+
+        assert window._try_start_ve_prewarm(window.mic, [7, 1], "startup") == "accepted"
+        ui_qapp.processEvents()
+        assert window._status.currentMessage() == "VE 设备正在初始化…"
+        assert not window.user_label.isVisible()
+        assert window.device_label.isVisible()
+        assert window.device_label.text() == "麦克风：Dev1 · 可用"
+
+        window.recording_bridge.callback(_completion(window.recording_bridge.calls[0]))
+        ui_qapp.processEvents()
+
+        assert window._status.currentMessage() == ""
+        assert window.user_label.isVisible()
+        assert window.user_label.text() == "当前用户：test-user  用户等级：Engineer"
+        assert window.device_label.isVisible()
+        assert window.device_label.text() == "麦克风：Dev1 · 可用"
+    finally:
+        host.close()
+        host.deleteLater()
+
+
+@pytest.mark.parametrize("ignored", ["context", "warmup_id", "signature", "closing", "duplicate"])
+def test_ignored_success_completion_preserves_current_message(ignored):
+    window = _WindowHarness()
+    window.mic, window.mic_channels = device_info(), [7, 1]
+    window._try_start_ve_prewarm(window.mic, [7, 1], "startup")
+    completion = _completion(window.recording_bridge.calls[0])
+    if ignored == "context":
+        window._ve_prewarm_context = None
+    elif ignored in ("warmup_id", "signature"):
+        completion = SimpleNamespace(**{**completion.__dict__, ignored: "mismatched"})
+    elif ignored == "closing":
+        window._recording_close_requested = True
+    else:
+        window.recording_bridge.callback(completion)
+    window._status.showMessage("Current operation")
+    messages = list(window._status.messages)
+
+    window.recording_bridge.callback(completion)
+
+    assert window._status.messages == messages
+
+
 @pytest.mark.parametrize("projected_busy,service_status", [(True, "accepted"), (False, "busy")])
 def test_busy_consumes_opportunity_without_queue_or_later_prewarm(projected_busy, service_status):
     bridge = _Bridge(service_status)
@@ -242,6 +308,7 @@ def test_completion_requires_exact_context_and_failure_uses_ownership_modal(monk
     assert "code=-9" in warnings[0][1] and "重启" in warnings[0][1]
     assert "ClearTask failed" not in warnings[0][1]
     assert window._status.messages[-1] == "VE 设备初始化失败"
+    assert "" not in window._status.messages
     assert window._try_start_ve_prewarm(
         device_info(machine_id="later-machine"), [7, 1], "later") == "consumed"
     assert len(window.recording_bridge.calls) == 1
