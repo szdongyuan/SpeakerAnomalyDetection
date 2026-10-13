@@ -1,4 +1,15 @@
 from typing import Any
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class SavedRecordingSource:
+    request: object
+    path: str
+    sample_rate: int
+    frame_count: int
+    calibration_metadata: object
+    metadata_appended: bool
 
 
 class DataDealStruct(object):
@@ -17,6 +28,9 @@ class DataDealStruct(object):
 
             self.store_wave_data = None
             self.store_wave_data_multi = None
+            self.recording_source = None
+            self.recording_sources = {}
+            self.recording_display_sources = {}
             self.clear_wav_calibration_context()
             self.split_repeat_data = None
             self.stimulus_data = None
@@ -34,10 +48,18 @@ class DataDealStruct(object):
 
             self._initialized = True
 
-    def clear_data(self):
+    def clear_recording_sources(self):
+        """Invalidate saved and displayed identities at explicit audio resets."""
+        self.recording_source = None
+        self.recording_sources = {}
+        self.recording_display_sources = {}
+
+    def clear_data(self, *, preserve_recording_sources=False):
         self.store_wave_data = None
         self.store_wave_data_multi = None
-        self.clear_wav_calibration_context()
+        if not preserve_recording_sources:
+            DataDealStruct.clear_recording_sources(self)
+            self.clear_wav_calibration_context()
         self.split_repeat_data = None
         # self.stimulus_data = None
         self.fft_result = None

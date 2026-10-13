@@ -381,10 +381,8 @@ def test_quality_gate_runs_after_trim(tmp_path, captures):
     data[:2] = 1
     backend.stream.feed(data)
     result = capture.wait(3)
-    from unit_test.base.test_recording_finalization import read_result
-    assert isinstance(result, RecordingResult)
-    validated = read_result(result, capture.request)
-    assert validated.audio is None and "weak_signal" in validated.error
+    assert isinstance(result, RecordingFailure)
+    assert result.stage == "quality" and "weak_signal" in result.message
     np.testing.assert_array_equal(sf.read(result.path, dtype="float32")[0], np.zeros((7, 2)))
 
 

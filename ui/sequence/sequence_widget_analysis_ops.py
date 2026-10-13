@@ -1260,10 +1260,11 @@ class SequenceWidgetAnalysisOpsMixin(
         self.start_this_play(label)
 
 
-    def _clear_audio_source_analysis_state(self) -> None:
-        self.data_struct.wav_calibration_metadata = None
-        self.data_struct.wav_calibration_metadata_authoritative = False
-        self.data_struct.wav_calibration_warning_shown = False
+    def _clear_audio_source_analysis_state(self, *, preserve_wav_calibration=False) -> None:
+        if not preserve_wav_calibration:
+            self.data_struct.wav_calibration_metadata = None
+            self.data_struct.wav_calibration_metadata_authoritative = False
+            self.data_struct.wav_calibration_warning_shown = False
         self._analysis_preflight_warning_shown = False
         self._analysis_preflight_skips = {}
         self._analysis_channel_local_columns = {}
@@ -1616,10 +1617,17 @@ class SequenceWidgetAnalysisOpsMixin(
         return False
 
     def reset_work_pram(self, label, count=None):
-        self.data_struct.clear_data()
         clear_source = getattr(self, "_clear_audio_source_analysis_state", None)
-        if callable(clear_source):
-            clear_source()
+        if getattr(self.data_struct, "recording_source", None) is not None:
+            # Starting a candidate recording cannot invalidate the published WAV.
+            # Display identities are invalidated separately when plots are cleared.
+            self.data_struct.clear_data(preserve_recording_sources=True)
+            if callable(clear_source):
+                clear_source(preserve_wav_calibration=True)
+        else:
+            self.data_struct.clear_data()
+            if callable(clear_source):
+                clear_source()
         self._recording_ve_device = None
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         # Product settings own new soundcard acquisitions, not the displayed

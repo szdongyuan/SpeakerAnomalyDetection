@@ -213,6 +213,11 @@ class ChannelPlotPresentationMixin:
         view_box = self.plot_widget.getViewBox()
         view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
         view_box.updateAutoRange()
+        self._clear_recording_display_failure()
+
+    def _clear_recording_display_failure(self) -> None:
+        self.plot_widget.setTitle("")
+        self.plot_widget.setEnabled(True)
 
     def set_relative_preview_data(self, x, y):
         updated = self._set_curve_data(x, y)
@@ -222,6 +227,7 @@ class ChannelPlotPresentationMixin:
         view_box.disableAutoRange(axis=pg.ViewBox.XAxis)
         self.plot_widget.setXRange(-10.0, 0.0, padding=0)
         self._set_presentation_mode(PREVIEW_TIME_MODE_RELATIVE_LATEST)
+        self._clear_recording_display_failure()
         return updated
 
     def set_live_data(self, x, y):
@@ -236,6 +242,7 @@ class ChannelPlotPresentationMixin:
         view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
         view_box.updateAutoRange()
         self._set_presentation_mode(PREVIEW_TIME_MODE_CUMULATIVE)
+        self._clear_recording_display_failure()
         return updated
 
     def set_data(self, x, y):
@@ -246,7 +253,14 @@ class ChannelPlotPresentationMixin:
         view_box = self.plot_widget.getViewBox()
         view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
         view_box.updateAutoRange()
+        self._clear_recording_display_failure()
         return updated
+
+    def show_recording_display_failure(self):
+        """Hide stale/partial curves and interactions after a saved-file refresh fails."""
+        self.clear_plot()
+        self.plot_widget.setTitle("波形刷新失败")
+        self.plot_widget.setEnabled(False)
 
     def snapshot_plot_state(self):
         """Copy curve and X-view state for an opaque rollback snapshot."""

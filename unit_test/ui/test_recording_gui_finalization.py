@@ -10,6 +10,8 @@ from PyQt5.QtCore import QThread, QTimer
 from unit_test.ui.test_recording_process_integration import main_host, pump, service
 from unit_test.base.test_recording_finalization import capture_audio, read_result
 from unit_test.base.test_recording_capture import request
+from base.recording_final_result import prepare_main_recording_result
+from unit_test.base.recording_process_fakes import known_audio
 
 def legacy_display(
     waveform,
@@ -80,24 +82,24 @@ def test_background_display_matches_original_exactly(length, limit):
     assert len(actual[0]) <= limit
 
 
-def test_reader_products_are_frozen_and_bound_to_exact_request(tmp_path):
-    from base.recording_result_reader import RecordingAudio
+def test_envelope_products_are_frozen_and_bound_to_exact_request(tmp_path):
+    from base.recording_final_result import PreparedRecordingResult
     req = request(tmp_path, channels=(2,0))
     _, descriptor = capture_audio(req)
-    audio = read_result(descriptor, req).audio
+    audio = prepare_main_recording_result(descriptor, req)
     assert audio.is_prepared_for(req)
     assert not audio.is_prepared_for(replace(req))
     assert not replace(audio).is_prepared_for(req)
     assert not replace(audio, descriptor=replace(descriptor)).is_prepared_for(req)
-    assert not RecordingAudio(descriptor, audio.multi, audio.mono).is_prepared_for(req)
+    assert not PreparedRecordingResult(descriptor, audio.waveforms).is_prepared_for(req)
     assert len(audio.waveforms) == 2
-    for array in (audio.multi, audio.mono, *(a for pair in audio.waveforms for a in pair)):
+    for array in (a for pair in audio.waveforms for a in pair):
         with pytest.raises(ValueError):
             array.flat[0] = 1
         with pytest.raises(ValueError):
             array.setflags(write=True)
     for column, waveform in enumerate(audio.waveforms):
-        expected = legacy_display(audio.multi[:,column], req.sample_rate, max_points=48000)
+        expected = legacy_display(known_audio()[2:9, req.channels][:,column], req.sample_rate, max_points=48000)
         for a,b in zip(waveform, expected):
             np.testing.assert_array_equal(a,b)
 
@@ -123,7 +125,7 @@ def test_actual_panel_recognizes_processing(ui_qapp, stage):
 @pytest.mark.parametrize("actual_workspace", [False, True])
 def test_background_preparation_keeps_qt_responsive_and_publishes_without_scans(ui_qapp, service, tmp_path, monkeypatch, caplog, drop_finalizing, actual_workspace):
     caplog.set_level(logging.INFO)
-    import base.recording_result_reader as reader_module
+    import base.recording_final_result as reader_module
     from ui.sequence.motor_result_panel import MotorResultPanel
     from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
     from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
@@ -134,12 +136,12 @@ def test_background_preparation_keeps_qt_responsive_and_publishes_without_scans(
             if event.kind != "finalizing":
                 handle_event(worker, event)
         monkeypatch.setattr(service, "_event", terminal_only)
-    original = reader_module.ResultReader._validate_metadata
-    def block_reader(reader):
+    original = reader_module.prepare_main_recording_result
+    def block_reader(descriptor, request):
         entered.set()
         assert release.wait(10)
-        return original(reader)
-    monkeypatch.setattr(reader_module.ResultReader, "_validate_metadata", block_reader)
+        return original(descriptor, request)
+    monkeypatch.setattr(reader_module, "prepare_main_recording_result", block_reader)
     host = main_host(service, tmp_path, streaming=False)
     panel = MotorResultPanel()
     panel.set_condition_configs([{"key":"forward", "name":"正转"}])
@@ -190,9 +192,10 @@ def test_background_preparation_keeps_qt_responsive_and_publishes_without_scans(
         if not actual_workspace:
             sys.setprofile(forbid_gui_mean)
         release.set()
-        pump(ui_qapp, lambda: host.data_struct.store_wave_data is not None)
-        assert host.data_struct.store_wave_data is session.audio.mono
-        assert host.data_struct.store_wave_data_multi is session.audio.multi
+        pump(ui_qapp, lambda: getattr(host.data_struct, "recording_source", None) is not None)
+        assert host.data_struct.store_wave_data is None
+        assert host.data_struct.store_wave_data_multi is None
+        assert host.data_struct.audio_lenth == session.audio.descriptor.final_frames
         assert session.state == "completed"
         messages = [record.getMessage() for record in caplog.records]
         assert any("stage=gui_publication" in message and session.request.request_id in message for message in messages)
@@ -211,7 +214,7 @@ def test_background_preparation_keeps_qt_responsive_and_publishes_without_scans(
             workspace.close()
 
 
-def test_child_and_reader_report_request_correlated_local_durations(tmp_path, caplog):
+def test_child_reports_request_correlated_local_durations(tmp_path, caplog):
     import logging
     caplog.set_level(logging.INFO)
     req = request(tmp_path)
@@ -219,9 +222,9 @@ def test_child_and_reader_report_request_correlated_local_durations(tmp_path, ca
     timing = descriptor.finalization_timing
     assert 0 <= timing.target_to_file_closed <= timing.target_to_descriptor
     assert 0 <= timing.metadata_seconds <= timing.target_to_descriptor
-    assert read_result(descriptor, req).error is None
+    assert prepare_main_recording_result(descriptor, req).is_prepared_for(req)
     messages = [r.getMessage() for r in caplog.records if req.request_id in r.getMessage()]
-    for stage in ("target_samples", "drain_file_close", "metadata", "read_validation", "mono_display", "reader_complete"):
+    for stage in ("target_samples", "drain_file_close", "metadata", "final_envelope", "descriptor_ready"):
         assert any("stage=" + stage in m for m in messages), stage
 
 
@@ -252,6 +255,10 @@ def test_changed_legacy_input_recomputes_mono(ui_qapp, tmp_path, monkeypatch, le
     from unit_test.ui.test_sequence_wav_calibration_metadata import _prepare_final_completion_host
     req = request(tmp_path, trim_samples=0)
     _, descriptor = capture_audio(req)
+    import hashlib
+    expected_saved = known_audio()[:9, req.channels]
+    descriptor = replace(descriptor, final_envelope=None, digest_algorithm="sha256-float32-le",
+                         sample_digest=hashlib.sha256(expected_saved.astype("<f4").tobytes()).hexdigest())
     audio = read_result(descriptor, req).audio
     changed = audio.multi.copy()
     changed[:, 0] += 4
@@ -264,7 +271,7 @@ def test_changed_legacy_input_recomputes_mono(ui_qapp, tmp_path, monkeypatch, le
     assert host._on_streaming_complete(recorded_mono=audio.mono, recorded_multi=changed,
         sample_rate=req.sample_rate, prefinalized=legacy_prefinalized,
         completion_source="process" if legacy_prefinalized else "streaming",
-        prepared_audio=audio) is True
+        prepared_audio=audio) is True, host.default_logger.error.call_args_list
     expected = changed.copy()
     if not legacy_prefinalized:
         expected[:, 0] = np.float32(8388607 / 8388608)
@@ -345,8 +352,13 @@ def test_ve_trusted_result_admission_never_scans_audio(ui_qapp, tmp_path, monkey
     from types import SimpleNamespace
     from unit_test.base.test_recording_finalization import prepared_ve_result
     from ui.sequence.recording_process_context import RecordingProcessContext
-    req, descriptor, _, _ = prepared_ve_result(tmp_path, {"enabled":False})
-    audio = read_result(descriptor, req).audio
+    req, descriptor, multi, _ = prepared_ve_result(tmp_path, {"enabled":False})
+    from base.recording_process_protocol import RecordingFinalEnvelope, RecordingQualityEvidence
+    columns = tuple((np.arange(len(multi), dtype=np.int64), multi[:, column]) for column in range(2))
+    descriptor = replace(descriptor, digest_algorithm=None, sample_digest=None,
+        final_envelope=RecordingFinalEnvelope(1, len(multi), req.channels, columns, None,
+            RecordingQualityEvidence(len(multi), "skipped", None, None, None, True)))
+    audio = prepare_main_recording_result(descriptor, req)
     host = main_host(SimpleNamespace(), tmp_path)
     from unit_test.ui.test_streaming_event_dispatch import _Workspace
     host.channel_workspace = _Workspace(req.channels)
@@ -398,7 +410,7 @@ def test_ve_overrange_pcm24_has_finite_mono_with_quality_disabled(tmp_path):
 def test_display_shape_changes_invalidate_preparation(tmp_path):
     req = request(tmp_path)
     _, descriptor = capture_audio(req)
-    audio = read_result(descriptor, req).audio
+    audio = prepare_main_recording_result(descriptor, req)
     audio.waveforms[0][0].shape = (1, -1)
     assert not audio.is_prepared_for(req)
 

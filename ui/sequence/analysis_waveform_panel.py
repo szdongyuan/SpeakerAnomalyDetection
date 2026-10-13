@@ -276,6 +276,7 @@ class AnalysisWaveformPanel(ChannelPlotWorkspace):
 
     def set_conditions(self, condition_configs, *, reset_context=False):
         if reset_context:
+            super().clear_plots()
             self._condition_contexts.clear()
             self._audio_paths.clear()
         self._conditions = {

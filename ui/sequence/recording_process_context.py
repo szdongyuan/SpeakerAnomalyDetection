@@ -18,6 +18,7 @@ class RecordingProcessContext:
     validated_audio: object = None
     accepted_audio: object = None
     final_windows: object = None
+    display_source: object = None
     release_warned: bool = False
     sequence: int = 0
     cleanup_owned: bool = False

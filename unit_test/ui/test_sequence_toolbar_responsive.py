@@ -471,12 +471,12 @@ def test_serial_click_uses_production_signal_and_configuration_entry(toolbar_hos
     host.toolsbar = toolbar
     def unused(*args):
         pass
-    for name in ("_start_selected_condition_manual_analysis", "clicked_scanner", "clicked_ok_or_ng",
+    for name in ("_start_selected_condition_manual_analysis", "clicked_scanner",
                  "on_reset_statistics_clicked", "on_mark_btn_clicked", "update_using_file_combobox",
                  "on_using_file_combobox_changed"):
         setattr(host, name, unused)
     host._barcode_router = SimpleNamespace(on_barcode_return_pressed=unused, on_barcode_text_changed=unused)
-    host.count_board = SimpleNamespace(mode="test", ok_btn=QPushButton(), ng_btn=QPushButton(),
+    host.count_board = SimpleNamespace(mode="test",
                                       reset_btn=QPushButton(), mark_btn=QPushButton())
     host._serial_trigger_config = {"enabled": False, "port": "TEST"}
     host.hw_manager = SimpleNamespace(get_serial_discrete_input_status=lambda: {"connected": False})

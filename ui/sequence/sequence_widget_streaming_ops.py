@@ -514,6 +514,15 @@ class SequenceWidgetStreamingOpsMixin:
                 if current_path and os.path.abspath(current_path) == os.path.abspath(old_abs_path):
                     self.recorded_path = new_path
                     self.recorded_signal_info = dict(updated_info or {})
+                from dataclasses import replace
+                data = getattr(self, "data_struct", None)
+                sources = getattr(data, "recording_sources", {})
+                source = sources.get(key)
+                if source is not None and os.path.abspath(source.path) == os.path.abspath(old_abs_path):
+                    renamed = replace(source, path=new_path)
+                    sources[key] = renamed
+                    if getattr(data, "recording_source", None) is source:
+                        data.recording_source = renamed
             else:
                 recorded_signal_info["labels"] = normalized_label
                 self._condition_record_cache[key] = {
@@ -1256,20 +1265,21 @@ class SequenceWidgetStreamingOpsMixin:
         if callable(reset_manual_product_cycle):
             reset_manual_product_cycle(clear_waveforms=True)
 
-    def update_audio_label_info(self):
-        button = self.sender()
-        if button == self.count_board.ok_btn:
-            self.recorded_signal_info["labels"] = "OK"
-        elif button == self.count_board.ng_btn:
-            self.recorded_signal_info["labels"] = "NG"
-
     def _clear_plot_area(self) -> None:
         if self.channel_workspace is not None:
             self.channel_workspace.clear_plots()
+            sources = getattr(getattr(self, "data_struct", None), "recording_display_sources", {})
+            condition = getattr(self.channel_workspace, "_active_condition_key", None)
+            if condition is None:
+                sources.clear()
+            else:
+                sources.pop(condition, None)
 
     def clear_all_direction_waveforms(self) -> None:
         if self.channel_workspace is not None:
             self.channel_workspace.clear_plots()
+        sources = getattr(getattr(self, "data_struct", None), "recording_display_sources", {})
+        sources.clear()
 
     def plot_waveform_to_workspace(
         self,
@@ -1336,7 +1346,8 @@ class SequenceWidgetStreamingOpsMixin:
                 prepared_columns,
             ):
                 time_axis, display_waveform = display_data
-                window.set_data(time_axis, display_waveform)
+                if window.set_data(time_axis, display_waveform) is False:
+                    raise ValueError("final waveform window declined prepared display data")
         except Exception:
             for window, state in zip(windows, window_states):
                 try:
@@ -1786,6 +1797,68 @@ class SequenceWidgetStreamingOpsMixin:
 
 
 
+    def _on_recording_envelope_complete(self, audio, context):
+        """Publish saved-file provenance and bounded display without requesting raw audio."""
+        from base.data_struct.data_deal_struct import DataDealStruct, SavedRecordingSource
+        from base.wav_calibration_metadata import WavCalibrationMetadataReadStatus
+        request = context.request
+        descriptor = audio.descriptor
+        if not audio.is_prepared_for(request):
+            raise ValueError("final envelope preparation no longer belongs to this request")
+        source = SavedRecordingSource(request, descriptor.path, descriptor.sample_rate,
+                                      descriptor.final_frames, request.calibration_metadata,
+                                      descriptor.metadata_appended)
+        data = self.data_struct
+        data.recording_source = source
+        data.recording_sources = {**getattr(data, "recording_sources", {}), context.direction: source}
+        data.store_wave_data = data.store_wave_data_multi = None
+        data.sample_rate = descriptor.sample_rate
+        data.audio_lenth = descriptor.final_frames
+        if request.device.get("backend") == "vkinging":
+            data.wav_calibration_metadata = request.calibration_metadata
+            data.wav_calibration_metadata_authoritative = True
+            data.wav_calibration_warning_shown = False
+            data.wav_calibration_declared_backend = "vkinging"
+            data.wav_calibration_read_status = WavCalibrationMetadataReadStatus.VALID
+        else:
+            DataDealStruct.clear_wav_calibration_context(data)
+
+        def project_waveform():
+            data.recording_display_sources = {
+                **getattr(data, "recording_display_sources", {}), context.direction: None}
+            context.display_source = None
+            try:
+                if audio.display_error:
+                    raise ValueError(audio.display_error)
+                self._project_normalized_waveform_to_workspace(
+                    None, descriptor.sample_rate, context.final_windows,
+                    prepared_columns=audio.waveforms)
+                if request.device.get("backend") == "vkinging":
+                    self._set_recording_voltage_tooltips(context.final_windows, request.calibration_metadata)
+                else:
+                    self._clear_recording_voltage_tooltips(context.final_windows)
+            except Exception as error:
+                # Plot/reducer boundary: rollback already ran; now hide every target curve.
+                self.default_logger.error(
+                    "Final waveform projection failed after recording save: request=%s error=%s",
+                    request.request_id, error)
+                for window in context.final_windows:
+                    try:
+                        window.show_recording_display_failure()
+                    except Exception as hide_error:
+                        # Destroyed/custom Qt windows may fail independently; continue hiding siblings.
+                        self.default_logger.error("Final waveform failure placeholder failed: %s", hide_error)
+                        hide = getattr(window, "hide", None)
+                        if callable(hide):
+                            hide()
+                QMessageBox.warning(self, "提示", "录音已保存，但波形刷新失败。")
+            else:
+                context.display_source = request
+                data.recording_display_sources[context.direction] = request
+
+        return self._complete_saved_recording_business(
+            descriptor.sample_rate, request.channels, request, True, "process", project_waveform)
+
     def _on_streaming_complete(
         self,
         recorded_mono=None,
@@ -1929,6 +2002,7 @@ class SequenceWidgetStreamingOpsMixin:
             # Publish the validated, trimmed recording atomically to the
             # authoritative analysis state. Invalid captures must leave the
             # previous recording available to downstream analysis.
+            self.data_struct.recording_source = None
             self.data_struct.store_wave_data_multi = recorded_multi
             self.data_struct.store_wave_data = (recorded_mono if trusted_preparation else
                 recorded_multi.mean(axis=1).astype(np.float32, copy=False))
@@ -1949,6 +2023,51 @@ class SequenceWidgetStreamingOpsMixin:
             if not prefinalized:
                 self._append_recording_wav_calibration_metadata()
 
+            def project_waveform():
+                nonlocal final_waveform_windows
+                # Final data and workspace semantic validation have succeeded, so
+                # waveform preparation / Qt failures are presentation-only.
+                try:
+                    if final_waveform_windows is None:
+                        final_waveform_windows = self._validate_final_waveform_workspace(run_channels)
+                    self._project_normalized_waveform_to_workspace(
+                        recorded_multi,
+                        sample_rate,
+                        final_waveform_windows,
+                        max_points=MAIN_RECORDING_FINAL_MAX_POINTS,
+                        **({"prepared_columns": prepared_audio.waveforms} if trusted_preparation else {}),
+                    )
+                    if request is not None and request.device.get("backend") == "vkinging":
+                        self._set_recording_voltage_tooltips(final_waveform_windows, request.calibration_metadata)
+                    else:
+                        self._clear_recording_voltage_tooltips(final_waveform_windows)
+                except Exception as error:
+                    self.default_logger.error(
+                        "Final waveform projection failed after recording save: "
+                        f"channels={run_channels}, shape={recorded_multi.shape}, "
+                        f"error={error}"
+                    )
+                    QMessageBox.warning(
+                        self,
+                        "提示",
+                        "录音已保存，但波形刷新失败。",
+                    )
+
+
+            return self._complete_saved_recording_business(
+                sample_rate, run_channels, request, prefinalized, completion_source,
+                project_waveform)
+
+        except Exception as e:
+            self._handle_saved_recording_completion_error(e, request)
+
+    def _complete_saved_recording_business(
+            self, sample_rate, run_channels, request, prefinalized, completion_source,
+            project_waveform):
+        """Run the existing file-based completion business for either display route."""
+        ve_recording = request is not None and request.device.get("backend") == "vkinging"
+        machine_id = request.device.get("machine_id") if request is not None else None
+        try:
             self.recorded_signal_info["sample_rate"] = sample_rate
             stage_started = perf_counter()
             self._schedule_raw_audio_csv_export(run_channels)
@@ -1960,34 +2079,7 @@ class SequenceWidgetStreamingOpsMixin:
             self._cache_condition_record(condition_key)
 
             stage_started = perf_counter()
-            # Final data and workspace semantic validation have succeeded, so
-            # waveform preparation / Qt failures are presentation-only.
-            try:
-                if final_waveform_windows is None:
-                    final_waveform_windows = self._validate_final_waveform_workspace(run_channels)
-                self._project_normalized_waveform_to_workspace(
-                    recorded_multi,
-                    sample_rate,
-                    final_waveform_windows,
-                    max_points=MAIN_RECORDING_FINAL_MAX_POINTS,
-                    **({"prepared_columns": prepared_audio.waveforms} if trusted_preparation else {}),
-                )
-                if request is not None and request.device.get("backend") == "vkinging":
-                    self._set_recording_voltage_tooltips(final_waveform_windows, request.calibration_metadata)
-                else:
-                    self._clear_recording_voltage_tooltips(final_waveform_windows)
-            except Exception as error:
-                self.default_logger.error(
-                    "Final waveform projection failed after recording save: "
-                    f"channels={run_channels}, shape={recorded_multi.shape}, "
-                    f"error={error}"
-                )
-                QMessageBox.warning(
-                    self,
-                    "提示",
-                    "录音已保存，但波形刷新失败。",
-                )
-
+            project_waveform()
             record_gui_stage(self, "waveform_projection", stage_started, request=request)
 
             # Save to database
@@ -2134,45 +2226,50 @@ class SequenceWidgetStreamingOpsMixin:
             return save_code == error_code.OK
 
         except Exception as e:
-            self.default_logger.error(
-                f"Error in streaming completion: {e}; machine_id={machine_id}")
-            # Clean up on error
-            try:
-                _claim_and_finalize_streaming_wav_writer(self)
-            except Exception as finalize_error:
-                self.default_logger.error(
-                    f"Error finalizing WAV file during completion cleanup: {finalize_error}"
-                )
-            self.streaming_processor = None
-            self.streaming_stimulus_data = None
-            self.streaming_mode = None
-            clear_active_recording_direction = getattr(self, "_clear_active_recording_direction", None)
-            if callable(clear_active_recording_direction):
-                clear_active_recording_direction()
-            self.player_status_flag = False  # Clear flag even on error to prevent permanent blocking
-            # Restore actions from their actual runtime conditions.
-            _refresh_manual_analysis_action(self, fallback_enabled=True)
-            self.replayer_btn.setEnabled(True)
-            self._awaiting_ok_ng = False
-            self._sn_clear_on_next_scan = False
-            self._pending_recent_session_append = False
-            unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
-            if callable(unlock_sn_after_recording):
-                unlock_sn_after_recording()
-            self._record_workflow_busy = False
-            _refresh_manual_analysis_action(self, fallback_enabled=True)
-            self.update_player_btn_is_paused()
-            serial_runtime_error = getattr(self, "_on_serial_product_runtime_error", None)
-            if callable(serial_runtime_error):
-                serial_runtime_error(ve_failure_text("recording") if ve_recording
-                                     else f"录音完成处理异常: {e}")
-            try:
-                self._reset_barcode_commit_dedup()
-            except Exception:
-                self._last_committed_barcode = None
-                self._last_committed_barcode_time = 0.0
+            self._handle_saved_recording_completion_error(e, request)
 
-            self._queued_directional_trigger = ""
+    def _handle_saved_recording_completion_error(self, e, request):
+        ve_recording = request is not None and request.device.get("backend") == "vkinging"
+        machine_id = request.device.get("machine_id") if request is not None else None
+        self.default_logger.error(
+            f"Error in streaming completion: {e}; machine_id={machine_id}")
+        # Clean up on error
+        try:
+            _claim_and_finalize_streaming_wav_writer(self)
+        except Exception as finalize_error:
+            self.default_logger.error(
+                f"Error finalizing WAV file during completion cleanup: {finalize_error}"
+            )
+        self.streaming_processor = None
+        self.streaming_stimulus_data = None
+        self.streaming_mode = None
+        clear_active_recording_direction = getattr(self, "_clear_active_recording_direction", None)
+        if callable(clear_active_recording_direction):
+            clear_active_recording_direction()
+        self.player_status_flag = False  # Clear flag even on error to prevent permanent blocking
+        # Restore actions from their actual runtime conditions.
+        _refresh_manual_analysis_action(self, fallback_enabled=True)
+        self.replayer_btn.setEnabled(True)
+        self._awaiting_ok_ng = False
+        self._sn_clear_on_next_scan = False
+        self._pending_recent_session_append = False
+        unlock_sn_after_recording = getattr(self, "_unlock_sn_after_recording_if_needed", None)
+        if callable(unlock_sn_after_recording):
+            unlock_sn_after_recording()
+        self._record_workflow_busy = False
+        _refresh_manual_analysis_action(self, fallback_enabled=True)
+        self.update_player_btn_is_paused()
+        serial_runtime_error = getattr(self, "_on_serial_product_runtime_error", None)
+        if callable(serial_runtime_error):
+            serial_runtime_error(ve_failure_text("recording") if ve_recording
+                                 else f"录音完成处理异常: {e}")
+        try:
+            self._reset_barcode_commit_dedup()
+        except Exception:
+            self._last_committed_barcode = None
+            self._last_committed_barcode_time = 0.0
+
+        self._queued_directional_trigger = ""
 
     def _append_recording_wav_calibration_metadata(self) -> bool:
         metadata = getattr(self, "_recording_wav_calibration_metadata", None)

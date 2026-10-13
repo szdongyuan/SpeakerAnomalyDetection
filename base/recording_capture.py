@@ -19,10 +19,12 @@ import soundfile as sf
 
 from base.log_manager import LogManager
 from base.multichannel_waveform_session import MultichannelWaveformSession
+from base.recording_final_envelope import FinalEnvelopeAccumulator
+from base.recording_quality_accumulator import RecordingQualityAccumulator
 from base.recording_input_device import validate_input_device
 from base.recording_process_protocol import (
     RecordingCancelled, RecordingFailure, RecordingPreview, RecordingRequest, RecordingResult,
-    RecordingFinalizationTiming,
+    RecordingFinalizationTiming, RecordingFinalEnvelope, RecordingQualityEvidence,
 )
 from base.streaming_file_writer import StreamingWavWriter
 from base.wav_calibration_metadata import (
@@ -30,14 +32,16 @@ from base.wav_calibration_metadata import (
     WavCalibrationMetadataReadStatus,
     append_owned_recording_calibration_metadata_result,
     inspect_wav_calibration_metadata,
+    normalize_wav_calibration_metadata,
 )
 from consts.recording_preview_consts import (
     MAIN_RECORDING_LIVE_MAX_POINTS,
+    MAIN_RECORDING_FINAL_MAX_POINTS,
     MAIN_RECORDING_LIVE_WINDOW_SECONDS,
     PREVIEW_TIME_MODE_RELATIVE_LATEST,
 )
 from consts.ve3668n_consts import VE_BACKEND
-from consts.recording_result_consts import RECORDING_SAMPLE_DIGEST_ALGORITHM
+from consts.recording_result_consts import RECORDING_SAMPLE_DIGEST_ALGORITHM, RECORDING_FINAL_ENVELOPE_VERSION
 from consts.wav_format_consts import WAV_PCM24_SUBTYPE
 
 
@@ -117,7 +121,7 @@ class RecordingCapture:
         self._queued_frames = 0
         self.raw_frames = 0
         self.consumed_frames = 0
-        self._sample_digest = hashlib.sha256()
+        self._sample_digest = hashlib.sha256() if request.purpose != "main" else None
         self._target_sample_arrival = None
         self._file_closed_at = None
         self.written_frames = 0
@@ -144,6 +148,21 @@ class RecordingCapture:
         # For a known overlarge trim, finalization retains all audio too.
         if self._effective_trim >= request.target_samples:
             self._effective_trim = 0
+        self._final_envelope = None
+        self._quality = None
+        self._display_error = None
+        self._envelope_seconds = 0.0
+        if request.purpose == "main":
+            self._quality = RecordingQualityAccumulator(
+                len(request.channels),
+                request.device["input_config"]["range_max"] if self._is_ve else None)
+            try:
+                self._final_envelope = FinalEnvelopeAccumulator(
+                    request.target_samples - self._effective_trim, len(request.channels),
+                    MAIN_RECORDING_FINAL_MAX_POINTS)
+            except Exception as exc:
+                # Display allocation is optional; quality and saved audio remain authoritative.
+                self._disable_final_envelope(exc)
         self._preview_enabled = request.effective_streaming
         self._waveforms = None
         if self._preview_enabled:
@@ -302,6 +321,12 @@ class RecordingCapture:
             self._warnings.append(f"preview disabled: {exc}")
             self._logger.exception("Preview failed for %s", self.request.request_id,
                                    exc_info=(type(exc), exc, exc.__traceback__))
+
+    def _disable_final_envelope(self, exc):
+        self._final_envelope = None
+        self._display_error = f"{type(exc).__name__}: {exc}"[:1024]
+        self._logger.exception("Final envelope failed for %s", self.request.request_id,
+                               exc_info=(type(exc), exc, exc.__traceback__))
 
     def _fail(self, stage, message):
         with self._queue_lock:
@@ -487,7 +512,19 @@ class RecordingCapture:
             if (not isinstance(quantized, np.ndarray) or quantized.dtype != np.float32
                     or quantized.shape != retained.shape):
                 raise ValueError("writer must return saved float32 samples with the retained shape")
-            self._sample_digest.update(quantized.astype("<f4", copy=False).tobytes(order="C"))
+            if self._quality is not None:
+                self._quality.append(quantized)
+                if self._final_envelope is not None:
+                    started = time.perf_counter()
+                    try:
+                        self._final_envelope.append(quantized)
+                    except Exception as exc:
+                        # Reducer/allocation boundary: abandon display, continue WAV and quality.
+                        self._disable_final_envelope(exc)
+                    finally:
+                        self._envelope_seconds += time.perf_counter() - started
+            else:
+                self._sample_digest.update(quantized.astype("<f4", copy=False).tobytes(order="C"))
         if self._preview_enabled and self._waveforms is not None:
             preview_error = None
             if lane is not None:
@@ -712,6 +749,13 @@ class RecordingCapture:
             return
         if self.raw_frames != req.target_samples:
             raise ValueError("recording ended before its target sample count")
+        quality = None
+        if self._quality is not None:
+            self._stage = "quality"
+            quality = self._quality.finish(req.validation_thresholds.to_dict())
+            if quality.status == "failed":
+                self._logger.warning("audio_validation_failed %s", quality.detail)
+                raise ValueError(f"{quality.reason} {quality.detail}")
         self._stage = "read_wav"
         with self._finalization_file(req.path) as source:
             if (source.subtype != WAV_PCM24_SUBTYPE or source.samplerate != req.sample_rate
@@ -759,7 +803,7 @@ class RecordingCapture:
                 if (len(source) != self.written_frames or source.channels != len(req.channels)
                         or source.subtype != WAV_PCM24_SUBTYPE or source.samplerate != req.sample_rate):
                     raise ValueError("WAV audio became invalid during metadata finalization")
-            if self._is_ve:
+            if metadata_appended:
                 diagnostic = inspect_wav_calibration_metadata(req.path, logger=self._logger)
                 self._unreleased_finalization_handles.extend(diagnostic.retained_handles)
                 self._warnings.extend(diagnostic.close_errors)
@@ -771,10 +815,11 @@ class RecordingCapture:
                 if diagnostic.primary_error is not None:
                     self._fail("metadata", diagnostic.primary_error)
                     return
+                expected = normalize_wav_calibration_metadata(metadata)
                 if (diagnostic.status is not WavCalibrationMetadataReadStatus.VALID
-                        or diagnostic.declared_backend != VE_BACKEND
-                        or diagnostic.metadata != req.calibration_metadata.to_dict()):
-                    raise ValueError("VE WAV metadata readback differs from the frozen request snapshot")
+                        or expected is None or diagnostic.metadata != expected
+                        or (self._is_ve and diagnostic.declared_backend != VE_BACKEND)):
+                    raise ValueError("final WAV calibration metadata differs from frozen request")
         # Metadata append/readback may outlast a cancellation request. Preserve
         # its ownership and error checks above, then avoid optional success I/O
         # while the worker is completing bounded cancellation cleanup.
@@ -783,6 +828,27 @@ class RecordingCapture:
         metadata_seconds = time.monotonic() - metadata_started
         self._logger.info("Recording timing request=%s process=child stage=metadata seconds=%.6f applicable=%s",
             req.request_id, metadata_seconds, req.purpose == "main")
+        if self._status_warning:
+            self._warnings.append(self._status_warning)
+        final_envelope = None
+        if quality is not None:
+            started = time.perf_counter()
+            columns = ()
+            if self._final_envelope is not None:
+                try:
+                    columns = self._final_envelope.finish()
+                except Exception as exc:
+                    # Final display materialization can fail independently of saved audio.
+                    self._disable_final_envelope(exc)
+            self._final_envelope = None
+            final_envelope = RecordingFinalEnvelope(
+                RECORDING_FINAL_ENVELOPE_VERSION, self.written_frames, req.channels,
+                columns, self._display_error,
+                RecordingQualityEvidence(quality.count, quality.status, quality.peak,
+                                         quality.rms, quality.variance, quality.voltage_finite))
+            self._logger.info(
+                "Recording timing request=%s process=child stage=final_envelope accumulate_seconds=%.6f materialize_seconds=%.6f",
+                req.request_id, self._envelope_seconds, time.perf_counter() - started)
         timing = None
         if self._target_sample_arrival is not None and self._file_closed_at is not None:
             timing = RecordingFinalizationTiming(
@@ -790,15 +856,13 @@ class RecordingCapture:
                 time.monotonic() - self._target_sample_arrival)
             self._logger.info("Recording timing request=%s process=child stage=descriptor_ready target_elapsed_seconds=%.6f",
                 req.request_id, timing.target_to_descriptor)
-        if self._status_warning:
-            self._warnings.append(self._status_warning)
         self.outcome = RecordingResult(req.request_id, req.purpose, req.path, req.sample_rate,
                                        req.channels, self.raw_frames, self.written_frames, metadata_appended,
                                        tuple(self._warnings),
                                        cleanup_paths=tuple(sorted(self._owned_temporary_paths)),
-                                       digest_algorithm=RECORDING_SAMPLE_DIGEST_ALGORITHM,
-                                       sample_digest=self._sample_digest.hexdigest(),
-                                       finalization_timing=timing)
+                                       digest_algorithm=(RECORDING_SAMPLE_DIGEST_ALGORITHM if self._sample_digest is not None else None),
+                                       sample_digest=(self._sample_digest.hexdigest() if self._sample_digest is not None else None),
+                                       finalization_timing=timing, final_envelope=final_envelope)
 
     def _close_finalization_handle(self, handle, path, close):
         try:

@@ -7,6 +7,26 @@ import pytest
 from unit_test.ui.test_recording_process_integration import main_host
 from ui.sequence.recording_process_context import RecordingProcessContext
 
+def prepared_main_result(path, request_id, rate, multi):
+    from base.recording_final_envelope import FinalEnvelopeAccumulator
+    from base.recording_final_result import prepare_main_recording_result
+    from base.recording_process_protocol import (
+        RecordingRequest, RecordingResult, RecordingFinalEnvelope, RecordingQualityEvidence)
+    from base.wav_pcm24 import quantize_pcm24
+    from consts.recording_result_consts import RECORDING_FINAL_ENVELOPE_VERSION
+    from unit_test.base.recording_process_fakes import device_info
+    request = RecordingRequest(request_id, "main", rate, len(multi), (0, 2),
+        device_info(), str(path), False, 0, {}, None, {"enabled": False})
+    accumulator = FinalEnvelopeAccumulator(len(multi), 2)
+    accumulator.append(quantize_pcm24(multi))
+    envelope = RecordingFinalEnvelope(RECORDING_FINAL_ENVELOPE_VERSION, len(multi),
+        request.channels, accumulator.finish(), None,
+        RecordingQualityEvidence(len(multi), "skipped", None, None, None, None))
+    descriptor = RecordingResult(request_id, "main", str(path), rate, request.channels,
+        len(multi), len(multi), False, final_envelope=envelope)
+    return request, prepare_main_recording_result(descriptor, request)
+
+
 @pytest.mark.parametrize("types", [("SPL",), ("FBA",), ("SPEC",), ("FBA", "FFT")])
 def test_accepted_released_capture_enters_original_queue_once(ui_qapp, tmp_path, monkeypatch, types):
     from ui.sequence import sequence_widget_streaming_ops as streaming
@@ -20,9 +40,8 @@ def test_accepted_released_capture_enters_original_queue_once(ui_qapp, tmp_path,
     host._publish_serialized_recording_context = mock.Mock()
     host._schedule_raw_audio_csv_export = mock.Mock()
     host._finalize_recording_channel_selection = mock.Mock()
-    request = SimpleNamespace(request_id="accepted", channels=(0, 2), path=str(tmp_path / "accepted.wav"), sample_rate=100, device={}, calibration_metadata=None)
     multi = np.ones((9, 2), dtype=np.float32)
-    audio = SimpleNamespace(multi=multi, mono=multi.mean(axis=1), descriptor=SimpleNamespace(sample_rate=100, warnings=()))
+    request, audio = prepared_main_result(tmp_path / "accepted.wav", "accepted", 100, multi)
     session = SimpleNamespace(request=request, state="completed", released=threading.Event(), release_error=None)
     session.released.set()
     context = RecordingProcessContext(request=request, session=session, direction="condition", preview_enabled=False, accepted_audio=audio, validated_audio=audio, final_windows=host.channel_workspace.all_subwindows())
@@ -41,7 +60,9 @@ def test_accepted_released_capture_enters_original_queue_once(ui_qapp, tmp_path,
     host.run.assert_not_called()
     host._submit_request_scoped_recording_publication.assert_not_called()
     host._publish_serialized_recording_context.assert_not_called()
-    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, multi)
+    assert host.data_struct.store_wave_data_multi is None
+    assert host.data_struct.store_wave_data is None
+    assert host.data_struct.recording_source.request is request
 
 
 def queue_host(ui_qapp, tmp_path, monkeypatch, types=("SPL",), auto=True):
@@ -81,7 +102,7 @@ def queue_host(ui_qapp, tmp_path, monkeypatch, types=("SPL",), auto=True):
     host.run = mock.Mock(side_effect=AssertionError("must not run direct analysis"))
     for name in ['_enqueue_automatic_analysis_current_recording','_build_process_analysis_request','_analysis_record_wav_path','_start_next_queued_analysis']:
         setattr(host, name, getattr(Queue, name).__get__(host))
-    audio = SimpleNamespace(multi=multi, mono=multi.mean(axis=1), descriptor=SimpleNamespace(sample_rate=48000, warnings=()))
+    request, audio = prepared_main_result(request.path, request.request_id, request.sample_rate, multi)
     session = SimpleNamespace(request=request, state="completed", released=threading.Event(), release_error=None)
     session.released.set()
     context = RecordingProcessContext(request=request, session=session, direction="condition", preview_enabled=False, accepted_audio=audio, validated_audio=audio, recorded_signal_info=dict(host.recorded_signal_info), final_windows=host.channel_workspace.all_subwindows())
@@ -99,6 +120,9 @@ def test_completion_uses_original_task_builder_and_disabled_analysis_setting(ui_
     host, session, context = queue_host(ui_qapp, tmp_path, monkeypatch, types, auto)
     host._publish_process_recording(session)
     host._on_process_recording_released(session)
+    assert host.data_struct.store_wave_data_multi is None
+    assert host.data_struct.store_wave_data is None
+    assert host.data_struct.recording_source.request is session.request
     assert len(host._analysis_task_queue) == int(auto)
     host.run.assert_not_called()
     assert host._condition_record_cache["condition"]["recorded_path"] == session.request.path

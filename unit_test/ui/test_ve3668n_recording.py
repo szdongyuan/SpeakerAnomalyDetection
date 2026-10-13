@@ -13,7 +13,7 @@ from base.data_struct.data_deal_struct import DataDealStruct
 from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
 from base.recording_capture import RecordingCapture
 from base.recording_process_protocol import RecordingResult
-from base.recording_result_reader import RecordingAudio
+from base.recording_final_result import prepare_main_recording_result
 from base.ve3668n_capture import Ve3668nInputStream
 from base.ve3668n_stores import VECalibrationStore, VEInputProfileStore
 from base.wav_calibration_metadata import inspect_wav_calibration_metadata
@@ -124,9 +124,7 @@ def capture_audio(request):
     capture.start()
     descriptor = capture.wait(5)
     assert isinstance(descriptor, RecordingResult), descriptor
-    multi, rate = sf.read(request.path, dtype="float32", always_2d=True)
-    assert rate == request.sample_rate
-    return capture, RecordingAudio(descriptor, multi, multi.mean(axis=1))
+    return capture, prepare_main_recording_result(descriptor, request)
 
 
 @pytest.mark.parametrize("rate", [44100, 48000, 51200])
@@ -168,8 +166,8 @@ def test_effective_rate_is_resolved_before_target_trim_and_timeline(host_factory
         assert preview.waveforms[0].time[-1] == 0.0
     else:
         assert preview is None
-    time_axis, _ = host._prepare_waveform_display_data(audio.multi[:, 0], rate)
-    assert time_axis[-1] == pytest.approx((len(audio.multi) - 1) / rate)
+    time_axis, _ = audio.waveforms[0]
+    assert time_axis[-1] == pytest.approx((audio.descriptor.final_frames - 1) / rate)
 
 
 def test_ve_request_and_capture_use_frozen_cumulative_preview_mode(host_factory):
@@ -218,7 +216,8 @@ def test_ve_channel_order_survives_refresh_request_metadata_and_wav(host_factory
     request = host._recording_process_session.request
     assert request.channels == (7, 1)
     _, audio = capture_audio(request)
-    np.testing.assert_array_equal(audio.multi, np.full(audio.multi.shape, 8388607 / 8388608, dtype=np.float32))
+    raw = sf.read(audio.descriptor.path, dtype="float32", always_2d=True)[0]
+    np.testing.assert_array_equal(raw, np.full(raw.shape, 8388607 / 8388608, dtype=np.float32))
     metadata = inspect_wav_calibration_metadata(request.path).metadata
     assert [entry["physical_input_channel"] for entry in metadata["recorded_channels"]] == [7, 1]
 
@@ -269,7 +268,8 @@ def test_direct_factor_recording_keeps_voltage_and_frozen_calibrated_tooltip(hos
     assert resolution.factor == 0.12345678901234567
     assert resolution.used_file_metadata
     assert Path(path).read_bytes() == original
-    np.testing.assert_array_equal(sf.read(path, dtype="float32")[0], audio.multi)
+    np.testing.assert_array_equal(sf.read(path, dtype="float32")[0],
+                                  np.column_stack([values for _, values in audio.waveforms]))
     np.testing.assert_array_equal(windows[0].plot_item.getData()[1], preview.waveforms[0].amplitude)
 
 
@@ -301,7 +301,8 @@ def test_request_freezes_shared_store_profile_and_calibration(host_factory, monk
     _, audio = capture_audio(request)
     assert request.calibration_metadata.to_dict() == original
     assert inspect_wav_calibration_metadata(request.path).metadata == original
-    np.testing.assert_array_equal(audio.multi, np.full(audio.multi.shape, 8388607 / 8388608, dtype=np.float32))
+    raw = sf.read(audio.descriptor.path, dtype="float32", always_2d=True)[0]
+    np.testing.assert_array_equal(raw, np.full(raw.shape, 8388607 / 8388608, dtype=np.float32))
     forbidden.assert_not_called()
 
 
@@ -408,7 +409,10 @@ def finish_ve_capture(host, session, audio, outcome="success"):
         host._on_process_recording_accepted(session, audio)
         session.released.set()
         host._on_process_recording_released(session)
-        np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, audio.multi)
+        assert host.data_struct.store_wave_data_multi is None
+        assert host.data_struct.store_wave_data is None
+        assert host.data_struct.recording_source.request is session.request
+        assert host.data_struct.audio_lenth == audio.descriptor.final_frames
     elif outcome == "cancel":
         host._on_process_recording_cancelled(session, None)
     else:
@@ -490,7 +494,8 @@ def test_completed_vk_capture_reaches_analysis_entry_with_file_local_factors(
     assert "结果仅供参考" in warning.call_args.args[-1]
     assert path.read_bytes() == original
     assert inspect_wav_calibration_metadata(path).metadata == metadata
-    np.testing.assert_array_equal(sf.read(path, dtype="float32")[0], audio.multi)
+    np.testing.assert_array_equal(sf.read(path, dtype="float32")[0],
+                                  np.column_stack([values for _, values in audio.waveforms]))
     assert (host.ve_calibration_store.path.read_bytes()
             if host.ve_calibration_store.path.exists() else None) == store_before
 
@@ -520,8 +525,11 @@ def test_soundcard_admission_after_ve_uses_product_rate(
     assert host.data_struct.sample_rate == ve_rate
     assert sf.info(session.request.path).samplerate == ve_rate
     if outcome == "success":
-        np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, audio.multi)
-        assert window.plot_item.getData()[0][-1] == pytest.approx((len(audio.multi) - 1) / ve_rate)
+        assert host.data_struct.store_wave_data_multi is None
+        assert host.data_struct.store_wave_data is None
+        assert host.data_struct.recording_source.request is session.request
+        assert host.data_struct.audio_lenth == audio.descriptor.final_frames
+        assert window.plot_item.getData()[0][-1] == pytest.approx((audio.descriptor.final_frames - 1) / ve_rate)
     recorded, actual_rate = host.reset_work_pram("not_labeled")
     assert actual_rate == recorded["sample_rate"] == recorded["sr"] == 32000
     assert host.data_struct.sample_rate == 32000
@@ -570,7 +578,7 @@ def test_current_product_rate_change_during_ve_wins_at_next_soundcard_admission(
 @pytest.mark.parametrize("fault", [
     "request_id", "purpose", "path", "channels", "sample_rate", "rate_type",
     "raw_frames", "final_frames", "count_type", "metadata_appended", "handles_released",
-    "shape", "nan", "mono", "context", "dtype",
+    "shape", "nan", "unprepared", "context", "dtype",
 ])
 def test_ve_invalid_descriptor_is_rejected_before_accept_or_analysis(host_factory, fault):
     host = host_factory()
@@ -589,15 +597,17 @@ def test_ve_invalid_descriptor_is_rejected_before_accept_or_analysis(host_factor
     if fault in changes:
         audio = replace(audio, descriptor=replace(descriptor, **changes[fault]))
     elif fault == "shape":
-        audio = replace(audio, multi=audio.multi[:, :1])
+        audio = replace(audio, waveforms=audio.waveforms[:1])
     elif fault == "nan":
-        multi = audio.multi.copy()
-        multi[0, 0] = np.nan
-        audio = replace(audio, multi=multi, mono=multi.mean(axis=1))
-    elif fault == "mono":
-        audio = replace(audio, mono=audio.mono + 1)
+        times, values = audio.waveforms[0]
+        values = values.copy()
+        values[0] = np.nan
+        audio = replace(audio, waveforms=((times, values), *audio.waveforms[1:]))
+    elif fault == "unprepared":
+        audio = replace(audio)
     elif fault == "dtype":
-        audio = replace(audio, multi=audio.multi.astype(np.float64), mono=audio.mono.astype(np.float64))
+        audio = replace(audio, waveforms=tuple(
+            (times, values.astype(np.float64)) for times, values in audio.waveforms))
     else:
         metadata = session.request.calibration_metadata.to_dict()
         metadata["acquisition"]["machine_id"] = "other-device"
@@ -682,7 +692,9 @@ def test_publish_keeps_frozen_rate_metadata_and_raw_voltage(host_factory, monkey
     assert host.recorded_signal_info["sample_rate"] == rate
     assert host.data_struct.wav_calibration_metadata == metadata
     assert host.data_struct.wav_calibration_metadata_authoritative is True
-    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, audio.multi)
+    assert host.data_struct.store_wave_data_multi is None
+    assert host.data_struct.store_wave_data is None
+    assert host.data_struct.recording_source.request is session.request
     assert host.data_btn.isEnabled() and host.replayer_btn.isEnabled()
     assert not host._record_workflow_busy and not host.player_status_flag
     host.run.assert_not_called()
@@ -690,8 +702,8 @@ def test_publish_keeps_frozen_rate_metadata_and_raw_voltage(host_factory, monkey
     forbidden.assert_not_called()
     for column, window in enumerate(host.channel_workspace.all_subwindows()):
         x, y = window.plot_item.getData()
-        assert x[-1] == pytest.approx((len(audio.multi) - 1) / rate)
-        np.testing.assert_array_equal(y, audio.multi[:, column])
+        assert x[-1] == pytest.approx((audio.descriptor.final_frames - 1) / rate)
+        np.testing.assert_array_equal(y, audio.waveforms[column][1])
         assert "Amplitude(V)" in window.plot_widget.getAxis("left").labelText
         assert "未校准，仅电压数据" in window.toolTip()
     host._on_process_recording_released(session)
@@ -777,22 +789,24 @@ def test_legacy_waveform_replacement_resets_only_ve_owned_tooltip(
 
 
 @pytest.mark.parametrize("outcome", ["ordinary", "streaming", "cancel", "close", "metadata_false", "release_error"])
-def test_real_service_bridge_ve_lifecycle(host_factory, ui_qapp, tmp_path, outcome):
-    from base.recording_result_reader import ResultReader
+def test_real_service_bridge_ve_lifecycle(host_factory, ui_qapp, tmp_path, monkeypatch, outcome):
     from base.recording_service import RecordingService
     from ui.recording_service_bridge import RecordingServiceBridge
     from unit_test.ui.test_recording_process_integration import pump
 
     host = host_factory(live=outcome == "streaming")
-    # The native owner/writer/reader/service/Qt delivery are production code.
+    # The native owner/writer/preparation/service/Qt delivery are production code.
     # Only the external SDK and business analysis/DB are replaced.
     service = RecordingService(
         backend_factory="unit_test.base.ve3668n_fakes:capture_dependencies",
         backend_options={"trace_path": str(tmp_path / "sdk.jsonl"), "read_delay": .03},
         preview_interval=.01)
     if outcome == "metadata_false":
-        service._reader_factory = lambda descriptor, completed: ResultReader(
-            replace(descriptor, metadata_appended=False), completed)
+        import base.recording_final_result as final
+        prepare = final.prepare_main_recording_result
+        monkeypatch.setattr(final, "prepare_main_recording_result",
+                            lambda descriptor, request: prepare(
+                                replace(descriptor, metadata_appended=False), request))
     bridge = RecordingServiceBridge(service)
     host.recording_bridge = bridge
     if outcome in ("cancel", "close", "streaming"):
@@ -836,7 +850,15 @@ def test_real_service_bridge_ve_lifecycle(host_factory, ui_qapp, tmp_path, outco
             assert host.data_struct.wav_calibration_metadata == session.request.calibration_metadata
             raw, rate = sf.read(session.request.path, dtype="float32", always_2d=True)
             assert rate == host.data_struct.sample_rate == 51200
-            np.testing.assert_array_equal(raw, host.data_struct.store_wave_data_multi)
+            assert host.data_struct.store_wave_data_multi is None
+            assert host.data_struct.store_wave_data is None
+            assert host.data_struct.audio_lenth == len(raw)
+            assert host.data_struct.recording_source.request is session.request
+            from base.recording_waveform_preparation import prepare_waveform_display_data
+            for column, pair in enumerate(session.audio.waveforms):
+                expected = prepare_waveform_display_data(raw[:, column], rate, max_points=48000)
+                for actual, wanted in zip(pair, expected):
+                    np.testing.assert_array_equal(actual, wanted)
             assert np.all(raw == np.float32(8388607 / 8388608))
         else:
             assert host.data_struct.store_wave_data_multi is None
@@ -870,7 +892,7 @@ def test_ve_records_with_corrupt_legacy_monitor_without_output(host_factory, str
     capture, audio = capture_audio(request)
     assert isinstance(capture.outcome, RecordingResult)
     assert (capture.snapshot(generation=1, sequence=1) is not None) is streaming
-    assert len(audio.multi) == request.target_samples - request.trim_samples
+    assert audio.descriptor.final_frames == request.target_samples - request.trim_samples
 
 
 class ProductRecordingHost(RecordingHost):

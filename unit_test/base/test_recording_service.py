@@ -3,6 +3,7 @@ from dataclasses import fields, is_dataclass, replace
 import json
 import multiprocessing as mp
 import os
+import pickle
 from pathlib import Path
 import queue
 import threading
@@ -24,6 +25,15 @@ from consts.recording_preview_consts import (
     PREVIEW_TIME_MODE_CUMULATIVE,
     PREVIEW_TIME_MODE_RELATIVE_LATEST,
 )
+
+
+def assert_main_waveforms(audio, expected):
+    from base.recording_waveform_preparation import prepare_waveform_display_data
+    assert not hasattr(audio, "multi") and not hasattr(audio, "mono")
+    for column, pair in enumerate(audio.waveforms):
+        display = prepare_waveform_display_data(expected[:, column], audio.descriptor.sample_rate, max_points=48000)
+        for actual, wanted in zip(pair, display):
+            np.testing.assert_array_equal(actual, wanted)
 
 
 def request(tmp_path, **changes):
@@ -370,7 +380,7 @@ def test_native_retry_keeps_service_consumer_contract(tmp_path, preview_mode):
         assert [row["physical_input_channel"] for row in
                 read_wav_calibration_metadata(req.path)["recorded_channels"]] == [0, 2]
         expected = known_audio()[2:9, [0, 2]]
-        np.testing.assert_array_equal(audio.multi, expected)
+        assert_main_waveforms(audio, expected)
         np.testing.assert_array_equal(sf.read(req.path, dtype="float32")[0], expected)
         trace = json.loads((tmp_path / "native-retry.json").read_text())
         assert trace == dict(attempts=2, refreshed=True, hostapi_name="Selected API",
@@ -468,7 +478,7 @@ def services(tmp_path):
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_spawn_pid_complete_arrays_and_healthy_reuse(tmp_path, services, streaming):
+def test_spawn_pid_complete_envelopes_and_healthy_reuse(tmp_path, services, streaming):
     service = services()
     for index in range(2):
         events = Events()
@@ -477,18 +487,13 @@ def test_spawn_pid_complete_arrays_and_healthy_reuse(tmp_path, services, streami
         result = events.results.get(timeout=10)
         assert session.state == "delivering" and not session.released.is_set()
         expected = known_audio()[:9, [0, 2]][2:]
-        np.testing.assert_array_equal(result.multi, expected)
-        np.testing.assert_array_equal(result.mono, expected.mean(axis=1))
-        assert result.multi.dtype == result.mono.dtype == np.float32
+        assert_main_waveforms(result, expected)
         assert result.is_prepared_for(session.request)
-        for array in (result.multi, result.mono):
-            assert not array.flags.writeable
-            owner = array
-            while isinstance(owner, np.ndarray) and owner.base is not None:
-                owner = owner.base
-            assert isinstance(owner, memoryview) and owner.readonly
-            assert isinstance(owner.obj, np.ndarray) and owner.obj.flags.owndata
-            assert not isinstance(owner.obj, np.memmap)
+        for pair in result.waveforms:
+            for array in pair:
+                assert not array.flags.writeable
+                with pytest.raises(ValueError):
+                    array.setflags(write=True)
         trace = eventually(lambda: read_trace(tmp_path))
         assert trace["capture_pid"] == trace["writer_pid"] == session.worker_pid != os.getpid()
         if index:
@@ -527,8 +532,7 @@ def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_progress_cu
     expected = (known_audio(110) % .5).astype(np.float32)
     expected[5, 0] = 7969177 / 8388608
     expected = expected[:100, (0, 2)]
-    np.testing.assert_array_equal(result.multi, expected)
-    np.testing.assert_array_equal(result.mono, expected.mean(axis=1))
+    assert_main_waveforms(result, expected)
     saved, rate = sf.read(session.request.path, dtype="float32", always_2d=True)
     assert rate == 100
     np.testing.assert_array_equal(saved, expected)
@@ -560,8 +564,7 @@ def test_spawn_cumulative_request_publishes_cumulative_preview_and_exact_complet
     expected = (known_audio(110) % .5).astype(np.float32)
     expected[5, 0] = 7969177 / 8388608
     expected = expected[:9, (0, 2)]
-    np.testing.assert_array_equal(result.multi, expected)
-    np.testing.assert_array_equal(result.mono, expected.mean(axis=1))
+    assert_main_waveforms(result, expected)
     saved, rate = sf.read(session.request.path, dtype="float32", always_2d=True)
     assert rate == 100
     np.testing.assert_array_equal(saved, expected)
@@ -594,8 +597,7 @@ def test_spawn_preview_fault_does_not_change_progress_completion_or_success(
     assert trace["preview_session_constructions"] == 1
     assert trace["preview_rolling_window_seconds"] is None
     assert (result.descriptor.raw_frames, result.descriptor.final_frames) == (9, 9)
-    np.testing.assert_array_equal(result.multi, expected)
-    np.testing.assert_array_equal(result.mono, expected.mean(axis=1))
+    assert_main_waveforms(result, expected)
     saved, rate = sf.read(session.request.path, dtype="float32", always_2d=True)
     assert rate == 100
     np.testing.assert_array_equal(saved, expected)
@@ -604,6 +606,51 @@ def test_spawn_preview_fault_does_not_change_progress_completion_or_success(
     assert events.accepted.get(timeout=5) is result
     assert session.released.wait(5)
     assert session.state == "completed"
+
+
+@pytest.mark.parametrize("change", ["amplitude", "indices", "columns", "pair", "oversized", "quality"])
+def test_changed_or_malformed_duplicate_envelope_retires_worker(tmp_path, services, monkeypatch, change):
+    service = services()
+    events = Events()
+    session = service.start(request(tmp_path), events.callbacks)
+    result = events.results.get(timeout=10)
+    worker = service._worker
+    released_before_termination = []
+    terminate = worker.process.terminate
+
+    def observe_termination():
+        released_before_termination.append(session.released.is_set())
+        terminate()
+
+    monkeypatch.setattr(worker.process, "terminate", observe_termination)
+    descriptor = pickle.loads(pickle.dumps(result.descriptor))
+    envelope = descriptor.final_envelope
+    indices, amplitudes = envelope.columns[0]
+    if change == "amplitude":
+        amplitudes[0] += np.float32(.125)
+    elif change == "indices":
+        indices[0] += 1
+    elif change == "columns":
+        envelope = replace(envelope, columns=np.array([1, 2]))
+    elif change == "pair":
+        envelope = replace(envelope, columns=(None,) + envelope.columns[1:])
+    elif change == "oversized":
+        envelope = replace(envelope, columns=((np.arange(48001), np.zeros(48001, dtype=np.float32)),)
+                           + envelope.columns[1:])
+    else:
+        envelope = replace(envelope, quality=replace(envelope.quality, count=np.array([7, 7])))
+    duplicate = RecordingEvent(session.generation, session.request.request_id, "completed",
+                               replace(descriptor, final_envelope=envelope))
+    service._inbox.put(("event", worker, duplicate))
+    failure = events.failed.get(timeout=5)
+    assert failure.stage == "protocol"
+    assert "contradictory worker terminal" in failure.message
+    assert session.released.wait(5)
+    eventually(lambda: service.worker_pid is None)
+    assert released_before_termination == [False]
+    assert session.state == "failed"
+    assert events.results.empty() and events.accepted.empty() and events.failed.empty()
+    assert not Path(session.request.path).exists()
 
 
 @pytest.mark.parametrize("signal", ["ack", "stop", "stop_at_deadline", "ack_at_deadline", "timeout"])
@@ -716,7 +763,7 @@ def test_synthetic_producer_writer_handshake_prevents_scheduling_overflow(
         (tmp_path / "release-writer").touch()
     if pace_writer:
         audio = events.results.get(timeout=10)
-        np.testing.assert_array_equal(audio.multi, generated_audio(0, 441000)[:, (0, 2)])
+        assert_main_waveforms(audio, generated_audio(0, 441000)[:, (0, 2)])
         session.accept_result()
     else:
         failure = events.failed.get(timeout=10)
@@ -795,8 +842,7 @@ def test_spawn_accepts_600_seconds_with_bounded_rolling_previews_and_exact_wav(
     # Completion must bypass the still-withheld second preview credit.
     audio = events.results.get(timeout=10)
     expected = generated_audio(0, target)[trim:, channels]
-    np.testing.assert_array_equal(audio.multi, expected)
-    np.testing.assert_array_equal(audio.mono, expected.mean(axis=1))
+    assert_main_waveforms(audio, expected)
     assert (audio.descriptor.raw_frames, audio.descriptor.final_frames) == (target, final_frames)
     assert audio.descriptor.final_frames / audio.descriptor.sample_rate == 600
     saved, rate = sf.read(session.request.path, dtype="float32", always_2d=True)
@@ -825,6 +871,9 @@ def test_spawn_accepts_600_seconds_with_bounded_rolling_previews_and_exact_wav(
         if event.kind == "preview":
             assert len(payload_arrays) == 2 * len(channels)
             assert all(array.ndim == 1 and array.size <= 4000 for array in payload_arrays)
+        elif event.kind == "completed":
+            assert len(payload_arrays) == 2 * len(channels)
+            assert all(array.ndim == 1 and array.size <= 48000 for array in payload_arrays)
         else:
             assert not payload_arrays, "raw audio history must never cross control IPC"
 
@@ -890,7 +939,7 @@ def test_reader_timeout_retires_worker_and_isolates_only_old_path(tmp_path, serv
     paused = PausedReader()
     service = services(reader_factory=paused, cancel_timeout=.2, terminate_timeout=.2)
     events = Events()
-    session = service.start(request(tmp_path), events.callbacks)
+    session = service.start(request(tmp_path, purpose="calibration", channels=(0,)), events.callbacks)
     try:
         assert paused.entered.wait(10)
         old_pid = session.worker_pid
@@ -900,7 +949,7 @@ def test_reader_timeout_retires_worker_and_isolates_only_old_path(tmp_path, serv
         assert not session.acknowledged and not session.released.is_set()
         assert Path(session.request.path).exists()
         with pytest.raises(RuntimeError, match="leased"):
-            service.start(request(tmp_path, request_id="same"))
+            service.start(request(tmp_path, request_id="same", path=session.request.path))
         fresh_events = Events()
         fresh = service.start(request(tmp_path, request_id="fresh", path=str(tmp_path / "fresh.wav")),
                               fresh_events.callbacks)
@@ -913,7 +962,7 @@ def test_reader_timeout_retires_worker_and_isolates_only_old_path(tmp_path, serv
         fresh_events.accepted.get(timeout=5)
         assert fresh.released.wait(5) and Path(fresh.request.path).exists()
         assert events.results.empty() and events.failed.empty()
-        assert offered.multi.shape == (7, 2)
+        assert offered.descriptor.final_frames == 7 and len(offered.waveforms) == 2
     finally:
         paused.release.set()
 
@@ -1012,7 +1061,7 @@ def test_result_read_failure_never_offers_arrays(tmp_path, services):
         return ResultReader(descriptor, completed, request=request, opener=fail_open)
     service = services(reader_factory=unreadable)
     events = Events()
-    session = service.start(request(tmp_path), events.callbacks)
+    session = service.start(request(tmp_path, purpose="calibration", channels=(0,)), events.callbacks)
     assert events.failed.get(timeout=10).stage == "read"
     assert session.released.wait(5) and events.results.empty()
 
@@ -1023,7 +1072,9 @@ def test_duplicate_and_stale_events_cannot_redeliver_or_overwrite(tmp_path, serv
     session = service.start(request(tmp_path), events.callbacks)
     result = events.results.get(timeout=10)
     worker = service._worker
-    duplicate = RecordingEvent(session.generation, session.request.request_id, "completed", result.descriptor)
+    descriptor = pickle.loads(pickle.dumps(result.descriptor))
+    assert descriptor.final_envelope.columns[0][0] is not result.descriptor.final_envelope.columns[0][0]
+    duplicate = RecordingEvent(session.generation, session.request.request_id, "completed", descriptor)
     service._inbox.put(("event", worker, duplicate))
     service._inbox.put(("event", worker, replace(duplicate, generation=session.generation + 1)))
     session.accept_result()
@@ -1277,7 +1328,8 @@ def test_public_methods_never_perform_pipe_process_or_file_io(tmp_path, services
     assert session.released.wait(5)
     service.shutdown()
     assert service.closed.wait(5)
-    assert {name for name, _ in observed} >= {"send", "recv", "start", "join", "read"}
+    assert {name for name, _ in observed} >= {"send", "recv", "start", "join"}
+    assert "read" not in {name for name, _ in observed}
 
 
 def test_acceptance_and_release_continuations_have_explicit_order(tmp_path, services):
@@ -1420,22 +1472,17 @@ def test_worker_and_service_imports_do_not_load_qt_or_hardware():
     assert completed.returncode == 0, completed.stderr
 
 
-def test_exact_cleanup_paths_remain_leased_until_old_reader_releases(tmp_path, services):
-    paused = PausedReader()
-    service = services(dict(metadata_leftover=True), reader_factory=paused, cancel_timeout=.2,
-                       terminate_timeout=.2)
+def test_main_cleanup_paths_remain_leased_until_result_rejected(tmp_path, services):
+    service = services(dict(metadata_leftover=True))
     events = Events()
     session = service.start(request(tmp_path), events.callbacks)
+    audio = events.results.get(timeout=10)
     owned = tmp_path / "exact-owned-temporary.wav"
-    try:
-        assert paused.entered.wait(10) and owned.exists()
-        session.cancel()
-        events.cancelled.get(timeout=5)
-        eventually(lambda: service.worker_pid is None)
-        with pytest.raises(RuntimeError, match="leased"):
-            service.start(request(tmp_path, request_id="unsafe-temp-reuse", path=str(owned)))
-    finally:
-        paused.release.set()
+    assert owned.exists() and service.is_path_leased(str(owned))
+    assert session.reader is None
+    with pytest.raises(RuntimeError, match="leased|busy"):
+        service.start(request(tmp_path, request_id="unsafe-temp-reuse", path=str(owned)))
+    session.reject_result("test rejected")
     assert session.released.wait(5)
     assert not owned.exists() and not service.is_path_leased(str(owned))
 
@@ -1462,7 +1509,7 @@ def test_preview_callback_failure_disables_preview_once_but_keeps_audio(tmp_path
     assert session.released.wait(5)
     assert len(failures) == 1
     assert sum("preview callback failed" in text for text in service.diagnostics) == 1
-    assert audio.multi.shape == (100, 2) and events.failed.empty()
+    assert audio.descriptor.final_frames == 100 and len(audio.waveforms) == 2 and events.failed.empty()
 
 
 
@@ -1648,8 +1695,7 @@ def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_cumulative(
     expected = (known_audio(110) % .5).astype(np.float32)
     expected[5, 0] = 7969177 / 8388608
     expected = expected[:100, (0, 2)]
-    np.testing.assert_array_equal(result.multi, expected)
-    np.testing.assert_array_equal(result.mono, expected.mean(axis=1))
+    assert_main_waveforms(result, expected)
     saved, rate = sf.read(session.request.path, dtype="float32", always_2d=True)
     assert rate == 100
     np.testing.assert_array_equal(saved, expected)

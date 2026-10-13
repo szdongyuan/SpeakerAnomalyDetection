@@ -7,6 +7,7 @@ from PyQt5.QtCore import QEvent, QSignalBlocker
 from PyQt5.QtWidgets import QApplication, QMessageBox, QLineEdit
 
 from base.load_config import LoadUiConfig
+from base.data_struct.data_deal_struct import DataDealStruct
 from base.product_test_project_config import ProductTestProjectConfigManager
 from base.product_test_config_refresh import (
     ProductTestConfigurationError,
@@ -191,6 +192,7 @@ class SequenceWidgetConfigOpsMixin:
             self.recorded_signal_info = {}
             self.data_struct.store_wave_data = None
             self.data_struct.store_wave_data_multi = None
+            DataDealStruct.clear_recording_sources(self.data_struct)
             self._clear_audio_source_analysis_state()
             self.replayer_btn.setDisabled(True)
             self.data_btn.setDisabled(True)
@@ -893,6 +895,7 @@ class SequenceWidgetConfigOpsMixin:
         self.data_btn.setDisabled(True)
         self.data_struct.store_wave_data = None
         self.data_struct.store_wave_data_multi = None
+        DataDealStruct.clear_recording_sources(self.data_struct)
         clear_wav_calibration_state = getattr(
             self,
             "_clear_audio_source_analysis_state",
@@ -901,7 +904,6 @@ class SequenceWidgetConfigOpsMixin:
         if callable(clear_wav_calibration_state):
             clear_wav_calibration_state()
         else:
-            from base.data_struct.data_deal_struct import DataDealStruct
             DataDealStruct.clear_wav_calibration_context(self.data_struct)
 
         # 1. 强制清除下拉框焦点

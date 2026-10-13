@@ -1086,6 +1086,9 @@ def test_legacy_queue_switch_clears_wav_metadata(monkeypatch):
         replayer_btn=_ButtonStub(),
         data_btn=_ButtonStub(),
         data_struct=SimpleNamespace(
+            recording_source=object(),
+            recording_sources={"old": object()},
+            recording_display_sources={"old": object()},
             store_wave_data="recorded",
             store_wave_data_multi="recorded_multi",
             wav_calibration_metadata={"old": True},
@@ -1108,6 +1111,21 @@ def test_legacy_queue_switch_clears_wav_metadata(monkeypatch):
     assert host.data_struct.wav_calibration_metadata is None
     assert host.data_struct.wav_calibration_metadata_authoritative is False
     assert host.data_struct.wav_calibration_warning_shown is False
+    assert host.data_struct.recording_source is None
+    assert host.data_struct.recording_sources == host.data_struct.recording_display_sources == {}
+
+
+def test_product_snapshot_reset_clears_all_recording_identities(refresh_host):
+    host, project, _, warnings = refresh_host
+    host.data_struct.recording_source = object()
+    host.data_struct.recording_sources = {"old": object()}
+    host.data_struct.recording_display_sources = {"old": object()}
+    project["test_groups"][0]["test_conditions"][0]["input_voltage"] = "12"
+    assert host.product_program_manager.save_project("A.json", project)[0]
+    host.on_product_test_program_updated()
+    assert warnings == []
+    assert host.data_struct.recording_source is None
+    assert host.data_struct.recording_sources == host.data_struct.recording_display_sources == {}
 
 
 @pytest.mark.parametrize("configuration", ["missing", "invalid_json", "valid", "empty"])
