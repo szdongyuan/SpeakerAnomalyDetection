@@ -8,14 +8,13 @@ from base.analysis_segments import normalize_segmented_analysis, recording_durat
 import time
 from uuid import uuid4
 
-import numpy as np
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
 
 from base.play_and_record import resolve_startup_trim_samples
 from base.recording_preview_config import resolve_recording_preview_time_mode
 from base.recording_process_protocol import RecordingFailure, RecordingRequest
-from base.recording_result_reader import RecordingAudio
+from base.recording_final_result import PreparedRecordingResult
 from base.recording_service import RecordingCallbacks, RecordingService
 from base.recording_settings import merge_audio_validation_thresholds
 from base.ve3668n_input import validate_sample_rate
@@ -520,15 +519,12 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
             self._recording_process_final = True
         try:
             request, descriptor = session.request, audio.descriptor
-            prepared = isinstance(audio, RecordingAudio) and audio.is_prepared_for(request)
+            if (request is not context.request or request.purpose != "main"
+                    or not isinstance(audio, PreparedRecordingResult)
+                    or not audio.is_prepared_for(request)):
+                raise ValueError("main result must be prepared for the exact recording request")
             if getattr(request, "device", {}).get("backend") == VE_BACKEND:
                 self._validate_ve_recording_result(session, audio, context=context)
-            multi = self._normalize_final_recording_array(audio.multi, request.channels)
-            if (descriptor.channels != request.channels or descriptor.path != request.path
-                    or descriptor.sample_rate != request.sample_rate
-                    or len(multi) != descriptor.final_frames
-                    or (not prepared and not np.array_equal(audio.mono, multi.mean(axis=1), equal_nan=True))):
-                raise ValueError("final recording arrays do not match the request/result contract")
             if context.final_windows is None:
                 context.final_windows = self._validate_final_waveform_workspace(
                     request.channels)
@@ -547,10 +543,8 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         context = context or self._recording_context_for_session(session)
         if context is None or request is not context.request:
             raise ValueError("VE result does not belong to the frozen recording request")
-        if (not isinstance(audio.multi, np.ndarray) or not isinstance(audio.mono, np.ndarray)
-                or audio.multi.dtype != np.float32 or audio.mono.dtype != np.float32
-                or audio.multi.ndim != 2 or audio.mono.ndim != 1):
-            raise ValueError("VE result must contain frame-first float32 voltage arrays")
+        if not isinstance(audio, PreparedRecordingResult) or not audio.is_prepared_for(request):
+            raise ValueError("VE result must contain prepared final envelope evidence")
         metadata = validate_ve_wav_metadata(request.calibration_metadata)
         expected_acquisition = {
             "model": request.device["model"], "machine_id": request.device["machine_id"],
@@ -566,10 +560,7 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
                 or descriptor.raw_frames != request.target_samples
                 or descriptor.final_frames != request.target_samples - trim
                 or descriptor.metadata_appended is not True
-                or descriptor.handles_released is not True
-                or (not (isinstance(audio, RecordingAudio) and audio.is_prepared_for(request))
-                    and (not np.all(np.isfinite(audio.multi))
-                         or not np.all(np.isfinite(audio.mono))))):
+                or descriptor.handles_released is not True):
             raise ValueError("VE final recording metadata/count/release contract mismatch")
 
     def _on_process_recording_accepted(self, session, audio):
@@ -684,13 +675,7 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
             for warning in audio.descriptor.warnings:
                 self.default_logger.warning(f"Recording {session.request.request_id}: {warning}")
             self._finish_process_recording_status(context, "待判定", "等待下一档位", "pending")
-            self._on_streaming_complete(
-                recorded_mono=audio.mono, recorded_multi=audio.multi,
-                sample_rate=audio.descriptor.sample_rate,
-                completion_source="process", prefinalized=True,
-                final_waveform_windows=context.final_windows,
-                **({"prepared_audio": audio} if isinstance(audio, RecordingAudio)
-                   and audio.is_prepared_for(context.request) else {}))
+            self._on_recording_envelope_complete(audio, context)
         finally:
             if self._is_active_recording_process(session):
                 self._finalize_recording_channel_selection()
@@ -870,7 +855,8 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         # An abort must not detach provenance from retained previous audio.
         data = getattr(self, "data_struct", None)
         if (data is not None and getattr(data, "store_wave_data", None) is None
-                and getattr(data, "store_wave_data_multi", None) is None):
+                and getattr(data, "store_wave_data_multi", None) is None
+                and getattr(data, "recording_source", None) is None):
             clear = getattr(self, "_clear_audio_source_analysis_state", None)
             if callable(clear):
                 clear()

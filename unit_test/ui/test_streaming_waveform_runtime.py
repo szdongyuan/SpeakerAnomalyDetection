@@ -145,6 +145,8 @@ class _RuntimeHost(SequenceWidgetStreamingOpsMixin):
         self._direction_waveform_cache = {}
         self.streaming_processor = object()
         self.scheduled = []
+        # Isolated legacy host has no current-product retry workflow.
+        self._recover_current_product_recording = lambda reason: False
 
     def _schedule_streaming_waveform_callback(self, callback):
         self.scheduled.append(callback)
@@ -1161,7 +1163,7 @@ def test_in_process_workspace_contract_failure_is_presentation_only(
         validation_attempts.append(tuple(run_channels))
         np.testing.assert_array_equal(
             host.data_struct.store_wave_data_multi,
-            recorded_multi,
+            sequence_widget_streaming_ops.quantize_pcm24(recorded_multi),
         )
         assert host.streaming_wav_writer is None
         assert writer.finalized is True
@@ -1200,10 +1202,11 @@ def test_in_process_workspace_contract_failure_is_presentation_only(
     assert result is True
     assert validation_attempts == [(0, 2)]
     assert events == ["presentation", "database", "analysis"]
-    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, recorded_multi)
+    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi,
+                                  sequence_widget_streaming_ops.quantize_pcm24(recorded_multi))
     np.testing.assert_array_equal(
         host.data_struct.store_wave_data,
-        recorded_multi.mean(axis=1),
+        sequence_widget_streaming_ops.quantize_pcm24(recorded_multi).mean(axis=1),
     )
     writer.finalize.assert_called_once_with()
     assert recorded_path.exists()
@@ -1475,7 +1478,7 @@ def test_coalesced_600_second_delivery_reaches_live_and_final_endpoints(
         assert max_points == MAIN_RECORDING_FINAL_MAX_POINTS
         np.testing.assert_array_equal(
             host.data_struct.store_wave_data_multi[:, 0],
-            raw_mono[trim:],
+            sequence_widget_streaming_ops.quantize_pcm24(raw_mono[trim:]),
         )
         events.append("publish-authoritative-array")
         events.append("prepare-final-48000")
@@ -1627,7 +1630,7 @@ def test_coalesced_600_second_delivery_reaches_live_and_final_endpoints(
         "config_snapshot": {},
     }
     expected_time, expected_display = original_prepare(
-        raw_mono[trim:],
+        sequence_widget_streaming_ops.quantize_pcm24(raw_mono[trim:]),
         sample_rate,
         max_points=MAIN_RECORDING_FINAL_MAX_POINTS,
     )
@@ -1636,11 +1639,11 @@ def test_coalesced_600_second_delivery_reaches_live_and_final_endpoints(
     assert host.data_struct.store_wave_data_multi.shape == (display_samples, 1)
     np.testing.assert_array_equal(
         host.data_struct.store_wave_data_multi[:, 0],
-        raw_mono[trim:],
+        sequence_widget_streaming_ops.quantize_pcm24(raw_mono[trim:]),
     )
     np.testing.assert_array_equal(
         host.data_struct.store_wave_data,
-        raw_mono[trim:],
+        sequence_widget_streaming_ops.quantize_pcm24(raw_mono[trim:]),
     )
     validation.assert_called_once()
     assert validation.call_args.args[0].shape == (display_samples, 1)

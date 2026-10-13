@@ -206,11 +206,29 @@ def validate_recorded_audio(
 
     mono = _to_mono_float(samples)
     if mono.size == 0:
-        return False, "录音缓冲区为空，未采集到任何样本。", "samples=0"
+        return validate_recorded_audio_metrics(0, 0.0, 0.0, 0.0, thresholds)
 
     peak = float(np.max(np.abs(mono)))
     rms = float(np.sqrt(np.mean(np.square(mono, dtype=np.float64))))
     variance = float(np.var(mono, dtype=np.float64))
+
+    return validate_recorded_audio_metrics(mono.size, peak, rms, variance, thresholds)
+
+
+def validate_recorded_audio_metrics(
+    count: int, peak: float, rms: float, variance: float, thresholds: dict
+) -> Tuple[bool, str, str]:
+    """Apply the shared gate to measured metrics without changing thresholds.
+
+    The caller owns sample/metric validity checks. The batch entry point keeps
+    its original reductions and early disabled behavior.
+    """
+    if not isinstance(thresholds, dict):
+        thresholds = AUDIO_VALIDATION_FALLBACK
+    if not thresholds.get("enabled", True):
+        return True, "", ""
+    if count == 0:
+        return False, "录音缓冲区为空，未采集到任何样本。", "samples=0"
 
     min_peak = float(thresholds.get("min_peak", AUDIO_VALIDATION_FALLBACK["min_peak"]))
     min_rms_dbfs = float(thresholds.get("min_rms_dbfs", AUDIO_VALIDATION_FALLBACK["min_rms_dbfs"]))

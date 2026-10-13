@@ -490,7 +490,7 @@ def test_terminal_payload_type_retires_even_when_event_kind_is_corrupted(monkeyp
     assert probe.session._child_released is False
 
 
-def test_reader_constructor_failure_isolates_only_finalizer_and_preserves_active_capture(
+def test_main_envelope_failure_isolates_only_finalizer_and_preserves_active_capture(
     monkeypatch, tmp_path,
 ):
     probe = ve_probe(monkeypatch, tmp_path)
@@ -516,7 +516,7 @@ def test_reader_constructor_failure_isolates_only_finalizer_and_preserves_active
         1, request.request_id, "completed", descriptor))
 
     failure = probe.failures.get_nowait()
-    assert failure.stage == "service" and "construction failure" in failure.message
+    assert failure.stage == "protocol" and "metadata" in failure.message
     assert probe.session.released.is_set()
     assert not probe.service.is_path_leased(request.path)
     assert not probe.worker.retiring and not probe.service._ownership_uncertain
@@ -624,6 +624,8 @@ def test_trusted_terminal_survives_newer_active_fatal_and_unconfirmed_death_keep
     probe = ve_probe(monkeypatch, tmp_path)
     release_probe_slot(probe)
     request = probe.session.request
+    from base.recording_process_protocol import RecordingFinalEnvelope, RecordingQualityEvidence
+    count = request.target_samples - request.trim_samples
     trusted = RecordingResult(
         request.request_id,
         request.purpose,
@@ -632,7 +634,9 @@ def test_trusted_terminal_survives_newer_active_fatal_and_unconfirmed_death_keep
         request.channels,
         request.target_samples,
         request.target_samples - request.trim_samples,
-        False,
+        True,
+        final_envelope=RecordingFinalEnvelope(1, count, request.channels, (), "display unavailable",
+            RecordingQualityEvidence(count, "skipped", None, None, None, True)),
     )
     probe.service._event(probe.worker, RecordingEvent(
         1, request.request_id, "completed", trusted))

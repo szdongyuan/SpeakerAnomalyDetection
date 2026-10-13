@@ -10,6 +10,8 @@ import soundfile as sf
 from base.recording_capture import RecordingCapture
 from base.recording_process_protocol import RecordingCancelled, RecordingResult
 from base.recording_result_reader import ResultReader
+from base.recording_final_result import prepare_main_recording_result
+from base.recording_process_protocol import RecordingFailure
 from base.streaming_file_writer import StreamingWavWriter
 from unit_test.base.recording_process_fakes import FakeBackend, known_audio
 from unit_test.base.test_recording_capture import request
@@ -64,8 +66,10 @@ def test_writer_only_receives_retained_samples(tmp_path, trim, channels):
     np.testing.assert_array_equal(np.concatenate(written), expected)
     assert capture.raw_frames == capture.consumed_frames == 9
     assert capture.written_frames == result.final_frames == len(expected)
-    assert result.sample_digest == hashlib.sha256(expected.astype("<f4").tobytes()).hexdigest()
-    assert result.digest_algorithm == "sha256-float32-le"
+    assert result.sample_digest is None and result.digest_algorithm is None
+    prepared = prepare_main_recording_result(result, req)
+    for column, (_, values) in enumerate(prepared.waveforms):
+        np.testing.assert_array_equal(values, expected[:, column])
 
 
 def test_capture_never_reads_audio_or_rewrites_trim(tmp_path, monkeypatch):
@@ -73,14 +77,59 @@ def test_capture_never_reads_audio_or_rewrites_trim(tmp_path, monkeypatch):
         raise AssertionError("capture attempted a full audio read or rewrite")
     monkeypatch.setattr(sf.SoundFile, "read", forbidden)
     monkeypatch.setattr(sf, "read", forbidden)
+    monkeypatch.setattr("base.recording_capture.hashlib.sha256", forbidden)
     capture, result = capture_audio(request(tmp_path, trim_samples=4))
     assert isinstance(result, RecordingResult), result
     assert not list(tmp_path.glob(".recording-trim-*"))
 
 
+@pytest.mark.parametrize("stage", ["append", "finish"])
+def test_final_envelope_failure_is_display_only(tmp_path, monkeypatch, stage):
+    from base import recording_capture as module
+    def broken(*args):
+        raise MemoryError("bounded display allocation failed")
+    monkeypatch.setattr(module.FinalEnvelopeAccumulator, stage, broken)
+    req = request(tmp_path)
+    capture, result = capture_audio(req)
+    assert isinstance(result, RecordingResult)
+    assert result.final_envelope.columns == ()
+    assert "allocation failed" in result.final_envelope.display_error
+    assert result.final_envelope.quality.count == 7
+    assert capture._final_envelope is None
+    assert prepare_main_recording_result(result, req).display_error
+    np.testing.assert_array_equal(sf.read(req.path, dtype="float32")[0], known_audio()[2:9, req.channels])
+
+
+@pytest.mark.parametrize("fault", ["changed", "invalid", "close", "retained"])
+def test_soundcard_appended_metadata_is_checked_in_child(tmp_path, monkeypatch, fault):
+    from base import recording_capture as module
+    from base.wav_calibration_metadata import WavCalibrationMetadataReadStatus
+    metadata = {"recorded_channels": [
+        {"wav_channel_index": index, "physical_input_channel": channel, "calibrated": False}
+        for index, channel in enumerate((0, 2))]}
+    inspect = module.inspect_wav_calibration_metadata
+    retained = object()
+    def damaged(path, **kwargs):
+        result = inspect(path, **kwargs)
+        changes = {
+            "changed": dict(metadata={"recorded_channels": []}),
+            "invalid": dict(status=WavCalibrationMetadataReadStatus.ABSENT),
+            "close": dict(handles_released=False, close_errors=("readback close failed",)),
+            "retained": dict(retained_handles=((path, retained),)),
+        }
+        return replace(result, **changes[fault])
+    monkeypatch.setattr(module, "inspect_wav_calibration_metadata", damaged)
+    capture, result = capture_audio(request(tmp_path, calibration_metadata=metadata))
+    assert isinstance(result, RecordingFailure)
+    assert result.stage == "metadata"
+    assert result.handles_released is (fault in ("changed", "invalid"))
+    if fault == "retained":
+        assert capture._unreleased_finalization_handles[-1][1] is retained
+
+
 @pytest.mark.parametrize("block_frames", [1, 3, 65536])
 def test_parent_reads_each_sample_once_and_validates_digest(tmp_path, block_frames):
-    req = request(tmp_path, trim_samples=4)
+    req = request(tmp_path, purpose="calibration", channels=(2,), trim_samples=4)
     _, result = capture_audio(req)
     reads = []
 
@@ -92,7 +141,7 @@ def test_parent_reads_each_sample_once_and_validates_digest(tmp_path, block_fram
 
     outcome = read_result(result, req, block_frames=block_frames, opener=Source)
     assert outcome.error is None
-    expected = known_audio(9)[4:, req.channels]
+    expected = known_audio(9)[:, req.channels]
     assert sum(reads) == len(expected)
     np.testing.assert_array_equal(outcome.audio.multi, expected)
     np.testing.assert_array_equal(outcome.audio.mono, expected.mean(axis=1))
@@ -100,10 +149,10 @@ def test_parent_reads_each_sample_once_and_validates_digest(tmp_path, block_fram
 
 @pytest.mark.parametrize("damage", ["samples", "truncated", "missing_digest", "wrong_request"])
 def test_invalid_disk_or_evidence_never_delivers_audio(tmp_path, damage):
-    req = request(tmp_path)
+    req = request(tmp_path, purpose="calibration", channels=(2,))
     _, result = capture_audio(req)
     if damage in ("samples", "truncated"):
-        audio = known_audio(9)[2:, req.channels].copy()
+        audio = known_audio(9)[:, req.channels].copy()
         if damage == "samples":
             audio[0, 0] += 1
         else:
@@ -119,15 +168,14 @@ def test_invalid_disk_or_evidence_never_delivers_audio(tmp_path, damage):
     assert outcome.handles_released
 
 
-def test_quality_gate_uses_retained_audio_in_parent(tmp_path):
+def test_quality_gate_uses_retained_audio_in_child(tmp_path):
     req = request(tmp_path, validation_thresholds={"enabled": True})
     data = np.zeros((9, 3), dtype=np.float32)
     data[:2] = 1
     _, result = capture_audio(req, data=data)
-    assert isinstance(result, RecordingResult), "child completion is provisional"
-    outcome = read_result(result, req)
-    assert outcome.audio is None
-    assert "weak_signal" in outcome.error
+    assert isinstance(result, RecordingFailure)
+    assert result.stage == "quality"
+    assert "weak_signal" in result.message
 
 
 @pytest.mark.parametrize("frames", [1, 3, 6])
@@ -166,14 +214,11 @@ def test_soundcard_metadata_survives_capture_to_reader(tmp_path, calibrated):
     assert descriptor.metadata_appended
     assert read_wav_calibration_metadata(req.path) == metadata
 
-    outcome = read_result(descriptor, req)
-    assert outcome.error is None
-    assert outcome.handles_released
-    assert outcome.audio is not None
-    assert outcome.audio.descriptor == descriptor
+    audio = prepare_main_recording_result(descriptor, req)
+    assert audio.descriptor is descriptor
     expected = known_audio(9)[req.trim_samples:, channels]
-    np.testing.assert_array_equal(outcome.audio.multi, expected)
-    np.testing.assert_array_equal(outcome.audio.mono, expected.mean(axis=1))
+    for column, (_, values) in enumerate(audio.waveforms):
+        np.testing.assert_array_equal(values, expected[:, column])
     assert read_wav_calibration_metadata(req.path) == metadata
     assert req.calibration_metadata.to_dict() == metadata
 
@@ -281,16 +326,17 @@ def test_service_never_offers_or_accepts_invalid_parent_result(tmp_path, service
         return ResultReader(descriptor, completed, request=request)
     service = services(reader_factory=reader)
     events = Events()
-    req = request(tmp_path, validation_thresholds={"enabled": fault == "quality", "min_peak": 100})
+    req = request(tmp_path, purpose="main" if fault == "quality" else "calibration",
+                  channels=(0,), validation_thresholds={"enabled": fault == "quality", "min_peak": 100})
     session = service.start(req, events.callbacks)
     failure = events.failed.get(timeout=10)
-    assert failure.stage == "read"
+    assert failure.stage == ("quality" if fault == "quality" else "read")
     assert session.released.wait(5)
     assert events.results.empty() and events.accepted.empty()
 
 
 def test_evidence_without_request_cannot_use_legacy_direct_reader(tmp_path):
-    _, descriptor = capture_audio(request(tmp_path))
+    _, descriptor = capture_audio(request(tmp_path, purpose="calibration", channels=(0,)))
     outcomes = []
     reader = ResultReader(descriptor, outcomes.append)
     reader.start()
@@ -306,7 +352,7 @@ def test_digest_failure_retains_actual_successful_write_count(tmp_path):
             raise MemoryError("digest allocation failed")
 
     backend = FakeBackend()
-    capture = RecordingCapture(request(tmp_path, trim_samples=4), backend=backend)
+    capture = RecordingCapture(request(tmp_path, purpose="calibration", channels=(0,)), backend=backend)
     capture._sample_digest = FailingDigest()
     capture.start()
     try:
@@ -315,7 +361,7 @@ def test_digest_failure_retains_actual_successful_write_count(tmp_path):
         outcome = capture.wait(3)
         assert isinstance(outcome, RecordingFailure)
         assert "digest allocation failed" in outcome.message
-        assert outcome.written_frames == sf.info(outcome.path).frames == 5
+        assert outcome.written_frames == sf.info(outcome.path).frames == 9
     finally:
         capture.cancel()
         assert capture.join(3)
@@ -338,12 +384,13 @@ def test_paced_process_consumes_fully_trimmed_blocks_without_waiting_for_write(t
     events = Events()
     session = service.start(request(tmp_path, trim_samples=4), events.callbacks)
     result = events.results.get(timeout=5)
-    np.testing.assert_array_equal(result.multi, generated_audio(4, 5)[:, (0, 2)])
+    for column, (_, values) in enumerate(result.waveforms):
+        np.testing.assert_array_equal(values, generated_audio(4, 5)[:, (0, 2)][:, column])
     session.accept_result()
     assert session.released.wait(5)
 
 
-@pytest.mark.parametrize("purpose", ["main", "calibration"])
+@pytest.mark.parametrize("purpose", ["calibration"])
 def test_capture_digest_proves_clipped_quantized_audio_and_detects_pcm_tamper(tmp_path, purpose):
     req = request(tmp_path, purpose=purpose, channels=(0,), trim_samples=0)
     source = np.array([.5, 2, -3, 1, -.5, 2 ** -24, -2 ** -24, 0, .25], dtype=np.float32).reshape(-1, 1)

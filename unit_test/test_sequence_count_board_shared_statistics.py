@@ -11,15 +11,12 @@ from ui.sequence.sequencement_count_board import SequenceCountBoard
 
 @pytest.mark.parametrize("existing", [False, True])
 def test_modes_do_not_access_statistics(qt_app, tmp_path, monkeypatch, existing):
-    from ui.sequence import sequencement_count_board as module
-
     mark_path = tmp_path / "ui/ui_config/mark_result.json"
     test_path = tmp_path / "log/test_result_log/old.dat"
     if existing:
         for path in (mark_path, test_path):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"legacy statistics must remain untouched")
-    monkeypatch.setattr(module, "DEFAULT_DIR", tmp_path.as_posix() + "/")
     original_open = builtins.open
     accessed = []
 
@@ -78,10 +75,4 @@ def test_allowed_mode_keeps_warning_and_mark_button_signals(qt_app, monkeypatch)
     prompt.assert_called_once_with(board, "测试结果说明", "no judging rules")
     board.mark_btn.click()
     assert board.mode == "mark"
-    marked = []
-    board.ok_btn.clicked.connect(lambda: marked.append("OK"))
-    board.ng_btn.clicked.connect(lambda: marked.append("NG"))
-    board.ok_btn.click()
-    board.ng_btn.click()
-    assert marked == ["OK", "NG"]
     board.deleteLater()

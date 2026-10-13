@@ -24,13 +24,15 @@ import threading
 import time
 from time import perf_counter, perf_counter_ns, monotonic as diagnostic_monotonic
 
+import numpy as np
+
 from base.log_manager import LogManager
 from base.log_exit import ProcessLogDrain, run_with_log_drain
 from base.recording_timing_logger import RecordingTimingLogger
 from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_process_protocol import (
     CaptureSlotReleased, FrozenConfig, RecordingCancelled, RecordingEvent,
-    RecordingFailure, RecordingProgress, RecordingRequest, RecordingResult,
+    RecordingFailure, RecordingFinalEnvelope, RecordingProgress, RecordingRequest, RecordingResult,
     VE_PREWARM_COMMAND, VE_PREWARM_DETACHING, VE_PREWARM_PROGRESS,
     VE_PREWARM_STARTED, VE_PREWARM_TERMINAL, VeLifecycleCounts,
     VePrewarmProgress, VePrewarmRequest, VePrewarmResult, VePrewarmStarted,
@@ -45,6 +47,7 @@ from base.ve_startup_policy import VeStartupBudget
 from consts.recording_timeout_consts import (
     VE_CAPTURE_RELEASE_SLOW_SECONDS, VE_CAPTURE_RELEASE_TIMEOUT_SECONDS,
 )
+from consts.recording_preview_consts import MAIN_RECORDING_FINAL_MAX_POINTS
 from consts.ve3668n_consts import VE_BACKEND
 
 
@@ -1754,7 +1757,7 @@ class RecordingService:
                 self._notify(session, "started")
         elif event.kind in ("completed", "failed", "cancelled"):
             if session.descriptor is not None:
-                if event.payload != session.descriptor:
+                if not self._same_terminal_descriptor(event.payload, session.descriptor):
                     self._retire_terminal_fault(worker, session, "contradictory worker terminal")
                 return
             descriptor = event.payload
@@ -1821,6 +1824,23 @@ class RecordingService:
                 self._notify_finalizing(session)
                 session.state = "delivering"
                 session._deadline = None
+                if session.request.purpose == "main":
+                    from base.recording_final_result import prepare_main_recording_result
+                    session._reader_released = True
+                    started = time.monotonic()
+                    try:
+                        session.audio = prepare_main_recording_result(descriptor, session.request)
+                    except Exception as exc:
+                        # Untrusted IPC preparation boundary; no reader ever acquired ownership.
+                        self._diagnose(str(exc))
+                        self._fail(session, "protocol", str(exc))
+                    else:
+                        self._timing_logger.info(self._logger,
+                            "Recording timing request=%s process=parent stage=envelope_preparation seconds=%.6f",
+                            session.request.request_id, time.monotonic() - started)
+                        self._notify(session, "result_ready", session.audio)
+                    self._release(session)
+                    return
                 try:
                     session.reader = self._reader_factory(descriptor,
                         lambda outcome: self._inbox.put(("read", session, outcome)),
@@ -1847,6 +1867,46 @@ class RecordingService:
                         self._fail(session, "service", str(exc))
             else:
                 self._release(session)
+
+    @staticmethod
+    def _same_terminal_descriptor(incoming, previous):
+        """Compare duplicate wire terminals without ndarray truth evaluation."""
+        if type(incoming) is not type(previous):
+            return False
+        try:
+            if not isinstance(previous, RecordingResult):
+                return bool(incoming == previous)
+            if replace(incoming, final_envelope=None) != replace(previous, final_envelope=None):
+                return False
+            current, original = incoming.final_envelope, previous.final_envelope
+            if original is None:
+                return current is None
+            if type(current) is not RecordingFinalEnvelope or type(original) is not RecordingFinalEnvelope:
+                return False
+            if replace(current, columns=()) != replace(original, columns=()):
+                return False
+            if (type(current.columns) is not tuple or type(original.columns) is not tuple
+                    or len(current.columns) != len(original.columns)
+                    or len(current.columns) > len(previous.channels)):
+                return False
+            for current_pair, original_pair in zip(current.columns, original.columns):
+                if (type(current_pair) is not tuple or type(original_pair) is not tuple
+                        or len(current_pair) != 2 or len(original_pair) != 2):
+                    return False
+                for current_array, original_array in zip(current_pair, original_pair):
+                    if (type(current_array) is not np.ndarray or type(original_array) is not np.ndarray
+                            or current_array.ndim != 1 or original_array.ndim != 1
+                            or current_array.shape != original_array.shape
+                            or current_array.dtype != original_array.dtype
+                            or original_array.dtype not in (np.dtype("int64"), np.dtype("float32"))
+                            or not 1 <= original_array.size <= MAIN_RECORDING_FINAL_MAX_POINTS
+                            or not np.array_equal(current_array, original_array)):
+                        return False
+            return True
+        except (AttributeError, TypeError, ValueError):
+            # Malformed duplicate wire fields are a contradictory terminal;
+            # the caller diagnoses and retires the worker while retaining leases.
+            return False
 
     @staticmethod
     def _terminal_validation_error(session, kind, descriptor):
@@ -2113,8 +2173,10 @@ class RecordingService:
             self._invoke_release_callback(
                 pending.callback, "failed", ("recording worker retirement completed before VE release",))
         for session in sessions:
-            if session.descriptor is None or not session.descriptor.handles_released:
-                session._child_released = True
+            # Confirmed process death releases child ownership even when a
+            # contradictory terminal invalidated an earlier release claim.
+            # Reader ownership and cleanup still gate _release independently.
+            session._child_released = True
         worker.stop.set()
         worker.process.join(timeout=0)
         for thread in worker.threads:

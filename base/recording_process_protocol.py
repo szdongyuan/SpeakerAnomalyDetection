@@ -227,6 +227,32 @@ class RecordingFinalizationTiming:
 
 
 @dataclass(frozen=True)
+class RecordingQualityEvidence:
+    """Fixed-size child quality evidence; failed gates cannot complete."""
+    count: int
+    status: str
+    peak: float | None
+    rms: float | None
+    variance: float | None
+    voltage_finite: bool | None
+
+    def __post_init__(self):
+        if self.status not in ("passed", "skipped"):
+            raise ValueError("completed quality evidence status must be passed or skipped")
+
+
+@dataclass(frozen=True)
+class RecordingFinalEnvelope:
+    """Bounded sample indices/amplitudes, validated by the receiving parent."""
+    version: int
+    frame_count: int
+    channels: tuple[int, ...]
+    columns: tuple[tuple[np.ndarray, np.ndarray], ...]
+    display_error: str | None
+    quality: RecordingQualityEvidence
+
+
+@dataclass(frozen=True)
 class RecordingResult:
     request_id: str
     purpose: str
@@ -243,6 +269,7 @@ class RecordingResult:
     digest_algorithm: str | None = None
     sample_digest: str | None = None
     finalization_timing: RecordingFinalizationTiming | None = None
+    final_envelope: RecordingFinalEnvelope | None = None
 
 
 @dataclass(frozen=True)

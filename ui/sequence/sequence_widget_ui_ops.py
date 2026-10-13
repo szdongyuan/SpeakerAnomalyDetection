@@ -5,6 +5,7 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QVBoxLayout, QMessageBox
 
 from base.load_config import LoadUiConfig
+from base.data_struct.data_deal_struct import DataDealStruct
 from base.recording_channel_selection import (
     RecordingChannelSelectionError,
     canonicalize_recording_input_channels,
@@ -266,8 +267,6 @@ class SequenceWidgetUiOpsMixin:
 
         self.barcode_scanner_box.clicked.connect(self.clicked_scanner)
         self.serial_trigger_btn.clicked.connect(self.on_serial_trigger_btn_clicked)
-        self.count_board.ok_btn.clicked.connect(self.clicked_ok_or_ng)
-        self.count_board.ng_btn.clicked.connect(self.clicked_ok_or_ng)
         self.count_board.mark_btn.clicked.connect(self.on_mark_btn_clicked)
         if hasattr(self.using_file_combobox, "before_show_popup"):
             self.using_file_combobox.before_show_popup = self.update_using_file_combobox
@@ -306,6 +305,7 @@ class SequenceWidgetUiOpsMixin:
         return reply == QMessageBox.Yes
 
     def on_mark_btn_clicked(self):
+        DataDealStruct.clear_recording_sources(self.data_struct)
         self.data_struct.store_wave_data = None
         self.data_struct.store_wave_data_multi = None
         clear_wav_calibration_state = getattr(
@@ -316,7 +316,6 @@ class SequenceWidgetUiOpsMixin:
         if callable(clear_wav_calibration_state):
             clear_wav_calibration_state()
         else:
-            from base.data_struct.data_deal_struct import DataDealStruct
             DataDealStruct.clear_wav_calibration_context(self.data_struct)
         clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
         if callable(clear_all_direction_waveforms):

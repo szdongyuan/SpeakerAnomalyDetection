@@ -47,6 +47,45 @@ def pump(app, predicate, timeout=15):
     app.processEvents()
 
 
+def assert_main_envelope(audio, request, expected):
+    from base.recording_final_result import PreparedRecordingResult
+
+    assert isinstance(audio, PreparedRecordingResult)
+    assert audio.is_prepared_for(request)
+    assert not hasattr(audio, "multi") and not hasattr(audio, "mono")
+    assert audio.descriptor.final_frames == len(expected)
+    assert audio.display_error is None
+    assert len(audio.waveforms) == expected.shape[1] == len(request.channels)
+    for column, (times, values) in enumerate(audio.waveforms):
+        np.testing.assert_array_equal(times, np.arange(len(expected)) / request.sample_rate)
+        np.testing.assert_array_equal(values, expected[:, column])
+
+
+def assert_saved_main_envelope(host, session, expected):
+    assert_main_envelope(session.audio, session.request, expected)
+    assert session.reader is None and session._reader_released
+    assert host.data_struct.store_wave_data_multi is None
+    assert host.data_struct.store_wave_data is None
+    assert host.data_struct.audio_lenth == len(expected)
+    source = host.data_struct.recording_source
+    assert source.request is session.request
+    assert source.path == session.request.path
+    assert source.sample_rate == session.request.sample_rate
+    assert source.frame_count == len(expected)
+
+
+def wait_for_main_finalization(app, service, session):
+    """Wait for the real child's open writer, before completion or release."""
+    trace_path = Path(service._backend_options["trace_dir"]) / "trace.json"
+    pump(app, lambda: trace_path.exists() and json.loads(
+        trace_path.read_text()).get("finalize_waiting_for_release", False))
+    assert not session._child_released
+    assert session.reader is None
+    assert session.audio is None
+    assert service.is_path_leased(session.request.path)
+    assert Path(session.request.path).exists()
+
+
 @pytest.fixture
 def service(tmp_path, ui_qapp, monkeypatch):
     from base.file_ops import FileOps
@@ -333,7 +372,7 @@ def test_calibrator_close_with_paused_reader_then_new_main(ui_qapp, service, tmp
         service._reader_factory = ResultReader
         service._backend_options.pop("frames")
         host = main_host(service, tmp_path)
-        host._on_streaming_complete = mock.Mock()
+        host._on_recording_envelope_complete = mock.Mock()
         host.judge_play_and_record()
         fresh = host._recording_process_session
         pump(ui_qapp, lambda: fresh.state == "completed")
@@ -344,7 +383,7 @@ def test_calibrator_close_with_paused_reader_then_new_main(ui_qapp, service, tmp
         assert not old_path.parent.exists()
         assert Path(fresh.request.path).exists()
         saved.assert_not_called()
-        host._on_streaming_complete.assert_called_once()
+        host._on_recording_envelope_complete.assert_called_once()
     finally:
         reader.release.set()
         widget.close()
@@ -471,7 +510,7 @@ def test_bridge_real_spawn_delivers_on_gui_thread_and_child_writes(
         threads.append(QThread.currentThread())
         events.append(kind)
         if kind == "offer":
-            np.testing.assert_array_equal(value.multi, known_audio()[2:9, (0, 2)])
+            assert_main_envelope(value, session.request, known_audio()[2:9, (0, 2)])
             session.accept_result()
 
     callbacks = RecordingCallbacks(
@@ -517,7 +556,8 @@ def main_host(service, tmp_path, *, streaming=True, monitor=False):
     host.recorded_path = str(tmp_path / "main.wav")
     host.recorded_signal_info[model_consts.RECORDING_ROOT_CONFIG_KEY] = str(tmp_path)
     host.mic = device
-    host.data_struct = SimpleNamespace(sample_rate=100, store_wave_data=None, store_wave_data_multi=None)
+    host.data_struct = SimpleNamespace(
+        sample_rate=100, store_wave_data=None, store_wave_data_multi=None, recording_source=None)
     detail = {"use_streaming_recording": streaming, "monitor_playback": monitor,
         "startup_trim_ms": 20, "audio_validation": {"enabled": False}}
     host.sequence_config = [{"seq1": {"acq": {"detail": detail}}}]
@@ -684,7 +724,7 @@ def test_process_request_rejects_explicit_non_mapping_detail_before_start(
 
 
 @pytest.mark.parametrize("streaming,monitor", [(False, False), (False, True), (True, False), (True, True)])
-def test_main_workflow_uses_prefinalized_child_arrays_and_snapshots(
+def test_main_workflow_uses_prefinalized_child_envelope_and_snapshots(
         ui_qapp, service, tmp_path, monkeypatch, streaming, monitor):
     host = main_host(service, tmp_path, streaming=streaming, monitor=monitor)
     from ui.sequence import sequence_widget_analysis_ops as analysis, sequence_widget_streaming_ops as stream
@@ -710,8 +750,7 @@ def test_main_workflow_uses_prefinalized_child_arrays_and_snapshots(
     pump(ui_qapp, lambda: session.released.is_set() and not host._record_workflow_busy)
     assert session.request.device["index"] == 7
     assert session.request.trim_samples == 2
-    np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, known_audio()[2:9, (0, 2)])
-    np.testing.assert_array_equal(host.data_struct.store_wave_data, known_audio()[2:9, (0, 2)].mean(axis=1))
+    assert_saved_main_envelope(host, session, known_audio()[2:9, (0, 2)])
     save.assert_called_once()
     forbidden.assert_not_called()
     host._handle_invalid_recording.assert_not_called()
@@ -735,23 +774,23 @@ def test_workspace_contract_failure_rejects_before_any_publication(ui_qapp, serv
     pump(ui_qapp, session.released.is_set)
     assert session.state == "failed"
     assert host.data_struct.store_wave_data_multi is None
+    assert host.data_struct.recording_source is None
     host._handle_invalid_recording.assert_called_once()
     assert not Path(session.request.path).exists()
 
 
-def test_exact_path_cleanup_keeps_reader_lease_until_delete_and_db_cleanup(ui_qapp, service, tmp_path):
-    from unit_test.base.test_recording_service import PausedReader
-    reader = PausedReader()
-    service._reader_factory = reader
+def test_exact_path_cleanup_keeps_child_lease_until_delete_and_db_cleanup(ui_qapp, service, tmp_path):
+    service._backend_options["pause_finalize"] = True
     host = main_host(service, tmp_path)
     host.judge_play_and_record()
     session = host._recording_process_session
     try:
-        pump(ui_qapp, reader.entered.is_set)
+        wait_for_main_finalization(ui_qapp, service, session)
         cleanup = []
 
         def delete_exact_path(path):
-            assert reader.closed.is_set()
+            assert session._child_released
+            assert session.reader is None
             assert service.is_path_leased(path)
             Path(path).unlink()
             cleanup.append(path)
@@ -763,34 +802,34 @@ def test_exact_path_cleanup_keeps_reader_lease_until_delete_and_db_cleanup(ui_qa
         assert not cleanup
         with pytest.raises(RuntimeError, match="leased"):
             service.start(session.request)
-        reader.release.set()
+        (tmp_path / "release-finalize").touch()
         pump(ui_qapp, session.released.is_set)
         assert cleanup == [session.request.path]
         assert not service.is_path_leased(session.request.path)
         assert host.data_struct.store_wave_data_multi is None
+        assert host.data_struct.recording_source is None
         # No delayed callback may retain deletion authority over a reused path.
         Path(session.request.path).write_bytes(b"new recording")
         ui_qapp.processEvents()
         assert Path(session.request.path).read_bytes() == b"new recording"
     finally:
-        reader.release.set()
+        (tmp_path / "release-finalize").touch()
 
 
 def test_relabel_denies_leased_path_before_file_move(ui_qapp, service, tmp_path):
-    from unit_test.base.test_recording_service import PausedReader
-    reader = PausedReader()
-    service._reader_factory = reader
+    service._backend_options["pause_finalize"] = True
     host = main_host(service, tmp_path)
     host.judge_play_and_record()
+    session = host._recording_process_session
     try:
-        pump(ui_qapp, reader.entered.is_set)
+        wait_for_main_finalization(ui_qapp, service, session)
         result = host._relabel_stored_audio_record(host.recorded_path, {"labels": "not_labeled"}, "OK")
         assert result[0] != 0
         assert "释放" in result[1]
         assert Path(host.recorded_path).exists()
     finally:
         host._recording_process_session.cancel()
-        reader.release.set()
+        (tmp_path / "release-finalize").touch()
 
 
 def test_main_close_waits_for_service_then_preserves_exports(ui_qapp, service, tmp_path):
@@ -828,10 +867,8 @@ def test_main_close_driven_cancellation_retains_delivered_live_preview(
     from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
     from main_window import MainWindow
     from PyQt5.QtWidgets import QMainWindow, QMessageBox
-    from unit_test.base.test_recording_service import PausedReader
 
-    reader = PausedReader()
-    service._reader_factory = reader
+    service._backend_options["pause_finalize"] = True
     host = _enable_live_workspace_double(main_host(service, tmp_path))
     host.sequence_config[0]["seq1"]["acq"]["detail"][
         RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
@@ -839,7 +876,7 @@ def test_main_close_driven_cancellation_retains_delivered_live_preview(
     host._begin_raw_audio_csv_close = mock.Mock()
     host.judge_play_and_record()
     session = host._recording_process_session
-    pump(ui_qapp, reader.entered.is_set)
+    wait_for_main_finalization(ui_qapp, service, session)
     waveform = StreamingWaveformSnapshot(
         (
             np.array([-0.01, 0.0], dtype=np.float64)
@@ -879,7 +916,7 @@ def test_main_close_driven_cancellation_retains_delivered_live_preview(
         assert window.isVisible()
         for plot in host.channel_workspace.all_subwindows():
             assert plot.is_live_preview is True
-        reader.release.set()
+        (tmp_path / "release-finalize").touch()
         pump(ui_qapp, lambda: session.released.is_set() and not window.isVisible())
         for plot, prior in zip(host.channel_workspace.all_subwindows(), prior_states):
             current = plot.snapshot_plot_state()
@@ -887,7 +924,7 @@ def test_main_close_driven_cancellation_retains_delivered_live_preview(
             np.testing.assert_array_equal(current[0][1], prior[0][1])
             assert current[1] is True
     finally:
-        reader.release.set()
+        (tmp_path / "release-finalize").touch()
         window.deleteLater()
 
 
@@ -913,9 +950,9 @@ def test_cleanup_error_after_acceptance_does_not_leave_successful_ui_busy(ui_qap
         warnings.assert_called_once()
         assert session.request.path in warnings.call_args.args[2]
         assert "cleanup denied" in warnings.call_args.args[2]
-        np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, known_audio()[2:9, (0, 2)])
+        assert_saved_main_envelope(host, session, known_audio()[2:9, (0, 2)])
         audio, rate = sf.read(session.request.path, dtype="float32", always_2d=True)
-        np.testing.assert_array_equal(audio, host.data_struct.store_wave_data_multi)
+        np.testing.assert_array_equal(audio, known_audio()[2:9, (0, 2)])
         assert rate == 100
         host._on_process_recording_release_failed(session, session.release_error)
         host._check_accepted_recording_release(session)
@@ -945,7 +982,7 @@ def test_main_resource_notice_is_once_and_cannot_overwrite_closed_or_replaced_vi
         else:
             enqueue(kind, session, value)
     monkeypatch.setattr(bridge, "_enqueue", defer_notice)
-    host._on_streaming_complete = lambda **kwargs: published.append(host._recording_process_id)
+    host._on_recording_envelope_complete = lambda audio, context: published.append(host._recording_process_id)
     def warn(*args):
         assert QThread.currentThread() is ui_qapp.thread()
         if action == "modal_close":
@@ -1011,6 +1048,7 @@ def test_cancel_view_after_service_acceptance_ignores_queued_success(ui_qapp, se
     session = host._recording_process_session
     pump(ui_qapp, session.released.is_set)
     assert host.data_struct.store_wave_data_multi is None
+    assert host.data_struct.recording_source is None
 
 
 def test_dead_worker_before_acceptance_never_publishes_success(ui_qapp, service, tmp_path):
@@ -1028,6 +1066,7 @@ def test_dead_worker_before_acceptance_never_publishes_success(ui_qapp, service,
     pump(ui_qapp, session.released.is_set)
     assert session.state == "failed"
     assert host.data_struct.store_wave_data_multi is None
+    assert host.data_struct.recording_source is None
     host._handle_invalid_recording.assert_called_once()
 
 
@@ -1399,7 +1438,10 @@ def test_paused_qt_preview_has_one_wakeup_while_child_file_continues(ui_qapp, se
     assert rss(session.worker_pid) - child_rss < 32 * 1024 * 1024
     pump(ui_qapp, session.released.is_set)
     assert len(offered) == 1
-    assert offered[0].multi[5, 0] == np.float32(7969177 / 8388608)
+    assert not hasattr(offered[0], "multi") and not hasattr(offered[0], "mono")
+    assert offered[0].descriptor.final_frames == 100
+    assert offered[0].waveforms[0][0][5] == .05
+    assert offered[0].waveforms[0][1][5] == np.float32(7969177 / 8388608)
 
 
 def test_hidden_sequence_close_does_not_shutdown_injected_service(ui_qapp, service):
@@ -1419,11 +1461,9 @@ def test_hidden_sequence_close_does_not_shutdown_injected_service(ui_qapp, servi
     window.deleteLater()
 
 
-def test_serial_round_cleanup_waits_for_real_reader_before_manager_delete(ui_qapp, service, tmp_path, monkeypatch):
-    from unit_test.base.test_recording_service import PausedReader
+def test_serial_round_cleanup_waits_for_real_child_before_manager_delete(ui_qapp, service, tmp_path, monkeypatch):
     from ui.sequence import sequence_widget_serial_trigger_ops as serial
-    reader = PausedReader()
-    service._reader_factory = reader
+    service._backend_options["pause_finalize"] = True
     host = main_host(service, tmp_path)
     host.judge_play_and_record()
     session = host._recording_process_session
@@ -1433,7 +1473,8 @@ def test_serial_round_cleanup_waits_for_real_reader_before_manager_delete(ui_qap
     deleted = []
 
     def delete_audio(path):
-        assert reader.closed.is_set()
+        assert session._child_released
+        assert session.reader is None
         assert service.is_path_leased(path)
         Path(path).unlink()
         deleted.append(path)
@@ -1441,18 +1482,18 @@ def test_serial_round_cleanup_waits_for_real_reader_before_manager_delete(ui_qap
 
     monkeypatch.setattr(serial, "RecordingManager", lambda: SimpleNamespace(delete_audio=delete_audio))
     try:
-        pump(ui_qapp, reader.entered.is_set)
+        wait_for_main_finalization(ui_qapp, service, session)
         session.cancel()
         assert serial.SequenceWidgetSerialTriggerOpsMixin._delete_serial_product_round_records(host, "round") == 1
         assert host.recent_test_sessions == []
         assert deleted == []
         assert Path(host.recorded_path).exists()
-        reader.release.set()
+        (tmp_path / "release-finalize").touch()
         pump(ui_qapp, session.released.is_set)
         assert deleted == [session.request.path]
         assert not Path(host.recorded_path).exists()
     finally:
-        reader.release.set()
+        (tmp_path / "release-finalize").touch()
 
 
 def test_final_plot_failure_is_warning_and_still_saves_once(ui_qapp, service, tmp_path, monkeypatch):
@@ -1532,17 +1573,15 @@ def test_later_recording_replaces_retained_live_mode_without_inheriting_fixed_ra
 
         assert session.state == "completed"
         host._project_normalized_waveform_to_workspace.assert_called_once()
-        assert (
-            host._project_normalized_waveform_to_workspace.call_args.kwargs[
-                "max_points"
-            ]
-            == 48_000
-        )
+        prepared = host._project_normalized_waveform_to_workspace.call_args.kwargs["prepared_columns"]
+        assert prepared is session.audio.waveforms
+        assert all(len(values) <= 48_000 for _times, values in prepared)
+        assert_saved_main_envelope(host, session, known_audio()[2:9, (0, 2)])
         for window in workspace.all_subwindows():
             time_axis, _amplitude = window.plot_item.getData()
             assert time_axis[0] == 0.0
             assert time_axis[-1] == pytest.approx(
-                (host.data_struct.store_wave_data_multi.shape[0] - 1) / 100
+                (host.data_struct.audio_lenth - 1) / 100
             )
             assert window.is_live_preview is False
             assert bool(
@@ -1625,13 +1664,20 @@ def test_partial_recent_placeholder_failure_discards_only_attempt_placeholder(
 
 def test_old_publication_does_not_finalize_a_reentrant_new_channel_selection(ui_qapp, service, tmp_path):
     host = main_host(service, tmp_path)
-    host._recording_process_id = "old"
-    host._recording_process_windows = []
-    host._recording_process_audio = SimpleNamespace(
-        descriptor=SimpleNamespace(warnings=(), sample_rate=100), mono=np.ones(2), multi=np.ones((2, 1)))
-    session = SimpleNamespace(request=SimpleNamespace(request_id="old"), state="completed")
-    host._on_streaming_complete = lambda **kwargs: setattr(host, "_recording_process_id", "new")
-    host._publish_process_recording(session)
+    published = []
+
+    def publish_and_replace_selection(audio, context):
+        assert audio.is_prepared_for(context.request)
+        assert context.session.released.is_set()
+        published.append(context.request.request_id)
+        host._active_recording_process_id = host._recording_process_id = "new"
+
+    host._on_recording_envelope_complete = publish_and_replace_selection
+    host.judge_play_and_record()
+    session = host._recording_process_session
+    pump(ui_qapp, lambda: bool(published))
+    assert published == [session.request.request_id]
+    assert host._recording_process_id == "new"
     host._finalize_recording_channel_selection.assert_not_called()
 
 
@@ -1669,7 +1715,7 @@ def failure_recovery_host(tmp_path):
     host.player_btn = QPushButton()
     host._handle_invalid_recording = SequenceWidgetStreamingOpsMixin._handle_invalid_recording.__get__(host)
     host.update_player_btn_is_paused = SequenceWidgetUiOpsMixin.update_player_btn_is_paused.__get__(host)
-    host._on_streaming_complete = mock.Mock()
+    host._on_recording_envelope_complete = mock.Mock()
     host.clear_all_direction_waveforms = mock.Mock()
     host.left_panel = mock.Mock()
     request = RecordingRequest("failure-recovery", "main", 100, 9, (0, 2),
@@ -1740,7 +1786,8 @@ def test_failure_recovery_refreshes_real_button_after_context_removal(
     assert host._discard_current_recent_session.mock_calls == history_calls
     assert host.left_panel.mock_calls == stage_calls
     assert host.data_struct.store_wave_data_multi is None
-    host._on_streaming_complete.assert_not_called()
+    assert host.data_struct.recording_source is None
+    host._on_recording_envelope_complete.assert_not_called()
     host._advance_manual_product_condition_cycle_after_recording.assert_not_called()
     assert not host.events
 
@@ -1803,7 +1850,7 @@ def test_failure_recovery_does_not_refresh_replaced_owner(
     deliver_failure_recovery_terminal(host, session, "released")
     assert not host.player_btn.isEnabled()
     assert host.player_btn.toolTip() == "owned elsewhere"
-    host._on_streaming_complete.assert_not_called()
+    host._on_recording_envelope_complete.assert_not_called()
 
 
 @pytest.mark.parametrize("owner", ["cleanup", "cancelled", "serial_abort"])
@@ -1829,7 +1876,7 @@ def test_failure_recovery_excludes_cleanup_owned_failure(
     deliver_failure_recovery_terminal(host, session, "released")
     assert not host.player_btn.isEnabled()
     assert host.player_btn.toolTip() == "cleanup owns controls"
-    host._on_streaming_complete.assert_not_called()
+    host._on_recording_envelope_complete.assert_not_called()
 
 
 def test_failure_recovery_same_id_impostor_cannot_consume_pending_owner(
@@ -1880,7 +1927,7 @@ def test_failure_recovery_synchronous_failure_before_alias_installation(
     assert not host.player_btn.isEnabled()
     deliver_failure_recovery_terminal(host, sessions[0], "released")
     assert host.player_btn.isEnabled()
-    host._on_streaming_complete.assert_not_called()
+    host._on_recording_envelope_complete.assert_not_called()
 
 
 def test_failure_recovery_modal_new_failure_keeps_new_owner_on_old_release(
@@ -1917,7 +1964,7 @@ def test_failure_recovery_modal_new_failure_keeps_new_owner_on_old_release(
     assert not host.player_btn.isEnabled()
     deliver_failure_recovery_terminal(host, new_sessions[0], "released")
     assert host.player_btn.isEnabled()
-    host._on_streaming_complete.assert_not_called()
+    host._on_recording_envelope_complete.assert_not_called()
 
 
 def workflow_host(service, tmp_path, monkeypatch, *, manual=False):
@@ -1938,16 +1985,16 @@ def test_recording_consumes_manual_intent_and_saves_once_after_release(
     host, save = workflow_host(service, tmp_path, monkeypatch, manual=manual)
     completion = []
     host._drain_queued_directional_trigger = lambda: completion.append("business complete")
-    publish = host._on_streaming_complete
-    def publish_after_release(**kwargs):
+    publish = host._on_recording_envelope_complete
+    def publish_after_release(audio, context):
         assert host._recording_process_session.released.is_set()
-        result = publish(**kwargs)
+        result = publish(audio, context)
         save.assert_called_once()
         assert completion == ["business complete"]
         assert not host._record_workflow_busy
         completion.append("published")
         return result
-    host._on_streaming_complete = publish_after_release
+    host._on_recording_envelope_complete = publish_after_release
     host.start_this_play()
     session = host._recording_process_session
     assert host._record_workflow_busy
@@ -2120,6 +2167,7 @@ def test_delayed_failure_preserves_caller_cleanup_but_recovers_ordinary_failure(
     assert session.state == "failed"
     assert delivered[0].stage == ("close_wav" if fault == "fail_close" else "cancel_timeout")
     assert host.data_struct.store_wave_data_multi is None
+    assert host.data_struct.recording_source is None
     assert host.data_btn.isEnabled() is (owner == "ordinary")
     assert host.replayer_btn.isEnabled() is (owner == "ordinary")
     if owner != "ordinary":
@@ -2208,9 +2256,7 @@ def test_control_enable_event_cannot_reenable_buttons_for_a_new_recording(ui_qap
 
 @pytest.mark.parametrize("owner", ["serial_abort", "close", "serial_runtime", "ordinary"])
 def test_delayed_cancellation_preserves_caller_control_disposition(ui_qapp, service, tmp_path, owner):
-    from unit_test.base.test_recording_service import PausedReader
-    reader = PausedReader()
-    service._reader_factory = reader
+    service._backend_options["pause_finalize"] = True
     host = controls_host(service, tmp_path, serial=owner.startswith("serial"))
     delivered = []
     callback = host._on_process_recording_cancelled
@@ -2223,7 +2269,7 @@ def test_delayed_cancellation_preserves_caller_control_disposition(ui_qapp, serv
     host.judge_play_and_record()
     session = host._recording_process_session
     try:
-        pump(ui_qapp, reader.entered.is_set)
+        wait_for_main_finalization(ui_qapp, service, session)
         if owner.startswith("serial"):
             host._serial_product_session_started = True
         if owner == "serial_abort":
@@ -2236,15 +2282,16 @@ def test_delayed_cancellation_preserves_caller_control_disposition(ui_qapp, serv
             session.cancel()
         assert not host.data_btn.isEnabled()
         assert not host.replayer_btn.isEnabled()
-        reader.release.set()
+        (tmp_path / "release-finalize").touch()
         pump(ui_qapp, lambda: bool(delivered) and session.released.is_set())
         assert host.data_btn.isEnabled() is (owner == "ordinary")
         assert host.replayer_btn.isEnabled() is (owner == "ordinary")
         assert host.data_struct.store_wave_data_multi is None
+        assert host.data_struct.recording_source is None
         if owner != "close":
             host._discard_current_recent_session.assert_called_once()
     finally:
-        reader.release.set()
+        (tmp_path / "release-finalize").touch()
 
 
 @pytest.mark.parametrize("nested", [False, True])

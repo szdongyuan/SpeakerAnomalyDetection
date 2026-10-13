@@ -353,7 +353,9 @@ def test_move_audio_normalizes_paths_written_to_database(tmp_path, monkeypatch):
     )
 
 
-def test_external_audio_path_round_trips_through_sqlite(tmp_path):
+def test_external_audio_path_round_trips_through_sqlite(tmp_path, monkeypatch):
+    # Keep the external path external even when --basetemp is inside the checkout.
+    monkeypatch.setattr(recording_management.running_consts, "DEFAULT_DIR", str(tmp_path / "application"))
     database_path = tmp_path / "audio_data.db"
     database = DataSave(str(database_path))
     create_code, _create_message = database.create_table()
@@ -394,6 +396,7 @@ def test_external_audio_path_round_trips_through_sqlite(tmp_path):
 
 
 def test_relabel_rolls_file_back_when_database_update_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(recording_management.running_consts, "DEFAULT_DIR", str(tmp_path / "application"))
     root = tmp_path / "factory_audio"
     source_dir = root / "S004-1" / "not_labeled"
     source_dir.mkdir(parents=True)
