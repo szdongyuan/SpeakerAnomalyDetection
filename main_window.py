@@ -353,6 +353,7 @@ class MainWindow(QMainWindow):
                     self.mic, self.mic_channels) != signature):
             return
         if completion.success:
+            self.statusBar().clearMessage()
             self.update_statusbar()
             return
 
