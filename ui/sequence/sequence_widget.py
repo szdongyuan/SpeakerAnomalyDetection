@@ -38,6 +38,7 @@ from base.unified_hid_device_manager import UnifiedHardwareManager
 from PyQt5.QtCore import QMetaObject
 from base.utils.custom_signals import sign
 from base.load_config import LoadUiConfig
+from base.output_calibration import OutputCalibrationCache, resolve_output_amplitude
 from ui.sequence.barcode_router import BarcodeRouter
 from base.log_manager import LogManager
 from base.play_and_record import (
@@ -183,6 +184,8 @@ class SequenceWindow(QWidget):
     def __init__(self):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
         super().__init__()
+        self._output_calibration_cache = OutputCalibrationCache()
+        self._output_calibration_config_revision = 0
         self.data_struct = DataDealStruct()
         self.recorded_path = None
         self.count_board = None
@@ -2186,6 +2189,23 @@ class SequenceWindow(QWidget):
 
         return False
 
+    def invalidate_output_calibration(self):
+        """Discard prepared output after a committed calibration/config change."""
+        self._output_calibration_cache.invalidate()
+
+    def _prepare_output_calibration(self, acq_detail):
+        stimulus_info = acq_detail.get("stimulus_info") or {}
+        voltage = stimulus_info.get("voltage")
+        voltage_type = stimulus_info.get("voltage_type")
+        hardware_id = self.speaker.get("hardware_id") if self.speaker else None
+        context = (
+            hardware_id, voltage, voltage_type, self.using_config_path,
+            id(self.sequence_config), self._output_calibration_config_revision,
+        )
+        return self._output_calibration_cache.get_or_resolve(
+            context, lambda: resolve_output_amplitude(self.speaker, voltage, voltage_type)
+        )
+
     def reset_work_pram(self, label, count=None):
         self.data_struct.clear_data()
         self._excel_export_cache = None
@@ -2221,8 +2241,16 @@ class SequenceWindow(QWidget):
         delay_ms = None
         if normalized_detail is not None:
             delay_ms = normalized_detail["recording_start_delay_ms"]
+        output_amplitude = None
+        if acq_mode == "PLAY_AND_RECORD":
+            preparation = self._prepare_output_calibration(acq_detail)
+            if preparation.error:
+                MessageBox.warning(self, "提示", preparation.error)
+                return None, None, None
+            output_amplitude = preparation.amplitude
         stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
-            self.data_struct, total_time, recording_start_delay_ms=delay_ms
+            self.data_struct, total_time, recording_start_delay_ms=delay_ms,
+            output_amplitude=output_amplitude,
         )
         if sample_rate is not None:
             recorded_dict["sr"] = sample_rate
@@ -3773,6 +3801,8 @@ class SequenceWindow(QWidget):
         """
         # Avoid noisy stdout prints; use logger if needed for debugging.
         # self.default_logger.debug(f"Loading sequence config: {self.using_config_path}")
+        self._output_calibration_config_revision += 1
+        self.invalidate_output_calibration()
         load_code, result = LoadUiConfig().load_sequence_config_from_json(self.using_config_path)
         if load_code == error_code.OK and result:
             self.sequence_config = result

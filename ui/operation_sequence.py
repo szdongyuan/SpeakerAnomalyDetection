@@ -15,6 +15,7 @@ from base.data_struct.sequence_data import SequenceData
 from base.file_ops import FileOps
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
+from base.output_calibration import resolve_output_amplitude
 from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
 from base.soundcard_calibration_manager import (
     AnalysisV2paBatch,
@@ -560,6 +561,13 @@ class AnalysisModelSelect(QDialog):
         runtime_state_snapshot = _snapshot_golden_sample_runtime_state(data_struct)
         try:
             data_struct.sample_rate = runtime_sample_rate
+            stimulus_info = detail.get("stimulus_info") or {}
+            output_preparation = resolve_output_amplitude(
+                selected_speaker, stimulus_info.get("voltage"), stimulus_info.get("voltage_type")
+            )
+            if output_preparation.error:
+                MessageBox.warning(self, "提示", output_preparation.error)
+                return
 
             try:
                 # Ensure stimulus data is loaded/generated into DataDealStruct
@@ -578,6 +586,7 @@ class AnalysisModelSelect(QDialog):
                 stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
                     data_struct,
                     recording_start_delay_ms=detail["recording_start_delay_ms"],
+                    output_amplitude=output_preparation.amplitude,
                 )
             except Exception as e:
                 MessageBox.warning(self, "提示", f"生成播放/录制参数失败: {str(e)[:200]}")

@@ -3,6 +3,7 @@ import math
 import os.path
 import sys
 from copy import deepcopy
+from decimal import Decimal
 
 import numpy as np
 import pyqtgraph
@@ -14,6 +15,7 @@ from base.file_ops import FileOps
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
 from base.audio_sample_rate import SampleRateResolution, resolve_output_sample_rate
+from base.output_calibration import resolve_output_amplitude
 from base.pre_processing.swept_sine_chirps import StimulusSignal
 from base.save_data import save_audio_simple
 from base.soundcard_audio_processor import SoundcardAudioProcessor
@@ -192,6 +194,8 @@ class StimulusWindow(QDialog):
         super().__init__()
         # initialize stimulus signal type， and create variable to store stimulus signal data
         self.speaker = speaker
+        self._output_preparation = None
+        self._output_preparation_key = None
         self.offline_reference_authoring = bool(offline_reference_authoring)
         self.output_sample_rate_resolution = resolve_output_sample_rate(self.speaker)
         self.load_wav_path = ""
@@ -1025,7 +1029,8 @@ class StimulusWindow(QDialog):
             self.repeat_box.setValue(int(restored_info.get("repeat_times", 1)))
             self.step_box.setValue(int(restored_info.get("num_steps", 3)))
             self.voltage_combo_box.setCurrentText(restored_info.get("voltage_type", "RMS"))
-            self.voltage_spin_box.setValue(float(restored_info.get("voltage", 2.0)))
+            self._set_loaded_voltage(float(restored_info.get("voltage", 2.0)))
+            self.sync_voltage_info()
             if self._apply_output_sample_rate_authority():
                 self._set_sample_rate_display(str(self.stimulus_info["sample_rate"]))
             self.custom_chk_box.setChecked(False)
@@ -1227,7 +1232,8 @@ class StimulusWindow(QDialog):
             "num_steps": stimulus_info.get("num_steps"),
             "resolution": stimulus_info.get("resolution"),
             "frequencies": retained_frequencies,
-            "amplitude": float(stimulus_info.get("amplitude", 1.0)),
+            # Output gain is applied once by the playback adapter.
+            "amplitude": 1.0,
             "generate_waveform": True,
         }
 
@@ -1262,10 +1268,11 @@ class StimulusWindow(QDialog):
             **self._frequency_stepped_generation_kwargs_from_info(candidate, retained, retained_state)
         )
         metadata = self._json_safe(result.metadata)
+        metadata.pop("amplitude", None)
         preserved = {
             key: value
             for key, value in candidate.items()
-            if key not in result.metadata or key in {"voltage_type", "voltage", "use_custom_stimulus", "stimulus_name"}
+            if key not in metadata or key in {"voltage_type", "voltage", "use_custom_stimulus", "stimulus_name"}
         }
         generated_info = deepcopy(preserved)
         generated_info.update(metadata)
@@ -1770,10 +1777,27 @@ class StimulusWindow(QDialog):
 
     def update_stimulus_info_from_voltage_combo_box(self):
         self.stimulus_info["voltage_type"] = self.voltage_combo_box.currentText()
+        self.update_amplitude()
         self.graph_stimulus()
 
     def update_amplitude(self):
-        self.stimulus_info["amplitude"] = self.get_predict_amplitude(self.voltage_spin_box.value())
+        key = (self._speaker_hardware_id(), self.voltage_spin_box.value(), self.voltage_combo_box.currentText())
+        if self._output_preparation is None or key != self._output_preparation_key:
+            self._output_preparation = resolve_output_amplitude(self.speaker, key[1], key[2])
+            self._output_preparation_key = key
+        if self._output_preparation.error is None:
+            self.stimulus_info["amplitude"] = self._output_preparation.amplitude
+        else:
+            self.stimulus_info.pop("amplitude", None)
+
+    def _set_loaded_voltage(self, target_voltage):
+        # Set precision before bounds/value: QDoubleSpinBox otherwise rounds the
+        # target, potentially turning an out-of-range voltage into a valid one.
+        if math.isfinite(target_voltage):
+            decimals = max(0, -Decimal(str(target_voltage)).as_tuple().exponent)
+            self.voltage_spin_box.setDecimals(max(self.voltage_spin_box.decimals(), decimals))
+        self.voltage_spin_box.setMaximum(max(self.voltage_spin_box.maximum(), target_voltage))
+        self.voltage_spin_box.setValue(target_voltage)
 
     def sync_voltage_info(self):
         """Ensure voltage-related fields mirror the current UI selection before persisting data."""
@@ -2246,7 +2270,10 @@ class StimulusWindow(QDialog):
         if stimulus_info.get("resolution") in self.STEP_SC_VALID_RESOLUTIONS:
             self._set_step_sc_resolution_code(stimulus_info.get("resolution"))
         self.voltage_combo_box.setCurrentText(stimulus_info.get("voltage_type", "RMS"))
-        self.voltage_spin_box.setValue(float(stimulus_info.get("voltage", "2.0")))
+        target_voltage = float(stimulus_info.get("voltage", "2.0"))
+        # Loaded targets must remain visible even when current calibration is lower.
+        self._set_loaded_voltage(target_voltage)
+        self.sync_voltage_info()
         if self._apply_output_sample_rate_authority():
             self._set_sample_rate_display(str(self.stimulus_info["sample_rate"]))
         if stimulus_info.get("use_custom_stimulus"):
@@ -2488,7 +2515,6 @@ class StimulusWindow(QDialog):
             "sample_rate": 44100,
             "voltage_type": "RMS",
             "voltage": 1.0,
-            "amplitude": 1.0,
             "use_custom_stimulus": True,
         }
 
@@ -2712,6 +2738,11 @@ class StimulusWindow(QDialog):
                 "输出设备信息无效，请在硬件管理中重新选择设备。",
             )
             return
+        self.update_amplitude()
+        if self._output_preparation.error is not None:
+            MessageBox.warning(self, "输出校准", self._output_preparation.error)
+            return
+        amplitude = self._output_preparation.amplitude
         if self.offline_reference_authoring:
             sample_rate = self._current_playback_sample_rate_or_warn()
             if sample_rate is None:
@@ -2721,14 +2752,12 @@ class StimulusWindow(QDialog):
                 self._restore_stimulus_state_snapshot(snapshot, update_ui=False)
                 return
             stimulus_data = self.stimulus_data
-            amplitude = self.stimulus_info["amplitude"]
             self._restore_stimulus_state_snapshot(snapshot, update_ui=False)
         else:
             if not self._ensure_stimulus_data_matches_authoritative_sample_rate():
                 return
             sample_rate = self.stimulus_info["sample_rate"]
             stimulus_data = self.stimulus_data
-            amplitude = self.stimulus_info["amplitude"]
         # Construct the stimulus parameter dictionary, including signal data, amplitude, and sample rate
         stimulus_param = {
             "data": stimulus_data,

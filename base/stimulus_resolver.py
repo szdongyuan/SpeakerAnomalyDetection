@@ -264,7 +264,8 @@ def _frequency_stepped_generator_kwargs(stimulus_info: dict) -> dict:
             kwargs[key] = repaired[key]
     kwargs["frequency_mode"] = repaired["frequency_mode"]
     kwargs["stimulus_type"] = repaired["frequency_mode"]
-    kwargs["amplitude"] = repaired.get("amplitude", 1.0)
+    # These waveforms are later multiplied by the prepared playback amplitude.
+    kwargs["amplitude"] = 1.0
     kwargs["generate_waveform"] = True
 
     retained_frequencies = _valid_retained_frequencies(repaired.get("frequencies"))
@@ -278,6 +279,7 @@ def _frequency_stepped_generator_kwargs(stimulus_info: dict) -> dict:
 
 def _merge_frequency_stepped_metadata(stimulus_info: dict, generated_metadata: dict) -> dict:
     merged = dict(generated_metadata)
+    merged.pop("amplitude", None)
     for key, value in (stimulus_info or {}).items():
         if key in merged and key not in ("stimulus_label",):
             continue

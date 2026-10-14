@@ -541,7 +541,7 @@ class LoadUiConfig(object):
 
     @staticmethod
     def get_rec_and_play_dict_base_sequence_dict(
-        data_struct, total_time=None, recording_start_delay_ms=None
+        data_struct, total_time=None, recording_start_delay_ms=None, *, output_amplitude=None
     ):
         """
         Generate dictionaries containing stimulus signal data and recording parameters.
@@ -552,6 +552,8 @@ class LoadUiConfig(object):
         Args:
         - sample_rate (int): The sampling rate, indicating the number of samples collected per second.
         - total_time (int): The total recording time, indicates the duration of the recording.
+        - output_amplitude: Prepared, range-validated gain supplied by actual output callers.
+          Omission retains the in-memory/zero fallback for non-output consumers.
 
         Returns:
         - stimulus_dict (dict): Dictionary containing the stimulus signal data and related information.
@@ -564,7 +566,10 @@ class LoadUiConfig(object):
             stimulus_info = data_struct.stimulus_info or {}
             stimulus_dict = {
                 "data": data_struct.stimulus_data,
-                "amplitude": stimulus_info["amplitude"],
+                "amplitude": (
+                    output_amplitude if output_amplitude is not None
+                    else stimulus_info.get("amplitude", 0.0)
+                ),
                 "sr": data_struct.sample_rate,
             }
             method = normalize_stimulus_method(stimulus_info.get("stimulus_method", "chirp"))

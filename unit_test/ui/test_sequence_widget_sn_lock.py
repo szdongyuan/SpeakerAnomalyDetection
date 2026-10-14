@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from base.load_config import LoadUiConfig
+from base.output_calibration import OutputCalibrationCache, resolve_output_amplitude
 from base.acquisition_recording_defaults import (
     normalize_play_record_detail,
     normalize_record_only_detail,
@@ -59,6 +60,7 @@ TARGET_METHODS = {
     "checked_work_status_message",
     "judge_play_and_record",
     "reset_work_pram",
+    "_prepare_output_calibration",
     "update_player_btn_is_paused",
     "_should_use_streaming_recording",
     "_start_streaming_recording",
@@ -208,6 +210,7 @@ def _build_method_namespace():
         Key_Z = "z"
 
     namespace = {
+        "resolve_output_amplitude": resolve_output_amplitude,
         "QApplication": DummyApplication,
         "QSignalBlocker": DummySignalBlocker,
         "QIcon": lambda *args, **kwargs: ("icon", args, kwargs),
@@ -522,7 +525,7 @@ class FakeWavWriter:
 
 def _install_sequence_load_config(namespace):
     namespace["LoadUiConfig"] = types.SimpleNamespace(
-        get_rec_and_play_dict_base_sequence_dict=lambda data_struct, total_time=None, recording_start_delay_ms=None: (
+        get_rec_and_play_dict_base_sequence_dict=lambda data_struct, total_time=None, recording_start_delay_ms=None, *, output_amplitude=None: (
             {
                 "data": np.array([1.0, 2.0, 3.0], dtype=np.float32),
                 "sr": data_struct.sample_rate,
@@ -631,6 +634,10 @@ def _build_fake_window(namespace, *, use_streaming=True, mode="RECORD_ONLY", res
         pass
 
     window = FakeWindow()
+    window._output_calibration_cache = OutputCalibrationCache()
+    window._output_calibration_config_revision = 0
+    window.using_config_path = "sequence.json"
+    window._prepare_output_calibration = _bind_method(window, namespace, "_prepare_output_calibration")
     window.default_logger = FakeLogger()
     window.lineedit_s_or_n = FakeLineEdit()
     window.lineedit_count = FakeLineEdit("1")
@@ -784,7 +791,7 @@ def test_reset_work_pram_converts_configured_recording_start_delay_ms_only_for_r
     namespace["get_recorded_info"] = lambda *args: ("demo.wav", {})
     calls = []
 
-    def fake_get_dict(data_struct, total_time=None, recording_start_delay_ms=None):
+    def fake_get_dict(data_struct, total_time=None, recording_start_delay_ms=None, *, output_amplitude=None):
         calls.append(recording_start_delay_ms)
         recorded = {
             "sr": data_struct.sample_rate,
@@ -843,7 +850,7 @@ def test_reset_work_pram_zero_recording_start_delay_disables_runtime_warmup():
     namespace = _build_method_namespace()
     namespace["get_recorded_info"] = lambda *args: ("demo.wav", {})
     namespace["LoadUiConfig"] = types.SimpleNamespace(
-        get_rec_and_play_dict_base_sequence_dict=lambda data_struct, total_time=None, recording_start_delay_ms=None: (
+        get_rec_and_play_dict_base_sequence_dict=lambda data_struct, total_time=None, recording_start_delay_ms=None, *, output_amplitude=None: (
             {},
             {
                 "sr": data_struct.sample_rate,
@@ -873,7 +880,7 @@ def test_reset_work_pram_missing_recording_start_delay_uses_normalized_default()
     namespace = _build_method_namespace()
     namespace["get_recorded_info"] = lambda *args: ("demo.wav", {})
     namespace["LoadUiConfig"] = types.SimpleNamespace(
-        get_rec_and_play_dict_base_sequence_dict=lambda data_struct, total_time=None, recording_start_delay_ms=None: (
+        get_rec_and_play_dict_base_sequence_dict=lambda data_struct, total_time=None, recording_start_delay_ms=None, *, output_amplitude=None: (
             {},
             {
                 "sr": data_struct.sample_rate,
@@ -1032,7 +1039,7 @@ def test_existing_sequence_config_without_recording_delay_runs_to_blocking_start
     captured = {}
     namespace["get_recorded_info"] = lambda *args: ("demo.wav", {})
 
-    def fake_get_dict(data_struct, total_time=None, recording_start_delay_ms=None):
+    def fake_get_dict(data_struct, total_time=None, recording_start_delay_ms=None, *, output_amplitude=None):
         recorded = {
             "sr": data_struct.sample_rate,
             "num_frames": int((total_time or 1.0) * data_struct.sample_rate),
@@ -1108,7 +1115,7 @@ def test_existing_sequence_config_without_recording_delay_runs_to_streaming_star
     captured = {}
     namespace["get_recorded_info"] = lambda *args: ("demo.wav", {})
 
-    def fake_get_dict(data_struct, total_time=None, recording_start_delay_ms=None):
+    def fake_get_dict(data_struct, total_time=None, recording_start_delay_ms=None, *, output_amplitude=None):
         recorded = {
             "sr": data_struct.sample_rate,
             "num_frames": int((total_time or 1.0) * data_struct.sample_rate),
@@ -3114,7 +3121,7 @@ def test_normal_recording_uses_next_count_for_path_without_advancing_ui():
     namespace["StreamingWavWriter"] = FakeWavWriter
     namespace["stream_record_without_play"] = lambda *args, **kwargs: (FakeStreamingProcessor(), None)
     namespace["LoadUiConfig"] = types.SimpleNamespace(
-        get_rec_and_play_dict_base_sequence_dict=lambda data_struct, total_time=None, recording_start_delay_ms=None: (
+        get_rec_and_play_dict_base_sequence_dict=lambda data_struct, total_time=None, recording_start_delay_ms=None, *, output_amplitude=None: (
             {"stimulus": True},
             {"sr": data_struct.sample_rate, "sample_rate": data_struct.sample_rate},
         )

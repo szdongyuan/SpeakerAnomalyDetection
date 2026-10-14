@@ -7,6 +7,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from base import play_and_record
+from base.output_calibration import OutputCalibrationCache
 from ui.sequence import sequence_widget
 
 
@@ -37,6 +38,9 @@ def _window(mode, detail, mic=_DEFAULT_DEVICE, speaker=_DEFAULT_DEVICE):
     obj._active_input_channels = []
     obj._build_current_wav_calibration_metadata = lambda: {"recorded_channels": []}
     obj.using_config_path = "sequence.json"
+    obj._output_calibration_cache = OutputCalibrationCache()
+    obj._output_calibration_config_revision = 0
+    obj._prepare_output_calibration = sequence_widget.SequenceWindow._prepare_output_calibration.__get__(obj)
     return obj
 
 
@@ -50,7 +54,7 @@ def test_record_only_uses_mic_samplerate_not_detail_sample_rate(monkeypatch):
     monkeypatch.setattr(
         sequence_widget.LoadUiConfig,
         "get_rec_and_play_dict_base_sequence_dict",
-        lambda ds, total_time, recording_start_delay_ms=None: ({}, {"sample_rate": ds.sample_rate}),
+        lambda ds, total_time, recording_start_delay_ms=None, *, output_amplitude=None: ({}, {"sample_rate": ds.sample_rate}),
     )
 
     _, recorded_dict, sample_rate = sequence_widget.SequenceWindow.reset_work_pram(win, "not_labeled")
@@ -92,7 +96,7 @@ def test_play_and_record_uses_device_samplerate_not_stimulus_config_rate(monkeyp
     monkeypatch.setattr(
         sequence_widget.LoadUiConfig,
         "get_rec_and_play_dict_base_sequence_dict",
-        lambda ds, total_time, recording_start_delay_ms=None: (
+        lambda ds, total_time, recording_start_delay_ms=None, *, output_amplitude=None: (
             {"sr": ds.sample_rate, "data": ds.stimulus_data},
             {"sample_rate": ds.sample_rate, "sr": ds.sample_rate},
         ),
@@ -135,7 +139,7 @@ def test_record_only_without_monitor_does_not_require_speaker_samplerate(monkeyp
     monkeypatch.setattr(
         sequence_widget.LoadUiConfig,
         "get_rec_and_play_dict_base_sequence_dict",
-        lambda ds, total_time, recording_start_delay_ms=None: ({}, {"sample_rate": ds.sample_rate}),
+        lambda ds, total_time, recording_start_delay_ms=None, *, output_amplitude=None: ({}, {"sample_rate": ds.sample_rate}),
     )
 
     _, recorded_dict, sample_rate = sequence_widget.SequenceWindow.reset_work_pram(win, "not_labeled")
