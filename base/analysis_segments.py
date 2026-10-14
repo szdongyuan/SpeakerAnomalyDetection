@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from decimal import Decimal
 import math
+import re
 
 from base.config_number_format import format_config_number
 
@@ -56,6 +57,14 @@ def normalize_segmented_analysis(condition):
             raise ValueError("时间单位必须为秒、分钟或小时")
         result["display_time_unit"] = unit
     return result
+
+
+def validate_input_voltage(voltage):
+    if not isinstance(voltage, str):
+        raise ValueError("输入电压必须是文字，可留空")
+    # Preserve unit text, positive ranges and negative scientific exponents.
+    if re.search(r"(^|[^0-9.eE])[-−－]\s*(?:\d|\.\d)", voltage):
+        raise ValueError("输入电压不能为负值")
 
 
 def segment_condition_fields(condition):

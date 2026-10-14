@@ -136,7 +136,7 @@ def project_data(tmp_path, conditions=None):
     ]
     target_trigger = ""
     if any(condition.get("trigger_state") for condition in conditions):
-        target_trigger = "01 04 02 01 01 29 30"
+        target_trigger = "02 01 01"
     return {
         "project_name": "PB-A01充电宝",
         "result_root_directory": str(tmp_path / "results"),
@@ -794,6 +794,34 @@ def test_segment_column_grows_without_shrinking_after_edit_or_port_switch(app, t
         close_dialog(dialog)
 
 
+@pytest.mark.parametrize(
+    "state, error",
+    [("0102", "按字节数等长"), ("01020304", "按字节数等长"),
+     ("01 02 GG", "状态码格式错误")],
+)
+def test_dialog_rejects_invalid_status_code_without_truncating(
+    app, tmp_path, monkeypatch, state, error
+):
+    manager = make_manager(tmp_path)
+    prepare_project(manager, tmp_path, [{
+        "condition_name": "档位1", "trigger_state": "01 02 03",
+        "test_queue": "低噪声基础测试",
+    }])
+    dialog = ProductTestProjectConfigDialog(manager)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    before = {p: p.read_bytes() for p in Path(manager.program_dir).glob("*.json")}
+    try:
+        trigger_input = dialog.condition_table.cellWidget(0, 2)
+        trigger_input.setText(state)
+        assert dialog._save_project(close_dialog=False) is False
+        assert warnings and error in warnings[0]
+        assert trigger_input.text() == state
+        assert {p: p.read_bytes() for p in before} == before
+    finally:
+        close_dialog(dialog)
+
+
 def test_dialog_uses_project_port_condition_layout(app, tmp_path):
     manager = make_manager(tmp_path)
     prepare_project(manager, tmp_path)
@@ -842,6 +870,7 @@ def test_dialog_uses_project_port_condition_layout(app, tmp_path):
     assert footer_layout.contentsMargins().left() == 10
     assert footer_layout.contentsMargins().right() == 10
     assert dialog.condition_table.cellWidget(0, 2).placeholderText() == "选填"
+    assert "同一项目内所有工况状态码须按字节数等长" in dialog.condition_table.cellWidget(0, 2).toolTip()
     assert not hasattr(dialog, "close_trigger_input")
     assert not hasattr(dialog, "pdf_report_checkbox")
     assert all(
@@ -1452,12 +1481,12 @@ def test_copy_conditions_replaces_targets_without_trigger_states(app, tmp_path):
     conditions = [
         {
             "condition_name": "档位1",
-            "trigger_state": "01 04 02 00 01 78 F0",
+            "trigger_state": "01 00 01",
             "test_queue": "低噪声基础测试",
         },
         {
             "condition_name": "档位2",
-            "trigger_state": "01 04 02 00 02 38 F1",
+            "trigger_state": "01 00 02",
             "test_queue": "低噪声基础测试",
         },
     ]
@@ -2045,4 +2074,48 @@ def test_replace_conditions_real_confirmation_preserves_cancelled_target(app, tm
             assert target == before
         assert {path: path.read_bytes() for path in tmp_path.rglob("*.json")} == files_before
     finally:
+        close_dialog(dialog)
+
+
+@pytest.mark.parametrize("entry", ["keyboard", "paste"])
+def test_negative_voltage_draft_is_preserved_but_cannot_be_saved(app, tmp_path, monkeypatch, entry):
+    manager = make_manager(tmp_path)
+    register_queue(manager)
+    dialog = ProductTestProjectConfigDialog(manager)
+    dialog._show_project(project_data(tmp_path), None)
+    voltage = dialog.condition_table.cellWidget(0, 7)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    from PyQt5.QtCore import QMimeData
+
+    clipboard = app.clipboard()
+    saved_clipboard = QMimeData()
+    original = clipboard.mimeData()
+    if original is not None:
+        for mime_format in original.formats():
+            saved_clipboard.setData(mime_format, original.data(mime_format))
+    try:
+        if entry == "keyboard":
+            QTest.keyClicks(voltage, "-12")
+        else:
+            clipboard.setText("-12")
+            app.processEvents()
+            if clipboard.text() != "-12":
+                pytest.skip("Native clipboard is unavailable in this test session")
+            voltage.paste()
+        assert voltage.text() == "-12"
+        assert not voltage.hasAcceptableInput()
+        assert not dialog._save_project(close_dialog=False)
+        assert any("输入电压不能为负值" in message for message in warnings)
+        assert voltage.text() == "-12"
+        assert not list(Path(manager.program_dir).glob("*.json"))
+        for valid in ("", "0", "230Vac/50Hz"):
+            voltage.selectAll()
+            QTest.keyClick(voltage, Qt.Key_Backspace)
+            QTest.keyClicks(voltage, valid)
+            assert voltage.text() == valid
+            assert voltage.hasAcceptableInput()
+    finally:
+        if entry == "paste":
+            clipboard.setMimeData(saved_clipboard)
         close_dialog(dialog)

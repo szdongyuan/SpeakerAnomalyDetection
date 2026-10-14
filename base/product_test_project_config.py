@@ -5,7 +5,10 @@ import math
 import ntpath
 import os
 
-from base.analysis_segments import segment_condition_fields, normalize_segmented_analysis, segment_count
+from base.analysis_segments import (
+    segment_condition_fields, normalize_segmented_analysis, segment_count,
+    validate_input_voltage,
+)
 from base.hardware_trigger.serial_full_frame_matcher import normalize_hex_frame
 from base.hardware_trigger.serial_product_port_plan import build_serial_product_port_plan
 from base.load_config import LoadUiConfig
@@ -260,6 +263,7 @@ class ProductTestProjectValidator(object):
 
         group_names = set()
         all_conditions = []
+        trigger_state_lengths = set()
         for group_index, group in enumerate(groups, 1):
             trigger_states = set()
             if not isinstance(group, dict):
@@ -313,12 +317,14 @@ class ProductTestProjectValidator(object):
                         except ValueError as error:
                             errors.append(f"{location}的状态码格式错误：{error}")
                         else:
+                            trigger_state_lengths.add(len(trigger_state.split()))
                             if trigger_state in trigger_states:
                                 errors.append(f"状态码重复：{trigger_state}")
                             else:
                                 trigger_states.add(trigger_state)
 
                 try:
+                    validate_input_voltage(condition.get("input_voltage", ""))
                     segment_condition_fields(condition)
                 except ValueError as error:
                     errors.append(str(error))
@@ -360,6 +366,9 @@ class ProductTestProjectValidator(object):
             == PRODUCT_TRIGGER_MODE_MIXED
         ):
             errors.append("所有工况状态码必须全部配置或全部留空")
+
+        if len(trigger_state_lengths) > 1:
+            errors.append("同一项目内所有工况状态码必须按字节数等长（不计空格）")
 
         if (
             not errors and all_conditions
