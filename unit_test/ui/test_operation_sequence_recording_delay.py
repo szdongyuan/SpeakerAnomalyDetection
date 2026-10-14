@@ -46,7 +46,7 @@ def test_record_golden_sample_converts_configured_recording_start_delay(qapp, mo
     dialog.mic = {"samplerate": 48000, "index": "5"}
     dialog.speaker = {"samplerate": 48000, "index": "7"}
 
-    def fake_get_dict(data_struct, recording_start_delay_ms=None, total_time=None):
+    def fake_get_dict(data_struct, recording_start_delay_ms=None, total_time=None, *, output_amplitude=None):
         recorded = {"sr": data_struct.sample_rate, "num_frames": 2}
         if recording_start_delay_ms is not None:
             recorded["recording_start_delay_frames"] = int(

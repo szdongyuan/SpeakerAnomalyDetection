@@ -243,6 +243,10 @@ class MainWindow(QMainWindow):
             self._clear_sequence_stimulus_runtime_state(sequence_window)
 
     def _apply_audio_devices(self, mic, speaker, mic_channels, available=True, message=""):
+        previous_speaker = self.speaker
+        previous_id = previous_speaker.get("hardware_id") if isinstance(previous_speaker, dict) else None
+        speaker_id = speaker.get("hardware_id") if isinstance(speaker, dict) else None
+        output_changed = bool(previous_id) and (previous_id != speaker_id or not available)
         self.mic = mic
         self.speaker = speaker
         self.mic_channels = list(mic_channels or [])
@@ -255,6 +259,8 @@ class MainWindow(QMainWindow):
         if sequence_window is None:
             return
 
+        if output_changed and hasattr(sequence_window, "invalidate_output_calibration"):
+            sequence_window.invalidate_output_calibration()
         sequence_window.mic = self.mic
         sequence_window.speaker = self.speaker
         sequence_window.mic_channels = self.mic_channels
@@ -464,6 +470,10 @@ class MainWindow(QMainWindow):
             self.startup_device_notice_message = None
             self.startup_recovery_action = None
             self._apply_audio_devices(mic, speaker, mic_channels, available=True)
+            previous_id = previous_speaker.get("hardware_id") if isinstance(previous_speaker, dict) else None
+            speaker_id = speaker.get("hardware_id") if isinstance(speaker, dict) else None
+            if previous_id and speaker_id and previous_id != speaker_id:
+                MessageBox.warning(self, "提示", "扬声器已变更，请重新设置激励信号。")
             return
 
         if was_available:
@@ -580,6 +590,8 @@ class MainWindow(QMainWindow):
         dlg = CalibrationWindow()
         dlg.speaker = self.speaker
         dlg.exec()
+        if getattr(dlg, "output_calibration_changed", False):
+            self.sequence_window.invalidate_output_calibration()
         if dlg.input_calibration_flag:
             self.sequence_window.update_v2pa_factor()
 

@@ -60,7 +60,7 @@ def test_record_golden_sample_uses_duplex_samplerate_not_config(monkeypatch):
     monkeypatch.setattr(
         operation_sequence.LoadUiConfig,
         "get_rec_and_play_dict_base_sequence_dict",
-        lambda data_struct, recording_start_delay_ms=None: (
+        lambda data_struct, recording_start_delay_ms=None, *, output_amplitude=None: (
             {"sr": data_struct.sample_rate, "data": np.zeros(4)},
             {"sample_rate": data_struct.sample_rate},
         ),
@@ -119,7 +119,7 @@ def test_record_golden_sample_passes_wav_calibration_metadata(monkeypatch):
     monkeypatch.setattr(
         operation_sequence.LoadUiConfig,
         "get_rec_and_play_dict_base_sequence_dict",
-        lambda data_struct, recording_start_delay_ms=None: (
+        lambda data_struct, recording_start_delay_ms=None, *, output_amplitude=None: (
             {"sr": data_struct.sample_rate, "data": np.zeros(4, dtype=np.float32), "amplitude": 1.0},
             {"sample_rate": data_struct.sample_rate, "sr": data_struct.sample_rate},
         ),
@@ -176,7 +176,7 @@ def test_record_golden_sample_cancel_save_restores_shared_runtime_state(monkeypa
     monkeypatch.setattr(
         operation_sequence.LoadUiConfig,
         "get_rec_and_play_dict_base_sequence_dict",
-        lambda data_struct, recording_start_delay_ms=None: (
+        lambda data_struct, recording_start_delay_ms=None, *, output_amplitude=None: (
             {
                 "sr": data_struct.sample_rate,
                 "data": np.zeros(3, dtype=np.float32),
@@ -241,7 +241,7 @@ def test_record_golden_sample_success_saves_runtime_payload_then_restores_shared
     monkeypatch.setattr(
         operation_sequence.LoadUiConfig,
         "get_rec_and_play_dict_base_sequence_dict",
-        lambda data_struct, recording_start_delay_ms=None: (
+        lambda data_struct, recording_start_delay_ms=None, *, output_amplitude=None: (
             {
                 "sr": data_struct.sample_rate,
                 "data": np.zeros(3, dtype=np.float32),

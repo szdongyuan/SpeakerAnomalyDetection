@@ -72,6 +72,7 @@ class CalibrationWindow(QDialog):
         cal_wnd_layout = QVBoxLayout()
 
         self.input_calibration_flag = False
+        self.output_calibration_changed = False
 
         self.tabwidget = TabWidget()
         self.output_cal_wnd = OutputCalibration()
@@ -133,7 +134,9 @@ class CalibrationWindow(QDialog):
         """
         current_tab_index = self.tabwidget.currentIndex()
         if current_tab_index == 0:
-            self.output_cal_wnd.calibration()
+            if self.output_cal_wnd.calibration():
+                # Keep a successful persistence even if a later attempt fails or is reset.
+                self.output_calibration_changed = True
         elif current_tab_index == 1:
             self.cal_btn.setDisabled(True)
             started = self.input_cal_wnd.clicked_calibration()
@@ -813,9 +816,11 @@ class OutputCalibration(QWidget):
             if fit_code == error_code.OK:
                 self.default_logger.info("Calibration success.")
                 self.calibration_popup(success_flag=True)
+                return True
             else:
                 self.default_logger.error(f"Failed to calibrate. {msg}")
                 self.calibration_popup(success_flag=False)
+        return False
 
     def calibration_popup(self, success_flag=True):
         """
@@ -831,7 +836,7 @@ class OutputCalibration(QWidget):
         cal_msg = MessageBox(self)
         if success_flag:
             cal_msg.setIcon(MessageBox.Information)
-            cal_msg.setText("校准成功")
+            cal_msg.setText("校准成功\n输出校准已更新，请重新设置激励信号。")
             cal_msg.setWindowTitle("校准成功")
         else:
             cal_msg.setIcon(MessageBox.Critical)

@@ -265,7 +265,7 @@ def test_retained_frequencies_take_precedence_over_scalar_reconstruction_fields(
     assert detail["stimulus_info"]["stop_freq"] == 1250.5
 
 
-def test_voltage_and_amplitude_fields_are_preserved_but_only_numeric_amplitude_reaches_generator(
+def test_voltage_and_amplitude_fields_are_preserved_but_generator_uses_unit_gain(
     monkeypatch,
     stored_stimulus_path,
 ):
@@ -288,7 +288,7 @@ def test_voltage_and_amplitude_fields_are_preserved_but_only_numeric_amplitude_r
 
     stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=48000)
 
-    assert calls[-1]["amplitude"] == 0.4
+    assert calls[-1]["amplitude"] == 1.0
     assert "voltage" not in calls[-1]
     assert detail["stimulus_info"]["amplitude"] == 0.4
     assert detail["stimulus_info"]["voltage"] == 9.9

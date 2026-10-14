@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from base.acquisition_recording_defaults import normalize_play_record_detail
 from base import soundcard_calibration_manager as calibration_manager
+from base.output_calibration import resolve_output_amplitude
 from base.soundcard_calibration_manager import MicChannelCalibrationResult
 from consts.acoustic_analysis.common_consts import (
     GOLDEN_SAMPLE_CHECKED_KEY,
@@ -58,6 +59,7 @@ def _load_class_method(
 
 
 def _load_record_golden_sample_method(namespace: dict):
+    namespace.setdefault("resolve_output_amplitude", resolve_output_amplitude)
     namespace.setdefault("build_recording_wav_calibration_metadata", lambda *args, **kwargs: {"recorded_channels": []})
     namespace.setdefault("AnalysisV2paBatch", calibration_manager.AnalysisV2paBatch)
     namespace.setdefault("GOLDEN_SAMPLE_CHECKED_KEY", GOLDEN_SAMPLE_CHECKED_KEY)
@@ -150,7 +152,7 @@ class FakeNonAnalysisWidget:
         cls.instances = []
 
 
-def _fake_get_rec_and_play_dict_base_sequence_dict(data_struct, recording_start_delay_ms=None):
+def _fake_get_rec_and_play_dict_base_sequence_dict(data_struct, recording_start_delay_ms=None, *, output_amplitude=None):
     recorded_dict = {"recorded": True}
     if recording_start_delay_ms is not None:
         recorded_dict["recording_start_delay_frames"] = int(
