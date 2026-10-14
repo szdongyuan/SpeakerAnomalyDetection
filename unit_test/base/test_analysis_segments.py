@@ -130,3 +130,18 @@ def test_empty_or_non_text_unit_is_rejected(unit):
             "mode": "output_load", "load_values": [0],
             "load_unit": unit, "analysis_seconds": 10,
         }})
+
+
+@pytest.mark.parametrize("voltage", ["-12", " -0.5V ", "-.5V", "−12V", "－12V", "DC -12V", "12V/-5V"])
+def test_negative_input_voltage_is_rejected(voltage):
+    from base.analysis_segments import validate_input_voltage
+
+    with pytest.raises(ValueError, match="输入电压不能为负值"):
+        validate_input_voltage(voltage)
+
+
+@pytest.mark.parametrize("voltage", ["", "  ", "0", "12", " 230Vac/50Hz ", "110-240Vac", "1e-3V"])
+def test_nonnegative_input_voltage_formats_remain_valid(voltage):
+    from base.analysis_segments import validate_input_voltage
+
+    validate_input_voltage(voltage)

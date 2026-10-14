@@ -6,7 +6,7 @@ from base.config_deletion import ConfigDeletionService
 from base.config_number_format import format_config_number
 
 from PyQt5.QtCore import QCoreApplication, QEvent, QSize, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QValidator
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -60,11 +60,24 @@ from ui.config_delete_dialog import ConfigDeleteDialog
 from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.queue_display import queue_display_name, queue_display_options
 from ui.output_load_config_dialog import OutputLoadConfigDialog
-from base.analysis_segments import normalize_segmented_analysis, segment_condition_fields, segment_count
+from base.analysis_segments import (
+    normalize_segmented_analysis, segment_condition_fields, segment_count,
+    validate_input_voltage,
+)
 
 
 NO_QUEUE_TEXT = "暂无可用测试队列"
 UNAVAILABLE_QUEUE_SUFFIX = "（不可用）"
+
+
+class _InputVoltageValidator(QValidator):
+    def validate(self, text, position):
+        try:
+            validate_input_voltage(text)
+        except ValueError:
+            # Keep invalid drafts editable; never drop a minus and turn -12 into 12.
+            return self.Intermediate, text, position
+        return self.Acceptable, text, position
 
 
 class _RefreshingQueueComboBox(QComboBox):
@@ -996,7 +1009,10 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         )
         trigger_input.setStyleSheet(self.CONDITION_CONTROL_FONT_STYLE)
         trigger_input.setPlaceholderText("选填")
-        trigger_input.setToolTip("完整十六进制报文；全部工况需同时填写或同时留空")
+        trigger_input.setToolTip(
+            "完整十六进制报文；同一项目内所有工况状态码须按字节数等长（不计空格）；"
+            "全部工况需同时填写或同时留空"
+        )
         trigger_input.textEdited.connect(self._on_row_widget_changed)
         self.condition_table.setCellWidget(row, 2, trigger_input)
 
@@ -1063,8 +1079,9 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         load_layout.addWidget(load_button)
         self.condition_table.setCellWidget(row, 5, load_cell)
         voltage_input = QLineEdit(str(condition.get("input_voltage", "") or ""))
+        voltage_input.setValidator(_InputVoltageValidator(voltage_input))
         voltage_input.setPlaceholderText("选填")
-        voltage_input.setToolTip("例如 230Vac/50Hz；留空时报告显示 /")
+        voltage_input.setToolTip("电压不能为负值；例如 230Vac/50Hz；留空时报告显示 /")
         voltage_input.setStyleSheet(self.CONDITION_CONTROL_FONT_STYLE)
         voltage_input.textEdited.connect(self._on_row_widget_changed)
         self.condition_table.setCellWidget(row, 7, voltage_input)

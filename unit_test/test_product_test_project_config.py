@@ -486,13 +486,74 @@ def test_project_validation_reports_project_group_and_condition_errors(
     assert any(expected_message in error for error in errors)
 
 
+@pytest.mark.parametrize(
+    "state, other_state, error",
+    [
+        ("0102", "02 03", ""),
+        ("0102af", "02 03 04", ""),
+        (" 01  02 af ", "020304", ""),
+        ("A5 5A 01 01 0D 0A", "A5 5A 01 02 0D 0A", ""),
+        ("FE 02 00 00 00 04 6D C6", "FE 02 00 00 00 05 AC 06", ""),
+        ("", "", ""),
+        ("  ", "", ""),
+        ("0102", "02 03 04", "按字节数等长"),
+        ("01020304", "02 03 04", "按字节数等长"),
+        ("01", "02 03", "状态码格式错误"),
+        ("01020", "02 03", "状态码格式错误"),
+        ("01 02 GG", "02 03 04", "状态码格式错误"),
+        ("0x0102", "02 03 04", "状态码格式错误"),
+        ("1 02 AF", "02 03 04", "状态码格式错误"),
+        ("", "02 03 04", "必须全部配置或全部留空"),
+    ],
+)
+@pytest.mark.parametrize("same_port", [True, False])
+def test_project_status_code_lengths_for_save_and_import(
+    tmp_path, state, other_state, error, same_port
+):
+    manager = make_manager(tmp_path)
+    project = make_project(tmp_path)
+    first, second = project[TEST_GROUPS_KEY]
+    first[TEST_CONDITIONS_KEY][0]["trigger_state"] = state
+    second[TEST_CONDITIONS_KEY][0]["trigger_state"] = other_state
+    if same_port:
+        second[TEST_CONDITIONS_KEY][0]["condition_name"] = "档位2"
+        first[TEST_CONDITIONS_KEY].extend(second[TEST_CONDITIONS_KEY])
+        project[TEST_GROUPS_KEY] = [first]
+    source = tmp_path / "import.json"
+    source.write_text(json.dumps(project), encoding="utf-8")
+
+    assert manager.validate_project(project, None)["can_save"] is (not error)
+    imported, import_result = manager.import_project(str(source))
+    assert imported is (not error)
+    saved, save_result = manager.save_project(None, project)
+    assert saved is (not error)
+    if error:
+        assert error in import_result
+        assert error in save_result
+        assert not Path(manager.registry_path).exists()
+    else:
+        _, loaded = manager.load_project(save_result)
+        assert loaded[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["trigger_state"] == (
+            bytes.fromhex(state).hex(" ").upper()
+        )
+
+
+def test_project_status_code_length_does_not_constrain_idle_code(tmp_path):
+    project = make_project(tmp_path)
+    for index, group in enumerate(project[TEST_GROUPS_KEY], 1):
+        group[TEST_CONDITIONS_KEY][0]["trigger_state"] = f"A5 5A 01 {index:02X} 0D 0A"
+    assert ProductTestProjectValidator.validate_for_save(
+        project, {}, None, port_switch_idle_code="FF 00 01"
+    ) == []
+
+
 def test_status_codes_must_be_all_empty_or_present_and_port_boundary_valid(tmp_path):
     project = make_project(tmp_path)
     conditions = flatten_test_conditions(project)
     assert classify_project_trigger_mode(conditions) == "manual"
 
     project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["trigger_state"] = (
-        "01 04 02 00 01 78 F0"
+        "01 02 03"
     )
     mixed_errors = ProductTestProjectValidator.validate_for_save(
         project,
@@ -501,7 +562,7 @@ def test_status_codes_must_be_all_empty_or_present_and_port_boundary_valid(tmp_p
     )
     assert "所有工况状态码必须全部配置或全部留空" in mixed_errors
 
-    duplicate_state = "01 04 02 00 01 78 F0"
+    duplicate_state = "01 02 03"
     for _group_index, _group, _condition_index, condition in iter_test_conditions(
         project
     ):
@@ -886,3 +947,24 @@ def test_acquisition_conflict_includes_all_ordered_repeated_references(tmp_path)
     assert not success
     assert type(message) is type(conflict)
     assert message.rows == expected
+
+
+@pytest.mark.parametrize("voltage", ["-12", "-.5V", "−12V", "－12V"])
+def test_negative_voltage_cannot_be_saved_or_imported(tmp_path, voltage):
+    manager = make_manager(tmp_path)
+    project = make_project(tmp_path)
+    success, file_name = manager.save_project(None, project)
+    assert success
+    target = Path(manager.program_dir, file_name)
+    before = target.read_bytes()
+    project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["input_voltage"] = voltage
+
+    success, message = manager.save_project(file_name, project)
+    assert not success and "输入电压不能为负值" in message
+    assert target.read_bytes() == before
+
+    source = tmp_path / "negative_voltage.json"
+    source.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
+    success, message = manager.import_project(str(source))
+    assert not success and "输入电压不能为负值" in message
+    assert target.read_bytes() == before
