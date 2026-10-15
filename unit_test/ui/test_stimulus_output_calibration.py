@@ -7,10 +7,17 @@ import pytest
 from PyQt5.QtWidgets import QApplication
 
 import ui.stimulus_window as module
+import base.soundcard_audio_processor as soundcard
+from base.stimulus_signal.frequency_stepped import generate_frequency_stepped
 from base.stimulus_resolver import _generate_stimulus_data
 from base.soundcard_calibration_manager import SoundcardCalibrationManager
 from ui.stimulus_window import StimulusWindow
 from unit_test.ui.test_speaker_calibration_db_consumers import _registered_speaker_db
+
+
+@pytest.fixture
+def real_sd_play():
+    return soundcard.SoundcardAudioProcessor.sd_play
 
 
 @pytest.fixture(scope="session")
@@ -34,7 +41,7 @@ def config(method="chirp", amplitude=0.5, voltage=1.0):
 
 
 @pytest.fixture
-def environment(qapp, tmp_path, monkeypatch):
+def environment(qapp, tmp_path, monkeypatch, real_sd_play):
     repo, speaker = _registered_speaker_db(tmp_path, monkeypatch)
     repo.update_output_amplitude_calibration(speaker["hardware_id"], [0.25, 0.0], max_voltage=2.0)
     speaker.update(index=7, samplerate=48000)
@@ -211,3 +218,42 @@ def test_pure_offline_generation_and_save_need_no_device(qapp, monkeypatch):
     assert window.save_stimulus_to_json()["stimulus_info"]["voltage"] == 1.0
     window.close()
     assert "amplitude" not in StimulusWindow._fallback_stimulus_info()
+
+
+@pytest.mark.parametrize("offline", [False, True])
+@pytest.mark.parametrize("voltage, gain", [(1.0, 0.25), (2.0, 0.5)])
+def test_preview_output_applies_gain_once_and_restores_definition(
+    environment, monkeypatch, real_sd_play, offline, voltage, gain,
+):
+    create, _, warnings = environment
+    monkeypatch.setattr(soundcard.SoundcardAudioProcessor, "sd_play", staticmethod(real_sd_play))
+    captured = []
+
+    def capture(data, **kwargs):
+        captured.append((data.copy(), kwargs))
+
+    monkeypatch.setattr(soundcard.sd, "play", capture)
+    payload = config("frequency_stepped", None, voltage)
+    payload["stimulus_info"]["sample_rate"] = 44100
+    window = create(payload, offline_reference_authoring=offline)
+    original_info = deepcopy(window.stimulus_info)
+    original_wave = window.stimulus_data.copy()
+    original_config = deepcopy(window.save_stimulus_to_json())
+    unit_wave = generate_frequency_stepped(
+        sample_rate=48000, frequency_mode="custom_linear",
+        frequencies=original_info["frequencies"],
+        min_duration=original_info["min_duration"], min_cycles=original_info["min_cycles"],
+        repeat_times=original_info["repeat_times"],
+    ).data
+
+    window.play_btn_clicked()
+
+    assert not warnings
+    assert len(captured) == 1
+    played, params = captured[0]
+    assert params["samplerate"] == 48000
+    np.testing.assert_allclose(played, unit_wave * gain)
+    np.testing.assert_array_equal(window.stimulus_data, original_wave)
+    assert window.stimulus_info == original_info
+    assert window.save_stimulus_to_json() == original_config
+    assert window.stimulus_info["sample_rate"] == (44100 if offline else 48000)

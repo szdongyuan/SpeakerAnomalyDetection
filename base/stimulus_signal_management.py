@@ -9,7 +9,9 @@ from base.stimulus_signal.frequency_stepped import (
     validate_frequency_stepped_resolution,
 )
 from base.stimulus_signal.methods import normalize_stimulus_method
-from consts.frequency_stepped_consts import FREQUENCY_STEPPED_CANONICAL_METADATA_KEYS
+from consts.frequency_stepped_consts import (
+    FREQUENCY_STEPPED_CANONICAL_METADATA_KEYS,
+)
 from consts import model_consts, error_code, running_consts
 
 
@@ -20,8 +22,6 @@ def _merge_frequency_stepped_noncanonical_metadata(authoritative_metadata, calle
             continue
         metadata[key] = value
     metadata["stimulus_method"] = "frequency_stepped"
-    metadata["frequency_mode"] = metadata.get("frequency_mode") or metadata.get("stimulus_type")
-    metadata["stimulus_type"] = metadata["frequency_mode"]
     return metadata
 
 
@@ -57,7 +57,7 @@ def _authoritative_frequency_stepped_frequencies(metadata):
 
 
 def _require_frequency_stepped_db_save_resolution(metadata):
-    frequency_mode = metadata.get("frequency_mode") or metadata.get("stimulus_type")
+    frequency_mode = metadata.get("frequency_mode")
     if frequency_mode != "octave":
         return
     metadata["resolution"] = validate_frequency_stepped_resolution(metadata.get("resolution"))
@@ -65,8 +65,7 @@ def _require_frequency_stepped_db_save_resolution(metadata):
 
 def _require_frequency_stepped_db_load_resolution(metadata):
     frequency_mode = valid_frequency_stepped_mode_value(metadata.get("frequency_mode"))
-    stimulus_type = valid_frequency_stepped_mode_value(metadata.get("stimulus_type"))
-    if (frequency_mode or stimulus_type) != "octave":
+    if frequency_mode != "octave":
         return
     metadata["resolution"] = validate_frequency_stepped_resolution(metadata.get("resolution"))
 
@@ -115,9 +114,6 @@ def frequency_stepped_insert_values(stimulus_info, is_default):
     _require_frequency_stepped_db_save_resolution(metadata)
 
     metadata["stimulus_method"] = "frequency_stepped"
-    frequency_mode = metadata.get("frequency_mode") or metadata.get("stimulus_type")
-    metadata["frequency_mode"] = frequency_mode
-    metadata["stimulus_type"] = frequency_mode
     metadata.setdefault("voltage_type", "RMS")
     metadata["voltage"] = float(metadata.get("voltage", 1.0))
     metadata["is_default"] = is_default

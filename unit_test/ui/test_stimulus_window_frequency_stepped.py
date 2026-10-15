@@ -160,14 +160,12 @@ def test_step_sc_method_mapping_generation_controls_and_wav_import(window_factor
     assert window.custom_chk_box.isChecked() is True
     assert _combo_items(window.stimulus_type_combo_box) == ["倍频程", "自定义线性", "自定义对数"]
     assert window.stimulus_info["frequency_mode"] == "octave"
-    assert window.stimulus_info["stimulus_type"] == "octave"
     assert window.total_time_box.isReadOnly() is True
     assert window.step_box.isReadOnly() is True
     assert window.step_box.isEnabled() is False
 
     window.stimulus_type_combo_box.setCurrentText("自定义线性")
     assert window.stimulus_info["frequency_mode"] == "custom_linear"
-    assert window.stimulus_info["stimulus_type"] == "custom_linear"
     assert window.step_box.isReadOnly() is False
     assert window.step_box.isEnabled() is True
 
@@ -3209,3 +3207,47 @@ def test_target_voltage_initialization_and_loaded_config(window_factory, monkeyp
         display = window.plot_stimulus.listDataItems()[0].yData
         statistic = np.sqrt(np.mean(display ** 2)) if payload['voltage_type'] == 'RMS' else np.max(np.abs(display))
         assert statistic == pytest.approx(.2)
+
+
+@pytest.mark.parametrize("mode", [None, "invalid"])
+def test_step_sc_import_rejects_missing_mode_without_changing_current_state(window_factory, monkeypatch, mode):
+    window = window_factory()
+    before = deepcopy(window.stimulus_info)
+    payload = _step_sc_payload(stimulus_type="custom_linear")
+    payload.pop("frequency_mode")
+    if mode is not None:
+        payload["frequency_mode"] = mode
+    warnings = []
+    _load_payload(window, monkeypatch, payload, warnings)
+    assert warnings and "frequency_mode" in warnings[-1][1]
+    assert window.stimulus_info == before
+
+
+def test_step_sc_snapshot_restores_complete_metadata_and_waveform(window_factory):
+    window = window_factory()
+    window.stimulus_info.update(_step_sc_payload(editor_annotation={"tags": ["reference"]}))
+    snapshot = window._step_sc_snapshot()
+    expected_info = deepcopy(window.stimulus_info)
+    expected_data = window.stimulus_data.copy()
+    window.stimulus_info["editor_annotation"]["tags"].append("edited")
+    window.stimulus_info["frequency_mode"] = "custom_log"
+    window.stimulus_data[:] = 0
+
+    window._restore_step_sc_snapshot(snapshot, update_ui=False)
+
+    assert window.stimulus_info == expected_info
+    np.testing.assert_array_equal(window.stimulus_data, expected_data)
+    window.stimulus_info["editor_annotation"]["tags"].append("restored edit")
+    assert snapshot["stimulus_info"] == expected_info
+
+
+def test_step_sc_config_cannot_disable_waveform_generation(window_factory, monkeypatch):
+    window = window_factory()
+    warnings = []
+    _load_payload(window, monkeypatch, _step_sc_payload(generate_waveform=False), warnings)
+    assert warnings == []
+    assert window.stimulus_data.size == window.stimulus_info["playback_sample_count"] > 0
+    assert np.max(np.abs(window.stimulus_data)) > 0.9
+    candidate = dict(window.stimulus_info, generate_waveform=False)
+    _, data, *_ = window._generate_frequency_stepped_candidate(candidate, None, "dirty")
+    assert data.size > 0

@@ -8,14 +8,11 @@ FREQUENCY_STEPPED_GENERATOR_KEYS = (
     "min_duration",
     "min_cycles",
     "frequency_mode",
-    "stimulus_type",
     "start_freq",
     "stop_freq",
     "num_steps",
     "resolution",
     "frequencies",
-    "amplitude",
-    "generate_waveform",
 )
 FREQUENCY_STEPPED_FILENAME_KEYS = (
     "stimulus_method",
@@ -40,7 +37,6 @@ FREQUENCY_STEPPED_MIN_PERCEPTUAL_HARMONIC_ORDER = 1
 FREQUENCY_STEPPED_CANONICAL_METADATA_KEYS = {
     "stimulus_method",
     "frequency_mode",
-    "stimulus_type",
     "start_freq",
     "stop_freq",
     "num_steps",
@@ -49,7 +45,6 @@ FREQUENCY_STEPPED_CANONICAL_METADATA_KEYS = {
     "frequencies",
     "min_duration",
     "min_cycles",
-    "amplitude",
     "repeat_times",
     "sample_rate",
     "schedule_sample_rate",

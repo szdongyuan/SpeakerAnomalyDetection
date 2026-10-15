@@ -83,7 +83,21 @@ def test_stream_record_without_play_forwards_float64_bit_depth(monkeypatch):
     assert calls[0]["bit_depth"] == 64
 
 
-def test_streaming_rec_uses_float32_transport_for_float64_samples_and_preserves_chunks(monkeypatch):
+@pytest.fixture
+def emitted_stream_chunks(monkeypatch):
+    # Transport tests must not depend on a QApplication surviving earlier UI fixtures.
+    chunks = []
+    signal = SimpleNamespace(emit=chunks.append)
+    monkeypatch.setattr(
+        "base.streaming_audio_processor.sign",
+        SimpleNamespace(stream_audio_chunk_signal=signal),
+    )
+    return chunks
+
+
+def test_streaming_rec_uses_float32_transport_for_float64_samples_and_preserves_chunks(
+    monkeypatch, emitted_stream_chunks,
+):
     calls = []
 
     class FakeInputStream:
@@ -111,9 +125,14 @@ def test_streaming_rec_uses_float32_transport_for_float64_samples_and_preserves_
     assert calls[0]["dtype"] == "float32"
     assert processor.sample_dtype == np.dtype("float64")
     assert processor.get_recorded_data_multi().dtype == np.float64
+    payload, = emitted_stream_chunks
+    assert payload["mono"].dtype == payload["multi"].dtype == np.float64
+    assert payload["multi"].shape == (2, 1)
+    np.testing.assert_array_equal(payload["multi"], np.array([[0.1], [0.2]], dtype=np.float32))
+    np.testing.assert_array_equal(payload["mono"], payload["multi"][:, 0])
 
 
-def test_streaming_playrec_uses_float32_transport_for_float64_samples(monkeypatch):
+def test_streaming_playrec_uses_float32_transport_for_float64_samples(monkeypatch, emitted_stream_chunks):
     calls = []
 
     class FakeStream:
@@ -151,6 +170,11 @@ def test_streaming_playrec_uses_float32_transport_for_float64_samples(monkeypatc
     processor.process_queue()
 
     assert processor.get_recorded_data().dtype == np.float64
+    payload, = emitted_stream_chunks
+    assert payload["mono"].dtype == payload["multi"].dtype == np.float64
+    assert payload["multi"].shape == (2, 1)
+    np.testing.assert_array_equal(payload["multi"], np.array([[0.1], [0.2]], dtype=np.float32))
+    np.testing.assert_array_equal(payload["mono"], payload["multi"][:, 0])
 
 
 def test_stream_record_without_play_forwards_recording_start_delay(monkeypatch):
@@ -656,7 +680,7 @@ def test_runtime_dict_builder_includes_alignment_sample_count_from_stimulus_info
 def test_runtime_dict_builder_does_not_leak_stale_alignment_count_to_legacy_stimulus(monkeypatch):
     data_struct = SimpleNamespace()
 
-    def fake_generate(detail, *, runtime_sample_rate, logger=None):
+    def fake_generate(detail, stimulus_info, sample_rate, logger=None):
         info = detail.get("stimulus_info") or {}
         if info.get("stimulus_method") == "frequency_stepped":
             info["stimulus_method"] = "frequency_stepped"
@@ -666,7 +690,7 @@ def test_runtime_dict_builder_does_not_leak_stale_alignment_count_to_legacy_stim
             return np.arange(8, dtype=np.float32), 48000, "generated.wav"
         return np.arange(6, dtype=np.float32), 48000, "legacy.wav"
 
-    monkeypatch.setattr(stimulus_resolver, "generate_and_save_stimulus", fake_generate)
+    monkeypatch.setattr(stimulus_resolver, "_generate_and_save_stimulus_at_rate", fake_generate)
 
     stepped_detail = {
         "stimulus_info": {

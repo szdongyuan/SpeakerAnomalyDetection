@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt5.QtWidgets import QApplication
 
 from base.core_algorithm.response.spl_frequency_analyzer import SplFrequencyAnalyzer
+from base.core_algorithm.response.frequency_response_analyzer import FrequencyResponseAnalyzer
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.stimulus_signal.frequency_stepped import generate_frequency_stepped
@@ -18,7 +19,7 @@ from consts.harmonic_detection_consts import (
     HARMONIC_DETECTION_METHOD_KEY,
     HARMONIC_DETECTION_METHOD_SYNCHRONOUS,
 )
-from ui.signal_analysis_window import SplFrequency, _abs_deviation_curve
+from ui.signal_analysis_window import SplFrequency, _abs_deviation_curve, _analysis_stimulus_metadata
 
 
 def _load_resolve_analysis_channel_signal():
@@ -270,3 +271,45 @@ def test_golden_baseline_deviation_pairs_duplicate_frequency_points_by_position(
     )
 
     assert deviation.tolist() == pytest.approx([-1.0, 1.0, 1.0])
+
+
+@pytest.mark.parametrize("mode", [None, "invalid", "custom_linear"])
+def test_analysis_adapter_forwards_mode_without_alias_or_fallback(mode):
+    info = {"stimulus_method": "frequency_stepped", "stimulus_type": "octave"}
+    if mode is not None:
+        info["frequency_mode"] = mode
+    metadata = _analysis_stimulus_metadata(info, 48000)
+    assert "stimulus_type" not in metadata
+    assert metadata.get("frequency_mode") == mode
+    if mode is None:
+        assert "frequency_mode" not in metadata
+    ordinary = _analysis_stimulus_metadata({"stimulus_method": "step", "stimulus_type": "log"}, 48000)
+    assert ordinary["stimulus_type"] == "log"
+
+
+def test_analysis_adapter_preserves_fixed_recording_fr_thd_and_splf():
+    metadata, recording, sample_rate = _frequency_stepped_metadata_and_recording()
+    old_metadata = dict(metadata, stimulus_type="octave", amplitude=0.25)
+    adapted = _analysis_stimulus_metadata(old_metadata, sample_rate)
+    reference = generate_frequency_stepped(
+        sample_rate=sample_rate, frequency_mode=metadata["frequency_mode"],
+        frequencies=metadata["frequencies"], min_duration=metadata["min_duration"],
+        min_cycles=metadata["min_cycles"],
+    ).data
+    fr_analyzer = FrequencyResponseAnalyzer(sample_rate)
+    expected_fr = fr_analyzer.compute(reference, recording, stimulus_metadata=old_metadata)
+    actual_fr = fr_analyzer.compute(reference, recording, stimulus_metadata=adapted)
+    np.testing.assert_array_equal(actual_fr.frequencies_hz, expected_fr.frequencies_hz)
+    np.testing.assert_allclose(actual_fr.magnitude_db, expected_fr.magnitude_db)
+    thd_analyzer = AudioThdFrequencyResponseAnalysis()
+    expected_thd = thd_analyzer.calculate_thd_three_phase(
+        recording, sample_rate, {"stimulus_metadata": old_metadata, "harmonic_orders": [2, 3]})
+    actual_thd = thd_analyzer.calculate_thd_three_phase(
+        recording, sample_rate, {"stimulus_metadata": adapted, "harmonic_orders": [2, 3]})
+    for actual, expected in zip(actual_thd, expected_thd):
+        np.testing.assert_allclose(actual, expected)
+    spl_analyzer = SplFrequencyAnalyzer(sample_rate)
+    expected_spl = spl_analyzer.compute(recording, stimulus_metadata=old_metadata, splf_calc_mode="total")
+    actual_spl = spl_analyzer.compute(recording, stimulus_metadata=adapted, splf_calc_mode="total")
+    np.testing.assert_array_equal(actual_spl.frequencies_hz, expected_spl.frequencies_hz)
+    np.testing.assert_allclose(actual_spl.spl_db, expected_spl.spl_db)

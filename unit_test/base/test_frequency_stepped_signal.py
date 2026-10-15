@@ -41,14 +41,11 @@ def test_frequency_stepped_consts_expose_domain_values():
         "min_duration",
         "min_cycles",
         "frequency_mode",
-        "stimulus_type",
         "start_freq",
         "stop_freq",
         "num_steps",
         "resolution",
         "frequencies",
-        "amplitude",
-        "generate_waveform",
     )
     assert FREQUENCY_STEPPED_FILENAME_KEYS == (
         "stimulus_method",
@@ -168,8 +165,6 @@ def test_build_frequency_stepped_rejects_string_frequencies():
         ("min_duration", np.bool_(True)),
         ("min_cycles", True),
         ("min_cycles", np.bool_(True)),
-        ("amplitude", True),
-        ("amplitude", np.bool_(True)),
     ],
 )
 def test_generate_frequency_stepped_rejects_bool_numeric_scalars(field_name, field_value):
@@ -180,7 +175,6 @@ def test_generate_frequency_stepped_rejects_bool_numeric_scalars(field_name, fie
         "min_cycles": 4,
         "frequency_mode": "custom_linear",
         "frequencies": [1000],
-        "amplitude": 1.0,
     }
     kwargs[field_name] = field_value
 
@@ -464,18 +458,17 @@ def test_fadeout_tail_continues_final_frequency_with_gain():
         min_cycles=4,
         frequency_mode="custom_linear",
         frequencies=[1000, 2000],
-        amplitude=0.5,
         generate_waveform=True,
     )
 
     alignment_count = result.metadata["alignment_sample_count"]
     tail_count = result.metadata["fadeout_tail_sample_count"]
     first_tail_gain = (1 - 1 / tail_count) ** result.metadata["fadeout_tail_exponent"]
-    expected_first_tail = 0.5 * math.sin(2 * math.pi * 2000 * 481 / 48000) * first_tail_gain
+    expected_first_tail = math.sin(2 * math.pi * 2000 * 481 / 48000) * first_tail_gain
     assert result.data[alignment_count] == pytest.approx(expected_first_tail, abs=1e-12)
 
 
-def test_generated_metadata_retains_json_safe_amplitude():
+def test_generated_metadata_has_no_playback_amplitude():
     result = generate_frequency_stepped(
         sample_rate=48000,
         repeat_times=1,
@@ -483,11 +476,11 @@ def test_generated_metadata_retains_json_safe_amplitude():
         min_cycles=4,
         frequency_mode="custom_linear",
         frequencies=[1000, 2000],
-        amplitude=0.5,
         generate_waveform=True,
     )
 
-    assert result.metadata["amplitude"] == 0.5
+    assert "amplitude" not in result.metadata
+    assert np.max(np.abs(result.data)) > 0.9
     json.dumps(result.metadata)
 
 
@@ -667,10 +660,9 @@ def test_resolver_preserves_amplitude_on_valid_cache_hit():
         min_cycles=4,
         frequency_mode="custom_linear",
         frequencies=[1000, 2000],
-        amplitude=0.5,
         generate_waveform=False,
     )
-    metadata = dict(generated.metadata)
+    metadata = dict(generated.metadata, amplitude=0.5)
     metadata["voltage"] = 2.5
     metadata["voltage_type"] = "RMS"
 
@@ -1021,10 +1013,9 @@ def test_resolver_preserves_amplitude_when_rebuilding_cross_rate_schedule():
         min_cycles=4,
         frequency_mode="custom_linear",
         frequencies=[1000, 2000],
-        amplitude=0.5,
         generate_waveform=False,
     )
-    metadata = dict(generated.metadata)
+    metadata = dict(generated.metadata, amplitude=0.5)
     metadata["voltage"] = 2.5
     metadata["voltage_type"] = "Peak"
 
@@ -1205,7 +1196,7 @@ def test_resolver_invalid_amplitude_does_not_block_schedule_rebuild():
 
     assert resolved.metadata["schedule_sample_rate"] == 96000
     assert resolved.metadata["frequencies"] == [1000.0, 2000.0]
-    assert resolved.metadata["amplitude"] == 1.0
+    assert resolved.metadata["amplitude"] == "invalid-amplitude"
 
 
 def test_resolver_rebuilds_when_cached_internal_boundary_mismatches_next_segment():
@@ -1484,7 +1475,7 @@ def test_resolver_malformed_string_retained_frequencies_without_reconstruction_i
         resolve_frequency_stepped_schedule(metadata, sample_rate=48000)
 
 
-def test_resolver_repairs_conflicting_modes_with_frequency_mode_winning():
+def test_resolver_uses_frequency_mode_with_explicit_frequencies():
     metadata = {
         "frequency_mode": "custom_linear",
         "stimulus_type": "octave",
@@ -1500,22 +1491,85 @@ def test_resolver_repairs_conflicting_modes_with_frequency_mode_winning():
     resolved = resolve_frequency_stepped_schedule(metadata, sample_rate=48000)
 
     assert resolved.metadata["frequency_mode"] == "custom_linear"
-    assert resolved.metadata["stimulus_type"] == "custom_linear"
     assert resolved.frequencies_hz.tolist() == [1000.0, 2000.0]
 
 
-def test_resolver_repairs_missing_invalid_frequency_mode_from_valid_stimulus_type():
+@pytest.mark.parametrize("mode", [None, "stale-invalid-mode"])
+def test_schedule_requires_frequency_mode(mode):
     metadata = {
-        "frequency_mode": "stale-invalid-mode",
         "stimulus_type": "custom_linear",
         "frequencies": [1000, 2000],
         "min_duration": 0.01,
         "min_cycles": 4,
-        "repeat_times": 1,
     }
+    if mode is not None:
+        metadata["frequency_mode"] = mode
+    with pytest.raises(ValueError, match="frequency_mode"):
+        resolve_frequency_stepped_schedule(metadata, sample_rate=48000)
 
-    resolved = resolve_frequency_stepped_schedule(metadata, sample_rate=48000)
 
-    assert resolved.metadata["frequency_mode"] == "custom_linear"
-    assert resolved.metadata["stimulus_type"] == "custom_linear"
-    assert resolved.frequencies_hz.tolist() == [1000.0, 2000.0]
+@pytest.mark.parametrize("compute", [build_frequency_stepped_frequencies, generate_frequency_stepped])
+def test_public_computation_rejects_stimulus_type_keyword(compute):
+    with pytest.raises(TypeError, match="stimulus_type"):
+        compute(sample_rate=48000, frequency_mode="custom_linear", stimulus_type="custom_linear")
+
+
+def test_generated_metadata_has_only_frequency_mode():
+    result = generate_frequency_stepped(
+        sample_rate=48000, frequency_mode="custom_linear", frequencies=[1000],
+        min_duration=0.01, min_cycles=4,
+    )
+    assert result.metadata["frequency_mode"] == "custom_linear"
+    assert "stimulus_type" not in result.metadata
+
+
+@pytest.mark.parametrize("mode", ["octave", "custom_linear", "custom_log"])
+def test_unit_wave_preserves_phase_boundaries_repetitions_and_fadeout(mode):
+    result = generate_frequency_stepped(
+        sample_rate=48000, repeat_times=2, min_duration=0.0103, min_cycles=4,
+        frequency_mode=mode, start_freq=1000, stop_freq=2000, num_steps=3, resolution="R10",
+    )
+    base_segments = [segment for segment in result.segments if segment.repetition_index == 0]
+    phase = 0.0
+    for index, segment in enumerate(base_segments):
+        if index:
+            assert segment.start_sample == base_segments[index - 1].boundary_zero_sample
+        offsets = np.arange(segment.sample_count)
+        expected = np.sin(phase + 2 * math.pi * segment.frequency_hz * offsets / result.sample_rate)
+        np.testing.assert_allclose(result.data[segment.start_sample:segment.end_sample], expected, atol=1e-12)
+        phase += 2 * math.pi * segment.frequency_hz * segment.sample_count / result.sample_rate
+    assert result.data[result.per_repetition_sample_count - 1] == pytest.approx(math.sin(phase), abs=1e-12)
+    count = result.per_repetition_sample_count
+    np.testing.assert_array_equal(result.data[:count], result.data[count:2 * count])
+    tail_count = result.metadata["fadeout_tail_sample_count"]
+    n = np.arange(1, tail_count + 1)
+    envelope = (1 - n / tail_count) ** result.metadata["fadeout_tail_exponent"]
+    expected_tail = np.sin(phase + 2 * math.pi * result.frequencies_hz[-1] * n / result.sample_rate) * envelope
+    np.testing.assert_allclose(result.data[2 * count:], expected_tail, atol=1e-12)
+    assert len(result.data) == 2 * count + tail_count
+    assert result.data[-1] == 0.0
+
+
+@pytest.mark.parametrize("mode", ["octave", "custom_linear", "custom_log"])
+def test_default_waveform_matches_false_schedule_metadata(mode):
+    kwargs = dict(sample_rate=44100, frequency_mode=mode, start_freq=100,
+                  stop_freq=2000, num_steps=5, resolution="R10", repeat_times=2,
+                  min_duration=0.01, min_cycles=4)
+    waveform = generate_frequency_stepped(**kwargs)
+    schedule = generate_frequency_stepped(**kwargs, generate_waveform=False)
+    assert waveform.data.size == waveform.metadata["playback_sample_count"] > 0
+    assert schedule.data.size == 0
+    assert waveform.metadata == schedule.metadata
+    assert waveform.segments == schedule.segments
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_schedule_preserves_custom_metadata(cached):
+    metadata = dict(sample_rate=48000, frequency_mode="custom_linear",
+                    frequencies=[1000, 2000], min_duration=0.01, min_cycles=4)
+    if cached:
+        metadata = generate_frequency_stepped(**metadata).metadata
+    metadata["editor_annotation"] = {"tags": ["reference"]}
+    schedule = resolve_frequency_stepped_schedule(metadata, 48000)
+    assert schedule.data.size == 0
+    assert schedule.metadata["editor_annotation"] == metadata["editor_annotation"]

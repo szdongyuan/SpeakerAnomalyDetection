@@ -312,7 +312,6 @@ def _analysis_stimulus_metadata(stimulus_info: dict, sample_rate):
     stimulus_method = analysis_stimulus_method(stimulus_info.get("stimulus_method", "steps"))
     metadata = {
         "stimulus_method": stimulus_method,
-        "stimulus_type": stimulus_info.get("stimulus_type", "linear"),
         "start_freq": stimulus_info.get("start_freq"),
         "stop_freq": stimulus_info.get("stop_freq"),
         "num_steps": stimulus_info.get("num_steps"),
@@ -321,6 +320,7 @@ def _analysis_stimulus_metadata(stimulus_info: dict, sample_rate):
         "sample_rate": sample_rate,
     }
     if stimulus_method != "frequency_stepped":
+        metadata["stimulus_type"] = stimulus_info.get("stimulus_type", "linear")
         return metadata
 
     passthrough_keys = (
@@ -347,8 +347,6 @@ def _analysis_stimulus_metadata(stimulus_info: dict, sample_rate):
     for key in passthrough_keys:
         if key in stimulus_info:
             metadata[key] = stimulus_info[key]
-    metadata["stimulus_type"] = stimulus_info.get("stimulus_type", metadata.get("frequency_mode", "custom_linear"))
-    metadata["frequency_mode"] = stimulus_info.get("frequency_mode", metadata["stimulus_type"])
     return metadata
 
 
