@@ -68,7 +68,6 @@ def _step_sc_metadata(**overrides):
         min_cycles=4,
         frequency_mode="custom_linear",
         frequencies=[1000.25, 2000.75],
-        amplitude=0.5,
         generate_waveform=False,
     )
     metadata = dict(result.metadata)
@@ -95,7 +94,6 @@ def _octave_step_sc_metadata(**overrides):
         start_freq=80,
         stop_freq=250,
         resolution="R10",
-        amplitude=0.5,
         generate_waveform=False,
     )
     metadata = dict(result.metadata)
@@ -593,7 +591,7 @@ def test_query_all_loads_valid_octave_frequency_stepped_metadata(monkeypatch, lo
     assert row["step_sc_row_state"] == "valid"
     payload = row["stimulus_payload"]
     assert payload["frequency_mode"] == "octave"
-    assert payload["stimulus_type"] == "octave"
+    assert "stimulus_type" not in payload
     assert payload["resolution"] == "R10"
     assert payload["frequencies"] == metadata["frequencies"]
 
@@ -924,7 +922,7 @@ def test_frequency_stepped_recording_auto_insert_without_usable_name_generates_d
     assert row is not None
     generated_name = row[0]
     assert isinstance(generated_name, str)
-    assert generated_name.strip()
+    assert generated_name.startswith("step_sc-custom_linear-")
     parsed_metadata = json.loads(row[1])
     assert parsed_metadata["stimulus_name"] == generated_name
 
@@ -943,7 +941,8 @@ def test_frequency_stepped_recording_auto_insert_without_usable_name_generates_d
     assert remaining == 0
 
 
-def test_frequency_stepped_recording_save_reuses_existing_rich_row(monkeypatch, local_tmp_path):
+@pytest.mark.parametrize("runtime_amplitude", [0.25, 0.5, None])
+def test_frequency_stepped_recording_save_reuses_existing_rich_row(monkeypatch, local_tmp_path, runtime_amplitude):
     db_path = local_tmp_path / "recording_step_sc_reuse.db"
     _create_database(db_path)
     _patch_local_database(monkeypatch, db_path)
@@ -953,6 +952,15 @@ def test_frequency_stepped_recording_save_reuses_existing_rich_row(monkeypatch, 
     assert save_code == error_code.OK, msg
     with sqlite3.connect(db_path) as conn:
         existing_id = conn.execute("SELECT stimulus_id FROM stimulus_signal_table").fetchone()[0]
+
+    runtime_metadata = dict(
+        metadata, stimulus_name="recording_runtime_name", start_freq=42, stop_freq=77,
+        num_steps=13, stimulus_type="octave",
+    )
+    if runtime_amplitude is None:
+        runtime_metadata.pop("amplitude")
+    else:
+        runtime_metadata["amplitude"] = runtime_amplitude
 
     manager = RecordingManager()
     manager.db_path = str(db_path)
@@ -965,7 +973,7 @@ def test_frequency_stepped_recording_save_reuses_existing_rich_row(monkeypatch, 
             "labels": "OK",
             "barcode": "reuse-step-sc",
         },
-        dict(metadata, stimulus_name="recording_runtime_name", start_freq=42, stop_freq=77, num_steps=13),
+        runtime_metadata,
     )
 
     assert code == error_code.OK, msg
@@ -1039,3 +1047,44 @@ def test_sample_import_matching_and_query_conditions_do_not_expose_metadata(monk
     assert "stimulus_metadata_json" not in conditions
     assert "stimulus_method" in conditions
     db.close()
+
+
+def test_storage_maps_mode_to_column_without_json_alias():
+    metadata = _step_sc_metadata()
+    row = dict(zip(model_consts.INERT_STIMULUS_RICH_CONFIG_COLUMNS, frequency_stepped_insert_values(metadata, 0)))
+    assert row["stimulus_type"] == "custom_linear"
+    payload = json.loads(row["stimulus_metadata_json"])
+    assert payload["frequency_mode"] == "custom_linear"
+    assert "stimulus_type" not in payload
+    row["stimulus_metadata_json"] = json.dumps(metadata)
+    loaded = parse_frequency_stepped_row(row)
+    assert loaded["step_sc_row_state"] == "valid"
+    assert "stimulus_type" not in loaded["stimulus_payload"]
+
+
+@pytest.mark.parametrize("mode", [None, "invalid"])
+@pytest.mark.parametrize("has_alias", [False, True])
+def test_storage_rejects_missing_mode_even_with_alias_and_shared_column(mode, has_alias):
+    metadata = _step_sc_metadata()
+    if has_alias:
+        metadata["stimulus_type"] = "custom_linear"
+    metadata.pop("frequency_mode")
+    if mode is not None:
+        metadata["frequency_mode"] = mode
+    with pytest.raises(ValueError, match="frequency_mode"):
+        frequency_stepped_insert_values(metadata, 0)
+    row = {"stimulus_method": "frequency_stepped", "stimulus_type": "custom_linear",
+           "stimulus_metadata_json": json.dumps(metadata)}
+    loaded = parse_frequency_stepped_row(row)
+    assert loaded["step_sc_row_state"] == "invalid_metadata"
+    assert "stimulus_payload" not in loaded
+
+
+def test_storage_preserves_custom_metadata_on_write_and_read():
+    metadata = _step_sc_metadata(editor_annotation={"tags": ["reference"]})
+    row = dict(zip(model_consts.INERT_STIMULUS_RICH_CONFIG_COLUMNS, frequency_stepped_insert_values(metadata, 0)))
+    assert json.loads(row["stimulus_metadata_json"])["editor_annotation"] == metadata["editor_annotation"]
+    row["stimulus_metadata_json"] = json.dumps(metadata)
+    loaded = parse_frequency_stepped_row(row)
+    assert loaded["step_sc_row_state"] == "valid"
+    assert loaded["stimulus_payload"]["editor_annotation"] == metadata["editor_annotation"]

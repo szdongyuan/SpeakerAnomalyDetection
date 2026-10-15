@@ -59,8 +59,7 @@ class FrequencySteppedSignalResult:
 def build_frequency_stepped_frequencies(
     *,
     sample_rate,
-    frequency_mode=None,
-    stimulus_type=None,
+    frequency_mode,
     start_freq=None,
     stop_freq=None,
     num_steps=None,
@@ -68,7 +67,22 @@ def build_frequency_stepped_frequencies(
     frequencies=None,
 ):
     sample_rate = _positive_int(sample_rate, "sample_rate")
-    mode = _resolve_frequency_mode(frequency_mode, stimulus_type)
+    return _build_frequency_stepped_frequencies_at_rate(
+        sample_rate=sample_rate,
+        frequency_mode=frequency_mode,
+        start_freq=start_freq,
+        stop_freq=stop_freq,
+        num_steps=num_steps,
+        resolution=resolution,
+        frequencies=frequencies,
+    )
+
+
+def _build_frequency_stepped_frequencies_at_rate(
+    *, sample_rate, frequency_mode, start_freq, stop_freq, num_steps, resolution, frequencies,
+):
+    """Build frequencies with a positive integer sample rate confirmed by the public caller."""
+    mode = _resolve_frequency_mode(frequency_mode)
     resolution_value = (
         validate_frequency_stepped_resolution(resolution)
         if mode == "octave" and resolution is not None
@@ -143,26 +157,22 @@ def generate_frequency_stepped(
     repeat_times=1,
     min_duration,
     min_cycles,
-    frequency_mode=None,
-    stimulus_type=None,
+    frequency_mode,
     start_freq=None,
     stop_freq=None,
     num_steps=None,
     resolution=None,
     frequencies=None,
-    amplitude=1.0,
     generate_waveform=True,
 ):
     sample_rate = _positive_int(sample_rate, "sample_rate")
     repeat_times = _positive_int(repeat_times, "repeat_times")
     min_duration = _positive_float(min_duration, "min_duration")
     min_cycles = _positive_float(min_cycles, "min_cycles")
-    amplitude = _finite_float(amplitude, "amplitude")
 
-    frequency_result = build_frequency_stepped_frequencies(
+    frequency_result = _build_frequency_stepped_frequencies_at_rate(
         sample_rate=sample_rate,
         frequency_mode=frequency_mode,
-        stimulus_type=stimulus_type,
         start_freq=start_freq,
         stop_freq=stop_freq,
         num_steps=num_steps,
@@ -175,7 +185,6 @@ def generate_frequency_stepped(
         frequencies_hz=frequency_result.frequencies_hz,
         min_duration=min_duration,
         min_cycles=min_cycles,
-        amplitude=amplitude,
         generate_waveform=generate_waveform,
     )
     per_repetition_sample_count = int(base_segments[-1].boundary_zero_sample + 1)
@@ -191,7 +200,6 @@ def generate_frequency_stepped(
             sample_count=fadeout_tail_sample_count,
             final_frequency=float(frequency_result.frequencies_hz[-1]),
             terminal_phase=terminal_phase,
-            amplitude=amplitude,
         )
         data = np.concatenate([body, tail]).astype(float, copy=False)
     else:
@@ -227,7 +235,6 @@ def generate_frequency_stepped(
         "stimulus_method": FREQUENCY_STEPPED_METHOD,
         "stimulus_label": FREQUENCY_STEPPED_LABEL,
         "frequency_mode": frequency_result.frequency_mode,
-        "stimulus_type": frequency_result.frequency_mode,
         "start_freq": frequency_result.start_freq,
         "stop_freq": frequency_result.stop_freq,
         "num_steps": frequency_result.num_steps,
@@ -237,7 +244,6 @@ def generate_frequency_stepped(
         "frequencies": frequencies_list,
         "min_duration": float(min_duration),
         "min_cycles": float(min_cycles),
-        "amplitude": float(amplitude),
         "repeat_times": int(repeat_times),
         "sample_rate": int(sample_rate),
         "schedule_sample_rate": int(sample_rate),
@@ -274,44 +280,30 @@ def resolve_frequency_stepped_schedule(stimulus_metadata: dict, sample_rate: int
     if not isinstance(stimulus_metadata, dict):
         raise ValueError("stimulus_metadata must be a dictionary")
 
-    repaired_metadata = _repair_resolver_metadata(stimulus_metadata)
+    normalized_metadata = dict(stimulus_metadata)
+    normalized_metadata["frequency_mode"] = _resolve_frequency_mode(stimulus_metadata.get("frequency_mode"))
 
-    cached = _cached_schedule_result(repaired_metadata, sample_rate)
+    cached = _cached_schedule_result(normalized_metadata, sample_rate)
     if cached is not None:
         return cached
 
-    frequencies = _resolver_retained_frequencies(repaired_metadata)
-    resolution = _resolver_resolution_for_generation(repaired_metadata, frequencies)
+    frequencies = _resolver_retained_frequencies(normalized_metadata)
+    resolution = _resolver_resolution_for_generation(normalized_metadata, frequencies)
 
     generated = generate_frequency_stepped(
         sample_rate=sample_rate,
-        repeat_times=repaired_metadata.get("repeat_times", 1),
-        min_duration=repaired_metadata.get("min_duration"),
-        min_cycles=repaired_metadata.get("min_cycles"),
-        frequency_mode=repaired_metadata.get("frequency_mode"),
-        stimulus_type=repaired_metadata.get("stimulus_type"),
-        start_freq=repaired_metadata.get("start_freq"),
-        stop_freq=repaired_metadata.get("stop_freq"),
-        num_steps=repaired_metadata.get("num_steps"),
+        repeat_times=normalized_metadata.get("repeat_times", 1),
+        min_duration=normalized_metadata.get("min_duration"),
+        min_cycles=normalized_metadata.get("min_cycles"),
+        frequency_mode=normalized_metadata.get("frequency_mode"),
+        start_freq=normalized_metadata.get("start_freq"),
+        stop_freq=normalized_metadata.get("stop_freq"),
+        num_steps=normalized_metadata.get("num_steps"),
         resolution=resolution,
         frequencies=frequencies,
-        amplitude=_metadata_amplitude(repaired_metadata),
         generate_waveform=False,
     )
-    return _with_preserved_resolver_metadata(repaired_metadata, generated)
-
-
-def _repair_resolver_metadata(stimulus_metadata):
-    repaired = dict(stimulus_metadata)
-    mode = valid_frequency_stepped_mode_value(repaired.get("frequency_mode"))
-    stimulus_type = valid_frequency_stepped_mode_value(repaired.get("stimulus_type"))
-    if mode is None:
-        if stimulus_type is None:
-            raise ValueError("frequency_mode is required")
-        mode = stimulus_type
-    repaired["frequency_mode"] = mode
-    repaired["stimulus_type"] = mode
-    return repaired
+    return _with_preserved_resolver_metadata(normalized_metadata, generated)
 
 
 def _resolver_retained_frequencies(stimulus_metadata):
@@ -350,7 +342,6 @@ def _build_one_repetition(
     frequencies_hz,
     min_duration,
     min_cycles,
-    amplitude,
     generate_waveform,
 ):
     segments = []
@@ -370,7 +361,7 @@ def _build_one_repetition(
 
         if generate_waveform and sample_count > 0:
             offsets = np.arange(sample_count, dtype=float)
-            chunks.append(amplitude * np.sin(start_phase + (2 * math.pi * frequency * offsets / sample_rate)))
+            chunks.append(np.sin(start_phase + (2 * math.pi * frequency * offsets / sample_rate)))
 
         terminal_phase = start_phase + 2 * math.pi * frequency * (sample_count / sample_rate)
         segments.append(
@@ -390,7 +381,7 @@ def _build_one_repetition(
         start_phase = terminal_phase
 
     if generate_waveform:
-        terminal_sample = np.array([amplitude * math.sin(terminal_phase)], dtype=float)
+        terminal_sample = np.array([math.sin(terminal_phase)], dtype=float)
         if chunks:
             one_repetition = np.concatenate([*chunks, terminal_sample])
         else:
@@ -422,12 +413,12 @@ def _repeat_segments(base_segments, repeat_times, per_repetition_sample_count):
     return tuple(repeated)
 
 
-def _build_fadeout_tail(*, sample_rate, sample_count, final_frequency, terminal_phase, amplitude):
+def _build_fadeout_tail(*, sample_rate, sample_count, final_frequency, terminal_phase):
     if sample_count <= 0:
         return np.array([], dtype=float)
     n = np.arange(1, sample_count + 1, dtype=float)
     gain = (1 - n / sample_count) ** FREQUENCY_STEPPED_FADEOUT_TAIL_EXPONENT
-    return amplitude * np.sin(terminal_phase + (2 * math.pi * final_frequency * n / sample_rate)) * gain
+    return np.sin(terminal_phase + (2 * math.pi * final_frequency * n / sample_rate)) * gain
 
 
 def _boundary_index(value):
@@ -510,10 +501,8 @@ def _authoritative_cached_schedule_result(
             min_duration=stimulus_metadata.get("min_duration"),
             min_cycles=stimulus_metadata.get("min_cycles"),
             frequency_mode=stimulus_metadata.get("frequency_mode"),
-            stimulus_type=stimulus_metadata.get("stimulus_type"),
             resolution=stimulus_metadata.get("resolution"),
             frequencies=stimulus_metadata["frequencies"],
-            amplitude=_metadata_amplitude(stimulus_metadata),
             generate_waveform=False,
         )
     except (KeyError, TypeError, ValueError):
@@ -525,13 +514,6 @@ def _authoritative_cached_schedule_result(
     if not _step_durations_match_expected(step_durations, expected.metadata["step_durations"]):
         return None
     return expected
-
-
-def _metadata_amplitude(stimulus_metadata):
-    try:
-        return _finite_float(stimulus_metadata.get("amplitude", 1.0), "amplitude")
-    except ValueError:
-        return 1.0
 
 
 def _with_preserved_resolver_metadata(stimulus_metadata, generated):
@@ -959,21 +941,10 @@ def validate_frequency_stepped_resolution(resolution):
     return resolution_value
 
 
-def _resolve_frequency_mode(frequency_mode, stimulus_type):
-    mode = frequency_mode if frequency_mode is not None else stimulus_type
+def _resolve_frequency_mode(frequency_mode):
+    mode = valid_frequency_stepped_mode_value(frequency_mode)
     if mode is None:
-        raise ValueError("frequency_mode is required")
-    mode = str(mode).strip()
-    stimulus_type_value = str(stimulus_type).strip() if stimulus_type is not None else None
-    if (
-        frequency_mode is not None
-        and stimulus_type is not None
-        and stimulus_type_value in FREQUENCY_STEPPED_MODES
-        and mode != stimulus_type_value
-    ):
-        raise ValueError("frequency_mode and stimulus_type conflict")
-    if mode not in FREQUENCY_STEPPED_MODES:
-        raise ValueError(f"Unsupported frequency_mode: {mode}")
+        raise ValueError(f"Unsupported frequency_mode: {frequency_mode}")
     return mode
 
 

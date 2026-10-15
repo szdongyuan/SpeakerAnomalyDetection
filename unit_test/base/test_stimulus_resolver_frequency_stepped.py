@@ -65,7 +65,6 @@ def test_supported_aliases_normalize_and_retained_frequencies_regenerate_authori
     assert len(data) == metadata["playback_sample_count"]
     assert metadata["stimulus_method"] == "frequency_stepped"
     assert metadata["frequency_mode"] == "custom_linear"
-    assert metadata["stimulus_type"] == "custom_linear"
     assert metadata["frequencies"] == [1000.0, 2000.0]
     assert metadata["num_steps"] == 2
     assert metadata["alignment_sample_count"] < metadata["playback_sample_count"]
@@ -238,15 +237,6 @@ def test_runtime_extra_fields_are_filtered_before_generator_call(monkeypatch, st
     assert detail["stimulus_info"]["voltage_display"] == "2.5 Vrms"
 
 
-def test_stale_mode_conflicts_are_repaired_before_generation(stored_stimulus_path):
-    detail = {"stimulus_info": _runtime_info(frequency_mode="custom_linear", stimulus_type="custom_log")}
-
-    stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=48000)
-
-    assert detail["stimulus_info"]["frequency_mode"] == "custom_linear"
-    assert detail["stimulus_info"]["stimulus_type"] == "custom_linear"
-
-
 def test_retained_frequencies_take_precedence_over_scalar_reconstruction_fields(stored_stimulus_path):
     detail = {
         "stimulus_info": _runtime_info(
@@ -288,7 +278,7 @@ def test_voltage_and_amplitude_fields_are_preserved_but_generator_uses_unit_gain
 
     stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=48000)
 
-    assert calls[-1]["amplitude"] == 1.0
+    assert "amplitude" not in calls[-1]
     assert "voltage" not in calls[-1]
     assert detail["stimulus_info"]["amplitude"] == 0.4
     assert detail["stimulus_info"]["voltage"] == 9.9
@@ -329,3 +319,46 @@ def test_frequency_stepped_runtime_rate_rebuilds_metadata(stored_stimulus_path):
     assert data_struct.sample_rate == 48000
     assert data_struct.stimulus_info["sample_rate"] == 48000
     assert data_struct.stimulus_info["schedule_sample_rate"] == 48000
+
+
+def test_runtime_playback_amplitude_does_not_change_generated_waveform():
+    signals = []
+    for amplitude in [0.25, 0.5, None]:
+        info = _runtime_info()
+        if amplitude is None:
+            info.pop("amplitude", None)
+        else:
+            info["amplitude"] = amplitude
+        data, _, metadata, _ = stimulus_resolver._generate_stimulus_data(
+            {"stimulus_info": info}, 48000
+        )
+        signals.append(data)
+        assert metadata.get("amplitude") == amplitude
+        assert ("amplitude" in metadata) == (amplitude is not None)
+    np.testing.assert_array_equal(signals[0], signals[1])
+    np.testing.assert_array_equal(signals[0], signals[2])
+
+
+@pytest.mark.parametrize("mode", [None, "invalid"])
+def test_runtime_rejects_alias_only_or_invalid_mode(mode):
+    info = _runtime_info(frequency_mode=mode, stimulus_type="custom_linear")
+    with pytest.raises(ValueError, match="frequency_mode"):
+        stimulus_resolver._generate_frequency_stepped_runtime(info, 48000)
+
+
+@pytest.mark.parametrize("entrypoint", ["generate", "save", "playback", "analysis"])
+def test_runtime_config_cannot_disable_waveform_generation(entrypoint, stored_stimulus_path):
+    detail = {"stimulus_info": _runtime_info(generate_waveform=False)}
+    if entrypoint == "generate":
+        data, _, metadata, _ = stimulus_resolver._generate_stimulus_data(detail, 48000)
+    elif entrypoint == "save":
+        data, _, _ = stimulus_resolver.generate_and_save_stimulus(detail, runtime_sample_rate=48000)
+        metadata = detail["stimulus_info"]
+    else:
+        target = SimpleNamespace()
+        setter = (stimulus_resolver.set_data_struct_stimulus_signal if entrypoint == "playback"
+                  else stimulus_resolver.set_data_struct_analysis_reference_signal)
+        setter(target, detail, runtime_sample_rate=48000)
+        data, metadata = target.stimulus_data, target.stimulus_info
+    assert data.size == metadata["playback_sample_count"] > 0
+    assert np.max(np.abs(data)) > 0.9

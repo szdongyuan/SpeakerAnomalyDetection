@@ -24,7 +24,6 @@ class _Logger:
 def _valid_step_sc_row():
     payload = {
         "stimulus_method": "frequency_stepped",
-        "stimulus_type": "custom_linear",
         "frequency_mode": "custom_linear",
         "repeat_times": 2,
         "start_freq": 1000,
@@ -73,6 +72,8 @@ def test_load_dialog_returns_valid_frequency_stepped_payload_and_displays_row(qa
 
     assert dialog.loaded_stimulus[0]["step_sc_row_state"] == "valid"
     assert selected["stimulus_method"] == "frequency_stepped"
+    assert selected["frequency_mode"] == "custom_linear"
+    assert "stimulus_type" not in selected
     assert selected["frequencies"] == [1000.0, 2000.0]
     assert selected["min_duration"] == pytest.approx(0.01)
     assert "stimulus_id" not in selected

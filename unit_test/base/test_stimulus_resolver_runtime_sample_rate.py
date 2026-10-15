@@ -398,7 +398,7 @@ def test_analysis_reference_missing_configured_external_wav_fails_without_genera
     monkeypatch.setattr(stimulus_resolver.os.path, "exists", lambda path: False)
     monkeypatch.setattr(
         stimulus_resolver,
-        "_generate_stimulus_data",
+        "_generate_stimulus_data_at_rate",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not generate substitute reference")),
     )
 

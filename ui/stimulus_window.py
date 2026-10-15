@@ -884,11 +884,10 @@ class StimulusWindow(QDialog):
         self.stimulus_info["stimulus_method"] = FREQUENCY_STEPPED_METHOD
         self.stimulus_info["stimulus_label"] = FREQUENCY_STEPPED_LABEL
         self.stimulus_info["use_custom_stimulus"] = True
-        mode = self.stimulus_info.get("frequency_mode") or self.stimulus_info.get("stimulus_type") or "octave"
+        mode = self.stimulus_info.get("frequency_mode", "octave")
         if mode not in self.STEP_SC_VALID_MODES:
             mode = "octave"
         self.stimulus_info["frequency_mode"] = mode
-        self.stimulus_info["stimulus_type"] = mode
         self.stimulus_info.setdefault("min_duration", self.STEP_SC_DEFAULT_MIN_DURATION)
         self.stimulus_info.setdefault("min_cycles", self.STEP_SC_DEFAULT_MIN_CYCLES)
         if mode == "octave":
@@ -900,7 +899,6 @@ class StimulusWindow(QDialog):
             mode = "octave"
         previous_mode = self.stimulus_info.get("frequency_mode")
         self.stimulus_info["frequency_mode"] = mode
-        self.stimulus_info["stimulus_type"] = mode
         if mode == "octave":
             if self.stimulus_info.get("resolution") not in self.STEP_SC_VALID_RESOLUTIONS:
                 self.stimulus_info["resolution"] = self.STEP_SC_DEFAULT_RESOLUTION
@@ -1159,15 +1157,10 @@ class StimulusWindow(QDialog):
         for key in self.STEP_SC_LEGACY_EXTERNAL_WAV_KEYS:
             repaired.pop(key, None)
         mode = repaired.get("frequency_mode")
-        stimulus_type = repaired.get("stimulus_type")
         if mode not in self.STEP_SC_VALID_MODES:
-            if stimulus_type not in self.STEP_SC_VALID_MODES:
-                raise ValueError("frequency_mode is required")
-            mode = stimulus_type
+            raise ValueError(f"Unsupported frequency_mode: {mode}")
         repaired["stimulus_method"] = FREQUENCY_STEPPED_METHOD
         repaired["stimulus_label"] = FREQUENCY_STEPPED_LABEL
-        repaired["frequency_mode"] = mode
-        repaired["stimulus_type"] = mode
         repaired["use_custom_stimulus"] = True
         self._require_step_sc_fields(repaired, ("min_duration", "min_cycles"))
 
@@ -1221,20 +1214,16 @@ class StimulusWindow(QDialog):
         if self._retained_frequencies_compatible_with_info(stimulus_info, retained, retained_state):
             retained_frequencies = list(retained)
         return {
-            "sample_rate": int(stimulus_info["sample_rate"]),
+            "sample_rate": stimulus_info["sample_rate"],
             "repeat_times": int(stimulus_info.get("repeat_times", 1)),
             "min_duration": float(stimulus_info.get("min_duration", self.STEP_SC_DEFAULT_MIN_DURATION)),
             "min_cycles": float(stimulus_info.get("min_cycles", self.STEP_SC_DEFAULT_MIN_CYCLES)),
             "frequency_mode": stimulus_info.get("frequency_mode"),
-            "stimulus_type": stimulus_info.get("stimulus_type"),
             "start_freq": stimulus_info.get("start_freq"),
             "stop_freq": stimulus_info.get("stop_freq"),
             "num_steps": stimulus_info.get("num_steps"),
             "resolution": stimulus_info.get("resolution"),
             "frequencies": retained_frequencies,
-            # Output gain is applied once by the playback adapter.
-            "amplitude": 1.0,
-            "generate_waveform": True,
         }
 
     @staticmethod
@@ -1256,7 +1245,7 @@ class StimulusWindow(QDialog):
             return False
         if not self._retained_frequencies_match_payload(stimulus_info.get("frequencies"), retained):
             return False
-        mode = stimulus_info.get("frequency_mode") or stimulus_info.get("stimulus_type")
+        mode = stimulus_info.get("frequency_mode")
         if mode == "octave":
             return stimulus_info.get(
                 "resolution"
@@ -1268,7 +1257,6 @@ class StimulusWindow(QDialog):
             **self._frequency_stepped_generation_kwargs_from_info(candidate, retained, retained_state)
         )
         metadata = self._json_safe(result.metadata)
-        metadata.pop("amplitude", None)
         preserved = {
             key: value
             for key, value in candidate.items()
@@ -1276,11 +1264,7 @@ class StimulusWindow(QDialog):
         }
         generated_info = deepcopy(preserved)
         generated_info.update(metadata)
-        generated_info["stimulus_method"] = FREQUENCY_STEPPED_METHOD
-        generated_info["stimulus_label"] = FREQUENCY_STEPPED_LABEL
         generated_info["use_custom_stimulus"] = True
-        generated_info["frequency_mode"] = metadata["frequency_mode"]
-        generated_info["stimulus_type"] = metadata["frequency_mode"]
         generated_retained = [float(value) for value in metadata["frequencies"]]
         if metadata["frequency_mode"] == "octave" and self._retained_frequencies_compatible_with_info(
             candidate, retained, retained_state
@@ -1709,7 +1693,6 @@ class StimulusWindow(QDialog):
         if mode not in self.STEP_SC_VALID_MODES:
             mode = "octave"
         self.stimulus_info["frequency_mode"] = mode
-        self.stimulus_info["stimulus_type"] = mode
         self.stimulus_info["num_steps"] = int(self.step_box.value())
         sample_rate = self._current_step_sc_sample_rate()
         if sample_rate is None:
