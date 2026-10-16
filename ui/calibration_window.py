@@ -1360,7 +1360,7 @@ class InputCalibration(QWidget):
             GroupBox: A GroupBox containing the sound pressure v2pa_factor label and line edit.
         """
         v2pa_factor_box = GroupBox("校准结果")
-        v2pa_factor_label = Label("校准系数（V/Pa）：")
+        v2pa_factor_label = Label("声压换算系数（Pa/归一化幅值）：")
         self.v2pa_factor_lineedit = LineEdit()
         self.v2pa_factor_lineedit.setReadOnly(True)
         validator = QRegularExpressionValidator(
