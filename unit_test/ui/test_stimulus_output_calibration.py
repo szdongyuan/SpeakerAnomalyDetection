@@ -227,12 +227,36 @@ def test_preview_output_applies_gain_once_and_restores_definition(
 ):
     create, _, warnings = environment
     monkeypatch.setattr(soundcard.SoundcardAudioProcessor, "sd_play", staticmethod(real_sd_play))
-    captured = []
+    captured, streams, events = [], [], []
 
-    def capture(data, **kwargs):
-        captured.append((data.copy(), kwargs))
+    class FakeOutputStream:
+        def __init__(self, **kwargs):
+            self.params = kwargs
+            streams.append(self)
 
-    monkeypatch.setattr(soundcard.sd, "play", capture)
+        def start(self):
+            events.append("start")
+            for _ in range((len(unit_wave) + 2047) // 2048):
+                output = np.empty((2048, self.params["channels"]), dtype=self.params["dtype"])
+                stopped = False
+                try:
+                    self.params["callback"](output, len(output), None, None)
+                except soundcard.sd.CallbackStop:
+                    stopped = True
+                captured.append(output.copy())
+                if stopped:
+                    events.append("callback_stop")
+                    self.params["finished_callback"]()
+                    events.append("finished")
+                    return
+            pytest.fail("Preview must end with CallbackStop after the final sample")
+
+        def close(self):
+            events.append("close")
+
+    monkeypatch.setattr(soundcard.sd, "OutputStream", FakeOutputStream)
+    monkeypatch.setattr(soundcard.sd, "stop", lambda: events.append("stop"))
+    monkeypatch.setattr(soundcard.sd, "play", lambda *args, **kwargs: pytest.fail("Preview must use OutputStream"))
     payload = config("frequency_stepped", None, voltage)
     payload["stimulus_info"]["sample_rate"] = 44100
     window = create(payload, offline_reference_authoring=offline)
@@ -249,11 +273,17 @@ def test_preview_output_applies_gain_once_and_restores_definition(
     window.play_btn_clicked()
 
     assert not warnings
-    assert len(captured) == 1
-    played, params = captured[0]
+    assert len(streams) == 1
+    assert events == ["stop", "start", "callback_stop", "finished", "close"]
+    params = streams[0].params
     assert params["samplerate"] == 48000
-    np.testing.assert_allclose(played, unit_wave * gain)
+    assert params["device"] == 7
+    assert params["channels"] == 1
+    played = np.concatenate(captured)[:len(unit_wave), 0]
+    np.testing.assert_allclose(played, unit_wave * gain, rtol=1e-6, atol=1e-8)
     np.testing.assert_array_equal(window.stimulus_data, original_wave)
     assert window.stimulus_info == original_info
     assert window.save_stimulus_to_json() == original_config
+    assert "drain_output" not in window.stimulus_info
+    assert "drain_output" not in window.save_stimulus_to_json()["stimulus_info"]
     assert window.stimulus_info["sample_rate"] == (44100 if offline else 48000)
