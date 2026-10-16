@@ -1,3 +1,5 @@
+from threading import Event
+
 import numpy as np
 from scipy.signal import correlate
 
@@ -213,6 +215,10 @@ class SoundcardAudioProcessor(object):
     @staticmethod
     def sd_play(stimulus_params):
         try:
+            blocking = stimulus_params.get("blocking", True)
+            drain_output = stimulus_params.get("drain_output", False)
+            if drain_output and not blocking:
+                raise ValueError("drain_output requires blocking playback")
             data = stimulus_params.get("data") * stimulus_params.get("amplitude")
             output_channels = stimulus_params.get("output_channels")
             if isinstance(output_channels, int) and not isinstance(output_channels, bool) and output_channels >= 2:
@@ -220,13 +226,60 @@ class SoundcardAudioProcessor(object):
                 if data.ndim == 1 or (data.ndim == 2 and data.shape[1] == 1):
                     data = np.tile(data.reshape(-1, 1), (1, output_channels))
             sr = stimulus_params.get("sr")
-            blocking = stimulus_params.get("blocking", True)
             device = stimulus_params.get("device", None)
-            sd.play(data, samplerate=sr, device=device, blocking=blocking)
+            if drain_output:
+                SoundcardAudioProcessor._play_with_output_drain(data, sr, device)
+            else:
+                sd.play(data, samplerate=sr, device=device, blocking=blocking)
             return error_code.OK, "play successfully"
         except Exception as e:
             err_msg = "Failed to play audio. [%s]" % (str(e)[:50])
             return error_code.INVALID_PLAY, err_msg
+
+    @staticmethod
+    def _play_with_output_drain(data, sample_rate, device):
+        data = np.asarray(data)
+        if data.ndim == 1:
+            data = data.reshape(-1, 1)
+        elif data.ndim != 2:
+            raise ValueError("Audio data must be one- or two-dimensional")
+        if data.shape[0] == 0:
+            return
+        if data.dtype == np.float64:
+            data = data.astype(np.float32)
+
+        done = Event()
+        position = 0
+        callback_error = None
+        silence = 128 if data.dtype == np.uint8 else 0
+
+        def callback(outdata, frames, time_info, status):
+            nonlocal position, callback_error
+            try:
+                outdata.fill(silence)
+                count = min(frames, len(data) - position)
+                outdata[:count] = data[position:position + count]
+                position += count
+            except Exception as error:
+                # Callback exceptions cannot propagate to the waiting caller.
+                callback_error = error
+                done.set()
+                raise sd.CallbackAbort from error
+            if position == len(data):
+                raise sd.CallbackStop
+
+        sd.stop()
+        stream = sd.OutputStream(
+            samplerate=sample_rate, device=device, channels=data.shape[1],
+            dtype=data.dtype, callback=callback, finished_callback=done.set,
+        )
+        try:
+            stream.start()
+            done.wait()
+            if callback_error is not None:
+                raise callback_error
+        finally:
+            stream.close()
 
     @staticmethod
     def sd_rec(recorded_dict):

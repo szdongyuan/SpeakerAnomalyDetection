@@ -166,6 +166,10 @@ def test_stimulus_window_preview_uses_speaker_samplerate(qapp, monkeypatch):
 
     assert calls[-1]["sr"] == 48000
     assert calls[-1]["device"] == 7
+    assert calls[-1]["drain_output"] is True
+    assert calls[-1].get("blocking", True) is True
+    assert "drain_output" not in window.stimulus_info
+    assert "drain_output" not in window.save_stimulus_to_json()["stimulus_info"]
 
 
 def test_stimulus_window_preview_rejects_missing_speaker(qapp, monkeypatch):
@@ -324,6 +328,11 @@ def test_offline_reference_authoring_preview_restores_authoring_waveform_and_sam
 
     assert play_calls
     assert play_calls[-1]["sr"] == 48000
+    assert play_calls[-1]["device"] == 7
+    assert play_calls[-1]["drain_output"] is True
+    assert play_calls[-1].get("blocking", True) is True
+    assert "drain_output" not in window.stimulus_info
+    assert "drain_output" not in window.save_stimulus_to_json()["stimulus_info"]
     assert np.array_equal(play_calls[-1]["data"], generated_by_rate[48000])
     assert window.stimulus_info == original_info
     assert window.stimulus_config_data["stimulus_info"] == original_config_info

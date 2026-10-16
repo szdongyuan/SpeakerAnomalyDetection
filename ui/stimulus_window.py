@@ -2747,6 +2747,7 @@ class StimulusWindow(QDialog):
             "amplitude": amplitude,
             "sr": sample_rate,
             "device": device_idx,
+            "drain_output": True,
         }
         # Create an instance of SoundcardAudioProcessor and play the stimulus signal
         sap = SoundcardAudioProcessor()
