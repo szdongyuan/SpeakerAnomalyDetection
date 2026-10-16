@@ -3,7 +3,7 @@ import threading
 from decimal import Decimal, ROUND_DOWN, localcontext
 
 import numpy as np
-from PyQt5.QtCore import Qt, QRegularExpression, QTimer, pyqtSignal
+from PyQt5.QtCore import QObject, Qt, QRegularExpression, QTimer, pyqtSignal
 from PyQt5.QtGui import QRegularExpressionValidator
 from PyQt5.QtWidgets import (
     QApplication,
@@ -57,6 +57,7 @@ class CalibrationWindow(QDialog):
     def __init__(self):
         super().__init__()
         self.init_ui()
+        self.finished.connect(self.output_cal_wnd._invalidate_playback_attempt)
 
     def init_ui(self):
         """
@@ -199,9 +200,14 @@ class CalibrationWindow(QDialog):
 
     def closeEvent(self, event):
         if self._can_close():
+            self.output_cal_wnd._invalidate_playback_attempt()
             event.accept()
         else:
             event.ignore()
+
+
+class _OutputPlaybackSignals(QObject):
+    playback_failed = pyqtSignal(int, str)
 
 
 class OutputCalibration(QWidget):
@@ -214,6 +220,11 @@ class OutputCalibration(QWidget):
         self.current_count = 1
         self.countdown = 10
         self.play_flag = False
+        self._playback_attempt = 0
+        self._active_playback_attempt = None
+        # No Qt parent: a playback worker retains this bridge after the widget is deleted.
+        self._playback_signals = _OutputPlaybackSignals()
+        self._playback_signals.playback_failed.connect(self._on_playback_failed)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_countdown)
         self.init_ui()
@@ -413,6 +424,7 @@ class OutputCalibration(QWidget):
         stimulus_dict = self.create_signal()
         sap = SoundcardAudioProcessor()
         if not self.play_flag:
+            attempt_id = self._begin_playback_attempt()
             self.play_flag = True
             self.play_btn.setDisabled(True)
             self.save_btn.setDisabled(True)
@@ -421,12 +433,19 @@ class OutputCalibration(QWidget):
                 f"<span style='color: red;'>{self.countdown} </span>"
                 f"<span style='color: black;'>s</span>"
             )
-            self.timer.start(1000)
-            if self._is_asio_output_playback():
+            if self._uses_main_thread_output_playback():
                 stimulus_dict["blocking"] = False
-                self._play_stimulus_and_log_failure(sap, stimulus_dict)
+                started = self._play_stimulus_and_log_failure(
+                    sap, stimulus_dict, attempt_id, self._playback_signals
+                )
+                if started and self._active_playback_attempt == attempt_id:
+                    self.timer.start(1000)
             else:
-                threading.Thread(target=self._play_stimulus_and_log_failure, args=(sap, stimulus_dict)).start()
+                self.timer.start(1000)
+                threading.Thread(
+                    target=self._play_stimulus_and_log_failure,
+                    args=(sap, stimulus_dict, attempt_id, self._playback_signals),
+                ).start()
         else:
             self.play_flag = False
             self.timer.stop()
@@ -465,7 +484,7 @@ class OutputCalibration(QWidget):
             return None
         return self._coerce_non_negative_int(self._speaker_field(speaker, "index"))
 
-    def _is_asio_output_playback(self):
+    def _uses_main_thread_output_playback(self):
         speaker = self._selected_speaker_for_playback()
         if speaker is None:
             return False
@@ -474,7 +493,9 @@ class OutputCalibration(QWidget):
             return False
         hostapi_index = self._speaker_field(speaker, "hostapi")
         try:
-            return self._playback_device_hostapi_name(hostapi_index) == "ASIO"
+            return self._playback_device_hostapi_name(hostapi_index) in (
+                "ASIO", "Windows WASAPI",
+            )
         except Exception:
             return False
 
@@ -613,13 +634,47 @@ class OutputCalibration(QWidget):
             stimulus_dict["output_channels"] = playback_params["output_channels"]
         return stimulus_dict
 
-    def _play_stimulus_and_log_failure(self, audio_processor, stimulus_dict):
+    def _begin_playback_attempt(self):
+        self._playback_attempt += 1
+        self._active_playback_attempt = self._playback_attempt
+        return self._active_playback_attempt
+
+    def _invalidate_playback_attempt(self):
+        self._active_playback_attempt = None
+
+    def _on_playback_failed(self, attempt_id, message):
+        if attempt_id != self._active_playback_attempt:
+            return
+        self._invalidate_playback_attempt()
+        self.timer.stop()
+        self.play_flag = False
+        self.countdown = 10
+        self.countdown_label.setText(
+            "<span style='color: black;'>倒计时：</span>"
+            "<span style='color: red;'>10 </span>"
+            "<span style='color: black;'>s</span>"
+        )
+        measurement_pending = len(self.output_voltage_value) < self.calibration_param["calibration_nums"]
+        if measurement_pending:
+            self.play_btn.setText(" 播  放 ")
+        self.play_btn.setEnabled(measurement_pending)
+        self.save_btn.setDisabled(True)
+        MessageBox.warning(self, "播放失败", message)
+
+    def _play_stimulus_and_log_failure(self, audio_processor, stimulus_dict, attempt_id, playback_signals):
         result = audio_processor.sd_play(stimulus_dict)
         if result is None:
-            return
+            return True
         play_code, msg = result
         if play_code != error_code.OK:
             self.default_logger.error(f"Failed to play the audio. {msg}")
+            playback_signals.playback_failed.emit(attempt_id, msg)
+            return False
+        return True
+
+    def closeEvent(self, event):
+        self._invalidate_playback_attempt()
+        super().closeEvent(event)
 
     def create_current_count(self):
         """
@@ -760,6 +815,7 @@ class OutputCalibration(QWidget):
         This function resets various settings and displays in the user interface to their default or initial states.
         It clears output voltage values, resets voltage settings, restores calibration counts, stops the timer, etc.
         """
+        self._invalidate_playback_attempt()
         self.output_voltage_value.clear()
         self.output_voltage_box.setValue(0)
         self.target_voltage_box.setValue(0)

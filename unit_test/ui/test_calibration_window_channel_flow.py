@@ -1,12 +1,14 @@
 import os
 import queue
 import sqlite3
+import threading
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import pytest
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QCoreApplication, QEvent, Qt, QThread, QTimer
 from PyQt5.QtGui import QColor, QValidator
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QSizePolicy
@@ -1486,23 +1488,29 @@ def test_output_playback_passes_selected_speaker_device_and_output_channels(qapp
         widget.close()
 
 
-def test_output_playback_uses_main_thread_nonblocking_for_asio(qapp, monkeypatch):
+@pytest.mark.parametrize("api_name", ["ASIO", "Windows WASAPI"])
+def test_output_playback_uses_main_thread_nonblocking(qapp, monkeypatch, api_name):
     play_calls = []
     monkeypatch.setattr(
         calibration_window.threading,
         "Thread",
-        lambda *args, **kwargs: pytest.fail("ASIO playback should not construct a worker thread"),
+        lambda *args, **kwargs: pytest.fail("GUI playback should not construct a worker thread"),
     )
     monkeypatch.setattr(calibration_window.sd, "check_output_settings", lambda **kwargs: None)
     monkeypatch.setattr(
         calibration_window.SoundDeviceManager,
         "get_api_info",
-        staticmethod(lambda api_index=None: {"name": "ASIO"}),
+        staticmethod(lambda api_index=None: {"name": api_name}),
     )
+
+    def play(_processor, stimulus_dict):
+        play_calls.append((QThread.currentThread(), dict(stimulus_dict)))
+        return calibration_window.error_code.OK, "ok"
+
     monkeypatch.setattr(
         calibration_window.SoundcardAudioProcessor,
         "sd_play",
-        lambda self, stimulus_dict: play_calls.append(stimulus_dict) or (calibration_window.error_code.OK, "ok"),
+        play,
     )
     widget = calibration_window.OutputCalibration()
     try:
@@ -1516,15 +1524,20 @@ def test_output_playback_uses_main_thread_nonblocking_for_asio(qapp, monkeypatch
         widget.play_btn_clicked()
 
         assert len(play_calls) == 1
-        assert play_calls[0]["blocking"] is False
-        assert play_calls[0]["device"] == 14
-        assert play_calls[0]["output_channels"] == 2
-        assert play_calls[0]["sr"] == 48000
+        thread, params = play_calls[0]
+        assert thread == qapp.thread()
+        assert params["blocking"] is False
+        assert params["device"] == 14
+        assert params["output_channels"] == 2
+        assert params["sr"] == 48000
+        assert params["amplitude"] == widget.calibration_param["amplitude_list"][0]
+        assert widget.timer.isActive()
     finally:
+        widget.timer.stop()
         widget.close()
 
 
-def test_output_playback_keeps_threaded_blocking_path_for_non_asio(qapp, monkeypatch):
+def test_output_playback_keeps_threaded_blocking_path_for_mme(qapp, monkeypatch):
     constructed_threads = []
     play_calls = []
 
@@ -1538,7 +1551,7 @@ def test_output_playback_keeps_threaded_blocking_path_for_non_asio(qapp, monkeyp
     monkeypatch.setattr(
         calibration_window.SoundDeviceManager,
         "get_api_info",
-        staticmethod(lambda api_index=None: {"name": "Windows WASAPI"}),
+        staticmethod(lambda api_index=None: {"name": "MME"}),
     )
     monkeypatch.setattr(
         calibration_window.SoundcardAudioProcessor,
@@ -1566,7 +1579,7 @@ def test_output_playback_keeps_threaded_blocking_path_for_non_asio(qapp, monkeyp
         widget.close()
 
 
-def test_output_playback_uses_parent_window_speaker_for_non_asio_threaded_path(
+def test_output_playback_uses_parent_window_speaker_for_mme_threaded_path(
     qapp, monkeypatch
 ):
     _install_calibration_window_startup_devices(monkeypatch)
@@ -1589,7 +1602,7 @@ def test_output_playback_uses_parent_window_speaker_for_non_asio_threaded_path(
     monkeypatch.setattr(
         calibration_window.SoundDeviceManager,
         "get_api_info",
-        staticmethod(lambda api_index=None: {"name": "Windows WASAPI"}),
+        staticmethod(lambda api_index=None: {"name": "MME"}),
     )
     monkeypatch.setattr(
         calibration_window.SoundcardAudioProcessor,
@@ -1620,8 +1633,9 @@ def test_output_playback_uses_parent_window_speaker_for_non_asio_threaded_path(
         window.close()
 
 
-def test_output_playback_uses_parent_window_speaker_for_asio_nonblocking_path(
-    qapp, monkeypatch
+@pytest.mark.parametrize("api_name", ["ASIO", "Windows WASAPI"])
+def test_output_playback_uses_parent_window_speaker_for_main_thread_nonblocking_path(
+    qapp, monkeypatch, api_name
 ):
     _install_calibration_window_startup_devices(monkeypatch)
     _use_fake_stimulus(monkeypatch)
@@ -1630,7 +1644,7 @@ def test_output_playback_uses_parent_window_speaker_for_asio_nonblocking_path(
     monkeypatch.setattr(
         calibration_window.threading,
         "Thread",
-        lambda *args, **kwargs: pytest.fail("ASIO playback should not construct a worker thread"),
+        lambda *args, **kwargs: pytest.fail("GUI playback should not construct a worker thread"),
     )
     monkeypatch.setattr(
         calibration_window.sd,
@@ -1640,13 +1654,17 @@ def test_output_playback_uses_parent_window_speaker_for_asio_nonblocking_path(
     monkeypatch.setattr(
         calibration_window.SoundDeviceManager,
         "get_api_info",
-        staticmethod(lambda api_index=None: {"name": "ASIO"}),
+        staticmethod(lambda api_index=None: {"name": api_name}),
     )
+
+    def play(_processor, stimulus_dict):
+        play_calls.append((QThread.currentThread(), dict(stimulus_dict)))
+        return calibration_window.error_code.OK, "ok"
+
     monkeypatch.setattr(
         calibration_window.SoundcardAudioProcessor,
         "sd_play",
-        lambda self, stimulus_dict: play_calls.append(stimulus_dict)
-        or (calibration_window.error_code.OK, "ok"),
+        play,
     )
     window = calibration_window.CalibrationWindow()
     try:
@@ -1662,16 +1680,71 @@ def test_output_playback_uses_parent_window_speaker_for_asio_nonblocking_path(
 
         assert check_calls == [{"device": 14, "samplerate": 96000, "channels": 2}]
         assert len(play_calls) == 1
-        assert play_calls[0]["blocking"] is False
-        assert play_calls[0]["device"] == 14
-        assert play_calls[0]["output_channels"] == 2
-        assert play_calls[0]["sr"] == 96000
+        thread, params = play_calls[0]
+        assert thread == qapp.thread()
+        assert params["blocking"] is False
+        assert params["device"] == 14
+        assert params["output_channels"] == 2
+        assert params["sr"] == 96000
+        assert params["amplitude"] == window.output_cal_wnd.calibration_param["amplitude_list"][0]
+        assert window.output_cal_wnd.timer.isActive()
     finally:
+        window.output_cal_wnd.timer.stop()
         window.close()
+
+
+def test_output_playback_wasapi_returns_to_qt_event_processing(qapp, monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        calibration_window.threading,
+        "Thread",
+        lambda *args, **kwargs: pytest.fail("WASAPI playback should not construct a worker thread"),
+    )
+    monkeypatch.setattr(calibration_window.sd, "check_output_settings", lambda **kwargs: None)
+    monkeypatch.setattr(
+        calibration_window.sd,
+        "wait",
+        lambda *args, **kwargs: pytest.fail("GUI playback should not wait for playback completion"),
+    )
+    monkeypatch.setattr(
+        calibration_window.SoundDeviceManager,
+        "get_api_info",
+        staticmethod(lambda api_index=None: {"name": "Windows WASAPI"}),
+    )
+
+    def play(_processor, params):
+        assert params["blocking"] is False
+        return calibration_window.error_code.OK, "ok"
+
+    monkeypatch.setattr(calibration_window.SoundcardAudioProcessor, "sd_play", play)
+    widget = calibration_window.OutputCalibration()
+    probe = QTimer(widget)
+    probe.setSingleShot(True)
+    probe.timeout.connect(lambda: events.append(QThread.currentThread()))
+    try:
+        widget.speaker = {
+            "index": 12,
+            "hostapi": 4,
+            "default_samplerate": 48000.0,
+            "max_output_channels": 2,
+        }
+        probe.start(0)
+
+        widget.play_btn_clicked()
+
+        assert events == []
+        qapp.processEvents()
+        assert events == [qapp.thread()]
+        assert widget.timer.isActive()
+    finally:
+        probe.stop()
+        widget.timer.stop()
+        widget.close()
 
 
 def test_output_playback_logs_sd_play_failures(qapp, monkeypatch):
     errors = []
+    monkeypatch.setattr(calibration_window.MessageBox, "warning", lambda *args: None)
     monkeypatch.setattr(calibration_window.threading, "Thread", _ImmediateThread)
     monkeypatch.setattr(calibration_window.sd, "check_output_settings", lambda **kwargs: None)
     monkeypatch.setattr(
@@ -1693,6 +1766,422 @@ def test_output_playback_logs_sd_play_failures(qapp, monkeypatch):
         assert errors == ["Failed to play the audio. strict host rejected stream"]
     finally:
         widget.close()
+
+
+def _prepare_output_playback(monkeypatch, api_name):
+    _use_fake_stimulus(monkeypatch)
+    monkeypatch.setattr(calibration_window.sd, "check_output_settings", lambda **kwargs: None)
+    monkeypatch.setattr(
+        calibration_window.SoundDeviceManager, "get_api_info",
+        staticmethod(lambda api_index=None: {"name": api_name}),
+    )
+
+
+def _output_speaker():
+    return {"index": 12, "hostapi": 4, "default_samplerate": 48000.0, "max_output_channels": 2}
+
+
+def _assert_output_playback_recovered(widget):
+    assert not widget.timer.isActive()
+    assert widget.play_flag is False
+    assert widget.countdown == 10
+    assert "<span style='color: red;'>10 </span>" in widget.countdown_label.text()
+    assert widget.play_btn.isEnabled()
+    assert widget.play_btn.text() == " 播  放 "
+    assert not widget.save_btn.isEnabled()
+
+
+@pytest.mark.parametrize("api_name", ["Windows WASAPI", "ASIO"])
+def test_output_playback_failure_recovers_preserves_measurements_and_retries(qapp, monkeypatch, api_name):
+    _prepare_output_playback(monkeypatch, api_name)
+    warnings, errors, calls = [], [], []
+    monkeypatch.setattr(calibration_window.MessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(
+        calibration_window, "SoundcardCalibrationManager",
+        lambda *args, **kwargs: pytest.fail("Playback failure must not access calibration persistence"),
+    )
+    monkeypatch.setattr(
+        calibration_window.threading, "Thread",
+        lambda *args, **kwargs: pytest.fail("Main thread playback must not construct a worker"),
+    )
+
+    def play(_processor, params):
+        calls.append((threading.get_ident(), QThread.currentThread(), dict(params)))
+        if len(calls) == 1:
+            return calibration_window.error_code.INVALID_PLAY, "strict host rejected stream"
+        return calibration_window.error_code.OK, "ok"
+
+    monkeypatch.setattr(calibration_window.SoundcardAudioProcessor, "sd_play", play)
+    widget = calibration_window.OutputCalibration()
+    try:
+        widget.speaker = _output_speaker()
+        speaker = widget.speaker
+        widget.calibration_nums_box.setValue(3)
+        widget.get_calibration_param()
+        widget.output_voltage_box.setValue(0.7)
+        widget.save_btn_clicked()
+        widget.output_voltage_box.setValue(1.25)
+        widget.target_voltage_box.setValue(2.5)
+        saved = widget.output_voltage_value
+        play_label = widget.play_label.text()
+        monkeypatch.setattr(widget.default_logger, "error", errors.append)
+        monkeypatch.setattr(widget, "calibration", lambda: pytest.fail("Unexpected calibration"))
+        monkeypatch.setattr(widget, "save_btn_clicked", lambda: pytest.fail("Unexpected measurement save"))
+
+        widget.play_btn_clicked()
+
+        _assert_output_playback_recovered(widget)
+        assert len(warnings) == 1
+        assert warnings[0][1:] == ("播放失败", "strict host rejected stream")
+        assert errors == ["Failed to play the audio. strict host rejected stream"]
+        assert widget.current_count == 2
+        assert widget.play_label.text() == play_label
+        assert widget.output_voltage_value is saved
+        assert saved == [0.7]
+        assert widget.output_voltage_box.value() == 1.25
+        assert widget.target_voltage_box.value() == 2.5
+        assert widget.speaker is speaker
+
+        widget.play_btn_clicked()
+
+        assert widget.timer.isActive()
+        assert widget.play_flag is True
+        assert widget.countdown == 10
+        assert not widget.play_btn.isEnabled()
+        assert not widget.save_btn.isEnabled()
+        assert len(warnings) == 1
+        assert len(calls) == 2
+        for python_thread, qt_thread, params in calls:
+            assert python_thread == threading.get_ident()
+            assert qt_thread == qapp.thread()
+            assert params["blocking"] is False
+            assert params["amplitude"] == widget.calibration_param["amplitude_list"][1]
+    finally:
+        widget.timer.stop()
+        widget.close()
+
+
+@pytest.mark.parametrize("api_name", ["Windows WASAPI", "ASIO", "MME"])
+def test_output_playback_none_result_remains_unreported(qapp, monkeypatch, api_name):
+    _prepare_output_playback(monkeypatch, api_name)
+    calls, warnings = [], []
+    monkeypatch.setattr(calibration_window.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(calibration_window.MessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(
+        calibration_window.SoundcardAudioProcessor, "sd_play",
+        lambda _processor, params: calls.append(params),
+    )
+    widget = calibration_window.OutputCalibration()
+    try:
+        widget.speaker = _output_speaker()
+        widget.play_btn_clicked()
+        assert len(calls) == 1
+        assert warnings == []
+        assert widget.timer.isActive()
+        assert widget.play_flag is True
+    finally:
+        widget.timer.stop()
+        widget.close()
+
+
+def _process_qt_until(qapp, condition, timeout=2):
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        qapp.processEvents()
+        QTest.qWait(1)
+    assert condition(), "Timed out waiting for queued playback result"
+
+
+@pytest.fixture
+def controlled_output_worker(monkeypatch):
+    _prepare_output_playback(monkeypatch, "MME")
+    started, release = threading.Event(), threading.Event()
+    real_thread = threading.Thread
+    workers, audio_calls, warnings, deliveries, timeouts = [], [], [], [], []
+
+    class ObservedOutput(calibration_window.OutputCalibration):
+        def _on_playback_failed(self, attempt_id, message):
+            deliveries.append((threading.get_ident(), QThread.currentThread()))
+            super()._on_playback_failed(attempt_id, message)
+
+    monkeypatch.setattr(calibration_window, "OutputCalibration", ObservedOutput)
+
+    def construct_worker(*args, **kwargs):
+        worker = real_thread(*args, **kwargs)
+        workers.append(worker)
+        return worker
+
+    def play(_processor, params):
+        audio_calls.append((threading.get_ident(), QThread.currentThread(), dict(params)))
+        started.set()
+        if not release.wait(3):
+            timeouts.append("Worker release timed out")
+        return calibration_window.error_code.INVALID_PLAY, "late worker failure"
+
+    def warning(widget, title, message):
+        _assert_output_playback_recovered(widget)
+        warnings.append((threading.get_ident(), QThread.currentThread(), title, message))
+
+    monkeypatch.setattr(calibration_window.threading, "Thread", construct_worker)
+    monkeypatch.setattr(calibration_window.SoundcardAudioProcessor, "sd_play", play)
+    monkeypatch.setattr(calibration_window.MessageBox, "warning", warning)
+    yield started, release, workers, audio_calls, warnings, deliveries
+    release.set()
+    for worker in workers:
+        worker.join(2)
+        assert not worker.is_alive(), "Playback worker did not exit"
+    assert not timeouts
+
+
+def test_output_playback_mme_failure_recovers_on_gui_thread(qapp, controlled_output_worker):
+    started, release, workers, audio_calls, warnings, deliveries = controlled_output_worker
+    widget = calibration_window.OutputCalibration()
+    try:
+        widget.speaker = _output_speaker()
+        widget.play_btn_clicked()
+        assert started.wait(2)
+        assert widget.timer.isActive()
+        assert widget.play_flag is True
+        assert warnings == []
+        python_thread, qt_thread, params = audio_calls[0]
+        assert python_thread != threading.get_ident()
+        assert qt_thread != qapp.thread()
+        assert "blocking" not in params
+
+        release.set()
+        _process_qt_until(qapp, lambda: bool(warnings))
+        workers[0].join(2)
+        assert not workers[0].is_alive()
+
+        _assert_output_playback_recovered(widget)
+        assert deliveries == [(threading.get_ident(), qapp.thread())]
+        assert warnings == [(threading.get_ident(), qapp.thread(), "播放失败", "late worker failure")]
+    finally:
+        release.set()
+        widget.timer.stop()
+        widget.close()
+
+
+@pytest.mark.parametrize("dismissal", ["escape", "reject", "accept", "done"])
+def test_output_playback_late_worker_failure_after_dialog_completion(
+    qapp, monkeypatch, controlled_output_worker, dismissal
+):
+    started, release, workers, audio_calls, warnings, deliveries = controlled_output_worker
+    _install_calibration_window_startup_devices(monkeypatch)
+    window = calibration_window.CalibrationWindow()
+    widget = window.output_cal_wnd
+    try:
+        widget.speaker = _output_speaker()
+        window.show()
+        qapp.processEvents()
+        assert window.isVisible()
+        widget.play_btn.click()
+        assert started.wait(2)
+        if dismissal == "escape":
+            QTest.keyClick(window, Qt.Key_Escape)
+        elif dismissal == "reject":
+            window.reject()
+        elif dismissal == "accept":
+            window.accept()
+        else:
+            window.done(window.Accepted)
+        assert not window.isVisible()
+        state_before = (widget.timer.isActive(), widget.play_flag, widget.countdown,
+                        widget.play_btn.isEnabled(), widget.save_btn.isEnabled())
+
+        release.set()
+        _process_qt_until(qapp, lambda: bool(deliveries))
+        for worker in workers:
+            worker.join(2)
+            assert not worker.is_alive()
+
+        assert warnings == []
+        assert (widget.timer.isActive(), widget.play_flag, widget.countdown,
+                widget.play_btn.isEnabled(), widget.save_btn.isEnabled()) == state_before
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(2)
+            assert not worker.is_alive()
+        widget.timer.stop()
+        window.close()
+
+
+@pytest.mark.parametrize("measurement_count", [1, 3])
+def test_output_playback_late_failure_preserves_final_saved_measurement(
+    qapp, monkeypatch, controlled_output_worker, measurement_count
+):
+    started, release, workers, audio_calls, warnings, deliveries = controlled_output_worker
+    monkeypatch.setattr(
+        calibration_window.MessageBox, "warning",
+        lambda _widget, title, message: warnings.append((title, message)),
+    )
+    widget = calibration_window.OutputCalibration()
+    try:
+        widget.speaker = _output_speaker()
+        widget.calibration_nums_box.setValue(measurement_count)
+        widget.get_calibration_param()
+        for _ in range(measurement_count - 1):
+            widget.output_voltage_box.setValue(0.5)
+            widget.save_btn_clicked()
+        widget.output_voltage_box.setValue(1.25)
+        widget.play_btn.click()
+        assert started.wait(2)
+        widget.countdown = 0
+        widget.update_countdown()
+        assert widget.save_btn.isEnabled()
+        widget.save_btn.click()
+        saved_values = list(widget.output_voltage_value)
+        completed_controls = (widget.play_btn.text(), widget.save_btn.text())
+        assert len(saved_values) == measurement_count
+        assert saved_values[-1] == 1.25
+        assert not widget.play_btn.isEnabled()
+        assert not widget.save_btn.isEnabled()
+
+        release.set()
+        _process_qt_until(qapp, lambda: bool(deliveries))
+        for worker in workers:
+            worker.join(2)
+            assert not worker.is_alive()
+
+        assert warnings == [("播放失败", "late worker failure")]
+        assert not widget.timer.isActive()
+        assert widget.play_flag is False
+        assert widget.countdown == 10
+        assert not widget.play_btn.isEnabled()
+        assert not widget.save_btn.isEnabled()
+        assert (widget.play_btn.text(), widget.save_btn.text()) == completed_controls
+        assert widget.current_count == measurement_count
+        assert widget.output_voltage_value == saved_values
+        # Completed controls cannot start a retry or save a duplicate final value.
+        widget.play_btn.click()
+        widget.save_btn.click()
+        assert len(workers) == 1
+        assert widget.output_voltage_value == saved_values
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(2)
+            assert not worker.is_alive()
+        widget.timer.stop()
+        widget.close()
+
+
+@pytest.mark.parametrize("with_parent", [False, True])
+def test_output_playback_failure_after_qobject_deletion_is_safe(
+    qapp, monkeypatch, controlled_output_worker, with_parent
+):
+    started, release, workers, audio_calls, warnings, deliveries = controlled_output_worker
+    errors, deleted = [], []
+    monkeypatch.setattr(threading, "excepthook", errors.append)
+    if with_parent:
+        _install_calibration_window_startup_devices(monkeypatch)
+        owner = calibration_window.CalibrationWindow()
+        widget = owner.output_cal_wnd
+    else:
+        owner = widget = calibration_window.OutputCalibration()
+    widget.destroyed.connect(lambda: deleted.append(True))
+    try:
+        widget.speaker = _output_speaker()
+        widget.play_btn_clicked()
+        assert started.wait(2)
+        widget.timer.stop()
+        assert owner.close()
+        owner.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        assert deleted == [True], "The regression requires actual QObject destruction"
+
+        release.set()
+        for worker in workers:
+            worker.join(2)
+            assert not worker.is_alive()
+        qapp.processEvents()
+
+        assert errors == []
+        assert deliveries == []
+        assert warnings == []
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(2)
+            assert not worker.is_alive()
+        if not deleted:
+            widget.timer.stop()
+            owner.close()
+
+
+@pytest.mark.parametrize("transition", ["reset", "new_attempt", "standalone_close", "parent_close", "parent_reject", "countdown_end"])
+def test_output_playback_late_worker_failure_lifecycle(qapp, monkeypatch, controlled_output_worker, transition):
+    started, release, workers, audio_calls, warnings, deliveries = controlled_output_worker
+    window = None
+    if transition.startswith("parent_"):
+        _install_calibration_window_startup_devices(monkeypatch)
+        window = calibration_window.CalibrationWindow()
+        widget = window.output_cal_wnd
+    else:
+        widget = calibration_window.OutputCalibration()
+    try:
+        widget.speaker = _output_speaker()
+        if transition == "new_attempt":
+            widget.calibration_nums_box.setValue(2)
+            widget.get_calibration_param()
+        widget.play_btn_clicked()
+        assert started.wait(2)
+        if transition == "reset":
+            widget.reset_btn_clicked()
+            widget.output_voltage_box.setValue(3.25)
+        elif transition == "new_attempt":
+            # Finish the first measurement, then start a second before its result arrives.
+            widget.countdown = 0
+            widget.update_countdown()
+            widget.save_btn_clicked()
+            assert widget.play_btn.isEnabled()
+            monkeypatch.setattr(
+                calibration_window.SoundcardAudioProcessor, "sd_play",
+                lambda *args: (calibration_window.error_code.OK, "ok"),
+            )
+            widget.play_btn_clicked()
+            widget.countdown = 6
+            assert widget.timer.isActive()
+        elif transition == "standalone_close":
+            assert widget.close()
+        elif transition.startswith("parent_"):
+            monkeypatch.setattr(window, "_can_close", lambda: transition == "parent_close")
+            event = _FakeCloseEvent()
+            window.closeEvent(event)
+            assert event.accepted == (transition == "parent_close")
+            assert event.ignored == (transition == "parent_reject")
+        elif transition == "countdown_end":
+            widget.countdown = 0
+            widget.update_countdown()
+            assert widget.save_btn.isEnabled()
+            assert widget.play_flag is False
+
+        state_before = (widget.timer.isActive(), widget.play_flag, widget.countdown,
+                        widget.countdown_label.text(), widget.play_btn.isEnabled(),
+                        widget.save_btn.isEnabled(), widget.output_voltage_box.value())
+        release.set()
+        _process_qt_until(qapp, lambda: bool(deliveries))
+        for worker in workers:
+            worker.join(2)
+            assert not worker.is_alive()
+        assert deliveries == [(threading.get_ident(), qapp.thread())]
+        if transition in ("parent_reject", "countdown_end"):
+            _assert_output_playback_recovered(widget)
+            assert len(warnings) == 1
+        else:
+            assert warnings == []
+            assert (widget.timer.isActive(), widget.play_flag, widget.countdown,
+                    widget.countdown_label.text(), widget.play_btn.isEnabled(),
+                    widget.save_btn.isEnabled(), widget.output_voltage_box.value()) == state_before
+    finally:
+        release.set()
+        widget.timer.stop()
+        if window is not None:
+            monkeypatch.setattr(window, "_can_close", lambda: True)
+            window.close()
+        else:
+            widget.close()
 
 
 def test_output_test_calibration_uses_selected_device_params_and_preserves_amplitude(
