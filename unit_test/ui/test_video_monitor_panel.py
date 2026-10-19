@@ -151,13 +151,9 @@ def test_manual_stop_restores_preview_and_preserves_session_result(ui_qapp, tmp_
     try:
         bridge.service.status = state.status
         widget.update_status(state.status, 4)
-        if had_gap:
-            assert not widget.record_button.isEnabled()
-            assert not state.request_stop()
-        else:
-            widget.record_button.click()
-            assert bridge.service.calls == ["stop"]
-            assert state.request_stop()
+        widget.record_button.click()
+        assert bridge.service.calls == ["stop"]
+        assert state.request_stop()
         widget.update_status(state.status, 4)
         assert widget.record_button.text() == "正在保存…"
         detail = "已结束，存在中断" if had_gap else "已保存"
@@ -308,7 +304,7 @@ def test_manual_buttons_and_compact_header(ui_qapp):
 
 @pytest.mark.parametrize("width", [340, 568])
 @pytest.mark.parametrize("preview_enabled", [False, True])
-def test_disconnect_saves_then_requires_manual_start(ui_qapp, tmp_path, width, preview_enabled):
+def test_disconnect_waits_then_resumes_with_visible_gap_history(ui_qapp, tmp_path, width, preview_enabled):
     configure_demo_font(ui_qapp)
     bridge = VideoServiceBridge(StubService())
     bridge._timer.stop()
@@ -317,52 +313,48 @@ def test_disconnect_saves_then_requires_manual_start(ui_qapp, tmp_path, width, p
     widget.resize(width, 350)
     widget.show()
     try:
-        image = QImage(10, 10, QImage.Format_RGB888)
-        image.fill(0)
+        image = QImage(320, 180, QImage.Format_RGB888)
+        image.fill(QColor("#6997AE"))
         widget.canvas.set_image(image)
-        state = VideoStatus(connection="reconnecting", recording="stopping", had_gap=True,
-                            started_at=1, ended_at=56)
+        state = VideoStatus(connection="reconnecting", recording="recovering", had_gap=True,
+                            record_intent=True, started_at=1, ended_at=56)
+        bridge.service.status = state
         widget.update_status(state, 55)
         ui_qapp.processEvents()
         assert widget.canvas.image.isNull()
-        assert widget.canvas.message == "摄像头已断开，正在保存录像…"
+        assert widget.canvas.message == "摄像头已断开，等待恢复录像…"
         assert widget.canvas.warning
-        assert not widget.record_button.isEnabled()
-        assert widget.record_button.text() == "正在保存…"
+        assert widget.record_button.isEnabled()
+        assert widget.record_button.text() == "停止录像"
         assert widget.record_indicator.isHidden()
-        assert widget.timer_label.isHidden()
+        assert widget.timer_label.isVisible()
         assert widget.timer_label.text() == "00:00:55"
-        state = replace(state, recording="interrupted")
-        bridge.service.status = state
-        widget.update_status(state, 55)
-        assert widget.record_button.text() == "开始录像"
-        assert not widget.record_button.isEnabled()
-        assert widget.canvas.message == "摄像头已断开，录像已停止"
-        widget.record_button.click()
-        assert bridge.service.calls == []
-        ui_qapp.processEvents()
-        screenshot = tmp_path / f"video-disconnected-{width}-{preview_enabled}.png"
+        assert "本次录像存在中断" in widget.record_button.toolTip()
+        screenshot = tmp_path / f"video-recovering-{width}-{preview_enabled}.png"
         assert widget.grab().save(str(screenshot))
         print(f"\nRecovery screenshot: {screenshot}")
-        # Reopening the camera restores preview and enables manual start only.
+        # READY alone cannot claim that media has been written.
         state = replace(state, connection="ready")
         bridge.service.status = state
         widget.update_status(state, 55)
-        assert widget.record_button.text() == "开始录像"
-        assert widget.record_button.isEnabled()
-        assert widget.canvas.message == ("" if preview_enabled else "预览已关闭")
-        assert widget.timer_label.isHidden() and widget.record_indicator.isHidden()
-        widget.record_button.click()
-        assert bridge.service.calls == ["start"]
-        widget.update_status(VideoStatus(connection="ready", recording="recording",
-                                        record_intent=True, started_at=100), 0)
+        assert widget.canvas.message == "正在恢复录像…"
+        assert widget.record_indicator.isHidden()
+        state = replace(state, recording="recording", ended_at=None, recovery_seconds=10)
+        bridge.service.status = state
+        if preview_enabled:
+            widget.canvas.set_image(image)
+        widget.update_status(state, 56)
         ui_qapp.processEvents()
         assert widget.record_indicator.isVisible() and widget.timer_label.isVisible()
-        assert widget.timer_label.text() == "00:00:00"
-        assert widget.record_indicator.grab().toImage().pixelColor(4, 4).name() == "#63e6a2"
-        assert widget.timer_label.palette().color(widget.timer_label.foregroundRole()).name() == "#ffffff"
+        assert widget.timer_label.text() == "00:00:56"
         assert widget.canvas.message == ("" if preview_enabled else "预览已关闭，正在录像")
         assert not widget.canvas.warning
+        assert "本次录像存在中断" in widget.record_button.toolTip()
+        screenshot = tmp_path / f"video-resumed-{width}-{preview_enabled}.png"
+        assert widget.grab().save(str(screenshot))
+        print(f"\nResumed screenshot: {screenshot}")
+        widget.record_button.click()
+        assert bridge.service.calls == ["stop"]
     finally:
         widget.close()
         bridge._timer.stop()

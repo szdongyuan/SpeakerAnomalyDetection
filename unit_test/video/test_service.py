@@ -77,39 +77,47 @@ def test_stop_while_starting_is_not_late_restarted(service_factory):
     assert service.status.started_at is None
 
 
-def test_reconnect_only_restores_preview_and_requires_manual_start(service_factory):
-    service = service_factory(SimulationOptions(disconnect_after=0.1, reconnect_after=0.25))
+def test_reconnect_resumes_same_recording_session(service_factory):
+    service = service_factory(SimulationOptions(disconnect_after=0.1, reconnect_after=0.5))
     service.start_recording()
-    wait_until(lambda: service.status.recording == "interrupted")
-    session = service.status.session_id
-    started = service.status.started_at
+    wait_until(lambda: service.status.recording == "recovering")
+    session, started = service.status.session_id, service.status.started_at
+    assert service.status.record_intent
     assert service.latest_preview() is None
-    wait_until(lambda: service.status.connection == "ready")
+    wait_until(lambda: service.status.recording == "recording")
     wait_until(lambda: service.latest_preview() is not None)
-    assert service.status.recording == "interrupted"
-    assert not service.status.record_intent
+    assert service.status.record_intent and service.status.had_gap
     assert service.status.session_id == session
     assert service.status.started_at == started
-    assert service.start_recording()
-    assert service.status.session_id != session
-    assert service.status.started_at is None
-    wait_until(lambda: service.status.recording == "recording")
     assert service.stop_recording()
+    wait_until(lambda: service.status.recording == "interrupted")
 
 
-def test_reconnect_during_finalization_does_not_resume(service_factory):
-    service = service_factory(SimulationOptions(disconnect_after=0.1, reconnect_after=0.1, stop_delay=0.5))
+def test_reconnect_during_manual_finalization_does_not_resume(service_factory):
+    service = service_factory(SimulationOptions(disconnect_after=0.1, reconnect_after=0.3, stop_delay=0.6))
     service.start_recording()
-    wait_until(lambda: service.status.recording == "stopping")
-    assert not service.stop_recording()
+    wait_until(lambda: service.status.recording == "recovering")
+    assert service.stop_recording()
     assert not service.status.record_intent
     wait_until(lambda: service.status.connection == "ready")
     assert service.status.recording == "stopping"
     assert not service.start_recording()
     wait_until(lambda: service.status.recording == "interrupted")
-    wait_until(lambda: service.status.connection == "ready")
-    assert service.status.recording == "interrupted"
     wait_until(lambda: service.latest_preview() is not None)
+    assert not service.status.record_intent
+
+
+def test_long_disconnect_keeps_intent_and_shutdown_cancels_it(service_factory):
+    service = service_factory(
+        SimulationOptions(disconnect_after=0.1, reconnect_after=60), command_timeout=0.5,
+    )
+    service.start_recording()
+    wait_until(lambda: service.status.recording == "recovering")
+    time.sleep(0.8)  # Exceeds startup timeout; waiting for hardware is a separate phase.
+    assert service.status.record_intent and not service.is_closed
+    service.shutdown()
+    assert service.wait_closed()
+    assert not service.status.record_intent and not service.forced_termination
 
 
 def test_start_failure_does_not_report_recording(service_factory):

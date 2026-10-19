@@ -111,15 +111,25 @@ class MjpegDecoder:
         data = bytes(packet)
         if data and (not data.startswith(b"\xff\xd8") or not data.endswith(b"\xff\xd9")):
             self.fragmented_inputs += 1
+        parser_reset = False
         if self.pending_bytes and (
             self.pending_bytes + len(data) > self.max_bytes
             or now - self.pending_since > self.pending_timeout
         ):
             self.discarded += 1
             self._reset_parser()
+            parser_reset = True
         if len(data) > self.max_bytes:
             self.discarded += 1
             frames = []
+        elif (
+            (parser_reset or (not self.pending_bytes and now - self.last_valid > self.invalid_timeout))
+            and data.startswith(b"\xff\xd8") and _jpeg_end(data) == len(data)
+        ):
+            # A fresh parser buffers one image until the next SOI. After a gap,
+            # try a complete image before the old deadline, including a second gap
+            # immediately after direct recovery left the parser empty.
+            frames = self._decode_packets([packet], now)
         else:
             if data and not self.pending_bytes:
                 self.pending_since = now

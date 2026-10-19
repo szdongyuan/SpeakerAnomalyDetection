@@ -159,6 +159,9 @@ class VideoRuntime:
         self.gate = threading.Lock()
         self.session_id = ""
         self.online = False
+        self.last_frame_at = None
+        self.frames_in_dispatch = 0
+        self.frame_timeout = max(3.0, 3 * config.fps_den / config.fps_num)
         self.connection_epoch = 0
         self.accept_frames = False
         self.start_pending = False
@@ -185,24 +188,46 @@ class VideoRuntime:
             was_online = self.online
             self.connection_epoch += 1
             self.online = ready
+            if ready != was_online:
+                self.last_frame_at = None
             if ready != was_online or detail:
                 self._logger.info("Video connection ready=%s: %s", ready, detail)
             self.post(EventKind.READY if ready else EventKind.OFFLINE, detail=detail)
-            if not ready and was_online and (self.accept_frames or self.start_pending):
+            recording_requested = self.session_id and not self.stop_requested and not self.stopping
+            if ready and recording_requested and not self.start_pending:
+                self.accept_frames = True
+            if not ready and was_online and recording_requested:
                 # USB gaps are not part of a run of software-skipped frames.
                 self.admission.drop_run = 0
                 self.admission.last_stamp = None
                 self.admission.low_since = None
                 self._raw_control("gap", self.session_id, (detail, utc_now()))
-                self._stop_locked()
+                self.accept_frames = False
                 self.post(EventKind.RECOVERING, self.session_id, detail)
 
     def on_frame(self, frame, stamp):
+        received_at = time.monotonic()
+        with self.gate:
+            self.frames_in_dispatch += 1
+        try:
+            self._dispatch_frame(frame, stamp, received_at)
+        finally:
+            with self.gate:
+                self.frames_in_dispatch -= 1
+
+    def _dispatch_frame(self, frame, stamp, received_at):
         import cv2
 
+        with self.gate:
+            gap = received_at - self.last_frame_at if self.last_frame_at is not None else 0
+            missed_gap = self.online and gap > self.frame_timeout
+        if missed_gap:
+            # If the watchdog was delayed too, the returning frame still exposes the gap.
+            self.on_connection(False, f"摄像头画面间隔 {gap:.3f} 秒，已标记录像中断")
         if not self.online:
             self.on_connection(True, "")
         with self.gate:
+            self.last_frame_at = received_at
             show_preview = self.preview_enabled
             preview_revision = self.preview_revision
         if show_preview and stamp >= self.preview_due:
@@ -250,7 +275,7 @@ class VideoRuntime:
             self.raw_bytes += cost
             self.raw_frames += 1
             try:
-                self.work.put_nowait(("frame", self.session_id, (frame, stamp, self.connection_epoch)))
+                self.work.put_nowait(("frame", self.session_id, (frame, stamp, self.connection_epoch, received_at)))
             except queue.Full:
                 self.raw_bytes -= cost
                 self.raw_frames -= 1
@@ -347,6 +372,7 @@ class VideoRuntime:
         encoder = None
         active_id = ""
         last_stamp = None
+        segment_origin = next_boundary = clock_offset = None
 
         def flush():
             if encoder is not None:
@@ -359,6 +385,13 @@ class VideoRuntime:
                 try:
                     kind, identity, value = self.work.get(timeout=.2)
                 except queue.Empty:
+                    with self.gate:
+                        if (encoder is not None and next_boundary is not None
+                                and time.monotonic() >= next_boundary + clock_offset
+                                and not self.frames_in_dispatch and self.work.empty()):
+                            # Order sealing with frame/stop admission. A frame still
+                            # in preview conversion must enter the queue before sealing.
+                            self._raw_control("segment_end", active_id)
                     continue
                 self.encoder_busy_since = time.monotonic()
                 self.encoder_busy = True
@@ -369,25 +402,37 @@ class VideoRuntime:
                         continue
                     if kind == "start":
                         active_id, last_stamp = identity, None
+                        segment_origin = next_boundary = clock_offset = None
                         self.encode_diagnostics.begin(identity)
                         encoder = FrameEncoder(self.config, self.encode_diagnostics)
                         self._send_encoded("start", identity, encoder.parameters)
                     elif kind == "frame":
-                        frame, stamp, epoch = value
+                        frame, stamp, epoch, received_at = value
                         if last_stamp is not None and stamp <= last_stamp:
                             raise ValueError("采集时间戳未递增，录像已停止")
-                        if (encoder is None or (encoder.first_time is not None
-                                and stamp - encoder.first_time >= self.config.segment_duration_seconds)):
+                        duration = self.config.segment_duration_seconds
+                        if segment_origin is None:
+                            segment_origin = stamp
+                            clock_offset = received_at - stamp
+                            next_boundary = segment_origin + duration
+                        if encoder is None or stamp >= next_boundary:
                             flush()
                             encoder = FrameEncoder(self.config, self.encode_diagnostics)
                             self._send_encoded("segment", identity, encoder.parameters)
+                            # Skip empty slots without moving the original segment schedule.
+                            slot = int((stamp - segment_origin) // duration)
+                            next_boundary = max(next_boundary, segment_origin + (slot + 1) * duration)
                         batch = encoder.write(frame, stamp)
                         self._send_encoded("frame", identity, (batch, stamp, epoch), batch)
                         last_stamp = stamp
                     elif kind == "gap":
+                        self._send_encoded("gap", identity, value)
+                    elif kind == "segment_end":
                         flush()
                         encoder = None
-                        self._send_encoded("gap", identity, value)
+                        # Late delivery cannot reopen a time slot already sealed.
+                        next_boundary += self.config.segment_duration_seconds
+                        self._send_encoded("segment_end", identity)
                     elif kind in {"stop", "fail", "close"}:
                         if active_id and active_id == self.session_id:
                             flush()
@@ -496,9 +541,10 @@ class VideoRuntime:
                     with self.diagnostics.stage("prepare"):
                         session.prepare(value)
                     with self.gate:
-                        if self.session_id == active_id and self.start_pending and not self.stopping:
+                        if (self.session_id == active_id and self.start_pending
+                                and not self.stop_requested and not self.stopping):
                             self.start_pending = False
-                            self.accept_frames = True
+                            self.accept_frames = self.online
                 elif kind == "frame":
                     frame, stamp, epoch = value
                     with self.diagnostics.stage("frame_total"):
@@ -509,6 +555,8 @@ class VideoRuntime:
                             self.post(EventKind.STARTED, active_id, str(session.directory))
                 elif kind == "segment":
                     session.next_segment(value)
+                elif kind == "segment_end":
+                    session.end_segment()
                 elif kind == "tail":
                     session.write_tail(value)
                 elif kind == "gap":
@@ -635,8 +683,7 @@ class VideoRuntime:
                     raise RuntimeError(self.fatal_error)
                 if not self.writer.is_alive() and not self.stopping:
                     raise RuntimeError("录像写入线程已异常退出")
-                frame_timeout = max(3, 3 * self.config.fps_den / self.config.fps_num)
-                if self.online and now - self.capture.last_progress > frame_timeout:
+                if self.online and now - self.capture.last_progress > self.frame_timeout:
                     self.on_connection(False, "摄像头暂无新画面，已标记录像中断")
                 if not self.stopping and now - self.capture.last_progress > 12:
                     raise TimeoutError("摄像头驱动长时间无响应")

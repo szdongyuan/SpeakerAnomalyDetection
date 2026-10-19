@@ -39,7 +39,11 @@ def test_worker_acceptance_precedes_start_and_commands_have_identity():
         assert started.monotonic_time - accepted.monotonic_time >= 0.1
         assert started.session_id == "session-1"
         assert started.generation == 7
-        assert mailbox.latest() is not None
+        # Preview reads are nonblocking and can coincide with the worker's publish lock.
+        preview_deadline = time.monotonic() + 2
+        while mailbox.latest() is None:
+            assert time.monotonic() < preview_deadline, "worker did not publish a preview"
+            time.sleep(.01)
         channel.send(Command(CommandKind.SHUTDOWN, 7, "exit-1"))
         events = receive_until(channel, EventKind.CLOSED)
         assert any(event.kind == EventKind.COMPLETED for event in events)

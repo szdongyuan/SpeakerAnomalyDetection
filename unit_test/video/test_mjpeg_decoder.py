@@ -91,9 +91,9 @@ def test_pending_budget_resets_without_blocking_following_images(jpeg):
     dec = decoder()
     dec.max_bytes = len(jpeg) + 16
     assert dec.feed(av.Packet(jpeg[:-2])) == []
-    assert dec.feed(av.Packet(jpeg)) == []
+    frames = dec.feed(av.Packet(jpeg))
     assert dec.pending_bytes <= dec.max_bytes
-    assert len(dec.finish()) == 1 and dec.discarded == 1
+    assert len(frames + dec.finish()) == 1 and dec.discarded == 1
 
 
 def test_oversized_input_never_enters_native_parser(jpeg):
@@ -104,13 +104,37 @@ def test_oversized_input_never_enters_native_parser(jpeg):
     assert dec.finish() == [] and dec.discarded == 1
 
 
-def test_stale_partial_is_replaced_by_fresh_image(jpeg):
+@pytest.mark.parametrize("pause", [1.1, 2.1, 4.209, 7.323])
+@pytest.mark.parametrize("partial", [True, False])
+def test_stale_input_is_replaced_by_fresh_image(jpeg, pause, partial):
     now = [0.0]
     dec = decoder(clock=lambda: now[0])
-    dec.feed(av.Packet(jpeg[:100]))
-    now[0] = 1.1
+    dec.feed(av.Packet(jpeg[:100] if partial else jpeg))
+    now[0] = pause
+    frames = dec.feed(av.Packet(jpeg))
+    assert len(frames) == 1 and dec.last_valid == pause
+    assert dec.finish() == [] and dec.discarded == 1
+    frames = dec.feed(av.Packet(jpeg)) + dec.finish()
+    assert len(frames) == 1  # Recovery must not duplicate the decoded image.
+
+
+@pytest.mark.parametrize("damage", ["dimensions", "truncated", "oversized"])
+def test_stale_reset_does_not_accept_bad_image_or_extend_timeout(jpeg, damage):
+    now = [0.0]
+    dec = decoder(clock=lambda: now[0])
     dec.feed(av.Packet(jpeg))
-    assert len(dec.finish()) == 1 and dec.discarded == 1
+    bad = bytearray(jpeg)
+    if damage == "dimensions":
+        header = bad.index(b"\xff\xc0")
+        bad[header + 5:header + 9] = b"\x00" * 4
+    elif damage == "truncated":
+        bad = bad[:-2]
+    else:
+        dec.max_bytes = len(bad) - 1
+    now[0] = 7.323
+    with pytest.raises(OSError, match="持续未输出"):
+        dec.feed(av.Packet(bad))
+    assert dec.last_valid == 0
 
 
 def test_continuous_invalid_data_eventually_requests_reconnect():
@@ -176,3 +200,37 @@ def test_split_input_keeps_same_camera_connection_and_stop_closes_it(jpeg, tmp_p
     assert connections == [True] and len(frames) == 1
     assert source.closed and pump.diagnostics.attempt == 1
     assert not list(tmp_path.rglob("result.json"))
+
+
+@pytest.mark.parametrize("pause", [2.1, 8.0])
+def test_repeated_pauses_with_one_valid_frame_between_them(jpeg, pause):
+    now = [0.0]
+    dec = decoder(clock=lambda: now[0])
+    dec.feed(av.Packet(jpeg))
+    for index in range(1, 4):
+        now[0] = index * pause
+        frames = dec.feed(av.Packet(jpeg))
+        assert len(frames) == 1 and not frames[0].is_corrupt
+        assert dec.last_valid == now[0]
+    assert dec.finish() == []  # Directly decoded images must not also remain in the parser.
+
+
+@pytest.mark.parametrize("damage", ["dimensions", "truncated", "oversized"])
+def test_empty_parser_after_recovery_still_rejects_bad_image(jpeg, damage):
+    now = [0.0]
+    dec = decoder(clock=lambda: now[0])
+    dec.feed(av.Packet(jpeg))
+    now[0] = 8.0
+    assert len(dec.feed(av.Packet(jpeg))) == 1
+    bad = bytearray(jpeg)
+    if damage == "dimensions":
+        header = bad.index(b"\xff\xc0")
+        bad[header + 5:header + 9] = b"\x00" * 4
+    elif damage == "truncated":
+        bad = bad[:-2]
+    else:
+        dec.max_bytes = len(bad) - 1
+    now[0] = 16.0
+    with pytest.raises(OSError, match="持续未输出"):
+        dec.feed(av.Packet(bad))
+    assert dec.last_valid == 8.0

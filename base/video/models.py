@@ -93,6 +93,7 @@ class VideoStatus:
     had_gap: bool = False
     started_at: float | None = None
     ended_at: float | None = None
+    recovery_seconds: float = 0.0
     connection_detail: str = ""
     recording_detail: str = ""
     directory: str = ""
@@ -110,7 +111,7 @@ class VideoStatus:
         if self.started_at is None:
             return 0
         end = self.ended_at if self.ended_at is not None else now
-        return max(0, int(end - self.started_at))
+        return max(0, int(end - self.started_at - self.recovery_seconds))
 
 
 class VideoState:
@@ -168,19 +169,24 @@ class VideoState:
                 return False
             self.status = replace(status, recording="stopping", record_intent=False, recording_detail=event.detail)
         elif kind == EventKind.STARTED:
-            if not status.record_intent or status.recording != "starting":
+            if not status.record_intent or status.recording not in {"starting", "recovering"}:
                 return False
+            recovery_seconds = status.recovery_seconds
+            if status.started_at is not None and status.ended_at is not None:
+                recovery_seconds += event.monotonic_time - status.ended_at
             self.status = replace(
-                status, connection="ready", recording="recording", connection_detail="", recording_detail="",
+                status, connection="ready", recording="recording", connection_detail="",
+                recording_detail="已恢复录像，存在中断" if status.had_gap else "",
                 started_at=status.started_at if status.started_at is not None else event.monotonic_time,
+                ended_at=None, recovery_seconds=recovery_seconds,
                 directory=event.detail or status.directory,
             )
         elif kind == EventKind.RECOVERING:
             if not status.record_intent or status.recording not in {"starting", "recording", "recovering"}:
                 return False
-            # Capture loss ends recording; camera READY only restores preview.
+            # Keep user intent, but freeze the timer until a new frame is written.
             self.status = replace(
-                status, connection="reconnecting", recording="stopping", record_intent=False,
+                status, connection="reconnecting", recording="recovering",
                 had_gap=True, connection_detail=event.detail,
                 ended_at=ended_at,
             )

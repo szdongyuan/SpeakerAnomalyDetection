@@ -98,12 +98,13 @@ def simulated_video_worker(channel, mailbox, generation, options):
                     disconnected_once = True
                     ready = False
                     recovery_due = now + options.reconnect_after
-                    stop_due = now + options.stop_delay
-                    emit(EventKind.RECOVERING, session_id, detail="模拟摄像头断开，正在停止录像")
+                    emit(EventKind.RECOVERING, session_id, detail="模拟摄像头断开，等待恢复录像")
             if recovery_due is not None and now >= recovery_due:
                 recovery_due = None
                 ready = True
                 emit(EventKind.READY)
+                if session_id and stop_due is None:
+                    emit(EventKind.STARTED, session_id)
             if ready and preview_enabled and now >= next_frame and recovery_due is None:
                 frame_number += 1
                 # Small RGB test pattern with a moving bar; constant memory footprint.

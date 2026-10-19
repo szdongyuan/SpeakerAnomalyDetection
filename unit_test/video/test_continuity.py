@@ -201,7 +201,9 @@ def test_impossible_raw_frame_is_a_real_error_not_endless_shedding(tmp_path, mon
 
 def test_usb_gap_is_not_counted_as_a_long_software_drop_run(tmp_path):
     runtime = VideoRuntime(None, None, 1, config_for(tmp_path), capture_factory=SyntheticCapture)
-    runtime.online = runtime.accept_frames = True
+    runtime.online = True
+    runtime._command(Command(CommandKind.START, 1, "start", "gap"))
+    runtime.accept_frames = True
     runtime.admission.record(False, 0, 0, "raw")
     runtime.admission.record(True, .1, .1, "raw")
     runtime.on_connection(False, "unplug")
@@ -284,7 +286,8 @@ def test_waiting_writer_stop_or_failure_preserves_order_and_releases_memory(tmp_
 
 
 @pytest.mark.parametrize("codec", ["h264", "h265"])
-def test_pressure_disconnect_stops_and_manual_restart_preserves_admitted_frames(tmp_path, codec):
+@pytest.mark.parametrize("manual_stop", [False, True])
+def test_pressure_disconnect_respects_intent_and_preserves_admitted_frames(tmp_path, codec, manual_stop):
     entered, release = threading.Event(), threading.Event()
 
     class PausedSession(RecordingSession):
@@ -325,19 +328,24 @@ def test_pressure_disconnect_stops_and_manual_restart_preserves_admitted_frames(
             capture(index)
         assert runtime.admission.dropped > 0 and runtime.accept_frames
         runtime.on_connection(False, "synthetic disconnect under pressure")
-        assert runtime.stop_requested and not runtime.accept_frames
+        assert not runtime.stop_requested and not runtime.accept_frames
+        if manual_stop:
+            runtime._command(Command(CommandKind.STOP, 1, "manual-stop", "pressure-segments"))
         runtime.on_connection(True, "")
         for index in range(45, 120):
             capture(index)
-        assert runtime.online and not runtime.accept_frames
-        assert runtime.admission.candidates == 45
-        assert len(accepted) == 45 - runtime.admission.dropped
+        assert runtime.online and runtime.accept_frames == (not manual_stop)
+        candidates = 45 if manual_stop else 120
+        assert runtime.admission.candidates == candidates
+        assert len(accepted) == candidates - runtime.admission.dropped
         release.set()
+        if not manual_stop:
+            runtime._command(Command(CommandKind.STOP, 1, "stop-after-resume", "pressure-segments"))
         wait_for(lambda: not runtime.session_id)
         wait_for(lambda: not runtime.encoder_busy and runtime.work.empty()
                  and runtime.encoded.snapshot()["resident_bytes"] == 0)
         files = sorted(tmp_path.glob("video/*/*.mp4"))
-        assert len(files) == 2
+        assert (len(files) == 2) if manual_stop else (len(files) >= 3)
         identities = []
         for path in files:
             with av.open(str(path)) as container:
@@ -357,7 +365,7 @@ def test_pressure_disconnect_stops_and_manual_restart_preserves_admitted_frames(
         assert not list(tmp_path.rglob("*.recording.mp4"))
 
         capture(120)
-        assert not runtime.accept_frames and runtime.admission.candidates == 45
+        assert not runtime.accept_frames and runtime.admission.candidates == candidates
         assert not runtime.session_id
         runtime._command(Command(CommandKind.START, 1, "start-again", "fresh"))
         wait_for(lambda: runtime.accept_frames)

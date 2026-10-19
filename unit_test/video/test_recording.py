@@ -387,7 +387,7 @@ def test_compressed_frame_without_file_header_is_rejected(tmp_path):
         session.finish()
 
 
-def test_gap_closes_segment_and_marks_session_interrupted(tmp_path, caplog):
+def test_explicit_segment_after_gap_marks_session_interrupted(tmp_path, caplog):
     caplog.set_level(logging.INFO, logger="core.video")
     session = RecordingSession(config_for(tmp_path), "gap")
     write_segment(session, [(i, 10 + i / 10) for i in range(15)])

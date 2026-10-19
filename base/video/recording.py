@@ -473,6 +473,7 @@ class SegmentWriter:
         self.path = Path(path)
         self.diagnostics = diagnostics or VideoDiagnostics()
         self.frames = self.packet_count = 0
+        self.written_pts = self._last_packet_pts = None
         self.failed = False
         self.first_time = self.last_time = None
         self._file = TimedVideoFile(self.path.open("xb", buffering=0), self.diagnostics)
@@ -505,7 +506,13 @@ class SegmentWriter:
                 for item in frame.packets:
                     packet = item.restore()
                     packet.stream = self.stream
+                    before = self._file.tell()
                     self._container.mux(packet)
+                    if self._file.tell() > before:
+                        # Single video stream, no B frames: a fragment boundary writes
+                        # the preceding packets. The triggering packet may still be buffered.
+                        self.written_pts = self._last_packet_pts
+                    self._last_packet_pts = item.pts
                     self.packet_count += 1
         except Exception:
             self.failed = True
@@ -591,6 +598,7 @@ class RecordingSession:
         self._last_file_name = ""
         self._last_file_bytes = 0
         self._pending_gap = False
+        self._resume_pts = None
         self.closed = False
         # No historical lists: memory use does not grow with segments or USB reconnects.
         self.summary = {
@@ -630,6 +638,7 @@ class RecordingSession:
             )
             with self.diagnostics.stage("open_segment"):
                 self.segment_writer = SegmentWriter(path, parameters=parameters, diagnostics=self.diagnostics)
+            self._resume_pts = None
 
     def write(self, frame: EncodedFrame, timestamp):
         if self.closed:
@@ -638,6 +647,11 @@ class RecordingSession:
             raise ValueError("采集时间戳未递增，已停止录像，避免生成错误的录像时间轴")
         if self.segment_writer is None:
             raise RuntimeError("压缩帧缺少对应的录像文件头")
+        if self._pending_gap and self._resume_pts is None:
+            # Use the returning frame's capture time, even if the codec has not yet
+            # emitted it. Buffered pre-gap packets cannot acknowledge recovery.
+            origin = self.segment_writer.first_time
+            self._resume_pts = round((timestamp - origin) * 90000) if origin is not None else 0
         self.segment_writer.write(frame, timestamp)
         if self.first_time is None:
             self.first_time = timestamp
@@ -645,7 +659,12 @@ class RecordingSession:
         self.last_time = timestamp
         self.summary["frames"] += 1
         self.summary["elapsed_seconds"] = timestamp - self.first_time
-        if self.segment_writer.has_written_media:
+        written = self.segment_writer.has_written_media
+        if self._pending_gap:
+            written = (self._resume_pts is not None
+                       and self.segment_writer.written_pts is not None
+                       and self.segment_writer.written_pts >= self._resume_pts)
+        if written:
             transitioned = self.summary["state"] == "starting" or self._pending_gap
             self.summary["state"] = "recording"
             if transitioned:
@@ -653,7 +672,11 @@ class RecordingSession:
                 self._log_statistics("capture resumed" if self._pending_gap else "recording started")
                 self._pending_gap = False
         self.maintain()
-        return self.segment_writer.has_written_media
+        return written
+
+    def end_segment(self):
+        """Close at a scheduled boundary without opening an empty replacement."""
+        self._finish_segment()
 
     def next_segment(self, parameters):
         self._finish_segment()
@@ -722,13 +745,13 @@ class RecordingSession:
         self.summary["gaps"] += 1
         self.summary["state"] = "recovering"
         self._pending_gap = True
+        self._resume_pts = None
         self._logger.warning(
             "Video capture interrupted: session=%s directory=%s detected_at=%s "
             "elapsed_seconds=%.3f frames=%d reason=%s",
             self.session_id, self.directory.name, disconnected_at or utc_now(),
             self.summary["elapsed_seconds"], self.summary["frames"], reason[:1000],
         )
-        self._finish_segment()
 
     def finish(self, *, error=""):
         if self.closed:
