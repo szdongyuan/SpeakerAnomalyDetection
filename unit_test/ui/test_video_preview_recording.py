@@ -379,22 +379,25 @@ def test_cancel_starting_keeps_preview_without_late_recording(camera, ui_qapp):
     assert not controller.panel.canvas.image.isNull()
 
 
-def test_preview_toggle_during_disconnect_does_not_resume_recording(camera, ui_qapp):
-    controller = camera(simulation=True, disconnect_after=.1, reconnect_after=1, stop_delay=.6)
+@pytest.mark.parametrize("preview_enabled", [False, True])
+def test_preview_choice_during_disconnect_preserves_auto_resume(camera, ui_qapp, preview_enabled):
+    controller = camera(simulation=True, disconnect_after=.1, reconnect_after=2)
     start(ui_qapp, controller)
     service = controller.service
     session, began = service.status.session_id, service.status.started_at
-    spin(ui_qapp, lambda: service.status.recording == "stopping")
-    save_preview(ui_qapp, controller, True)
+    spin(ui_qapp, lambda: service.status.recording == "recovering")
+    save_preview(ui_qapp, controller, preview_enabled)
     assert service.status.session_id == session and service.status.started_at == began
-    assert not service.status.record_intent
-    spin(ui_qapp, lambda: service.status.recording == "interrupted")
-    spin(ui_qapp, lambda: controller.panel.record_button.text() == "开始录像")
-    assert not controller.panel.record_button.isEnabled()
-    spin(ui_qapp, lambda: service.status.connection == "ready")
-    assert not service.status.record_intent and service.status.recording == "interrupted"
+    assert service.status.record_intent
+    spin(ui_qapp, lambda: service.status.recording == "recording")
+    assert service.status.record_intent and service.status.had_gap
     assert not service.is_closing and controller.service is service
-    spin(ui_qapp, lambda: controller.panel.record_button.isEnabled())
+    spin(ui_qapp, lambda: controller.panel.record_button.text() == "停止录像")
+    assert controller.panel.record_button.isEnabled()
+    assert controller.stop_recording()
+    spin(ui_qapp, lambda: service.status.recording == "interrupted")
+    if not preview_enabled:
+        spin(ui_qapp, lambda: service.is_closed)
 
 
 @pytest.mark.parametrize("field", ["bitrate", "preview_resolution"])

@@ -44,6 +44,10 @@ class SyntheticCapture:
                 self.on_connection(False, "test unplug")
                 self.stop_event.wait(.5)
                 self.on_connection(True, "")
+            if self.config.device_name in {"stall", "stall8"} and index == 30:
+                # No OFFLINE callback: exercise the unchanged 3-second watchdog.
+                self.stop_event.wait(8 if self.config.device_name == "stall8" else 4.2)
+                self.last_progress = time.monotonic()
             pixels = np.full((90, 160, 3), index % 200, dtype=np.uint8)
             pixels[:, :] = (65, 115, 160)
             pixels[:, index % 155:index % 155 + 5] = (230, 230, 230)
@@ -69,8 +73,8 @@ def wait_for(predicate, timeout=8):
     raise AssertionError("real video pipeline timed out")
 
 
-@pytest.mark.parametrize("name", ["normal", "disconnect"])
-def test_real_encoding_stops_manually_or_on_disconnect(tmp_path, name):
+@pytest.mark.parametrize("name", ["normal", "disconnect", "stall", "stall8"])
+def test_real_encoding_resumes_after_gap_until_manually_stopped(tmp_path, name):
     service = VideoService(
         worker_target=synthetic_video_worker, worker_options=config_for(tmp_path, device_name=name),
         heartbeat_timeout=8, command_timeout=10, shutdown_timeout=10,
@@ -81,13 +85,16 @@ def test_real_encoding_stops_manually_or_on_disconnect(tmp_path, name):
         assert service.start_recording()
         wait_for(lambda: service.status.recording == "recording")
         assert decoded(next(tmp_path.glob("*/*/*.recording.mp4")))
-        if name == "disconnect":
-            wait_for(lambda: service.status.recording == "interrupted")
-        else:
-            assert service.stop_recording()
-            wait_for(lambda: service.status.recording == "completed")
+        session = service.status.session_id
+        if name != "normal":
+            wait_for(lambda: service.status.recording == "recovering")
+            assert service.status.record_intent
+            wait_for(lambda: service.status.recording == "recording")
+            assert service.status.session_id == session and service.status.had_gap
+        assert service.stop_recording()
+        wait_for(lambda: service.status.recording == ("completed" if name == "normal" else "interrupted"))
         files = list(tmp_path.glob("*/*/*.mp4"))
-        assert files
+        assert len(files) == 1
         assert all(decoded(path) for path in files)
         assert not list(tmp_path.rglob("*.json"))
         wait_for(lambda: service.latest_preview() is not None)
@@ -600,24 +607,43 @@ def test_production_runtime_recovers_from_real_file_write_pause(tmp_path, monkey
         assert not runtime.encoder_thread.is_alive() and not runtime.writer.is_alive()
 
 
-def test_disconnect_during_startup_cannot_reenable_writer(tmp_path):
+@pytest.mark.parametrize("cancel", [None, CommandKind.STOP, CommandKind.SHUTDOWN])
+@pytest.mark.parametrize("ready_before_prepare", [False, True])
+def test_startup_gap_resumes_unless_cancelled(tmp_path, cancel, ready_before_prepare):
     runtime = VideoRuntime(None, None, 1, config_for(tmp_path), capture_factory=SyntheticCapture)
     runtime.preview_due, runtime.online = float("inf"), True
     runtime._command(Command(CommandKind.START, 1, "start", "startup-disconnect"))
-    assert runtime.start_pending
     runtime.on_connection(False, "startup unplug")
     runtime.on_connection(False, "still unplugged")
-    runtime.on_connection(True, "")
-    assert not runtime.start_pending and not runtime.accept_frames
+    assert runtime.start_pending and not runtime.accept_frames
+    if cancel:
+        runtime._command(Command(cancel, 1, "cancel", "startup-disconnect"))
+    if ready_before_prepare:
+        runtime.on_connection(True, "")
     runtime.writer.start()
     runtime.encoder_thread.start()
     try:
-        wait_for(lambda: not runtime.session_id)
-        assert not runtime.accept_frames
-        assert not list(tmp_path.rglob("*.mp4"))
+        wait_for(lambda: not runtime.start_pending)
+        if not ready_before_prepare:
+            assert not runtime.accept_frames
+            runtime.on_connection(True, "")
         interruptions = [event for event in runtime.events.queue if event[0] == EventKind.RECOVERING]
         assert len(interruptions) == 1
-        assert not any(event[0] == EventKind.STARTED for event in runtime.events.queue)
+        if cancel:
+            wait_for(lambda: not runtime.session_id)
+            assert not runtime.accept_frames
+            assert not list(tmp_path.rglob("*.mp4"))
+            assert not any(event[0] == EventKind.STARTED for event in runtime.events.queue)
+        else:
+            wait_for(lambda: runtime.accept_frames)
+            pixels = np.zeros((90, 160, 3), dtype=np.uint8)
+            for index in range(15):  # MP4 emits its first fragment after one second of media.
+                runtime.on_frame(av.VideoFrame.from_ndarray(pixels, format="rgb24"), 100 + index / 10)
+                wait_for(lambda: runtime.raw_frames == 0)
+            wait_for(lambda: any(e[0] == EventKind.STARTED for e in runtime.events.queue))
+            runtime._command(Command(CommandKind.STOP, 1, "stop", "startup-disconnect"))
+            wait_for(lambda: not runtime.session_id)
+            assert len(decoded(next(tmp_path.rglob("*.mp4")))) == 15
     finally:
         runtime._command(Command(CommandKind.SHUTDOWN, 1, "close"))
         runtime.encoder_thread.join(5)
@@ -626,10 +652,11 @@ def test_disconnect_during_startup_cannot_reenable_writer(tmp_path):
 
 
 @pytest.mark.parametrize("codec", ["h264", "h265"])
-def test_production_disconnect_finalizes_frames_without_automatic_resume(tmp_path, codec):
+@pytest.mark.parametrize("gap_source", ["connection", "delayed_watchdog"])
+def test_production_repeated_disconnect_creates_decodable_segments(tmp_path, codec, gap_source, caplog):
     config = replace(config_for(tmp_path), width=320, height=180, fps_num=30, codec=codec)
     # Test-only shortened segment boundary; saved settings still require two hours.
-    config = SimpleNamespace(**(vars(config) | {"segment_duration_seconds": 1}))
+    config = SimpleNamespace(**(vars(config) | {"segment_duration_seconds": 2}))
     runtime = VideoRuntime(None, None, 1, config, capture_factory=SyntheticCapture)
     runtime.preview_due, runtime.online = float("inf"), True
     runtime.writer.start()
@@ -638,17 +665,30 @@ def test_production_disconnect_finalizes_frames_without_automatic_resume(tmp_pat
     try:
         runtime._command(Command(CommandKind.START, 1, "start", "segments"))
         wait_for(lambda: runtime.accept_frames)
-        for index in range(90):
-            if index == 45:
-                runtime.on_connection(False, "合成断线")
-                assert not runtime.accept_frames
-                runtime.on_connection(True, "")
-            runtime.on_frame(synthetic_frame(index, 320, 180, background), 100 + index / 30)
-            wait_for(lambda: runtime.work.empty() and not runtime.encoder_busy)
+        for index in range(240):
+            if index in {90, 165}:
+                if gap_source == "connection":
+                    runtime.on_connection(False, "合成断线")
+                    runtime.on_connection(False, "重复离线通知")
+                    assert not runtime.accept_frames
+                    runtime.on_connection(True, "")
+                else:
+                    # Simulate both capture and watchdog being descheduled before a valid frame returns.
+                    runtime.last_frame_at = time.monotonic() - 7.323
+            gap_seconds = 10 * ((index >= 90) + (index >= 165))
+            runtime.on_frame(synthetic_frame(index, 320, 180, background), 100 + index / 30 + gap_seconds)
+            wait_for(lambda: runtime.work.empty() and not runtime.encoder_busy
+                     and runtime.encoded.snapshot()["items"] == 0 and not runtime.writer_busy)
+        assert runtime.session_id == "segments" and runtime.accept_frames
+        assert len([e for e in runtime.events.queue if e[0] == EventKind.STARTED]) == 3
+        runtime._command(Command(CommandKind.STOP, 1, "stop", "segments"))
         wait_for(lambda: not runtime.session_id)
         files = sorted(tmp_path.glob("video/*/*.mp4"))
-        assert len(files) == 2
-        verify_files(files, 45)
+        assert len(files) == 6
+        verify_files(files, 240)
+        assert [len(decoded(path)) for path in files] == [60, 30, 30, 45, 15, 60]
+        assert len([r for r in caplog.records if "Video capture interrupted:" in r.message]) == 2
+        assert len([r for r in caplog.records if "Video capture resumed:" in r.message]) == 2
         assert not runtime.accept_frames
         assert runtime.stop_requested
         assert runtime.encoded.snapshot()["bytes"] == runtime.raw_bytes == 0
@@ -911,3 +951,40 @@ def test_stuck_file_owner_exits_before_releasing_directory_lease(tmp_path, caplo
     finally:
         service.shutdown()
         assert service.wait_closed(10)
+
+
+def test_storage_failure_on_resume_cancels_future_recovery(tmp_path):
+    class FailOnResume(RecordingSession):
+        def write(self, frame, stamp):
+            if self.summary["gaps"]:
+                raise OSError("test resume storage failure")
+            return super().write(frame, stamp)
+
+    runtime = VideoRuntime(None, None, 1, config_for(tmp_path),
+                           capture_factory=SyntheticCapture, session_factory=FailOnResume)
+    runtime.preview_due, runtime.online = float("inf"), True
+    runtime.writer.start()
+    runtime.encoder_thread.start()
+    pixels = np.zeros((90, 160, 3), dtype=np.uint8)
+    try:
+        runtime._command(Command(CommandKind.START, 1, "start", "resume-storage"))
+        wait_for(lambda: runtime.accept_frames)
+        for index in range(15):
+            runtime.on_frame(av.VideoFrame.from_ndarray(pixels, format="rgb24"), 100 + index / 10)
+            wait_for(lambda: runtime.raw_frames == 0)
+        wait_for(lambda: any(e[0] == EventKind.STARTED for e in runtime.events.queue))
+        runtime.on_connection(False, "test unplug")
+        runtime.on_connection(True, "")
+        runtime.on_frame(av.VideoFrame.from_ndarray(pixels, format="rgb24"), 110)
+        wait_for(lambda: any(e[0] == EventKind.RECORDING_FAILED for e in runtime.events.queue))
+        runtime.on_connection(False, "second unplug")
+        runtime.on_connection(True, "")
+        assert not runtime.accept_frames and not runtime.session_id
+        assert len([e for e in runtime.events.queue if e[0] == EventKind.STARTED]) == 1
+        files = list(tmp_path.rglob("*.mp4"))
+        assert len(files) == 1 and len(decoded(files[0])) == 15
+    finally:
+        runtime._command(Command(CommandKind.SHUTDOWN, 1, "close"))
+        runtime.encoder_thread.join(5)
+        runtime.writer.join(5)
+        assert not runtime.encoder_thread.is_alive() and not runtime.writer.is_alive()
