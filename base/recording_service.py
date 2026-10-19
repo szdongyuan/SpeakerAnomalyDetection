@@ -2318,6 +2318,15 @@ class RecordingService:
                 # existing cancel deadline, but actually ask the child to stop.
                 if session._sent and not session._child_released:
                     self._command("cancel", session)
+                try:
+                    self._logger.warning(
+                        "VE parent_capture_timeout request=%s progress_frames=%s target_frames=%s "
+                        "last_frame_at=%s now=%s progress_age=%s",
+                        session.request.request_id, progress.frames, session.request.target_samples,
+                        progress.last_frame_at, now, max(0, now - progress.last_frame_at))
+                except Exception:
+                    # Timeout and cancellation are already decided; logging is optional.
+                    pass
         if (session is not None and session._slot_release_deadline is not None
                 and not session._terminal):
             self._warn_slow_capture_release(session, now, session._slot_release_deadline)

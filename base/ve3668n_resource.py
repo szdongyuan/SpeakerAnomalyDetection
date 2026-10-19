@@ -101,6 +101,10 @@ class VeRecordingAdapter:
         self._deadline = None
         self._pending_started_at = None
         self._progress = VeCaptureProgress(None, 0, None)
+        self._empty_read_since = None
+        self._empty_read_count = 0
+        self._last_empty_warning = None
+        self._last_slow_read_warning = None
 
     def start(self):
         with self._lock:
@@ -359,13 +363,16 @@ class VeResourceController:
                 self._release_outcome = None
                 self._submit(_Command("release"))
             owner = self._owner
+        wait_started = time.perf_counter()
         owner.join(timeout)
         if owner.is_alive():
-            self._resource_diagnostics.timeout(
-                "release", owner, resource_state=self._state, request_association=(
-                    "last_bound" if self._has_bound_request else "initial_request"))
+            observed_state = self._state
             message = "VE native owner did not exit before release timeout"
             self._mark_failed("release", message)
+            self._resource_diagnostics.timeout(
+                "release", owner, resource_state=observed_state,
+                wait_budget=timeout, elapsed_ms=(time.perf_counter() - wait_started) * 1000,
+                request_association=("last_bound" if self._has_bound_request else "initial_request"))
             with self._lock:
                 self._release_outcome = VeResourceReleaseOutcome(
                     False, released_signature, tuple(self._diagnostics),
@@ -755,11 +762,15 @@ class VeResourceController:
         if adapter._detached.is_set():
             return adapter.handles_released
         timeout = self._detach_timeout if timeout is None else timeout
+        wait_started = time.perf_counter()
         self._submit(_Command("detach", adapter))
         if not adapter._detached.wait(timeout):
             message = "VE adapter detach confirmation timed out"
             adapter._detach_timeout(message)
             self._mark_failed("detach", message, adapter)
+            self._resource_diagnostics.timeout(
+                "detach", self._owner, wait_budget=timeout,
+                elapsed_ms=(time.perf_counter() - wait_started) * 1000)
             return False
         return adapter.handles_released
 
@@ -816,16 +827,22 @@ class VeResourceController:
                 self._confirm_detach(active)
                 continue
             read_adapter = active
+            requested = returned = None
+            read_started = read_finished = None
+            read_validated = False
             try:
                 requested = self._requested_frames(read_adapter)
                 if read_adapter is not None:
                     read_adapter._check_deadline()
+                read_started = self._clock()
                 buffer, returned = self._sdk.read_task_data(
                     self._task, channel_count=len(self._signature[2]),
                     samples_per_channel=requested, timeout_seconds=.2)
+                read_finished = self._clock()
                 if read_adapter is not None:
                     read_adapter._check_deadline()
                 self._validate_read(buffer, returned, requested)
+                read_validated = True
                 self._process_commands()
                 with self._lock:
                     if self._state in (self._RELEASING, self._FAILED):
@@ -857,12 +874,62 @@ class VeResourceController:
                 # ``read_adapter`` is the binding associated with this exact
                 # read/callback operation; controller state may change while a
                 # native call is blocked and cannot identify the fault owner.
+                failure_elapsed = (None if read_started is None else
+                                   ((read_finished if read_finished is not None else self._clock())
+                                    - read_started) * 1000)
                 message, fault = self._failure_from_exception(
                     "read_task_data", exc)
                 self._mark_failed(
                     "read_task_data", message, read_adapter, fault,
                 )
+                logger = self._resource_diagnostics.logger
+                if logger is not None:
+                    try:
+                        logger.exception(
+                            "VE sdk_read_failed request=%s requested_frames=%s returned_frames=%s elapsed_ms=%s",
+                            read_adapter.request.request_id if read_adapter is not None else None,
+                            requested, returned, failure_elapsed)
+                    except Exception:
+                        # Borrowed logger delivery is optional; the original fault is already latched.
+                        pass
                 return
+            finally:
+                if read_adapter is not None and read_finished is not None:
+                    elapsed = read_finished - read_started
+                    logger = self._resource_diagnostics.logger
+                    if (elapsed >= .5 and (read_adapter._last_slow_read_warning is None
+                            or read_finished - read_adapter._last_slow_read_warning >= 5)):
+                        read_adapter._last_slow_read_warning = read_finished
+                        if logger is not None:
+                            try:
+                                logger.warning(
+                                    "VE sdk_read_slow request=%s requested_frames=%s returned_frames=%s elapsed_ms=%.3f",
+                                    read_adapter.request.request_id, requested, returned, elapsed * 1000)
+                            except Exception:
+                                # Optional logging must not alter capture or its first failure.
+                                pass
+                    if read_validated and returned == 0:
+                        if read_adapter._empty_read_since is None:
+                            read_adapter._empty_read_since = read_started
+                        read_adapter._empty_read_count += 1
+                        empty_elapsed = read_finished - read_adapter._empty_read_since
+                        if (empty_elapsed >= 1 and (read_adapter._last_empty_warning is None
+                                or read_finished - read_adapter._last_empty_warning >= 5)):
+                            read_adapter._last_empty_warning = read_finished
+                            if logger is not None:
+                                try:
+                                    logger.warning(
+                                        "VE sdk_read_empty request=%s requested_frames=%s returned_frames=%s "
+                                        "empty_reads=%s empty_ms=%.3f progress_frames=%s",
+                                        read_adapter.request.request_id, requested, returned,
+                                        read_adapter._empty_read_count, empty_elapsed * 1000,
+                                        read_adapter.progress_snapshot.frames)
+                                except Exception:
+                                    # Optional logger delivery cannot stop the native owner.
+                                    pass
+                    elif read_validated and returned > 0:
+                        read_adapter._empty_read_since = None
+                        read_adapter._empty_read_count = 0
 
     def _latch_startup_native_failure(self, attempt, stage, exc):
         if attempt is not None:

@@ -144,6 +144,9 @@ class RecordingCapture:
         self._warnings = []
         self._status_warning = None
         self._logger = LogManager.set_log_handler("core")
+        self._last_callback_warning = None
+        self._last_queue_wait_warning = None
+        self._callback_queue_wait = None
         self._effective_trim = request.trim_samples if request.purpose == "main" else 0
         # For a known overlarge trim, finalization retains all audio too.
         if self._effective_trim >= request.target_samples:
@@ -349,7 +352,10 @@ class RecordingCapture:
                 or (self._is_ve and type(frames) is not int)):
             self._fail("capture", "driver input shape does not match frame/channel contract")
             return None
-        with self._queue_lock:
+        wait_started = time.perf_counter() if self._is_ve else None
+        self._queue_lock.acquire()
+        wait_finished = time.perf_counter() if self._is_ve else None
+        try:
             if self._stop_requested.is_set():
                 return None
             accepted = min(frames, self.request.target_samples - self.raw_frames)
@@ -372,16 +378,52 @@ class RecordingCapture:
             if self.raw_frames == self.request.target_samples:
                 self._target_sample_arrival = time.monotonic()
                 self._stop_requested.set()
+        finally:
+            self._queue_lock.release()
+            if wait_started is not None:
+                self._callback_queue_wait = wait_finished - wait_started
         self._wake.set()
         return owned
 
     def _input_callback(self, indata, frames, time_info, status):
+        started = time.perf_counter() if self._is_ve else None
+        self._callback_queue_wait = None
         try:
             self._accept(indata, frames, status)
         except Exception as exc:
             # PortAudio otherwise suppresses callback exceptions. Record once and
-            # wake the owner to stop/close; never log or send IPC on this thread.
+            # wake the owner to stop/close before optional logger delivery.
             self._fail("capture", f"audio callback failed: {exc}")
+            if self._is_ve:
+                try:
+                    self._logger.exception("VE audio_callback_failed request=%s", self.request.request_id)
+                except Exception:
+                    # Keep the original capture failure if the borrowed logger fails.
+                    pass
+        finally:
+            if started is not None:
+                finished = time.perf_counter()
+                queue_wait = self._callback_queue_wait
+                if (queue_wait is not None and queue_wait >= .1
+                        and (self._last_queue_wait_warning is None
+                             or finished - self._last_queue_wait_warning >= 5)):
+                    self._last_queue_wait_warning = finished
+                    try:
+                        self._logger.warning(
+                            "VE callback_queue_wait_slow request=%s elapsed_ms=%.3f",
+                            self.request.request_id, queue_wait * 1000)
+                    except Exception:
+                        # Queue lock is released and any capture failure is already latched.
+                        pass
+                if (finished - started >= .1 and (self._last_callback_warning is None
+                        or finished - self._last_callback_warning >= 5)):
+                    self._last_callback_warning = finished
+                    try:
+                        self._logger.warning("VE audio_callback_slow request=%s elapsed_ms=%.3f",
+                                             self.request.request_id, (finished - started) * 1000)
+                    except Exception:
+                        # Optional logging cannot stop healthy capture or replace its failure.
+                        pass
 
     def _open(self):
         req = self.request
