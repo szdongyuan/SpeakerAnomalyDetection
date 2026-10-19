@@ -137,6 +137,119 @@ def request(tmp_path, **overrides):
     return RecordingRequest(**values)
 
 
+def direct_anomaly_capture(tmp_path, monkeypatch):
+    from base import recording_capture as module
+    from unit_test.base.ve3668n_fakes import capture_request, DiscoveryClock
+    from unit_test.base.test_ve_resource_diagnostics import sink
+    capture = RecordingCapture(capture_request(tmp_path / "direct.wav", target_samples=512000),
+                               backend=FakeBackend())
+    logger, records = sink()
+    capture._logger = logger
+    clock = DiscoveryClock()
+    monkeypatch.setattr(module.time, "perf_counter", clock)
+    return capture, clock, logger, records
+
+
+@pytest.mark.parametrize("logger_fails", [False, True])
+def test_direct_anomaly_callback_healthy_silence_and_slow_limit(tmp_path, monkeypatch, logger_fails):
+    capture, clock, logger, records = direct_anomaly_capture(tmp_path, monkeypatch)
+    if logger_fails:
+        class FailingLog(logging.Handler):
+            def emit(self, record):
+                raise OSError("optional-slow-log-probe")
+        logger.addHandler(FailingLog())
+    data = np.zeros((1, 8))
+    capture._input_callback(data, 1, None, None)
+    assert records == [] and capture.raw_frames == 1
+    accept = capture._accept
+
+    def slow_accept(*args):
+        clock.advance(.125)
+        return accept(*args)
+
+    monkeypatch.setattr(capture, "_accept", slow_accept)
+    for _ in range(2):
+        capture._input_callback(data, 1, None, None)
+    clock.advance(5)
+    capture._input_callback(data, 1, None, None)
+    assert capture.raw_frames == 4
+    assert len(records) == 2
+    assert all("audio_callback_slow" in r.getMessage() and "elapsed_ms=125" in r.getMessage()
+               and "request=" + capture.request.request_id in r.getMessage() for r in records)
+
+
+@pytest.mark.parametrize("logger_fails", [False, True])
+def test_direct_anomaly_callback_error_preserves_failure_and_traceback(
+        tmp_path, monkeypatch, logger_fails):
+    capture, _, logger, records = direct_anomaly_capture(tmp_path, monkeypatch)
+    observations = []
+
+    def reject(*args):
+        raise ValueError("callback-probe")
+
+    class CheckFailure(logging.Handler):
+        def emit(self, record):
+            observations.append((capture._failure, capture._queue_lock.locked()))
+            if logger_fails:
+                raise OSError("optional-callback-log-probe")
+
+    logger.addHandler(CheckFailure())
+    monkeypatch.setattr(capture, "_accept", reject)
+    capture._input_callback(None, 1, None, None)
+    assert capture._failure == ("capture", "audio callback failed: callback-probe")
+    assert capture._stop_requested.is_set()
+    assert observations == [(("capture", "audio callback failed: callback-probe"), False)]
+    assert len(records) == 1 and records[0].exc_info
+    assert "audio_callback_failed" in records[0].getMessage()
+
+
+@pytest.mark.parametrize("copy_fails", [False, True])
+def test_direct_anomaly_queue_wait_logs_after_unlock_with_independent_limit(tmp_path, monkeypatch, copy_fails):
+    capture, clock, logger, records = direct_anomaly_capture(tmp_path, monkeypatch)
+    lock = threading.Lock()
+    observations = []
+
+    class SlowLock:
+        def __enter__(self):
+            self.acquire()
+            return self
+
+        def __exit__(self, *args):
+            self.release()
+
+        def acquire(self):
+            clock.advance(.125)
+            return lock.acquire()
+
+        def release(self):
+            lock.release()
+
+    class CheckUnlocked(logging.Handler):
+        def emit(self, record):
+            observations.append((lock.locked(), capture._failure))
+
+    capture._queue_lock = SlowLock()
+    logger.addHandler(CheckUnlocked())
+    if copy_fails:
+        def fail_copy(*args, **kwargs):
+            raise ValueError("copy-probe")
+        monkeypatch.setattr(np, "array", fail_copy)
+        capture._input_callback(np.zeros((1, 8)), 1, None, None)
+        assert capture._failure == ("capture", "audio callback failed: copy-probe")
+        # The first queued diagnostic must already see the business failure.
+        assert "audio_callback_failed" in records[0].getMessage()
+        assert observations and all(observation == (False, capture._failure) for observation in observations)
+        return
+    for _ in range(2):
+        capture._input_callback(np.zeros((1, 8)), 1, None, None)
+    clock.advance(5)
+    capture._input_callback(np.zeros((1, 8)), 1, None, None)
+    assert capture.raw_frames == 3
+    assert sum("callback_queue_wait_slow" in r.getMessage() for r in records) == 2
+    assert sum("audio_callback_slow" in r.getMessage() for r in records) == 2
+    assert observations and all(observation == (False, None) for observation in observations)
+
+
 @pytest.fixture
 def captures():
     active = []

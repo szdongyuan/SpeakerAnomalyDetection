@@ -1405,6 +1405,39 @@ def probe(tmp_path, monkeypatch):
                            events=events, event=event, progress=progress)
 
 
+@pytest.mark.parametrize("logger_fails", [False, True])
+def test_direct_anomaly_parent_timeout_uses_original_progress(probe, logger_fails):
+    from unit_test.base.test_ve_resource_diagnostics import sink
+    import logging
+    p = probe
+    logger, records = sink()
+    p.service._logger = logger
+    observations = []
+
+    class CheckFailure(logging.Handler):
+        def emit(self, record):
+            if "parent_capture_timeout" in record.getMessage():
+                observations.append(p.session.failure.stage if p.session.failure is not None else None)
+                if logger_fails:
+                    raise OSError("optional-parent-log-probe")
+
+    logger.addHandler(CheckFailure())
+    p.event("started", 100.0)
+    p.progress(7, 100.0)
+    p.clock.advance(5)
+    p.service._tick()
+    assert p.events.failed.get_nowait().stage == "capture_timeout"
+    messages = [r.getMessage() for r in records if "parent_capture_timeout" in r.getMessage()]
+    assert len(messages) == 1
+    assert observations == ["capture_timeout"]
+    message = messages[0]
+    assert "request=" + p.session.request.request_id in message
+    for fact in ("progress_frames=7", "target_frames=51200", "last_frame_at=100.0", "now=105.0", "progress_age=5.0"):
+        assert fact in message
+    assert not any(field in message for field in ("receipt", "dispatch", "supervisor"))
+    assert p.worker.outgoing.get_nowait().kind == "cancel"
+
+
 def test_watchdog_native_start_not_receipt_time_and_actual_cancel(probe):
     p = probe
     p.clock.advance(.4)

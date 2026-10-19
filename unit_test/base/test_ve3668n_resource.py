@@ -1,5 +1,6 @@
 import ctypes
 import itertools
+import logging
 import threading
 import time
 
@@ -38,6 +39,124 @@ ALL_ORDERED_CHANNEL_CASES = tuple(
     for size in range(1, len(FAKE_PHYSICAL_CHANNELS) + 1)
     for order in itertools.permutations(FAKE_PHYSICAL_CHANNELS, size)
 )
+
+
+def run_direct_anomaly_reads(controller, tmp_path, clock, steps, name="A"):
+    """Drive the actual owner loop without a thread or native startup clock."""
+    adapter, blocks, failures = stream(controller, tmp_path, name, target=512000)
+    adapter._accept_bind(clock)
+    controller._signature = adapter.signature
+    controller._active = adapter
+    controller._state = controller._RECORDING
+    pending = iter((duration, error) for duration, _, error in steps)
+
+    def read(*args, **kwargs):
+        step = next(pending, None)
+        if step is None:
+            controller._state = controller._RELEASING
+            return
+        duration, error = step
+        clock.advance(duration)
+        if error is not None:
+            raise error
+
+    controller._sdk = CaptureSDK(counts=[count for _, count, _ in steps] + [0],
+                                 hooks={"read_task_data": read})
+    controller._owner_loop()
+    if not controller.failed:
+        controller._confirm_detach(adapter)
+        controller._state = controller._IDLE
+    return adapter, blocks, failures
+
+
+def test_direct_anomaly_sdk_short_and_isolated_empty_reads_are_silent(tmp_path):
+    from unit_test.base.test_ve_resource_diagnostics import sink
+    logger, records = sink()
+    clock = DiscoveryClock()
+    controller, _ = controller_for(CaptureSDK, clock=clock, logger=logger)
+    adapter, blocks, failures = run_direct_anomaly_reads(
+        controller, tmp_path, clock, [(0, 1, None), (.4, 0, None), (.4, 1, None)])
+    assert len(blocks) == 2 and adapter.progress_snapshot.frames == 2
+    assert not records and not failures
+
+
+@pytest.mark.parametrize("logger_fails", [False, True])
+def test_direct_anomaly_sdk_slow_reads_limit_and_reset_per_request(tmp_path, logger_fails):
+    from unit_test.base.test_ve_resource_diagnostics import sink
+    logger, records = sink()
+    clock = DiscoveryClock()
+    if logger_fails:
+        class FailingLog(logging.Handler):
+            def emit(self, record):
+                raise OSError("optional-sdk-log-probe")
+        logger.addHandler(FailingLog())
+    controller, _ = controller_for(CaptureSDK, clock=clock, logger=logger)
+    adapter, blocks, failures = run_direct_anomaly_reads(controller, tmp_path, clock, [(.5, 1, None)] * 12)
+    assert not failures and len(blocks) == adapter.progress_snapshot.frames == 12
+    warnings = [r.getMessage() for r in records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2
+    assert all("sdk_read_slow" in m and "request=A" in m and "returned_frames=1" in m
+               and "requested_frames=2048" in m and "elapsed_ms=500" in m for m in warnings)
+    run_direct_anomaly_reads(controller, tmp_path, clock, [(.5, 1, None)], name="B")
+    assert "request=B" in records[-1].getMessage()
+    assert len(records) == 3
+
+
+def test_direct_anomaly_sdk_empty_streak_threshold_limit_and_positive_reset(tmp_path):
+    from unit_test.base.test_ve_resource_diagnostics import sink
+    logger, records = sink()
+    clock = DiscoveryClock()
+    controller, _ = controller_for(CaptureSDK, clock=clock, logger=logger)
+    # Positive frames end the streak. A second threshold crossing inside 5s is suppressed.
+    run_direct_anomaly_reads(controller, tmp_path, clock,
+                            [(.5, 0, None)] * 4 + [(0, 1, None)]
+                            + [(.5, 0, None)] * 4)
+    warnings = [r.getMessage() for r in records if "sdk_read_empty" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "request=A" in warnings[0] and "empty_reads=2" in warnings[0]
+    assert "empty_ms=1000" in warnings[0] and "progress_frames=0" in warnings[0]
+    run_direct_anomaly_reads(controller, tmp_path, clock, [(.5, 0, None)] * 2, name="B")
+    warnings = [r.getMessage() for r in records if "sdk_read_empty" in r.getMessage()]
+    assert len(warnings) == 2 and "request=B" in warnings[-1]
+
+
+@pytest.mark.parametrize("logger_fails", [False, True])
+@pytest.mark.parametrize("duration,error", [(0.5, OSError("native-read-probe")), (5, None)])
+def test_direct_anomaly_sdk_exception_keeps_original_failure_first(
+        tmp_path, logger_fails, duration, error):
+    from unit_test.base.test_ve_resource_diagnostics import sink
+    logger, records = sink()
+    clock = DiscoveryClock()
+    controller, _ = controller_for(CaptureSDK, clock=clock, logger=logger)
+    observed = []
+
+    class CheckFailure(logging.Handler):
+        def emit(self, record):
+            observed.append(controller.failure_snapshot)
+            if logger_fails:
+                raise RuntimeError("optional-log-probe")
+
+    logger.addHandler(CheckFailure())
+    adapter, blocks, failures = run_direct_anomaly_reads(
+        controller, tmp_path, clock, [(duration, 1, error)])
+    assert not blocks and len(failures) == 1
+    expected = "native-read-probe" if error is not None else "no progress"
+    assert expected in failures[0][1]
+    errors = [r for r in records if "sdk_read_failed" in r.getMessage()]
+    assert len(errors) == 1 and errors[0].exc_info
+    assert "request=A" in errors[0].getMessage() and "requested_frames=2048" in errors[0].getMessage()
+    assert observed and all(fault == adapter.failure_snapshot for fault in observed)
+
+
+def test_direct_anomaly_sdk_failure_duration_excludes_failure_delivery(tmp_path):
+    from unit_test.base.test_ve_resource_diagnostics import sink
+    logger, records = sink()
+    clock = DiscoveryClock()
+    controller, _ = controller_for(CaptureSDK, clock=clock, logger=logger)
+    controller._fatal_callback = lambda *_: clock.advance(10)
+    run_direct_anomaly_reads(controller, tmp_path, clock, [(.5, 0, OSError("read-probe"))])
+    message = next(r.getMessage() for r in records if "sdk_read_failed" in r.getMessage())
+    assert "elapsed_ms=500.0" in message
 
 
 def controller_for(sdk_factory, fatals=None, **options):
@@ -514,6 +633,40 @@ def test_prewarm_detach_timeout_has_structured_first_fault():
     assert adapter.failure_snapshot == VeResourceFault(
         "detach", None, "VE adapter detach confirmation timed out")
     allow_read.set()
+
+
+@pytest.mark.parametrize("phase", ["detach", "release"])
+def test_direct_anomaly_cleanup_timeout_keeps_budget_and_owner_stack(tmp_path, phase):
+    from unit_test.base.test_ve_resource_diagnostics import sink, events
+    logger, records = sink()
+    entered, unblock = threading.Event(), threading.Event()
+    reads = []
+
+    def block_read(*args, **kwargs):
+        reads.append(1)
+        if phase == "detach" or len(reads) == 2:
+            entered.set()
+            assert unblock.wait(3)
+
+    sdk = CaptureSDK(counts=(4, 4), hooks={"read_task_data": block_read})
+    controller, _ = controller_for(lambda: sdk, logger=logger, detach_timeout=.03)
+    adapter, _, _ = stream(controller, tmp_path)
+    try:
+        assert adapter.start() and entered.wait(1)
+        if phase == "release":
+            wait_released(adapter)
+            assert not controller.release(.03).success
+        else:
+            assert not adapter.stop()
+        evidence = events(records, event="TIMEOUT", phase=phase)
+        assert len(evidence) == 1
+        assert evidence[0]["wait_budget"] == .03
+        assert evidence[0]["elapsed_ms"] >= 20
+        assert evidence[0]["owner_alive"]
+        assert any(frame["function"] == "block_read" for frame in evidence[0]["owner_stack"])
+    finally:
+        unblock.set()
+        controller._owner.join(2)
 
 
 @pytest.mark.parametrize("channel_order", ALL_ORDERED_CHANNEL_CASES)
