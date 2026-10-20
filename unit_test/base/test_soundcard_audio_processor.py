@@ -11,6 +11,14 @@ from base.soundcard_audio_processor import SoundcardAudioProcessor
 from consts import error_code
 
 
+@pytest.fixture(autouse=True)
+def mono_input_device(monkeypatch):
+    monkeypatch.setattr(
+        "base.soundcard_audio_processor.sd.query_devices",
+        lambda device=None, kind=None: {"max_input_channels": 1},
+    )
+
+
 class TestSoundcardAudioProcessor(object):
 
     test_path = "base.soundcard_audio_processor.SoundcardAudioProcessor"
@@ -120,6 +128,10 @@ def test_sd_play_rec_saves_record_dict_calibration_metadata(monkeypatch):
 
 
 def test_sd_play_rec_uses_selected_nonzero_input_channel_for_saved_metadata(monkeypatch):
+    monkeypatch.setattr(
+        "base.soundcard_audio_processor.sd.query_devices",
+        lambda device=None, kind=None: {"max_input_channels": 6},
+    )
     calls = {}
     metadata = {
         "recorded_channels": [
@@ -137,9 +149,9 @@ def test_sd_play_rec_uses_selected_nonzero_input_channel_for_saved_metadata(monk
     stimulus = {"data": np.array([0.0, 1.0, 0.0], dtype=np.float32), "amplitude": 1.0, "sr": 48000}
     recorded_channels = np.array(
         [
-            [10.0, 20.0, 30.0],
-            [11.0, 21.0, 31.0],
-            [12.0, 22.0, 32.0],
+            [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+            [11.0, 21.0, 31.0, 41.0, 51.0, 61.0],
+            [12.0, 22.0, 32.0, 42.0, 52.0, 62.0],
         ],
         dtype=np.float32,
     )
@@ -169,7 +181,7 @@ def test_sd_play_rec_uses_selected_nonzero_input_channel_for_saved_metadata(monk
     code, recorded = processor.sd_play_rec(record, stimulus, "record.wav", calibration_metadata=metadata)
 
     assert code == error_code.OK
-    assert calls["playrec"]["channels"] == 3
+    assert calls["playrec"]["channels"] == 6
     assert calls["saved_path"] == "record.wav"
     assert calls["saved_sample_rate"] == 48000
     assert calls["saved_metadata"] is metadata
@@ -178,6 +190,10 @@ def test_sd_play_rec_uses_selected_nonzero_input_channel_for_saved_metadata(monk
 
 
 def test_sd_play_rec_projects_multi_channel_metadata_to_saved_mono_channel(monkeypatch):
+    monkeypatch.setattr(
+        "base.soundcard_audio_processor.sd.query_devices",
+        lambda device=None, kind=None: {"max_input_channels": 6},
+    )
     calls = {}
     metadata = {
         "recorded_channels": [
@@ -197,9 +213,9 @@ def test_sd_play_rec_projects_multi_channel_metadata_to_saved_mono_channel(monke
     stimulus = {"data": np.array([0.0, 1.0, 0.0], dtype=np.float32), "amplitude": 1.0, "sr": 48000}
     recorded_channels = np.array(
         [
-            [10.0, 20.0, 30.0, 40.0, 50.0],
-            [11.0, 21.0, 31.0, 41.0, 51.0],
-            [12.0, 22.0, 32.0, 42.0, 52.0],
+            [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+            [11.0, 21.0, 31.0, 41.0, 51.0, 61.0],
+            [12.0, 22.0, 32.0, 42.0, 52.0, 62.0],
         ],
         dtype=np.float32,
     )

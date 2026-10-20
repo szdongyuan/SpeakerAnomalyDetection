@@ -1,3 +1,4 @@
+import sqlite3
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from base.data_struct.data_deal_struct import DataDealStruct
+from base.hardware_management import HardwareManagementRepository
+from base import recording_management
+from base import soundcard_audio_processor as soundcard
 from consts import error_code
 from ui.sequence import sequence_widget
 
@@ -312,6 +316,215 @@ def test_blocking_play_and_record_passes_metadata(monkeypatch):
     )
 
     assert calls == [("record.wav", metadata, metadata)]
+
+
+@pytest.fixture
+def full_input_record_window(monkeypatch):
+    def deny_database_connection(*args, **kwargs):
+        pytest.fail("Blocking integration tests must not open SQLite connections")
+
+    monkeypatch.setattr(sqlite3, "connect", deny_database_connection)
+    monkeypatch.setattr(recording_management, "ensure_audio_database_ready", lambda: (error_code.OK, "isolated"))
+
+    def calibration_rows(self, hardware_id, direction, calibration_type):
+        assert (hardware_id, direction, calibration_type) == ("six-input-mic", "input", "mic_v2pa")
+        return [
+            {"channel_index": 2, "factor_value": 2.5, "standard_spl": 94.0},
+            {"channel_index": 4, "factor_value": 4.5, "standard_spl": 96.0},
+        ]
+
+    monkeypatch.setattr(HardwareManagementRepository, "list_channel_calibrations", calibration_rows)
+
+    def build_window(mode):
+        window = _bind_current_metadata_input_channels(_record_window(mode))
+        window.mic = {"index": 18, "hardware_id": "six-input-mic"}
+        window._active_input_channels = [2, 4]
+        window._build_current_wav_calibration_metadata = lambda: (
+            sequence_widget.SequenceWindow._build_current_wav_calibration_metadata(window)
+        )
+        return window
+
+    return build_window
+
+
+@pytest.mark.parametrize("mode", ["RECORD_ONLY", "PLAY_AND_RECORD"])
+@pytest.mark.parametrize("bit_depth", [32, 64])
+def test_real_blocking_capture_retains_selected_audio_and_calibration(
+    monkeypatch, full_input_record_window, mode, bit_depth
+):
+    window = full_input_record_window(mode)
+    dtype = np.dtype(f"float{bit_depth}")
+    delay_frames, prepare_frames, prolong_frames = 3, 2, 2
+    stimulus = np.linspace(0.1, 0.7, 7, dtype=dtype)
+    amplitude = 0.25
+    recorded = {
+        "device": window.mic,
+        "output_device": {"index": 16},
+        "input_channels": [2, 4],
+        "sr": 48000,
+        "sample_rate": 48000,
+        "num_frames": len(stimulus) + prolong_frames,
+        "recording_start_delay_frames": delay_frames,
+        "prepare_frames": prepare_frames,
+        "prolong_frames": prolong_frames,
+        "bit_depth": bit_depth,
+    }
+    frame_count = (
+        recorded["num_frames"] + delay_frames
+        if mode == "RECORD_ONLY"
+        else delay_frames + prepare_frames + len(stimulus) + prolong_frames
+    )
+    raw = np.arange(frame_count * 6, dtype=dtype).reshape(frame_count, 6) / 1000
+    queries, captures, alignment_inputs, saved, database_calls, successes, failures = [], [], [], [], [], [], []
+
+    def query_devices(device, kind):
+        queries.append((device, kind))
+        return {"max_input_channels": 6}
+
+    def capture_record(**kwargs):
+        captures.append(("record", kwargs))
+        return raw.copy()
+
+    def capture_playrec(data, **kwargs):
+        captures.append(("playrec", kwargs))
+        np.testing.assert_array_equal(
+            data,
+            np.concatenate([
+                np.zeros(delay_frames + prepare_frames, dtype=dtype),
+                stimulus * amplitude,
+                np.zeros(prolong_frames, dtype=dtype),
+            ]),
+        )
+        return raw.copy()
+
+    def align(reference, captured):
+        alignment_inputs.append((reference.copy(), captured.copy()))
+        return prepare_frames
+
+    def save(path, data, sample_rate, calibration_metadata=None, logger=None, bit_depth=32):
+        saved.append((path, data.copy(), sample_rate, calibration_metadata, bit_depth))
+
+    monkeypatch.setattr(soundcard.sd, "query_devices", query_devices)
+    monkeypatch.setattr(soundcard.sd, "rec", capture_record)
+    monkeypatch.setattr(soundcard.sd, "playrec", capture_playrec)
+    monkeypatch.setattr(soundcard.SoundcardAudioProcessor, "calculate_alignment", staticmethod(align))
+    monkeypatch.setattr(soundcard, "save_audio_with_calibration_metadata", save)
+    monkeypatch.setattr(sequence_widget, "save_audio_with_calibration_metadata", save)
+    monkeypatch.setattr(soundcard, "save_audio_simple", lambda *args, **kwargs: pytest.fail("missing calibration"))
+    monkeypatch.setattr(
+        sequence_widget.RecordingManager,
+        "save_signal_info_to_db",
+        lambda self, info, stimulus_info: database_calls.append((info.copy(), stimulus_info)) or (error_code.OK, "ok"),
+    )
+    window._finish_recording_success = successes.append
+    window._finish_recording_failure = failures.append
+
+    sequence_widget.SequenceWindow._start_blocking_recording(
+        window, {"sr": 48000, "data": stimulus, "amplitude": amplitude}, recorded, 48000
+    )
+
+    assert failures == []
+    assert successes == [48000]
+    assert queries == [(18, "input")]
+    assert len(captures) == 1
+    capture_mode, capture_kwargs = captures[0]
+    assert capture_mode == ("record" if mode == "RECORD_ONLY" else "playrec")
+    assert capture_kwargs["channels"] == 6
+    assert capture_kwargs["samplerate"] == 48000
+    assert capture_kwargs["dtype"] == dtype.name
+    assert capture_kwargs["blocking"] is True
+    expected_metadata = {
+        "recorded_channels": [
+            {"wav_channel_index": 0, "v2pa_factor": 2.5, "standard_spl": 94.0, "calibrated": True}
+        ]
+    }
+    if mode == "RECORD_ONLY":
+        assert capture_kwargs["frames"] == recorded["num_frames"] + delay_frames
+        assert capture_kwargs["device"] == 18
+        expected = raw[delay_frames + prolong_frames:, [2, 4]]
+        expected_mono = expected.mean(axis=1)
+        expected_metadata["recorded_channels"].append(
+            {"wav_channel_index": 1, "v2pa_factor": 4.5, "standard_spl": 96.0, "calibrated": True}
+        )
+        assert alignment_inputs == []
+    else:
+        assert capture_kwargs["device"] == (18, 16)
+        assert len(alignment_inputs) == 1
+        np.testing.assert_array_equal(alignment_inputs[0][0], stimulus * amplitude)
+        np.testing.assert_array_equal(alignment_inputs[0][1], raw[delay_frames:, 2])
+        expected = raw[delay_frames + prepare_frames:delay_frames + prepare_frames + len(stimulus), 2]
+        expected_mono = expected
+    assert len(saved) == 1
+    path, saved_data, saved_rate, saved_metadata, saved_bit_depth = saved[0]
+    assert (path, saved_rate, saved_bit_depth) == ("record.wav", 48000, bit_depth)
+    assert saved_metadata == expected_metadata
+    assert recorded["wav_calibration_metadata"] == expected_metadata
+    assert saved_data.shape == expected.shape
+    assert saved_data.dtype == dtype
+    np.testing.assert_array_equal(saved_data, expected)
+    np.testing.assert_array_equal(window.data_struct.store_wave_data, expected_mono)
+    np.testing.assert_array_equal(window.data_struct.store_wave_data_multi, expected.reshape(len(stimulus), -1))
+    assert len(saved_data) == len(stimulus)
+    assert len(database_calls) == 1
+    assert database_calls[0][0]["sample_rate"] == 48000
+    assert database_calls[0][1] == (None if mode == "RECORD_ONLY" else window.data_struct.stimulus_info)
+
+
+@pytest.mark.parametrize("mode", ["RECORD_ONLY", "PLAY_AND_RECORD"])
+@pytest.mark.parametrize("failure_boundary", ["query", "capture"])
+def test_real_blocking_endpoint_failure_reaches_ui_without_persistence(
+    monkeypatch, full_input_record_window, mode, failure_boundary
+):
+    window = full_input_record_window(mode)
+    original_error = RuntimeError(f"{failure_boundary} failed")
+    queries, captures, alignment_calls, saves, database_calls, successes, failures = [], [], [], [], [], [], []
+
+    def query_devices(device, kind):
+        queries.append((device, kind))
+        if failure_boundary == "query":
+            raise original_error
+        return {"max_input_channels": 6}
+
+    def capture(*args, **kwargs):
+        captures.append(kwargs)
+        raise original_error
+
+    monkeypatch.setattr(soundcard.sd, "query_devices", query_devices)
+    monkeypatch.setattr(soundcard.sd, "rec", capture)
+    monkeypatch.setattr(soundcard.sd, "playrec", capture)
+    monkeypatch.setattr(
+        soundcard.SoundcardAudioProcessor, "calculate_alignment",
+        staticmethod(lambda *args: alignment_calls.append(args) or 0),
+    )
+    monkeypatch.setattr(soundcard, "save_audio_simple", lambda *args, **kwargs: saves.append(args))
+    monkeypatch.setattr(soundcard, "save_audio_with_calibration_metadata", lambda *args, **kwargs: saves.append(args))
+    monkeypatch.setattr(sequence_widget, "save_audio_with_calibration_metadata", lambda *args, **kwargs: saves.append(args))
+    monkeypatch.setattr(
+        sequence_widget.RecordingManager, "save_signal_info_to_db",
+        lambda *args: database_calls.append(args) or (error_code.OK, "ok"),
+    )
+    window._finish_recording_success = successes.append
+    window._finish_recording_failure = failures.append
+
+    sequence_widget.SequenceWindow._start_blocking_recording(
+        window,
+        {"sr": 48000, "data": np.ones(7, dtype=np.float32), "amplitude": 0.25},
+        {"device": window.mic, "input_channels": [2, 4], "sr": 48000, "num_frames": 7},
+        48000,
+    )
+
+    assert queries == [(18, "input")]
+    assert len(captures) == (0 if failure_boundary == "query" else 1)
+    if captures:
+        assert captures[0]["channels"] == 6
+    assert len(failures) == 1
+    assert failures[0] is original_error
+    assert alignment_calls == []
+    assert saves == []
+    assert database_calls == []
+    assert successes == []
+    assert window.data_struct.store_wave_data is None
+    assert window.data_struct.store_wave_data_multi is None
 
 
 def test_streaming_record_only_appends_metadata_after_finalize(monkeypatch):

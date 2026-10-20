@@ -18,6 +18,14 @@ from base.streaming_audio_processor import StreamingAudioProcessor
 from consts import error_code
 
 
+@pytest.fixture(autouse=True)
+def mono_input_device(monkeypatch):
+    monkeypatch.setattr(
+        "base.soundcard_audio_processor.sd.query_devices",
+        lambda device=None, kind=None: {"max_input_channels": 1},
+    )
+
+
 def test_stream_record_without_play_forwards_selected_input_channels(monkeypatch):
     calls = []
 
@@ -1149,11 +1157,15 @@ def test_sd_rec_invalid_recording_start_delay_defaults_to_zero(monkeypatch, valu
 
 
 def test_sd_rec_slices_selected_input_channels(monkeypatch):
+    monkeypatch.setattr(
+        "base.soundcard_audio_processor.sd.query_devices",
+        lambda device=None, kind=None: {"max_input_channels": 6},
+    )
     calls = []
     captured = np.array(
         [
-            [1.0, 10.0, 100.0],
-            [2.0, 20.0, 200.0],
+            [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0],
+            [2.0, 20.0, 200.0, 2000.0, 20000.0, 200000.0],
         ],
         dtype=np.float32,
     )
@@ -1187,7 +1199,7 @@ def test_sd_rec_slices_selected_input_channels(monkeypatch):
         {
             "frames": 2,
             "samplerate": 48000,
-            "channels": 3,
+            "channels": 6,
             "device": 5,
             "blocking": True,
         }
@@ -1264,12 +1276,16 @@ def test_sd_play_rec_invalid_recording_start_delay_defaults_to_zero(monkeypatch,
 
 
 def test_sd_play_rec_forwards_selected_input_output_devices(monkeypatch):
+    monkeypatch.setattr(
+        "base.soundcard_audio_processor.sd.query_devices",
+        lambda device=None, kind=None: {"max_input_channels": 2},
+    )
     calls = []
     captured = np.array(
         [
-            [1.0],
-            [2.0],
-            [3.0],
+            [1.0, 10.0],
+            [2.0, 20.0],
+            [3.0, 30.0],
         ],
         dtype=np.float32,
     )
@@ -1309,7 +1325,7 @@ def test_sd_play_rec_forwards_selected_input_output_devices(monkeypatch):
     assert calls == [
         {
             "samplerate": 48000,
-            "channels": 1,
+            "channels": 2,
             "blocking": True,
             "device": (5, 7),
         }
