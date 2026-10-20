@@ -80,6 +80,43 @@ class SoundcardAudioProcessor(object):
             return int(device["index"])
         return device
 
+    @classmethod
+    def _resolve_blocking_input_channels(cls, input_index, input_channels, default_channels=1):
+        info = sd.query_devices(input_index, kind="input")
+        maximum = info.get("max_input_channels")
+        if (isinstance(maximum, (bool, np.bool_))
+                or not isinstance(maximum, (int, np.integer)) or maximum <= 0):
+            raise ValueError(f"Input device {input_index!r} has invalid max_input_channels: {maximum!r}")
+        maximum = int(maximum)
+        if input_channels is None:
+            selected = []
+        elif isinstance(input_channels, (int, np.integer)):
+            selected = [input_channels]
+        else:
+            try:
+                selected = list(input_channels)
+            except TypeError as error:
+                raise ValueError(
+                    f"Invalid input_channels for device {input_index!r}: {input_channels!r}"
+                ) from error
+        for channel in selected:
+            if (isinstance(channel, (bool, np.bool_))
+                    or not isinstance(channel, (int, np.integer))
+                    or not 0 <= channel < maximum):
+                raise ValueError(
+                    f"Input device {input_index!r}: channel {channel!r} outside integer range 0..{maximum - 1}"
+                )
+        if not selected:
+            if (isinstance(default_channels, (bool, np.bool_))
+                    or not isinstance(default_channels, (int, np.integer))
+                    or not 1 <= default_channels <= maximum):
+                raise ValueError(
+                    f"Input device {input_index!r}: retained count {default_channels!r} "
+                    f"outside integer range 1..{maximum}"
+                )
+            selected = list(range(int(default_channels)))
+        return maximum, [int(channel) for channel in selected]
+
     @staticmethod
     def _sample_rate_values(params):
         values = {}
@@ -177,14 +214,10 @@ class SoundcardAudioProcessor(object):
             ]
         )
         device = self._playrec_device_selector(record_dict)
-        input_channels = record_dict.get("input_channels")
-        selected_channels = []
-        if input_channels is not None:
-            if isinstance(input_channels, int):
-                selected_channels = [input_channels]
-            else:
-                selected_channels = list(input_channels)
-        record_channels = max(selected_channels) + 1 if selected_channels else 1
+        input_index = device[0] if isinstance(device, tuple) else device
+        record_channels, selected_channels = self._resolve_blocking_input_channels(
+            input_index, record_dict.get("input_channels")
+        )
         if device is None:
             rec_data = sd.playrec(prolong_data, samplerate=sr, channels=record_channels, blocking=True, dtype=dtype)
         else:
@@ -193,8 +226,7 @@ class SoundcardAudioProcessor(object):
             )
         rec_data = np.asarray(rec_data)
         if rec_data.ndim > 1:
-            record_channel = selected_channels[0] if selected_channels else 0
-            rec_data = rec_data[:, record_channel]
+            rec_data = rec_data[:, selected_channels[0]]
         if delay_frames > 0:
             rec_data = rec_data[delay_frames:]
         align_frames = self.calculate_alignment(alignment_reference, rec_data)
@@ -298,15 +330,9 @@ class SoundcardAudioProcessor(object):
         )
         device = recorded_dict.get("device") or recorded_dict.get("input_device")
         device = SoundcardAudioProcessor._device_index(device)
-        input_channels = recorded_dict.get("input_channels")
-        selected_channels = []
-        if input_channels is not None:
-            if isinstance(input_channels, int):
-                selected_channels = [input_channels]
-            else:
-                selected_channels = list(input_channels)
-
-        record_channels = max(selected_channels) + 1 if selected_channels else channels
+        record_channels, selected_channels = SoundcardAudioProcessor._resolve_blocking_input_channels(
+            device, recorded_dict.get("input_channels"), default_channels=channels
+        )
         recorded_data = sd.rec(
             frames=num_frames + delay_frames,
             samplerate=sample_rate,
@@ -323,13 +349,13 @@ class SoundcardAudioProcessor(object):
         if recorded_data.ndim == 1:
             return error_code.OK, recorded_data
 
-        if selected_channels:
-            if selected_channels == [0]:
-                recorded_data = recorded_data[:, 0]
-            else:
-                recorded_data = recorded_data[:, selected_channels]
-        elif channels == 1:
+        if selected_channels == [0]:
             recorded_data = recorded_data[:, 0]
+        elif selected_channels == list(range(len(selected_channels))):
+            # Keep prefix retention live while a nonblocking capture fills the buffer.
+            recorded_data = recorded_data[:, :len(selected_channels)]
+        else:
+            recorded_data = recorded_data[:, selected_channels]
 
         return error_code.OK, recorded_data
 
