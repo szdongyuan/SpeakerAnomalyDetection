@@ -194,12 +194,15 @@ def _build_analysis_report_pages(
     cancel_requested=None,
 ):
     _ensure_qt_application()
-    logo_data, logo_width, logo_height = load_company_logo()
-    logo_encoded = base64.b64encode(logo_data).decode("ascii")
-    logo_html = (
-        f'<img src="data:image/png;base64,{logo_encoded}" '
-        f'width="{logo_width}" height="{logo_height}">'
-    )
+    logo = load_company_logo()
+    logo_html = ""
+    if logo is not None:
+        logo_data, logo_width, logo_height = logo
+        logo_encoded = base64.b64encode(logo_data).decode("ascii")
+        logo_html = (
+            f'<img src="data:image/png;base64,{logo_encoded}" '
+            f'width="{logo_width}" height="{logo_height}">'
+        )
     layout = MeasuredReportLayout(
         _report_stylesheet(), _ensure_report_font(), cancel_requested,
         page_header=_build_report_header_html(logo_html),

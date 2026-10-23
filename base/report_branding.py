@@ -13,9 +13,11 @@ COMPANY_LOGO_WIDTH_MM = 30.0
 
 
 def load_company_logo():
-    """Return the complete original PNG and its proportional report display size."""
+    """Return PNG data and proportional display size, or None if the file is absent."""
     try:
         data = COMPANY_LOGO_PATH.read_bytes()
+    except FileNotFoundError:
+        return None
     except OSError as error:
         raise ValueError("无法读取公司 Logo：公司-LOGO.png") from error
     image = QImage.fromData(data, "PNG")
