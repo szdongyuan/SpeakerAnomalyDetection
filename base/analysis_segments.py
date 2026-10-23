@@ -61,10 +61,10 @@ def normalize_segmented_analysis(condition):
 
 def validate_input_voltage(voltage):
     if not isinstance(voltage, str):
-        raise ValueError("输入电压必须是文字，可留空")
+        raise ValueError("电压必须是文字，可留空")
     # Preserve unit text, positive ranges and negative scientific exponents.
     if re.search(r"(^|[^0-9.eE])[-−－]\s*(?:\d|\.\d)", voltage):
-        raise ValueError("输入电压不能为负值")
+        raise ValueError("电压不能为负值")
 
 
 def segment_condition_fields(condition):
@@ -73,7 +73,7 @@ def segment_condition_fields(condition):
     if "input_voltage" in condition:
         voltage = condition["input_voltage"]
         if not isinstance(voltage, str):
-            raise ValueError("输入电压必须是文字，可留空")
+            raise ValueError("电压必须是文字，可留空")
         result["input_voltage"] = voltage.strip()
     if "segmented_analysis" in condition or "output_load" in condition:
         result["segmented_analysis"] = normalize_segmented_analysis(condition)

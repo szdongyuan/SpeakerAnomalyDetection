@@ -960,11 +960,11 @@ def test_negative_voltage_cannot_be_saved_or_imported(tmp_path, voltage):
     project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["input_voltage"] = voltage
 
     success, message = manager.save_project(file_name, project)
-    assert not success and "输入电压不能为负值" in message
+    assert not success and "电压不能为负值" in message
     assert target.read_bytes() == before
 
     source = tmp_path / "negative_voltage.json"
     source.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
     success, message = manager.import_project(str(source))
-    assert not success and "输入电压不能为负值" in message
+    assert not success and "电压不能为负值" in message
     assert target.read_bytes() == before

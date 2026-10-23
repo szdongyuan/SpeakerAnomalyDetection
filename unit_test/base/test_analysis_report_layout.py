@@ -113,7 +113,7 @@ def table_rows(page):
 @pytest.mark.parametrize("count", [1, 25, 64])
 def test_measured_pages_keep_all_rows_and_fill_available_space(tmp_path, channels, count):
     layout = make_layout()
-    headers = "<th>样本</th><th>输入电压</th><th>输出负载（A）</th>"
+    headers = "<th>样本</th><th>电压</th><th>输出负载（A）</th>"
     headers += "".join(f"<th>CH{i}（位置{i}）</th>" for i in range(1, channels + 1))
     rows = [
         f"<tr><td>S{index:03d}</td><td>230Vac/50Hz</td><td>{'/' if index % 3 == 0 else '0.3'}</td>"

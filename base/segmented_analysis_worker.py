@@ -197,7 +197,7 @@ def _save_segment_csvs(request, result):
         path = build_csv_path(context, Path(request.wav_path).stem, key, "总体声压级")
         try:
             columns = overall_spl_csv_columns(configs[key].get("weighting", "Z"))
-            _write_csv_atomic(path, ("通道", *columns, "result", "输入电压"), rows)
+            _write_csv_atomic(path, ("通道", *columns, "result", "电压"), rows)
             artifacts.append(AnalysisArtifactResult("CSV:总体声压级", "已保存", str(path)))
         except (OSError, ValueError, TypeError) as error:
             artifacts.append(AnalysisArtifactResult("CSV:总体声压级", "保存失败", str(path), error_message=str(error)))

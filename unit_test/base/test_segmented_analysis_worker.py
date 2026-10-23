@@ -77,7 +77,7 @@ def test_segments_use_actual_windows_and_failures_do_not_skip_later_items(tmp_pa
     with open(paths[0], encoding="utf-8-sig", newline="") as stream:
         rows = list(csv.DictReader(stream))
     assert [r["通道"] for r in rows] == ["输出负载0A_CH1(前)", "输出负载0.3A_CH1(前)"]
-    assert all(r["输入电压"] == "230Vac/50Hz" for r in rows)
+    assert all(r["电压"] == "230Vac/50Hz" for r in rows)
     if short:
         assert rows[1]["总体声压级dB(Z)"] == rows[1]["result"] == ""
     assert not list(tmp_path.rglob('*.segments.json'))
@@ -276,5 +276,5 @@ def test_failed_segments_log_identity_window_and_reason_without_csv_columns(tmp_
     overall = next(a.path for i in result.instance_results for a in i.artifacts if a.kind == 'CSV:总体声压级')
     with open(overall, encoding='utf-8-sig', newline='') as stream:
         reader = csv.DictReader(stream)
-        assert reader.fieldnames == ['通道', '总体声压级dB(Z)', '总体下限dB(Z)', '总体上限dB(Z)', 'result', '输入电压']
+        assert reader.fieldnames == ['通道', '总体声压级dB(Z)', '总体下限dB(Z)', '总体上限dB(Z)', 'result', '电压']
         assert list(reader)[1]['总体声压级dB(Z)'] == ''

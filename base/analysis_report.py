@@ -373,9 +373,10 @@ def _read_spl_csv(item):
             reader = csv.DictReader(stream)
             columns, unit = resolve_overall_spl_csv_columns(reader.fieldnames)
             value_column, lower_column, upper_column = columns
+            voltage_column = "电压" if "电压" in reader.fieldnames else "输入电压"
             for index, row in enumerate(reader):
-                if index == 0 and "输入电压" in reader.fieldnames:
-                    voltage = row.get("输入电压") or "/"
+                if index == 0 and voltage_column in reader.fieldnames:
+                    voltage = row.get(voltage_column) or "/"
                 label, channel = split_segment_channel(row.get("通道"))
                 channel = _physical_channel_name(channel if label else row.get("通道"))
                 value = _format_number(row.get(value_column))
@@ -384,7 +385,7 @@ def _read_spl_csv(item):
                     _format_number(row.get(lower_column)), _format_number(row.get(upper_column)),
                 )
                 if label:
-                    _, cells = groups.setdefault(label, (row.get("输入电压") or "/", {}))
+                    _, cells = groups.setdefault(label, (row.get(voltage_column) or "/", {}))
                     cells[channel] = cell
                 elif channel:
                     values[channel] = cell
@@ -515,7 +516,7 @@ def _append_data_tables(layout, prepared_by_item, report_content, summary):
             show_segments = bool(segment_heading)
             show_voltage = show_segments or any(record.input_voltage for record in group_records)
             segment_columns = [segment_heading] if show_segments else []
-            segment_headers = ("<th>输入电压</th>" if show_voltage else "") + (
+            segment_headers = ("<th>电压</th>" if show_voltage else "") + (
                 "".join(f"<th>{_html(heading)}</th>" for heading in segment_columns)
             )
             channels = _section_channels(group_records, labels)
