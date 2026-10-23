@@ -136,7 +136,7 @@ def test_empty_or_non_text_unit_is_rejected(unit):
 def test_negative_input_voltage_is_rejected(voltage):
     from base.analysis_segments import validate_input_voltage
 
-    with pytest.raises(ValueError, match="输入电压不能为负值"):
+    with pytest.raises(ValueError, match="电压不能为负值"):
         validate_input_voltage(voltage)
 
 

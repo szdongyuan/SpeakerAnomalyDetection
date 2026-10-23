@@ -53,7 +53,7 @@ def export_item_csvs(
         if skip_overall and config_item_name == "总体声压级":
             continue
         if config_item_name == "总体声压级" and input_voltage is not None:
-            header = (*header, "输入电压")
+            header = (*header, "电压")
             rows = [(*row, input_voltage) for row in rows]
         path = build_csv_path(
             storage_context,

@@ -1,6 +1,7 @@
 from datetime import datetime
 import csv
 from pathlib import Path
+import pytest
 from base.analysis_artifact_paths import AnalysisStorageContext
 from base.analysis_csv_exporter import export_item_csvs
 
@@ -21,6 +22,21 @@ def _context(tmp_path):
 def _read(path):
     with open(path, "r", encoding="utf-8-sig", newline="") as stream:
         return list(csv.reader(stream))
+
+
+@pytest.mark.parametrize('voltage', ['9', '9V', '230Vac/50Hz', ''])
+def test_overall_csv_preserves_voltage_text_with_new_header(tmp_path, voltage):
+    records = export_item_csvs(
+        _context(tmp_path), '共同主名', '声压级1', 'SPL',
+        {'show_overall_spl': True},
+        [{'raw_channel': 0, 'judgement': 'OK', 'metrics': {'overall_spl': 30}}],
+        {}, input_voltage=voltage,
+    )
+    assert records[0].ok
+    rows = _read(records[0].file_path)
+    assert rows[0][-1] == '电压'
+    assert '输入电压' not in rows[0]
+    assert rows[1][-1] == voltage
 
 
 def test_spl_exports_overall_and_one_shared_axis_realtime_csv(tmp_path):

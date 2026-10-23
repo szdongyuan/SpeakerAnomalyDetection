@@ -13,7 +13,7 @@ from base.load_config import LoadUiConfig
 from base.sequence_queue_references import SequenceQueueReferenceScanner
 from base.product_test_project_config import ProductTestProjectConfigManager
 from consts.ve3668n_consts import VE_BACKEND
-from consts import ui_style_const
+from consts import error_code, ui_style_const
 from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
 from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.product_test_project_config_dialog import (
@@ -47,6 +47,30 @@ def make_manager(tmp_path, *, input_device_provider=lambda: {"backend": VE_BACKE
         str(queue_dir / "sequence_config_registry.json"),
         input_device_provider=input_device_provider,
     )
+
+
+@pytest.mark.parametrize('voltage', ['9', '9V', '230Vac/50Hz', ''])
+def test_voltage_header_and_text_survive_config_save_reload(app, tmp_path, monkeypatch, voltage):
+    monkeypatch.setattr(QMessageBox, 'information', lambda *args: QMessageBox.Ok)
+    manager = make_manager(tmp_path)
+    register_queue(manager)
+    dialog = ProductTestProjectConfigDialog(manager)
+    try:
+        dialog._show_project(project_data(tmp_path), None)
+        assert dialog.condition_table.horizontalHeaderItem(7).text() == '电压'
+        voltage_input = dialog.condition_table.cellWidget(0, 7)
+        QTest.keyClicks(voltage_input, voltage)
+        assert voltage_input.hasAcceptableInput()
+        assert dialog._save_project(close_dialog=False)
+        load_code, saved = manager.load_project(dialog.current_file)
+        assert load_code == error_code.OK
+        condition = saved['test_groups'][0]['test_conditions'][0]
+        assert condition['input_voltage'] == voltage
+        assert 'voltage' not in condition
+        dialog._show_project(saved, dialog.current_file)
+        assert dialog.condition_table.cellWidget(0, 7).text() == voltage
+    finally:
+        close_dialog(dialog)
 
 
 def test_contextual_queue_editor_collects_visible_draft_without_saving(app, tmp_path):
@@ -2106,7 +2130,7 @@ def test_negative_voltage_draft_is_preserved_but_cannot_be_saved(app, tmp_path, 
         assert voltage.text() == "-12"
         assert not voltage.hasAcceptableInput()
         assert not dialog._save_project(close_dialog=False)
-        assert any("输入电压不能为负值" in message for message in warnings)
+        assert any("电压不能为负值" in message for message in warnings)
         assert voltage.text() == "-12"
         assert not list(Path(manager.program_dir).glob("*.json"))
         for valid in ("", "0", "230Vac/50Hz"):

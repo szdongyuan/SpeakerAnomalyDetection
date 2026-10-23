@@ -708,7 +708,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
                 "录音时长",
                 "分段分析",
                 "判定与分析",
-                "输入电压",
+                "电压",
             ]
         )
         self.condition_table.verticalHeader().setVisible(False)

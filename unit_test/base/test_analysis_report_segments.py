@@ -1,10 +1,14 @@
 """Manual report grouping and recovery of persisted segment CSV rows."""
 
 from datetime import datetime
+import csv
+import wave
 
 import pytest
 
-from base.analysis_report import build_analysis_report_html, _prepare_segment_records
+from base.analysis_report import (
+    build_analysis_report_html, export_analysis_report_pdf, _prepare_segment_records,
+)
 from base.analysis_report_source import AnalysisItemIdentity, CandidateAnalysisItem, ReportCandidate
 
 
@@ -132,6 +136,78 @@ def test_unsegmented_manual_report_preserves_optional_input_voltage(tmp_path):
     assert records[0].input_voltage == '230Vac/50Hz'
     assert records[0].scalar_values[0][1].value == '0.00'
     html, warnings = build_analysis_report_html([candidate], [identity], report_content='values_only', generated_at=datetime.now())
-    assert '230Vac/50Hz' in html and '<th>输入电压</th>' in html
+    assert '230Vac/50Hz' in html and '<th>电压</th>' in html
     assert '<th>分段</th>' not in html
     assert not warnings
+
+
+def _voltage_candidate(tmp_path, channel, columns, values):
+    path = tmp_path / 'voltage.csv'
+    with path.open('w', encoding='utf-8-sig', newline='') as stream:
+        writer = csv.writer(stream)
+        writer.writerow(['通道', '总体声压级dB', 'result', *columns])
+        writer.writerow([channel, '30', 'OK', *values])
+    wav_path = tmp_path / 'source.wav'
+    with wave.open(str(wav_path), 'wb') as stream:
+        stream.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
+        stream.writeframes(b'\x00\x00' * 480)
+    identity = AnalysisItemIdentity('SPL1', 'SPL')
+    candidate = ReportCandidate(
+        str(wav_path), '项目', '产品', '样本',
+        analysis_items=(CandidateAnalysisItem(
+            identity, csv_files=(('总体声压级', str(path)),),
+        ),),
+    )
+    return path, identity, candidate
+
+
+@pytest.mark.parametrize('channel', ['CH1', '时间1s_CH1', '输出负载0.3A_CH1'])
+@pytest.mark.parametrize('columns,values,expected', [
+    (['电压'], ['230Vac/50Hz'], '230Vac/50Hz'),
+    (['输入电压'], ['230Vac/50Hz'], '230Vac/50Hz'),
+    (['电压'], [''], '/'),
+    (['输入电压'], [''], '/'),
+    (['输入电压', '电压'], ['5V', '9V'], '9V'),
+    (['电压', '输入电压'], ['9V', '5V'], '9V'),
+    (['电压', '输入电压'], ['', '5V'], '/'),
+    (['电压'], ['0'], '0'),
+    ([], [], None),
+])
+def test_voltage_csv_header_compatibility(tmp_path, channel, columns, values, expected):
+    path, identity, candidate = _voltage_candidate(tmp_path, channel, columns, values)
+    before = path.read_bytes()
+    if expected is None:
+        expected = '' if channel == 'CH1' else '/'
+    record = _prepare_segment_records(candidate, identity, 'values_only')[0]
+    assert record.input_voltage == expected
+    assert record.scalar_values[0][1].value == '30.00'
+    html, warnings = build_analysis_report_html(
+        [candidate], [identity], report_content='values_only',
+        generated_at=datetime(2026, 10, 23),
+    )
+    assert ('<th>电压</th>' in html) == bool(expected)
+    assert '<th>输入电压</th>' not in html
+    assert not warnings
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('channel', ['CH1', '时间1s_CH1', '输出负载0.3A_CH1'])
+@pytest.mark.parametrize('column', ['电压', '输入电压'])
+def test_new_and_legacy_voltage_csv_export_pdf(tmp_path, channel, column):
+    fitz = pytest.importorskip('fitz')
+    path, identity, candidate = _voltage_candidate(
+        tmp_path, channel, [column], ['230Vac/50Hz'],
+    )
+    before = path.read_bytes()
+    output = tmp_path / 'report.pdf'
+    result = export_analysis_report_pdf(
+        str(output), [candidate], [identity], report_content='values_only',
+        generated_at=datetime(2026, 10, 23),
+    )
+    assert result.ok, result.message
+    assert not result.warnings
+    with fitz.open(output) as document:
+        text = ''.join(page.get_text() for page in document)
+    assert '电压' in text and '输入电压' not in text
+    assert '230Vac/50Hz' in ''.join(text.split()) and '30.00' in text
+    assert path.read_bytes() == before
