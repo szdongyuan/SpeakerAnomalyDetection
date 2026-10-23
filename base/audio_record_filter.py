@@ -121,6 +121,7 @@ def natural_sort_key(value):
 
 def filter_audio_records(rows, metadata_by_id, filters):
     """Return original rows; field comparisons never search unrelated columns."""
+    barcode = filters.get("select_barcode")
     metadata_filters = [
         (field, filters[key]) for key, field in METADATA_FILTER_FIELDS.items()
         if filters.get(key) is not None
@@ -138,6 +139,8 @@ def filter_audio_records(rows, metadata_by_id, filters):
         if "select_labels" in filters and row[5] not in filters["select_labels"]:
             continue
         if filters.get("select_record_date") is not None and row[4] != filters["select_record_date"]:
+            continue
+        if barcode and row[6] != barcode:
             continue
         output.append(row)
     return output

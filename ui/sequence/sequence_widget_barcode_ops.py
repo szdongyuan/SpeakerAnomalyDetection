@@ -10,7 +10,7 @@ from consts import error_code
 
 
 class SequenceWidgetBarcodeOpsMixin:
-    _INVALID_FILENAME_CHARS = set('\\/:*?"<>|')
+    _INVALID_BARCODE_CHARS = set('\\:*?"<>|')
 
     @staticmethod
     def _normalize_saved_scanner_checkbox_state(value) -> bool:
@@ -514,9 +514,8 @@ class SequenceWidgetBarcodeOpsMixin:
         return str(text).strip()
 
     def _barcode_has_invalid_chars(self, barcode: str) -> tuple:
-        """检查条形码是否包含无法用于文件名/单条码输入的字符，返回 (是否有, 特殊字符列表)"""
-        invalid_chars_set = getattr(self, "_INVALID_FILENAME_CHARS", set('\\/:*?"<>|'))
-        found = [ch for ch in barcode if ch in invalid_chars_set or ch.isspace() or ord(ch) < 32 or ord(ch) == 127]
+        """检查单条产品码；允许原码中的 /，原码不参与录音文件命名。"""
+        found = [ch for ch in barcode if ch in self._INVALID_BARCODE_CHARS or ch.isspace() or ord(ch) < 32 or ord(ch) == 127]
         return (bool(found), found)
 
     def _warn_invalid_barcode(self, barcode: str, invalid_chars) -> None:
@@ -531,7 +530,7 @@ class SequenceWidgetBarcodeOpsMixin:
         QMessageBox.warning(
             self,
             "条码格式异常",
-            "条码只能包含一个连续条码，不能包含换行、回车、制表符、空格或文件名非法字符。\n\n"
+            '条码允许包含 /，但不能包含换行、回车、制表符、空格、控制字符或以下字符：\\ : * ? " < > |。\n\n'
             f"异常字符: {chars_display}\n\n"
             "请重新扫码后再开始录音。",
         )

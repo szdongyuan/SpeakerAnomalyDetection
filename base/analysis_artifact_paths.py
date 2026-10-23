@@ -139,7 +139,7 @@ def storage_context_from_metadata(metadata):
 
 
 def build_recording_stem(context: AnalysisStorageContext, *, max_length=220):
-    """Build 项目_型号_样本_端口_轮次_档位_时间戳[_SN]."""
+    """Build 项目_型号_样本_端口_轮次_档位_时间戳."""
     timestamp = context.recording_started_at.strftime("%Y%m%d-%H%M%S")
     components = [
         context.project_name,
@@ -150,8 +150,6 @@ def build_recording_stem(context: AnalysisStorageContext, *, max_length=220):
         context.condition_name,
         timestamp,
     ]
-    if context.serial_number:
-        components.append(f"SN-{context.serial_number}")
     stem = "_".join(sanitize_path_component(value) for value in components)
     return _shorten_component(stem, max_length=max_length)
 
