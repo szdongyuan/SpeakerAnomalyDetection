@@ -4,12 +4,22 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from PyQt5.QtGui import QImage
+from PyQt5.QtGui import QColor, QImage
 
 from base import report_branding
 from base.analysis_report import export_analysis_report_pdf
 from base.analysis_report_source import AnalysisItemIdentity
 from unit_test.base.test_analysis_report import _candidate
+
+
+@pytest.fixture
+def logo_path(tmp_path, monkeypatch, qt_app):
+    path = tmp_path / "公司-LOGO.png"
+    image = QImage(360, 120, QImage.Format_RGB32)
+    image.fill(QColor("#205080"))
+    assert image.save(str(path), "PNG")
+    monkeypatch.setattr(report_branding, "COMPANY_LOGO_PATH", path)
+    return path
 
 
 def export_analysis_sample(directory, report_content="values_only", *, include_missing=False):
@@ -32,7 +42,7 @@ def export_analysis_sample(directory, report_content="values_only", *, include_m
     ("values_only", False), ("values_and_charts", False), ("values_only", True),
 ])
 def test_pdf_logo_repeats_without_overlapping_page_content(
-    tmp_path, qt_app, report_content, include_missing,
+    tmp_path, qt_app, logo_path, report_content, include_missing,
 ):
     fitz = pytest.importorskip("fitz")
     source_bytes = report_branding.COMPANY_LOGO_PATH.read_bytes()
@@ -80,13 +90,79 @@ def test_pdf_logo_repeats_without_overlapping_page_content(
     assert report_branding.COMPANY_LOGO_PATH.read_bytes() == source_bytes
 
 
-@pytest.mark.parametrize("asset_state", ["missing", "corrupt"])
-def test_export_reports_logo_asset_failure(tmp_path, monkeypatch, qt_app, asset_state):
-    logo = tmp_path / "invalid.png"
+@pytest.mark.parametrize("asset_state", ["corrupt", "unreadable"])
+def test_export_reports_logo_asset_failure(tmp_path, monkeypatch, logo_path, asset_state):
     if asset_state == "corrupt":
-        logo.write_bytes(b"invalid PNG")
-    monkeypatch.setattr(report_branding, "COMPANY_LOGO_PATH", logo)
+        logo_path.write_bytes(b"invalid PNG")
+    else:
+        read_bytes = Path.read_bytes
+
+        def deny_logo_read(path):
+            if path == logo_path:
+                raise PermissionError("test logo access denied")
+            return read_bytes(path)
+
+        monkeypatch.setattr(Path, "read_bytes", deny_logo_read)
     result = export_analysis_sample(tmp_path)
     assert not result.ok
     assert "公司 Logo" in result.message
     assert not list(tmp_path.glob("*.pdf"))
+
+
+@pytest.mark.parametrize("report_content,include_missing", [
+    ("values_only", False), ("values_and_charts", False), ("values_only", True),
+])
+@pytest.mark.parametrize("operation", ["delete", "rename"])
+def test_missing_logo_exports_complete_multipage_report(
+    tmp_path, logo_path, report_content, include_missing, operation,
+):
+    fitz = pytest.importorskip("fitz")
+    if operation == "delete":
+        logo_path.unlink()
+    else:
+        logo_path.rename(logo_path.with_name("公司-LOGO-renamed.png"))
+    result = export_analysis_sample(tmp_path, report_content, include_missing=include_missing)
+    assert result.ok, result.message
+    assert not any("Logo" in warning or "LOGO" in warning for warning in result.warnings)
+    with fitz.open(result.file_path) as document:
+        assert len(document) > 1
+        texts = [page.get_text() for page in document]
+        assert "声学测试分析报告" in texts[0]
+        assert all("声学测试分析报告" not in text for text in texts[1:])
+        count = 35 if report_content == "values_only" else 5
+        words = {word[4] for page in document for word in page.get_text("words")}
+        assert {f"S{i}" for i in range(count)} <= words
+        for page, text in zip(document, texts):
+            assert text.strip()
+            assert "页" in text
+            assert all((image["width"], image["height"]) != (360, 120)
+                       for image in page.get_image_info())
+        if report_content == "values_only":
+            assert all(not page.get_image_info() for page in document)
+        else:
+            assert any(page.get_image_info() for page in document)
+        if include_missing:
+            assert result.warnings
+            assert any("缺失明细" in text for text in texts)
+        else:
+            assert not result.warnings
+
+
+def test_replacing_logo_changes_next_pdf_without_changing_source(tmp_path, logo_path):
+    fitz = pytest.importorskip("fitz")
+    for width, height, color in [(360, 120, "#205080"), (240, 100, "#803020")]:
+        replacement = QImage(width, height, QImage.Format_RGB32)
+        replacement.fill(QColor(color))
+        assert replacement.save(str(logo_path), "PNG")
+        before = logo_path.read_bytes()
+        result = export_analysis_sample(tmp_path)
+        assert result.ok, result.message
+        with fitz.open(result.file_path) as document:
+            for page in document:
+                images = page.get_image_info()
+                assert len(images) == 1
+                image = images[0]
+                assert (image["width"], image["height"]) == (width, height)
+                x0, y0, x1, y1 = image["bbox"]
+                assert y1 - y0 == pytest.approx((x1 - x0) * height / width, abs=0.4)
+        assert logo_path.read_bytes() == before
