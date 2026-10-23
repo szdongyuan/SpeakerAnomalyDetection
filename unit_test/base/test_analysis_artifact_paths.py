@@ -36,7 +36,7 @@ def test_storage_paths_share_one_stem_without_label_directories(tmp_path):
     context = _context(tmp_path)
     stem = build_recording_stem(context)
 
-    assert stem == "项目A_型号01_样本001_端口1_R0007_0.3_20260901-080910_SN-SN123456"
+    assert stem == "项目A_型号01_样本001_端口1_R0007_0.3_20260901-080910"
 
     wav_path = build_wav_path(context)
     image_path = build_channel_image_path(context, stem, "声压级", 2)

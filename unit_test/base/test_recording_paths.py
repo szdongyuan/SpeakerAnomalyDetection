@@ -1,11 +1,17 @@
 import os
+import wave
+from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from base.db_manager import DataSave
 from base.file_ops import FileOps
+from base.analysis_artifact_paths import AnalysisStorageContext
 from base import play_and_record
-from consts import model_consts
+from base.recording_management import RecordingManager
+from consts import error_code, model_consts
 
 
 def _set_recording_paths(monkeypatch, root):
@@ -25,7 +31,7 @@ def test_product_condition_file_name_uses_confirmed_field_order():
         True,
     )
 
-    assert file_name == "2026-08-04-14-32-15_BCSN240727018_S004-1_6000_107C610BB999.wav"
+    assert file_name == "2026-08-04-14-32-15_S004-1_6000_107C610BB999.wav"
 
 
 def test_product_condition_file_name_omits_empty_barcode():
@@ -51,7 +57,67 @@ def test_product_condition_file_name_sanitizes_path_components():
         True,
     )
 
-    assert file_name == "2026-08-04-14-32-15_BCSN_001_Motor_A_01_6000_107C610BB999.wav"
+    assert file_name == "2026-08-04-14-32-15_Motor_A_01_6000_107C610BB999.wav"
+
+
+@pytest.mark.parametrize("mode", ["legacy", "product_condition", "analysis_storage"])
+@pytest.mark.parametrize(
+    "barcode",
+    ["ABC/123/XY", "ABC_123_XY", "ABC%2F123%2FXY", "/ABC/", "/", "AB/" * 10 + "X" * 172, ""],
+    ids=["slash", "underscore", "literal-percent", "edge-slashes", "slash-only", "long", "empty"],
+)
+def test_barcode_round_trips_without_entering_wav_filename(
+    tmp_path, monkeypatch, mode, barcode,
+):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 10, 22, 10, 0, 0)
+
+    monkeypatch.setattr(play_and_record, "datetime", FixedDatetime)
+    monkeypatch.setattr(play_and_record, "get_mac_address", lambda: "10:7C:61:0B:B9:99")
+    context = None
+    if mode == "analysis_storage":
+        context = AnalysisStorageContext(
+            result_root_directory=str(tmp_path),
+            project_name="project", product_model="model", sample_number="sample",
+            test_round=1, port_name="port", condition_name="condition",
+            recording_started_at=FixedDatetime.now(), serial_number=barcode,
+        )
+    recorded_path, info = play_and_record.get_recorded_info(
+        "model", "recording-token", barcode, "not_labeled",
+        use_product_model_dir=mode == "product_condition",
+        recording_root=str(tmp_path), analysis_storage_context=context,
+    )
+    path = Path(recorded_path)
+    assert info["barcode"] == (barcode or None)
+    if context is not None:
+        assert info["analysis_storage"]["serial_number"] == barcode
+        expected_parent = tmp_path / "project" / "model" / "sample" / "audio" / "wav"
+        expected_name = "project_model_sample_port_R0001_condition_20261022-100000.wav"
+    elif mode == "product_condition":
+        expected_parent = tmp_path / "model" / "not_labeled"
+        expected_name = "2026-10-22-10-00-00_model_107C610BB999.wav"
+    else:
+        expected_parent = tmp_path / "not_labeled"
+        expected_name = "model_2026-10-22-10-00-00_107C610BB999.wav"
+    assert path == expected_parent / expected_name
+
+    manager = RecordingManager()
+    manager.db_path = str(tmp_path / "audio_data.db")
+    with DataSave(manager.db_path) as database:
+        assert database.create_table()[0] == error_code.OK
+    info.update(sample_rate=8000, recorded_signal=np.zeros(16, dtype=np.float32))
+    save_code, save_message = manager.save_recording_to_wav(info, None)
+    assert save_code == error_code.OK, save_message
+    with wave.open(str(path), "rb") as wav:
+        assert wav.getnframes() == 16
+        assert wav.getframerate() == 8000
+    query_code, rows = manager.get_record_audio_data()
+    assert query_code == error_code.OK
+    assert len(rows) == 1
+    assert rows[0][1] == manager.normalize_audio_path_for_db(str(path))
+    assert rows[0][6] == (barcode or None)
 
 
 @pytest.mark.parametrize(
@@ -81,7 +147,7 @@ def test_legacy_file_name_keeps_existing_field_order():
         False,
     )
 
-    assert file_name == "S004-1_2026-08-04-14-32-15_107C610BB999_BCSN240727018_forward.wav"
+    assert file_name == "S004-1_2026-08-04-14-32-15_107C610BB999_forward.wav"
 
 
 def test_product_condition_recording_dir_uses_product_model_folder(tmp_path, monkeypatch):
@@ -156,7 +222,7 @@ def test_get_recorded_info_uses_product_condition_storage_contract(tmp_path, mon
 
     path = Path(recorded_path)
     assert path.parent == root / "S004-1" / "not_labeled"
-    assert path.name.endswith("_BCSN240727018_S004-1_6000_107C610BB999.wav")
+    assert path.name.endswith("_S004-1_6000_107C610BB999.wav")
     assert recorded_info["file_path"] == recorded_path
     assert recorded_info["product_model"] == "S004-1"
     assert recorded_info["record_name_suffix"] == "_6000_rpm"

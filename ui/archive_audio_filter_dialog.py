@@ -7,7 +7,7 @@ import re
 from PyQt5.QtCore import QDate, Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
-    QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel,
+    QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPushButton, QSizePolicy, QVBoxLayout,
 )
 
@@ -64,6 +64,11 @@ class ArchiveAudioFilterDialog(ConfigDialogBase):
             row, column = 2 + (index // 2) * 2, index % 2
             grid.addWidget(QLabel(label), row, column)
             grid.addWidget(self._new_combo(key), row + 1, column)
+        self.barcode_lineedit = QLineEdit()
+        self.barcode_lineedit.setAccessibleName("条形码")
+        self.barcode_lineedit.setPlaceholderText("完整条形码，留空不限")
+        grid.addWidget(QLabel("条形码"), 6, 1)
+        grid.addWidget(self.barcode_lineedit, 7, 1)
         layout.addLayout(grid)
 
         labels_row, self.label_boxes = self._checkbox_row(
@@ -190,6 +195,7 @@ class ArchiveAudioFilterDialog(ConfigDialogBase):
             "ALL" if selected_rates is None else ", ".join(map(str, selected_rates))
         )
         self.date_filter_combobox.setCurrentText(self.filter_config.get("select_record_date", "ALL"))
+        self.barcode_lineedit.setText(self.filter_config.get("select_barcode", ""))
 
     def _project_changed(self):
         selected_project = self.combos["select_project"].currentData()
@@ -215,6 +221,7 @@ class ArchiveAudioFilterDialog(ConfigDialogBase):
             self._set_options(combo, all_text, options, combo.currentData())
 
     def reset_filters(self):
+        self.barcode_lineedit.clear()
         self.combos["select_project"].setCurrentIndex(0)
         for combo in self.combos.values():
             combo.setCurrentIndex(0)
@@ -228,6 +235,9 @@ class ArchiveAudioFilterDialog(ConfigDialogBase):
             key: combo.currentData() for key, combo in self.combos.items()
             if combo.currentData() is not None
         }
+        barcode = self.barcode_lineedit.text()
+        if barcode:
+            filters["select_barcode"] = barcode
         labels = [value for value, box in self.label_boxes.items() if box.isChecked()]
         if not labels:
             QMessageBox.warning(self, "提示", "请至少选择一个标签。")

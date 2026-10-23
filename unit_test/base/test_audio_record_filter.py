@@ -15,8 +15,9 @@ def recording_path(root="C:/results", project="项目A", sample="003", port="端
     return f"{root}/{project}/型号01/{sample}/{layout}/{stem}.wav"
 
 
-def audio_row(identifier, path=None, *, model="型号01", day="2026-09-14", rate=44100, label="OK"):
-    return (identifier, path or recording_path(), model, rate, day, label, None, None)
+def audio_row(identifier, path=None, *, model="型号01", day="2026-09-14", rate=44100,
+              label="OK", barcode=None):
+    return (identifier, path or recording_path(), model, rate, day, label, barcode, None)
 
 
 def select(rows, filters):
@@ -124,3 +125,40 @@ def test_single_date_matches_database_column_and_ignores_wav_timestamp():
     assert select(rows, {"select_record_date": "2026-09-13"}) == [rows[1]]
     assert select(rows, {"select_record_date": "2026-09-16"}) == []
     assert select(rows, {}) == rows
+
+
+@pytest.mark.parametrize("barcode", ["ABC/123/XY", "ABC%2F123", "000123", "ALL", "AB/" * 70])
+def test_barcode_matches_complete_database_value_and_keeps_all_recordings(barcode):
+    rows = [
+        audio_row("first", barcode=barcode),
+        audio_row("second", recording_path(round_number=3), label="NG", barcode=barcode),
+        audio_row("longer", barcode=barcode + "X"),
+        audio_row("prefixed", barcode="X" + barcode),
+        audio_row(barcode, model=barcode),
+        audio_row("filename_only", f"C:/old/{barcode}.wav"),
+        audio_row("empty", barcode=""),
+    ]
+    matched = select(rows, {"select_barcode": barcode})
+    assert matched == rows[:2]
+    assert matched[0] is rows[0] and matched[1] is rows[1]
+
+
+@pytest.mark.parametrize("barcode", [None, ""])
+def test_empty_barcode_filter_is_unrestricted(barcode):
+    rows = [audio_row("missing"), audio_row("empty", barcode=""),
+            audio_row("known", barcode="ABC/123")]
+    assert select(rows, {"select_barcode": barcode}) == rows
+
+
+def test_barcode_combines_with_existing_filters_without_normalizing():
+    rows = [
+        audio_row("chosen", barcode="ABC/123"),
+        audio_row("other_condition", recording_path(gear="低速档"), barcode="ABC/123"),
+        audio_row("other_label", label="NG", barcode="ABC/123"),
+        audio_row("encoded", barcode="ABC%2F123"),
+    ]
+    assert select(rows, {"select_barcode": "ABC/123", "select_condition": "高速档",
+                         "select_labels": ["OK"]}) == [rows[0]]
+    assert select(rows, {"select_barcode": "ABC%2F123"}) == [rows[3]]
+    for unmatched in ("ABC", "abc/123", " ABC/123 ", "unknown"):
+        assert select(rows, {"select_barcode": unmatched}) == []

@@ -81,18 +81,14 @@ class FileOps(object):
         name_suffix,
         use_product_model_dir,
     ):
-        """Build product-condition names without changing the legacy order."""
+        """Keep field order while leaving barcodes in recording metadata only."""
         if not use_product_model_dir:
             recorded_name = product_model + "_" + recording_time + "_" + mac_address
-            if barcode:
-                recorded_name = recorded_name + "_BC" + barcode
             if name_suffix:
                 recorded_name = recorded_name + str(name_suffix)
             return recorded_name + ".wav"
 
         name_parts = [recording_time]
-        if barcode:
-            name_parts.append("BC" + FileOps.sanitize_file_name_component(barcode))
         name_parts.append(
             FileOps.sanitize_file_name_component(
                 product_model,

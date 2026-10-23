@@ -1,6 +1,7 @@
 import os
 import time
 import sys
+import textwrap
 import wave
 from datetime import datetime
 
@@ -61,8 +62,10 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._audio_filter_cache = {}
         self._package_thread = None
         self._package_mutation_permit = None
-        self._play_btn_col = 6
-        self._analysis_btn_col = 7
+        self._barcode_col = 3
+        self._barcode_column_width = 200
+        self._play_btn_col = 7
+        self._analysis_btn_col = 8
         self._analysis_dialog = None
         self._play_text = "\u64ad\u653e"
         self._stop_text = "\u505c\u6b62"
@@ -92,9 +95,16 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.package_btn = QPushButton(" 打  包 ")
         self.delete_btn = QPushButton(" 删  除 ")
 
-        self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "播放", "分析结果"])
+        self.set_h_header([
+            "", "文件名称", "产品型号", "条形码", "音频标签",
+            "采样率", "录音时间", "播放", "分析结果",
+        ])
         self.horizontalHeader().setSectionsClickable(False)
         self.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
+        self.data_view.setColumnWidth(2, 120)
+        self.horizontalHeader().setSectionResizeMode(self._barcode_col, QHeaderView.Fixed)
+        self.data_view.setColumnWidth(self._barcode_col, self._barcode_column_width)
         self.data_view.setWordWrap(False)
         self.data_view.setTextElideMode(Qt.ElideRight)
 
@@ -175,7 +185,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self._setup_status_row_with_remaining_label()
         self._set_remaining_label_idle()
         screen = self.screen().availableGeometry()
-        self.resize(min(1150, screen.width() - 40), min(520, screen.height() - 60))
+        self.resize(min(1300, screen.width() - 40), min(520, screen.height() - 60))
 
     def mousePressEvent(self, a0):
         print(self.size())
@@ -202,11 +212,22 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             record_date_set.add(item[4])
 
             file_name = extract_audio_file_name(item[1])
-            row_data_list = [None, file_name, item[2], item[5], item[3], item[4], None]
+            barcode = item[6] or ""
+            row_data_list = [
+                None, file_name, item[2], barcode, item[5], item[3], item[4], None, None,
+            ]
             self.add_row_data(row_data_list)
             self.model().item(row, 1).setToolTip(file_name)
+            barcode_item = self.model().item(row, self._barcode_col)
+            barcode_item.setToolTip(textwrap.fill(
+                barcode, width=64, break_on_hyphens=False,
+                replace_whitespace=False, drop_whitespace=False,
+            ))
 
         self.resizeColumnsToContents()
+        self.data_view.setColumnWidth(2, 120)
+        # Long barcodes stay complete in the model without pushing actions off screen.
+        self.data_view.setColumnWidth(self._barcode_col, self._barcode_column_width)
         self.resizeRowsToContents()
         return product_model_set, record_date_set
 

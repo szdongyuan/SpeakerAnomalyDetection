@@ -84,6 +84,7 @@ def test_apply_reopen_and_reset_preserve_draft_semantics(qapp, rows, dialog):
     dialog.label_boxes["NG"].setChecked(False)
     dialog.sample_rate_combobox.setEditText("44100")
     dialog.date_filter_combobox.setEditText("2026-09-13")
+    dialog.barcode_lineedit.setText("ABC/123/XY")
     dialog.apply_filters()
     saved = dict(dialog.filter_config)
     reopened = ArchiveAudioFilterDialog(rows, dialog.metadata_by_id, saved)
@@ -92,7 +93,10 @@ def test_apply_reopen_and_reset_preserve_draft_semantics(qapp, rows, dialog):
     assert saved["select_record_date"] == "2026-09-13"
     assert not reopened.label_boxes["NG"].isChecked()
     assert reopened.sample_rate_combobox.currentText() == "44100"
+    assert reopened.barcode_lineedit.text() == "ABC/123/XY"
+    assert saved["select_barcode"] == "ABC/123/XY"
     reopened.reset_filters()
+    assert reopened.barcode_lineedit.text() == ""
     assert reopened.filter_config == saved
     assert saved["select_test_round"] == 2
     QTimer.singleShot(0, reopened.reject)
@@ -104,7 +108,9 @@ def test_reset_and_apply_returns_show_all(dialog):
     choose(dialog.combos["select_port"], "端口1")
     dialog.date_filter_combobox.setEditText("2026-09-13")
     dialog.sample_rate_combobox.setEditText("96000")
+    dialog.barcode_lineedit.setText("ABC/123/XY")
     dialog.reset_filters()
+    assert dialog.barcode_lineedit.text() == ""
     assert dialog.date_filter_combobox.currentText() == "ALL"
     assert dialog.sample_rate_combobox.currentText() == "ALL"
     QTimer.singleShot(0, dialog.apply_filters)
@@ -137,11 +143,27 @@ def test_controls_are_visible_and_two_column_layout_fits(dialog, qapp):
     right = dialog.combos["select_sample_number"]
     assert left.geometry().right() < right.geometry().left()
     for widget in (*dialog.combos.values(), dialog.sample_rate_combobox,
-                   dialog.date_filter_combobox, dialog.apply_button):
+                   dialog.date_filter_combobox, dialog.barcode_lineedit, dialog.apply_button):
         assert widget.isVisible()
         assert dialog.rect().contains(widget.geometry())
         assert widget.height() >= widget.minimumSizeHint().height()
     assert dialog.sample_rate_combobox.isEditable()
+
+
+@pytest.mark.parametrize("key", [Qt.Key_Return, Qt.Key_Enter])
+def test_barcode_keyboard_scan_keeps_original_and_existing_enter_policy(dialog, qapp, key):
+    dialog.show()
+    dialog.activateWindow()
+    dialog.barcode_lineedit.setFocus()
+    qapp.processEvents()
+    QTest.keyClicks(dialog.barcode_lineedit, "ABC/123%2FXY")
+    QTest.keyClick(dialog.barcode_lineedit, key)
+    qapp.processEvents()
+    assert dialog.barcode_lineedit.text() == "ABC/123%2FXY"
+    assert dialog.result() != dialog.Accepted
+    QTest.mouseClick(dialog.apply_button, Qt.LeftButton)
+    assert dialog.result() == dialog.Accepted
+    assert dialog.filter_config == {"select_barcode": "ABC/123%2FXY"}
 
 
 @pytest.mark.parametrize("text,expected", [
@@ -260,6 +282,42 @@ def test_custom_sample_rate_filters_real_archive_records(archive):
     archive.filter_audio_data_at_filter_config(dialog.filter_config)
     assert archive.filter_audio_data == archive.all_audio_data
     dialog.close()
+
+
+def test_barcode_filters_archive_rows_and_show_all_clears_it(archive, monkeypatch):
+    archive.all_audio_data.extend([
+        audio_row("barcode_one", barcode="ABC/123/XY"),
+        audio_row("barcode_two", recording_path(round_number=3), barcode="ABC/123/XY"),
+        audio_row("partial", barcode="ABC/123/XY-extra"),
+    ])
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Barcode filtering must use existing records without new I/O")
+
+    monkeypatch.setattr(sqlite3, "connect", forbidden)
+    monkeypatch.setattr(os, "scandir", forbidden)
+
+    def execute(dialog):
+        dialog.barcode_lineedit.setText("ABC/123/XY")
+        dialog.apply_filters()
+        return 1, dialog.filter_config
+
+    monkeypatch.setattr(ArchiveAudioFilterDialog, "exec", execute)
+    original_rows = list(archive.all_audio_data)
+    archive.on_click_filter_btn()
+    assert [row[0] for row in archive.filter_audio_data] == ["barcode_one", "barcode_two"]
+    assert archive.model().rowCount() == 2
+    assert archive.model().item(0, 3).text() == "ABC/123/XY"
+    assert archive.model().index(0, archive._analysis_btn_col).data(Qt.UserRole) == (
+        original_rows[-3][0], original_rows[-3][1],
+    )
+    archive.show_all_wave()
+    assert archive.filter_config == {}
+    assert archive.model().rowCount() == len(original_rows)
+    assert archive.all_audio_data == original_rows
+    reopened = archive.create_filter_dialog(archive.filter_config)
+    assert reopened.barcode_lineedit.text() == ""
+    reopened.close()
 
 
 def test_metadata_is_cached_by_identity_and_refreshed_when_path_changes(archive, monkeypatch):
