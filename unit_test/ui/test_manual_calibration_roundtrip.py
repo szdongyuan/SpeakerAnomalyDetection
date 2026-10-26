@@ -25,7 +25,12 @@ from unit_test.ui.test_ve3668n_calibration import CalibrationBridgeFake
 
 
 @pytest.fixture
-def windows(ui_qapp):
+def windows(ui_qapp, tmp_path, monkeypatch):
+    from base import ve3668n_calibration_settings
+
+    # Direct VE panels must never depend on the installed calibration text.
+    monkeypatch.setattr(ve3668n_calibration_settings, "default_path",
+                        lambda: tmp_path / "ve_calibration_range.txt")
     opened = []
 
     def make(device, channels, bridge, **kwargs):
