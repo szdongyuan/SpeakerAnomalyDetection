@@ -199,7 +199,7 @@ def test_explicit_queue_ignores_profile_io_but_missing_rate_propagates_it(host_f
         host.reset_work_pram("not_labeled")
 
 
-def test_prewarm_and_both_admissions_use_current_queue(host_factory):
+def test_prewarm_uses_queue_but_calibration_ignores_previous_queue_failure(host_factory):
     host = host_factory()
     detail = host.sequence_config[0]["seq1"]["acq"]["detail"]
     detail.update(sample_rate=96000, ve_range_index=5)
@@ -215,28 +215,27 @@ def test_prewarm_and_both_admissions_use_current_queue(host_factory):
     lifetime.mark_failed(state.token, request.signature,
                          SimpleNamespace(stage="start", detail="rejected"), ownership_safe=True)
     assert not host._ve_prewarm_admission_available()
-    assert not MainWindow._calibration_admission_available(window)
+    assert MainWindow._calibration_admission_available(window)
     detail.update(sample_rate=48000, ve_range_index=1)
     assert host._ve_prewarm_admission_available()
     assert MainWindow._calibration_admission_available(window)
 
 
-def test_queue_calibration_uses_frozen_config_and_retains_coefficients(setup):
-    detail = {"sample_rate": 96000, "ve_range_index": 5}
-    widget = setup.make(ve_queue_config_provider=lambda: detail)
+def test_independent_calibration_uses_frozen_text_and_retains_coefficients(setup):
+    widget = setup.make()
     seed_old(setup, widget)
     before = setup.profiles.path.read_bytes()
     assert widget.saved_v2pa_factors[7] == 73
     session, audio = offered(widget)
-    assert session.request.sample_rate == 96000
-    assert session.request.device["input_config"]["range_max"] == .1
-    assert session.request.target_samples == 960000
-    detail.update(sample_rate=48000, ve_range_index=1)
+    assert session.request.sample_rate == 48000
+    assert session.request.device["input_config"]["range_max"] == 2.5
+    assert session.request.target_samples == 480000
+    setup.write_settings(96000, .1)
     widget._on_calibration_result_ready(session, audio)
     setup.bridge.service.accept_result.assert_called_once()
     accept(widget, session, audio)
     release(widget, session)
-    assert setup.calibrations.get_record(session.request.device, 7)["calibration_sample_rate"] == 96000
+    assert setup.calibrations.get_record(session.request.device, 7)["calibration_sample_rate"] == 48000
     assert setup.profiles.path.read_bytes() == before
 
 
@@ -256,8 +255,7 @@ def test_admission_configuration_failures_are_diagnostic_and_repairable(host_fac
         diagnostic = "profile denied"
     assert not host._ve_prewarm_admission_available()
     assert diagnostic in host._ve_recording_config_error
-    assert not MainWindow._calibration_admission_available(window)
-    assert window._status.messages[-1] == ve_failure_text("configuration")
+    assert MainWindow._calibration_admission_available(window)
     assert diagnostic in caplog.text and host.mic["machine_id"] in caplog.text
     assert window._try_start_ve_prewarm(host.mic, host.mic_channels, "startup") == "invalid"
     assert not window.recording_bridge.calls
@@ -469,3 +467,25 @@ def test_busy_condition_entry_cannot_load_or_mutate_target(condition_host, entry
     host._cancel_pending_serial_trigger_delay.assert_not_called()
     assert not host.recording_bridge.requests
     assert not getattr(host, "_manual_product_condition_group_id", "")
+
+
+def test_calibration_admission_never_resolves_queue_or_profile(host_factory):
+    from ui.sequence.sequence_widget_recording_process_ops import SequenceWidgetRecordingProcessOpsMixin
+
+    host = host_factory()
+    window = _WindowHarness()
+    window.sequence_window = host
+    window.mic, window.mic_channels = host.mic, host.mic_channels
+    host.ve_prewarm_lifetime = window.ve_prewarm_lifetime
+    window._ve_signature = mock.Mock(side_effect=AssertionError("queue signature read"))
+    with mock.patch.object(SequenceWidgetRecordingProcessOpsMixin, "_ve_prewarm_admission_available",
+                           side_effect=AssertionError("queue admission read")) as queue_admission:
+        assert host._can_start_calibration_workflow()
+        assert MainWindow._calibration_admission_available(window)
+        window._ve_signature.assert_not_called()
+        queue_admission.assert_not_called()
+        signature = ve_acquisition_signature(host.mic, host.mic_channels,
+                                            host.mic["input_config"]["sample_rate"])
+        window.ve_prewarm_lifetime.claim("pending", signature)
+        assert not host._can_start_calibration_workflow()
+        assert not MainWindow._calibration_admission_available(window)

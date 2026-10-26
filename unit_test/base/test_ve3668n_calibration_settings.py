@@ -162,12 +162,10 @@ def test_default_path_is_resolved_at_call_time_independently_of_cwd(tmp_path, mo
 
 
 @pytest.mark.parametrize("overrides,reason", [
-    ({"sample_rate": 3999}, "sample_rate"),
-    ({"range_min": -3, "range_max": 3}, "range"),
     ({"input_mode": "invalid"}, "input_mode"),
     ({"unit": "Pa"}, "unit"),
 ])
-def test_builder_validates_source_before_overriding_it(tmp_path, overrides, reason):
+def test_builder_preserves_hardware_mode_and_unit_validation(tmp_path, overrides, reason):
     settings = load_ve_calibration_settings(tmp_path / "missing.txt")
     config = input_config(96000)
     config.update(overrides)
@@ -176,3 +174,15 @@ def test_builder_validates_source_before_overriding_it(tmp_path, overrides, reas
     with pytest.raises(ValueError, match=reason):
         build_ve_calibration_device(source, settings)
     assert source == before
+
+
+@pytest.mark.parametrize("obsolete", [
+    {"sample_rate": "broken", "range_min": None, "range_max": object()},
+    {"sample_rate": 0, "range_min": -3, "range_max": 3},
+    {},
+])
+def test_builder_replaces_obsolete_source_acquisition_fields(tmp_path, obsolete):
+    settings = load_ve_calibration_settings(tmp_path / "missing.txt")
+    source = device_info(input_config={"input_mode": "IEPE", "unit": "V", **obsolete})
+    result = build_ve_calibration_device(source, settings)
+    assert result["input_config"] == input_config(48000, range_min=-2.5, range_max=2.5)

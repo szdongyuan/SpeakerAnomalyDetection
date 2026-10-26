@@ -171,10 +171,7 @@ class MainWindow(QMainWindow):
         shutdown ownership still make opening a new calibration dialog unsafe.
         """
         lifetime = self.ve_prewarm_lifetime
-        signature = self._ve_signature(self.mic, self.mic_channels)
-        if (self.mic or {}).get("backend") == "vkinging" and signature is None:
-            return False
-        if lifetime.admission_for(signature) != "allowed":
+        if lifetime.admission_for(None) != "allowed":
             return False
         bridge = getattr(self, "recording_bridge", None)
         hardware_busy = getattr(bridge, "hardware_busy", None)
@@ -898,19 +895,8 @@ class MainWindow(QMainWindow):
         calibration_options = {}
         input_device = self.mic
         if (self.mic or {}).get("backend") == "vkinging":
-            from base.recording_process_protocol import FrozenConfig
-            from consts.ve3668n_consts import VE_RANGE_LIMITS
-            from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
-            input_device = SequenceWidgetConfigOpsMixin._current_ve_recording_device(
-                self.sequence_window, self.mic)
-            config = input_device["input_config"]
-            queue_config = FrozenConfig.snapshot({
-                "sample_rate": config["sample_rate"],
-                "ve_range_index": VE_RANGE_LIMITS.index(config["range_max"]),
-            })
             calibration_options = dict(ve_profile_store=self.ve_profile_store,
-                                       ve_calibration_store=self.ve_calibration_store,
-                                       ve_queue_config_provider=lambda: queue_config)
+                                       ve_calibration_store=self.ve_calibration_store)
         dlg = CalibrationWindow(
             input_device=input_device,
             input_channels=self.mic_channels,
