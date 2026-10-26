@@ -72,8 +72,7 @@ def load_ve_calibration_settings(path=None):
 
 
 def build_ve_calibration_device(source_device, settings):
-    source = validate_device_snapshot(source_device)
-    config = dict(source["input_config"])
+    config = dict(source_device["input_config"])
     config.update(sample_rate=settings.sample_rate,
                   range_min=-settings.range_volts, range_max=settings.range_volts)
-    return validate_device_snapshot({**source, "input_config": config})
+    return validate_device_snapshot({**source_device, "input_config": config})

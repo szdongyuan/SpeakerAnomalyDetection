@@ -208,10 +208,7 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         )
 
     def _can_start_calibration_workflow(self):
-        return (
-            SequenceWidgetRecordingProcessOpsMixin._recording_resources_available(self)
-            and SequenceWidgetRecordingProcessOpsMixin._ve_prewarm_admission_available(self)
-        )
+        return SequenceWidgetRecordingProcessOpsMixin._recording_resources_available(self)
 
     def _recording_context_owns_active_workflow(self, context):
         if context is None:
