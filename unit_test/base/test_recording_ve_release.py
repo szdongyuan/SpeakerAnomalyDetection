@@ -112,6 +112,7 @@ def test_incompatible_start_prepares_then_arms_start_deadline_only_after_release
     first = capture_request(tmp_path / "A.wav")
     service._retained_ve_signature = ve_acquisition_signature(
         first.device, first.channels, first.sample_rate)
+    service._retained_lifecycle_counts = VeLifecycleCounts(1, 1, 1, 0, 0, 0)
     second = changed_request(tmp_path, change)
     session = service.start(second)
     service._dispatch(service._inbox.get_nowait())
@@ -289,6 +290,7 @@ def test_cancel_after_preparing_release_sent_keeps_release_terminal_but_never_st
     service, tmp_path,
 ):
     service._retained_ve_signature = ("vkinging", "old", (0,), 51200, "IEPE", "V", -10.0, 10.0)
+    service._retained_lifecycle_counts = VeLifecycleCounts(1, 1, 1, 0, 0, 0)
     session = service.start(capture_request(tmp_path / "B.wav"))
     service._dispatch(service._inbox.get_nowait())
     release = service._worker.outgoing.get_nowait()
@@ -325,6 +327,7 @@ def test_unexpected_current_release_terminal_retires_but_old_generation_is_ignor
 def test_release_before_first_slot_advances_all_six_expected_lifecycle_counts(service):
     signature = ("vkinging", "old", (0,), 51200, "IEPE", "V", -10.0, 10.0)
     service._retained_ve_signature = signature
+    service._retained_lifecycle_counts = VeLifecycleCounts(1, 1, 1, 0, 0, 0)
     service._expected_next_lifecycle_counts = VeLifecycleCounts(1, 1, 1, 0, 0, 0)
     assert service.release_ve(None) == "pending"
     service._dispatch(service._inbox.get_nowait())

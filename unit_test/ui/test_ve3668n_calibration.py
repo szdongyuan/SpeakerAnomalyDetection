@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import QLabel, QWidget
 
 from base.recording_result_reader import RecordingAudio, ResultReader
 from base.recording_service import RecordingSession
+from base import ve3668n_calibration_settings as settings_module
 from base.ve3668n_stores import VECalibrationStore, VEInputProfileStore
 from ui import calibration_window as calibration
 from ui.vkinging_presentation import ve_failure_text
@@ -43,6 +44,13 @@ class CalibrationBridgeFake(QObject):
 
 @pytest.fixture
 def setup(ui_qapp, tmp_path, monkeypatch):
+    settings_path = tmp_path / "ve_calibration_range.txt"
+    monkeypatch.setattr(settings_module, "default_path", lambda: settings_path)
+
+    def write_settings(rate=48000, limit=2.5):
+        settings_path.write_text(f"sample_rate={rate}\nrange_volts={limit}\n", encoding="utf-8")
+
+    write_settings()
     real_popup = calibration.InputCalibration.calibration_popup
     monkeypatch.setattr(calibration.LogManager, "set_log_handler", lambda *_: mock.Mock())
     monkeypatch.setattr(calibration.InputCalibration, "calibration_popup", mock.Mock())
@@ -69,6 +77,7 @@ def setup(ui_qapp, tmp_path, monkeypatch):
 
     yield SimpleNamespace(make=make, profiles=profiles, calibrations=calibrations,
                           bridge=bridge, tmp_path=tmp_path, forbidden=forbidden,
+                          settings_path=settings_path, write_settings=write_settings,
                           real_popup=real_popup)
     for widget in widgets:
         widget.close_recording()
@@ -76,21 +85,22 @@ def setup(ui_qapp, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("rate", [44100, 48000, 51200])
-def test_request_uses_shared_profile_ten_seconds_one_physical_channel_no_factor(setup, rate):
+def test_request_uses_text_settings_ten_seconds_one_physical_channel_no_factor(setup, rate):
     widget = setup.make(rate)
-    # Stale device/UI sampling rate must not win over the shared profile.
+    # Neither the source profile nor a stale UI sampling rate controls calibration.
     widget.input_device["input_config"]["sample_rate"] = 44100
     assert widget.calibration_available
     assert widget.current_channel == 7
     assert [widget.channel_combo_box.itemData(i) for i in range(2)] == [7, 1]
     assert widget.clicked_calibration()
     request = widget.streaming_processor.session.request
-    assert request.sample_rate == rate
-    assert request.target_samples == rate * 10
+    assert request.sample_rate == 48000
+    assert request.target_samples == 480000
     assert request.channels == (7,)
     assert request.trim_samples == 0
     assert request.purpose == "calibration"
-    assert request.device["input_config"].to_dict() == input_config(rate)
+    assert request.device["input_config"].to_dict() == input_config(
+        48000, range_min=-2.5, range_max=2.5)
     assert not request.monitor.get("enabled", False)
     assert request.calibration_metadata is None
     assert not request.streaming
@@ -315,6 +325,229 @@ def release(widget, session):
     widget._on_calibration_released(session)
 
 
+@pytest.mark.parametrize("queued", [False, True])
+@pytest.mark.parametrize("edit", ["change", "corrupt", "delete"])
+def test_independent_settings_freeze_request_and_success_provenance(setup, queued, edit):
+    detail = {"sample_rate": 96000, "ve_range_index": 0}
+    kwargs = {"ve_queue_config_provider": lambda: detail} if queued else {}
+    widget = setup.make(96000, channels=(7,), **kwargs)
+    source_before = deepcopy(widget.input_device)
+    queue_before = deepcopy(detail)
+    profile_before = setup.profiles.path.read_bytes()
+    finished = []
+    widget.calibration_finished.connect(finished.append)
+    session, audio = offered(widget)
+    request = session.request
+    assert request.sample_rate == request.device["input_config"]["sample_rate"] == 48000
+    assert request.target_samples == 480000
+    assert request.device["input_config"]["range_min"] == -2.5
+    assert request.device["input_config"]["range_max"] == 2.5
+    assert widget._ve_capture_context.source_device["input_config"]["sample_rate"] == 96000
+    assert widget._ve_capture_context.source_device["input_config"]["range_max"] == 10
+    logs = str(widget.default_logger.info.call_args_list)
+    for value in (f"request_id={request.request_id}", f"machine_id={request.device['machine_id']}",
+                  "channel=7", "sample_rate=48000", "range_min=-2.5", "range_max=2.5"):
+        assert value in logs
+    widget._on_calibration_result_ready(session, audio)
+    setup.bridge.service.accept_result.assert_called_once_with(request.request_id)
+    accept(widget, session, audio)
+    if edit == "change":
+        setup.write_settings(51200, .1)
+    elif edit == "corrupt":
+        setup.settings_path.write_text("sample_rate=broken", encoding="utf-8")
+    else:
+        setup.settings_path.unlink()
+    release(widget, session)
+    record = setup.calibrations.get_record(widget.input_device, 7)
+    assert record["calibration_sample_rate"] == 48000
+    assert record["fingerprint"]["range_min"] == -2.5
+    assert record["fingerprint"]["range_max"] == 2.5
+    assert record["status"] == "valid"
+    assert finished == [True]
+    assert widget.input_device == source_before
+    assert detail == queue_before
+    assert setup.profiles.path.read_bytes() == profile_before
+
+
+def test_next_click_rereads_both_fields_without_invalidating_success(setup):
+    widget = setup.make(96000, channels=(7,))
+    session, audio = offered(widget)
+    accept(widget, session, audio)
+    release(widget, session)
+    before = setup.calibrations.path.read_bytes()
+    setup.write_settings(51200, .1)
+    widget.refresh_ve_calibration_state()
+    assert setup.calibrations.path.read_bytes() == before
+    assert widget.clicked_calibration()
+    request = widget.streaming_processor.session.request
+    assert request.sample_rate == request.device["input_config"]["sample_rate"] == 51200
+    assert request.target_samples == 512000
+    assert request.device["input_config"]["range_min"] == -.1
+    assert request.device["input_config"]["range_max"] == .1
+    assert setup.calibrations.path.read_bytes() == before
+    assert setup.calibrations.get_record(widget.input_device, 7)["status"] == "valid"
+
+
+@pytest.mark.parametrize("failure", ["field", "encoding", "permission"])
+def test_settings_failure_preserves_old_record_controls_and_can_retry(setup, monkeypatch, failure):
+    widget = setup.make(channels=(7,))
+    seed_old(setup, widget)
+    before = setup.calibrations.path.read_bytes()
+    finished, changed = [], []
+    widget.calibration_finished.connect(finished.append)
+    widget.calibration_state_changed.connect(changed.append)
+    if failure == "field":
+        setup.settings_path.write_text("sample_rate=broken\nrange_volts=2.5", encoding="utf-8")
+    elif failure == "encoding":
+        setup.settings_path.write_bytes(b"\xff")
+    with monkeypatch.context() as patch:
+        if failure == "permission":
+            original = Path.read_text
+            def denied(path, *args, **kwargs):
+                if path == setup.settings_path:
+                    raise PermissionError("permission denied")
+                return original(path, *args, **kwargs)
+            patch.setattr(Path, "read_text", denied)
+        widget.default_logger.reset_mock()
+        assert not widget.clicked_calibration()
+    assert setup.bridge.sessions == []
+    assert widget.streaming_processor is None
+    assert widget._ve_capture_context is None and widget.active_capture_channel is None
+    assert not widget.update_ui_timer.isActive()
+    assert widget.channel_combo_box.isEnabled()
+    assert widget.standard_spl_i.isEnabled() and widget.standard_spl_ii.isEnabled()
+    assert widget.v2pa_factor_lineedit.text() == "73.000000"
+    assert setup.calibrations.path.read_bytes() == before
+    assert finished == changed == []
+    widget.default_logger.error.assert_called_once()
+    assert "ve_calibration_range.txt" in str(widget.default_logger.error.call_args)
+    widget.calibration_popup.assert_called_once()
+    message = widget.calibration_popup.call_args.kwargs["message"]
+    assert "ve_calibration_range.txt" in message and "检查" in message
+    if failure == "field":
+        assert "sample_rate" in message
+    elif failure == "permission":
+        assert "permission denied" in message
+    setup.write_settings()
+    assert widget.clicked_calibration()
+    assert len(setup.bridge.sessions) == 1
+
+
+@pytest.mark.parametrize("source", ["input", "profile"])
+@pytest.mark.parametrize("change", ["range", "mode", "unit"])
+def test_standalone_source_fingerprints_are_separate_and_guarded(setup, monkeypatch, source, change):
+    widget = setup.make(96000, channels=(7,))
+    # The raw input and resolved profile may start with different valid ranges.
+    widget.input_device["input_config"].update(range_min=-5., range_max=5.)
+    session, audio = offered(widget)
+    assert widget._ve_capture_context.input_fingerprint["range_max"] == 5
+    assert widget._ve_capture_context.source_device["input_config"]["range_max"] == 10
+    updates = {"range": {"range_min": -1., "range_max": 1.},
+               "mode": {"input_mode": "AC"}, "unit": {"unit": "g"}}[change]
+    if source == "input":
+        widget.input_device["input_config"].update(updates)
+    else:
+        payload = json.loads(setup.profiles.path.read_text())
+        payload["devices"][widget.input_device["machine_id"]].update(updates)
+        setup.profiles.path.write_text(json.dumps(payload), encoding="utf-8")
+    calculate = mock.Mock(side_effect=AssertionError("changed source entered maths"))
+    monkeypatch.setattr(widget, "_calculate_spl_from_data", calculate)
+    accept(widget, session, audio)
+    release(widget, session)
+    calculate.assert_not_called()
+    assert not setup.calibrations.path.exists()
+
+
+def test_standalone_distinct_valid_raw_and_profile_ranges_allow_success(setup):
+    widget = setup.make(96000, channels=(7,))
+    widget.input_device["input_config"].update(range_min=-5., range_max=5.)
+    session, audio = offered(widget)
+    accept(widget, session, audio)
+    release(widget, session)
+    assert setup.calibrations.get_record(widget.input_device, 7)["calibration_sample_rate"] == 48000
+
+
+def test_queue_source_is_frozen_while_live_identity_and_channels_still_guarded(setup):
+    detail = {"sample_rate": 96000, "ve_range_index": 0}
+    widget = setup.make(96000, channels=(7,), ve_queue_config_provider=lambda: detail)
+    session, audio = offered(widget)
+    detail.update(sample_rate="broken", ve_range_index=99)
+    accept(widget, session, audio)
+    release(widget, session)
+    assert setup.calibrations.get_record(widget.input_device, 7)["calibration_sample_rate"] == 48000
+
+
+def test_bad_settings_do_not_enter_refresh_manual_or_recording_config(setup):
+    from base.ve3668n_recording_config import resolve_ve_recording_device
+    widget = setup.make(96000, channels=(7,))
+    setup.settings_path.write_text("broken", encoding="utf-8")
+    assert widget.refresh_ve_calibration_state()
+    _edit_manual(widget, "2.5")
+    assert widget.coefficient_editor.commit_pending()
+    assert setup.calibrations.get_factor(widget.input_device, 7) == 2.5
+    normal = resolve_ve_recording_device(widget.input_device,
+                                       {"sample_rate": 96000, "ve_range_index": 0})
+    assert normal["input_config"] == input_config(96000)
+    assert setup.bridge.sessions == []
+
+
+def test_bad_settings_do_not_affect_soundcard_calibration(setup, monkeypatch):
+    setup.settings_path.write_text("broken", encoding="utf-8")
+    monkeypatch.setattr(calibration, "load_mic_channel_v2pa_factors", lambda *_: {})
+    device = {"index": 7, "name": "Test Microphone", "hostapi": 3, "max_input_channels": 3}
+    widget = calibration.InputCalibration(device, [1], recording_bridge=setup.bridge)
+    try:
+        assert widget.clicked_calibration()
+        request = widget.streaming_processor.session.request
+        assert request.sample_rate == 44100
+        assert request.target_samples == 441000
+        assert request.device.to_dict() == device
+        assert widget._ve_capture_context is None
+    finally:
+        widget.close_recording()
+        widget.close()
+
+
+def test_missing_settings_file_uses_defaults_in_ui_without_creating_file(setup):
+    setup.settings_path.unlink()
+    widget = setup.make(96000, channels=(7,))
+    assert widget.clicked_calibration()
+    request = widget.streaming_processor.session.request
+    assert request.sample_rate == 48000
+    assert request.device["input_config"]["range_max"] == 2.5
+    assert not setup.settings_path.exists()
+
+
+@pytest.mark.parametrize("detail", [{"sample_rate": "broken", "ve_range_index": 0},
+                                   {"sample_rate": 96000, "ve_range_index": 99}])
+def test_valid_text_cannot_hide_invalid_queue_source(setup, detail):
+    widget = setup.make(96000, channels=(7,), ve_queue_config_provider=lambda: detail)
+    assert not widget.calibration_available
+    assert not widget.clicked_calibration()
+    assert setup.bridge.sessions == []
+
+
+@pytest.mark.parametrize("change", ["identity", "physical_channels", "unavailable", "input_channels"])
+def test_frozen_queue_still_rejects_live_device_and_channel_changes(setup, monkeypatch, change):
+    widget = setup.make(96000, channels=(7,), ve_queue_config_provider=lambda: {
+        "sample_rate": 96000, "ve_range_index": 0})
+    session, audio = offered(widget)
+    if change == "identity":
+        widget.input_device["machine_id"] = "replacement"
+    elif change == "physical_channels":
+        widget.input_device["physical_channels"] = [1]
+    elif change == "unavailable":
+        widget.input_device["available"] = False
+    else:
+        widget.input_channels = [1]
+    calculate = mock.Mock(side_effect=AssertionError("changed device entered maths"))
+    monkeypatch.setattr(widget, "_calculate_spl_from_data", calculate)
+    accept(widget, session, audio)
+    release(widget, session)
+    calculate.assert_not_called()
+    assert not setup.calibrations.path.exists()
+
+
 @pytest.mark.parametrize(
     'channels,completed,already_valid,selected,next_label',
     [
@@ -486,6 +719,7 @@ def test_reset_invalid_identity_still_reports_failure_without_writing(setup, dev
 @pytest.mark.parametrize("rate", [44100, 48000, 51200])
 @pytest.mark.parametrize("standard", [94, 114])
 def test_real_maths_replace_old_k_only_after_accepted_and_released(setup, rate, standard, monkeypatch):
+    setup.write_settings(rate, 2.5)
     widget = setup.make(rate)
     seed_old(setup, widget)
     other = seed_old(setup, widget, 1, 3)
@@ -661,16 +895,23 @@ def test_changed_current_context_rejects_before_maths_and_keeps_provenance(setup
         assert setup.calibrations.path.read_bytes() == before
 
 
-def test_fs_only_inflight_change_saves_original_measurement_rate(setup):
+@pytest.mark.parametrize("source", ["profile", "input"])
+def test_fs_only_inflight_change_saves_original_measurement_rate(setup, source):
     widget = setup.make(51200, channels=(7,))
     session, audio = offered(widget)
     accept(widget, session, audio)
-    setup.profiles.set_sample_rate(widget.input_device, 44100, setup.calibrations)
+    if source == "profile":
+        setup.profiles.set_sample_rate(widget.input_device, 44100, setup.calibrations)
+    else:
+        widget.input_device["input_config"]["sample_rate"] = 44100
     release(widget, session)
     record = setup.calibrations.get_record(widget.input_device, 7)
-    assert record["calibration_sample_rate"] == 51200
+    assert record["calibration_sample_rate"] == 48000
     assert record["v2pa_factor"] == pytest.approx(10.0, rel=2e-3)
-    assert setup.profiles.load(widget.input_device, setup.calibrations)["sample_rate"] == 44100
+    if source == "profile":
+        assert setup.profiles.load(widget.input_device, setup.calibrations)["sample_rate"] == 44100
+    else:
+        assert widget.input_device["input_config"]["sample_rate"] == 44100
 
 
 def test_non_path_session_request_change_is_not_service_allocation(setup, monkeypatch):
@@ -854,9 +1095,12 @@ def test_main_dialog_handoff_reaches_input_child_before_initialization(setup, mo
         assert child.ve_calibration_store is setup.calibrations
         assert child.recording_bridge is setup.bridge
         assert child.calibration_available
+        source = child._current_ve_device()
+        assert source["input_config"]["sample_rate"] == rate
+        assert source["input_config"]["range_max"] == limit
         assert child.clicked_calibration()
-        assert child.streaming_processor.session.request.sample_rate == rate
-        assert child.streaming_processor.session.request.device["input_config"]["range_max"] == limit
+        assert child.streaming_processor.session.request.sample_rate == 48000
+        assert child.streaming_processor.session.request.device["input_config"]["range_max"] == 2.5
         dialog.reject()
         dialog.done(0)
         opened.append(dialog)

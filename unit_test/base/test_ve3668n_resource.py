@@ -1,4 +1,5 @@
 import ctypes
+from copy import deepcopy
 import itertools
 import logging
 import threading
@@ -693,7 +694,8 @@ def test_all_nonempty_ordered_channel_permutations_share_the_same_slot_release_p
         physical_channels=list(FAKE_PHYSICAL_CHANNELS),
         max_input_channels=max(FAKE_PHYSICAL_CHANNELS) + 1,
     )
-    expected_values = {1: 2.5, 3: -4.75, 7: 8.25}
+    expected_values = {1: 0.25, 3: -0.5, 7: 0.75}
+    sdk.values_by_physical_channel = expected_values.copy()
     transitions = []
 
     for identity in ("A", "B"):
@@ -784,6 +786,127 @@ def test_compatible_adapters_reuse_started_task_without_inter_request_cleanup(tm
     assert sdk.calls("start_task") == 1
     assert sdk.calls("stop_task") == sdk.calls("clear_task") == sdk.calls("close") == 0
     assert controller.release(.5).success
+
+
+def test_text_calibration_settings_roundtrip_restores_queue_resource_and_factor(tmp_path):
+    from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
+    from base.ve3668n_calibration_settings import (
+        build_ve_calibration_device, load_ve_calibration_settings,
+    )
+    from base.ve3668n_recording_config import resolve_ve_recording_device
+    from base.ve3668n_stores import VECalibrationStore
+    from unit_test.base.ve3668n_fakes import input_config
+
+    source = device_info(input_config=input_config(96000))
+    queue = {"sample_rate": 96000, "ve_range_index": 0}
+    original_source, original_queue = deepcopy(source), deepcopy(queue)
+    main_device = resolve_ve_recording_device(source, queue)
+    original_main_device = deepcopy(main_device)
+    settings_path = tmp_path / "ve_calibration_range.txt"
+    settings_path.write_text("sample_rate=48000\nrange_volts=2.5\n", encoding="utf-8")
+    calibration_device = build_ve_calibration_device(
+        main_device, load_ve_calibration_settings(settings_path))
+    store = VECalibrationStore(tmp_path / "calibrations.json")
+    channels = (7,)
+
+    def main_request(name):
+        device = resolve_ve_recording_device(source, queue)
+        return capture_request(
+            tmp_path / f"{name}.wav", request_id=name, device=device,
+            sample_rate=device["input_config"]["sample_rate"], channels=channels,
+            target_samples=4, trim_samples=0,
+            calibration_metadata=build_recording_wav_calibration_metadata(
+                channels, device, ve_calibration_store=store),
+        )
+
+    first = main_request("main-before")
+    calibration = capture_request(
+        tmp_path / "calibration.wav", request_id="calibration", purpose="calibration",
+        device=calibration_device, sample_rate=48000, target_samples=480000,
+        channels=channels, trim_samples=0, calibration_metadata=None,
+    )
+    assert calibration.sample_rate == calibration.device["input_config"]["sample_rate"] == 48000
+    assert calibration.target_samples == calibration.sample_rate * 10 == 480000
+    assert calibration.purpose == "calibration" and calibration.channels == (7,)
+    assert calibration.trim_samples == 0 and calibration.calibration_metadata is None
+    assert first.calibration_metadata["acquisition"]["sample_rate"] == 96000
+    assert first.calibration_metadata["acquisition"]["range_min"] == -10
+    assert first.calibration_metadata["acquisition"]["range_max"] == 10
+
+    sdks = [CaptureSDK(counts=(4,), hooks={
+        "read_task_data": lambda *args, **kwargs: time.sleep(.001),
+    }) for _ in range(3)]
+    pending_sdks = iter(sdks)
+    controller, fatals = controller_for(lambda: next(pending_sdks))
+    failures = []
+
+    def attach(request):
+        return controller.stream(
+            request=request, callback=lambda *args: None,
+            fail=lambda stage, message: failures.append((stage, message)),
+            stop_event=threading.Event(),
+        )
+
+    try:
+        before = attach(first)
+        assert before.start()
+        wait_released(before)
+        with pytest.raises(VeResourceConfigurationError):
+            attach(calibration)
+        assert controller.lifecycle_counts == VeLifecycleCounts(1, 1, 1, 0, 0, 0)
+        assert not sdks[1].trace
+        assert controller.release(.5).success
+
+        during = attach(calibration)
+        assert during.start()
+        # Exercise configuration/bind/detach without shortening the ten-second request.
+        assert during.stop()
+        wait_released(during)
+        # Supply a verified coefficient fixture; full result acceptance/math is covered
+        # by the calibration tests, rather than treating this partial capture as success.
+        store.save(
+            calibration.device, channels[0], v2pa_factor=10.0, standard_spl=94.0,
+            calibration_sample_rate=calibration.sample_rate,
+            calibration_duration_seconds=10.0, calibrated_at="2026-10-23T00:00:00+00:00",
+        )
+        record = store.get_record(main_device, channels[0])
+        assert record["status"] == "valid" and record["calibration_sample_rate"] == 48000
+        assert record["fingerprint"]["range_min"] == -2.5
+        assert record["fingerprint"]["range_max"] == 2.5
+        assert store.get_factor(main_device, channels[0]) == 10.0
+        returned = main_request("main-after")
+        assert returned.device == first.device
+        assert returned.calibration_metadata["acquisition"] == first.calibration_metadata["acquisition"]
+        metadata_channel = returned.calibration_metadata["recorded_channels"][0]
+        assert metadata_channel["calibrated"] and metadata_channel["v2pa_factor"] == 10.0
+        assert metadata_channel["calibration"]["sample_rate"] == 48000
+        with pytest.raises(VeResourceConfigurationError):
+            attach(returned)
+        assert controller.lifecycle_counts == VeLifecycleCounts(2, 2, 2, 1, 1, 1)
+        assert not sdks[2].trace
+        assert controller.release(.5).success
+
+        after = attach(returned)
+        assert after.start()
+        wait_released(after)
+        assert controller.release(.5).success
+    finally:
+        controller.close(.5)
+
+    assert not fatals and not failures
+    assert controller.lifecycle_counts == VeLifecycleCounts(3, 3, 3, 3, 3, 3)
+    assert [call["args"][1] for sdk in sdks for call in sdk.trace
+            if call["operation"] == "configure_sample_clock"] == [96000, 48000, 96000]
+    assert [call["kwargs"] for sdk in sdks for call in sdk.trace
+            if call["operation"] == "create_iepe_voltage_channel"] == [
+        {"range_min": -10.0, "range_max": 10.0},
+        {"range_min": -2.5, "range_max": 2.5},
+        {"range_min": -10.0, "range_max": 10.0},
+    ]
+    assert [call["args"][1] for sdk in sdks for call in sdk.trace
+            if call["operation"] == "create_iepe_voltage_channel"] == ["FreshDev/AIN8"] * 3
+    assert source == original_source and queue == original_queue
+    assert main_device == original_main_device
 
 
 def test_initial_adapter_preserves_native_start_time_across_slow_rate_verification(
