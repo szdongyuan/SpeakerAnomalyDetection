@@ -148,11 +148,11 @@ def test_record_golden_sample_passes_wav_calibration_metadata(monkeypatch):
     assert record_calls == [([2], metadata)]
 
 
-def test_record_golden_sample_cancel_save_restores_shared_runtime_state(monkeypatch):
+def test_record_golden_sample_cancel_save_preserves_shared_runtime_state(monkeypatch):
     seeded_stimulus = np.array([0.25, 0.5], dtype=np.float32)
     seeded_wave = np.array([0.75, 0.125], dtype=np.float32)
     seeded_info = {"sample_rate": 44100, "stimulus_method": "seeded"}
-    selector = _selector({"samplerate": 48000, "hostapi": 1}, {"samplerate": 48000, "hostapi": 1})
+    selector = _selector({"samplerate": 48000, "hostapi": 1, "index": 5}, {"samplerate": 48000, "hostapi": 1, "index": 7})
     data_struct = selector.select_list.data_struct
     data_struct.sample_rate = 44100
     data_struct.stimulus_data = seeded_stimulus
@@ -206,14 +206,12 @@ def test_record_golden_sample_cancel_save_restores_shared_runtime_state(monkeypa
     assert "golden_sample_result_path" not in analysis_cfg
 
 
-def test_record_golden_sample_success_saves_runtime_payload_then_restores_shared_state(monkeypatch):
+def test_record_golden_sample_success_saves_runtime_payload_and_preserves_shared_state(monkeypatch, tmp_path):
     seeded_stimulus = np.array([0.25, 0.5], dtype=np.float32)
     seeded_wave = np.array([0.75, 0.125], dtype=np.float32)
     seeded_info = {"sample_rate": 44100, "stimulus_method": "seeded"}
     runtime_info = {"sample_rate": 48000, "stimulus_method": "runtime", "total_time": 0.25}
-    saved_path = Path("unit_test/ui/.golden_baseline_regression.json").resolve()
-    if saved_path.exists():
-        saved_path.unlink()
+    saved_path = tmp_path / "golden_baseline_regression.json"
     selector = _selector(
         {"samplerate": 48000, "hostapi": 1, "index": 5},
         {"samplerate": 48000, "hostapi": 1, "index": 7},

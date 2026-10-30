@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QApplication, QFi
 from time import time
 
 from base.data_struct.data_deal_struct import DataDealStruct
+from base.data_struct.golden_sample_context import create_golden_analysis_input, create_golden_context
 from base.data_struct.sequence_data import SequenceData
 from base.file_ops import FileOps
 from base.load_config import ConfigManager, LoadUiConfig
@@ -117,33 +118,6 @@ def _resolve_golden_sample_runtime_sample_rate(dialog, data_struct):
     if speaker is None and select_list is not None:
         speaker = _safe_dialog_attr(select_list, "speaker", None)
     return resolve_duplex_sample_rate(mic, speaker)
-
-
-_RUNTIME_ATTR_MISSING = object()
-
-
-def _snapshot_golden_sample_runtime_state(data_struct):
-    return {
-        name: getattr(data_struct, name, _RUNTIME_ATTR_MISSING)
-        for name in (
-            "sample_rate",
-            "stimulus_data",
-            "stimulus_info",
-            "alignment_sample_count",
-            "store_wave_data",
-        )
-    }
-
-
-def _restore_golden_sample_runtime_state(data_struct, snapshot):
-    if data_struct is None:
-        return
-    for name, value in snapshot.items():
-        if value is _RUNTIME_ATTR_MISSING:
-            if hasattr(data_struct, name):
-                delattr(data_struct, name)
-        else:
-            setattr(data_struct, name, value)
 
 
 def _detail_total_time(detail):
@@ -558,188 +532,188 @@ class AnalysisModelSelect(QDialog):
             return
         runtime_sample_rate = sample_rate_result.sample_rate
 
-        runtime_state_snapshot = _snapshot_golden_sample_runtime_state(data_struct)
+        golden_context = create_golden_context(runtime_sample_rate)
+        stimulus_info = detail.get("stimulus_info") or {}
+        output_preparation = resolve_output_amplitude(
+            selected_speaker, stimulus_info.get("voltage"), stimulus_info.get("voltage_type")
+        )
+        if output_preparation.error:
+            MessageBox.warning(self, "提示", output_preparation.error)
+            return
+
         try:
-            data_struct.sample_rate = runtime_sample_rate
-            stimulus_info = detail.get("stimulus_info") or {}
-            output_preparation = resolve_output_amplitude(
-                selected_speaker, stimulus_info.get("voltage"), stimulus_info.get("voltage_type")
+            # Prepare this golden operation's paired stimulus.
+            self.set_data_struct_stimulus_signal(
+                golden_context,
+                detail,
+                using_config_path=self.using_config_path,
+                runtime_sample_rate=runtime_sample_rate,
+                logger=self.default_logger,
             )
-            if output_preparation.error:
-                MessageBox.warning(self, "提示", output_preparation.error)
-                return
+        except Exception as e:
+            MessageBox.warning(self, "提示", f"加载激励失败: {str(e)[:200]}")
+            return
 
-            try:
-                # Ensure stimulus data is loaded/generated into DataDealStruct
-                self.set_data_struct_stimulus_signal(
-                    data_struct,
-                    detail,
-                    using_config_path=self.using_config_path,
-                    runtime_sample_rate=runtime_sample_rate,
-                    logger=self.default_logger,
-                )
-            except Exception as e:
-                MessageBox.warning(self, "提示", f"加载激励失败: {str(e)[:200]}")
-                return
-
-            try:
-                stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
-                    data_struct,
-                    recording_start_delay_ms=detail["recording_start_delay_ms"],
-                    output_amplitude=output_preparation.amplitude,
-                )
-            except Exception as e:
-                MessageBox.warning(self, "提示", f"生成播放/录制参数失败: {str(e)[:200]}")
-                return
-
-            # Prepare default save locations
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            golden_dir = os.path.join(DEFAULT_DIR, "audio_data", "stored_sample", "golden")
-            try:
-                os.makedirs(golden_dir, exist_ok=True)
-            except Exception:
-                pass
-
-            recorded_wav_path = os.path.join(golden_dir, f"golden_record_{ts}.wav").replace("\\", "/")
-
-            # Blocking play+record (also saves wav)
-            try:
-                sap = SoundcardAudioProcessor()
-                hardware_id = selected_mic.get("hardware_id")
-                input_channels = _safe_dialog_attr(self.select_list, "mic_channels", None) or [0]
-                input_channels = [int(channel) for channel in input_channels]
-                input_channels = [input_channels[0]] if input_channels else [0]
-                calibration_metadata = build_recording_wav_calibration_metadata(
-                    input_channels,
-                    hardware_id=hardware_id,
-                    logger=self.default_logger,
-                )
-                recorded_dict["input_device"] = selected_mic
-                recorded_dict["output_device"] = selected_speaker
-                recorded_dict["input_channels"] = input_channels
-                recorded_dict["wav_calibration_metadata"] = calibration_metadata
-                record_code, aligned_data = sap.sd_play_rec(
-                    recorded_dict,
-                    stimulus_dict,
-                    recorded_wav_path,
-                    calibration_metadata=calibration_metadata,
-                )
-                if record_code != 0 or aligned_data is None:
-                    MessageBox.warning(self, "提示", "录制黄金样本失败")
-                    return
-                data_struct.store_wave_data = aligned_data
-            except Exception as e:
-                MessageBox.warning(self, "提示", f"录制黄金样本失败: {str(e)[:200]}")
-                return
-
-            # Prepare only checked items and collect calibration warnings before calculation.
-            items_out = {}
-            class_mapping = get_class_mapping()
-            prepared_items = []
-            calibration_batch = AnalysisV2paBatch(
-                resolver=resolve_analysis_v2pa_factor_for_channel,
+        try:
+            stimulus_dict, recorded_dict = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
+                golden_context,
+                recording_start_delay_ms=detail["recording_start_delay_ms"],
+                output_amplitude=output_preparation.amplitude,
             )
-            for key in item_sort_list:
-                key_config = analysis_cfg.get(key)
-                if not isinstance(key_config, dict):
-                    continue
-                if not key_config.get(GOLDEN_SAMPLE_CHECKED_KEY, False):
-                    continue
-                item_type = key_config.get("type")
-                if item_type not in {"SPLF", "FR", "HD", "RB", "PRB"}:
-                    continue
+        except Exception as e:
+            MessageBox.warning(self, "提示", f"生成播放/录制参数失败: {str(e)[:200]}")
+            return
 
-                cls_map = class_mapping.get(item_type)
-                if cls_map is None:
-                    continue
+        # Prepare default save locations
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        golden_dir = os.path.join(DEFAULT_DIR, "audio_data", "stored_sample", "golden")
+        try:
+            os.makedirs(golden_dir, exist_ok=True)
+        except Exception:
+            pass
 
+        recorded_wav_path = os.path.join(golden_dir, f"golden_record_{ts}.wav").replace("\\", "/")
+
+        # Blocking play+record (also saves wav)
+        try:
+            sap = SoundcardAudioProcessor()
+            hardware_id = selected_mic.get("hardware_id")
+            input_channels = _safe_dialog_attr(self.select_list, "mic_channels", None) or [0]
+            input_channels = [int(channel) for channel in input_channels]
+            input_channels = [input_channels[0]] if input_channels else [0]
+            calibration_metadata = build_recording_wav_calibration_metadata(
+                input_channels,
+                hardware_id=hardware_id,
+                logger=self.default_logger,
+            )
+            recorded_dict["input_device"] = selected_mic
+            recorded_dict["output_device"] = selected_speaker
+            recorded_dict["input_channels"] = input_channels
+            recorded_dict["wav_calibration_metadata"] = calibration_metadata
+            record_code, golden_recording = sap.sd_play_rec(
+                recorded_dict,
+                stimulus_dict,
+                recorded_wav_path,
+                calibration_metadata=calibration_metadata,
+            )
+            if record_code != 0 or golden_recording is None:
+                MessageBox.warning(self, "提示", "录制黄金样本失败")
+                return
+            golden_context.golden_recording = golden_recording
+            golden_context.wav_calibration_metadata = calibration_metadata
+        except Exception as e:
+            MessageBox.warning(self, "提示", f"录制黄金样本失败: {str(e)[:200]}")
+            return
+
+        golden_analysis_input = create_golden_analysis_input(golden_context)
+
+        # Prepare only checked items and collect calibration warnings before calculation.
+        items_out = {}
+        class_mapping = get_class_mapping()
+        prepared_items = []
+        calibration_batch = AnalysisV2paBatch(
+            resolver=resolve_analysis_v2pa_factor_for_channel,
+        )
+        for key in item_sort_list:
+            key_config = analysis_cfg.get(key)
+            if not isinstance(key_config, dict):
+                continue
+            if not key_config.get(GOLDEN_SAMPLE_CHECKED_KEY, False):
+                continue
+            item_type = key_config.get("type")
+            if item_type not in {"SPLF", "FR", "HD", "RB", "PRB"}:
+                continue
+
+            cls_map = class_mapping.get(item_type)
+            if cls_map is None:
+                continue
+
+            raw_channel = 0
+            try:
+                raw_channel = int(key_config.get("analysis_channel", 0) or 0)
+            except (TypeError, ValueError, OverflowError):
                 raw_channel = 0
-                try:
-                    raw_channel = int(key_config.get("analysis_channel", 0) or 0)
-                except (TypeError, ValueError, OverflowError):
-                    raw_channel = 0
-                if raw_channel < 0:
-                    raw_channel = 0
+            if raw_channel < 0:
+                raw_channel = 0
 
-                preparation = None
-                if (
-                    item_type in GOLDEN_SAMPLE_ANALYSIS_TYPES_REQUIRING_V2PA
-                    and item_type not in {"HD", "RB"}
-                ):
-                    preparation = calibration_batch.resolve(raw_channel)
-                prepared_items.append(
-                    (key, item_type, key_config, cls_map, raw_channel, preparation)
-                )
-
-            calibration_warning = calibration_batch.warning_text()
-            if calibration_warning:
-                MessageBox.warning(self, "提示", calibration_warning)
-
-            for key, item_type, key_config, cls_map, raw_channel, preparation in prepared_items:
-                if preparation is not None and preparation.factor is None:
-                    continue
-                try:
-                    params = copy.deepcopy(key_config)
-                    # When generating baseline, always disable golden/threshold influence
-                    params[GOLDEN_SAMPLE_CHECKED_KEY] = False
-                    params.pop(GOLDEN_SAMPLE_RESULT_PATH_KEY, None)
-                    params["limit_checked"] = False
-                    params["limit_data"] = None
-
-                    instance = cls_map(key)
-                    instance.analysis_config = params
-                    if preparation is not None:
-                        instance.v2pa_factor = preparation.factor
-                        if hasattr(instance, "_resolve_v2pa_factor_for_analysis"):
-                            instance._v2pa_raw_analysis_channel = raw_channel
-                            instance._use_pre_resolved_v2pa_factor = True
-
-                    result = None
-                    if hasattr(instance, "calculate_spl"):
-                        result = instance.calculate_spl()
-                    elif hasattr(instance, "calculate_fr"):
-                        result = instance.calculate_fr()
-                    elif hasattr(instance, "calculate_thd"):
-                        result = instance.calculate_thd()
-                        result.pop("harmonic", None)
-                    else:
-                        continue
-
-                    items_out[key] = {"type": item_type, "result": result}
-                except Exception as e:
-                    self.default_logger.error(f"Golden sample analysis failed for {key}: {e}")
-                    continue
-
-            default_json_path = os.path.join(golden_dir, f"golden_baseline_{ts}.json").replace("\\", "/")
-            json_path, _ = QFileDialog.getSaveFileName(
-                self,
-                "保存黄金样本分析结果",
-                default_json_path,
-                filter="JSON Files (*.json)",
+            preparation = None
+            if (
+                item_type in GOLDEN_SAMPLE_ANALYSIS_TYPES_REQUIRING_V2PA
+                and item_type not in {"HD", "RB"}
+            ):
+                preparation = calibration_batch.resolve(raw_channel)
+            prepared_items.append(
+                (key, item_type, key_config, cls_map, raw_channel, preparation)
             )
-            if not json_path:
-                return
 
-            payload = {
-                "created_at": datetime.now().isoformat(timespec="seconds"),
-                "stimulus_info": getattr(data_struct, "stimulus_info", None),
-                "sample_rate": getattr(data_struct, "sample_rate", None),
-                "recorded_wav_path": recorded_wav_path,
-                "items": items_out,
-            }
+        calibration_warning = calibration_batch.warning_text()
+        if calibration_warning:
+            MessageBox.warning(self, "提示", calibration_warning)
 
+        for key, item_type, key_config, cls_map, raw_channel, preparation in prepared_items:
+            if preparation is not None and preparation.factor is None:
+                continue
             try:
-                FileOps.ensure_directory_exists(json_path)
-                with open(json_path, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                MessageBox.warning(self, "提示", f"保存黄金样本文件失败: {str(e)[:200]}")
-                return
+                params = copy.deepcopy(key_config)
+                # When generating baseline, always disable golden/threshold influence
+                params[GOLDEN_SAMPLE_CHECKED_KEY] = False
+                params.pop(GOLDEN_SAMPLE_RESULT_PATH_KEY, None)
+                params["limit_checked"] = False
+                params["limit_data"] = None
 
-            # Store path into sequence analysis config; persisted when user clicks 保存/确定
-            analysis_cfg[GOLDEN_SAMPLE_RESULT_PATH_KEY] = json_path.replace("\\", "/")
-        finally:
-            _restore_golden_sample_runtime_state(data_struct, runtime_state_snapshot)
+                instance = cls_map(key)
+                instance.data_struct = golden_analysis_input
+                instance.analysis_config = params
+                if preparation is not None:
+                    instance.v2pa_factor = preparation.factor
+                    if hasattr(instance, "_resolve_v2pa_factor_for_analysis"):
+                        instance._v2pa_raw_analysis_channel = raw_channel
+                        instance._use_pre_resolved_v2pa_factor = True
+
+                result = None
+                if hasattr(instance, "calculate_spl"):
+                    result = instance.calculate_spl()
+                elif hasattr(instance, "calculate_fr"):
+                    result = instance.calculate_fr()
+                elif hasattr(instance, "calculate_thd"):
+                    result = instance.calculate_thd()
+                    result.pop("harmonic", None)
+                else:
+                    continue
+
+                items_out[key] = {"type": item_type, "result": result}
+            except Exception as e:
+                self.default_logger.error(f"Golden sample analysis failed for {key}: {e}")
+                continue
+
+        default_json_path = os.path.join(golden_dir, f"golden_baseline_{ts}.json").replace("\\", "/")
+        json_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存黄金样本分析结果",
+            default_json_path,
+            filter="JSON Files (*.json)",
+        )
+        if not json_path:
+            return
+
+        payload = {
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "stimulus_info": golden_context.stimulus_info,
+            "sample_rate": golden_context.sample_rate,
+            "recorded_wav_path": recorded_wav_path,
+            "items": items_out,
+        }
+
+        try:
+            FileOps.ensure_directory_exists(json_path)
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            MessageBox.warning(self, "提示", f"保存黄金样本文件失败: {str(e)[:200]}")
+            return
+
+        # Store path into sequence analysis config; persisted when user clicks 保存/确定
+        analysis_cfg[GOLDEN_SAMPLE_RESULT_PATH_KEY] = json_path.replace("\\", "/")
 
     def load_btn_clicked(self):
         default_dir = os.path.normpath(os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config"))

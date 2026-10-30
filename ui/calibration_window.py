@@ -1,3 +1,4 @@
+import math
 import sys
 import threading
 from decimal import Decimal, ROUND_DOWN, localcontext
@@ -34,6 +35,7 @@ from base.soundcard_calibration_manager import (
     save_manual_mic_channel_v2pa_factor,
 )
 from consts import error_code, model_consts, ui_style_const
+from consts.acoustic_analysis.common_consts import REFERENCE_PRESSURE_PA
 from consts.calibration_consts import (
     INPUT_CALIBRATION_MODE_MANUAL,
     INPUT_CALIBRATION_MODE_STANDARD_SPL,
@@ -951,6 +953,19 @@ class InputCalibration(QWidget):
             truncated = decimal_factor.quantize(Decimal("0.001"), rounding=ROUND_DOWN)
         return format(truncated, ".3f")
 
+    @staticmethod
+    def _full_scale_spl_from_factor(factor):
+        if factor is None or not math.isfinite(factor) or factor <= 0:
+            return None
+        return 20 * (math.log10(factor) - math.log10(REFERENCE_PRESSURE_PA)) - 10 * math.log10(2)
+
+    def _set_factor_result_display(self, factor):
+        self.v2pa_factor_lineedit.setText(
+            "" if factor is None else self._format_v2pa_factor_for_display(factor)
+        )
+        level = self._full_scale_spl_from_factor(factor)
+        self.full_scale_spl_lineedit.setText("—" if level is None else f"{level:.2f}")
+
     def _load_selected_input_hardware(self):
         saved_devices = SoundDeviceManager.load_selected_devices() or {}
         saved_channels = SoundDeviceManager.normalize_channel_indices(saved_devices.get("mic_channels"))
@@ -1082,10 +1097,7 @@ class InputCalibration(QWidget):
 
     def _refresh_current_channel_display(self):
         factor = self._current_channel_factor()
-        if factor is None:
-            self.v2pa_factor_lineedit.clear()
-        else:
-            self.v2pa_factor_lineedit.setText(self._format_v2pa_factor_for_display(factor))
+        self._set_factor_result_display(factor)
 
         self._manual_factor_dirty = False
         self._manual_edit_snapshot = self._capture_manual_edit_snapshot(factor)
@@ -1135,9 +1147,7 @@ class InputCalibration(QWidget):
                 self.unsaved_session_channels.discard(channel)
         self.pending_persistence_failure = snapshot["pending_persistence_failure"]
         factor = snapshot["factor"]
-        self.v2pa_factor_lineedit.setText(
-            "" if factor is None else self._format_v2pa_factor_for_display(factor)
-        )
+        self._set_factor_result_display(factor)
         self._manual_factor_dirty = False
         self._manual_edit_snapshot = snapshot
 
@@ -1196,7 +1206,7 @@ class InputCalibration(QWidget):
         self.calibrated_channels.add(channel)
         self.unsaved_session_channels.discard(channel)
         self.pending_persistence_failure = False
-        self.v2pa_factor_lineedit.setText(self._format_v2pa_factor_for_display(factor))
+        self._set_factor_result_display(factor)
         self._manual_factor_dirty = False
         self._manual_edit_snapshot = self._capture_manual_edit_snapshot(factor)
         self._refresh_current_channel_display()
@@ -1278,7 +1288,7 @@ class InputCalibration(QWidget):
         self.recorded_box = self.create_recorded_box()
         self.recorded_box.setMinimumHeight(min_height)
         self.v2pa_factor_box = self.create_v2pa_factor_box()
-        self.v2pa_factor_box.setMinimumHeight(min_height)
+        self.v2pa_factor_box.setMinimumHeight(max(min_height, self.v2pa_factor_box.minimumSizeHint().height()))
 
         self._input_calibration_layout = QVBoxLayout()
         self._input_calibration_middle_spacers = [
@@ -1406,11 +1416,7 @@ class InputCalibration(QWidget):
 
     def create_v2pa_factor_box(self):
         """
-        Create a GroupBox to display the sound pressure v2pa_factor.
-
-        This method creates a GroupBox containing a label and a read-only line edit
-        to show the sound pressure v2pa_factor from the calibration results. The layout
-        uses a horizontal box layout to arrange the elements horizontally.
+        Create a two-row GroupBox for the factor and derived full-scale SPL.
 
         Returns:
             GroupBox: A GroupBox containing the sound pressure v2pa_factor label and line edit.
@@ -1431,7 +1437,25 @@ class InputCalibration(QWidget):
         standard_v2pa_factor_layout.addWidget(v2pa_factor_label)
         standard_v2pa_factor_layout.addStretch()
         standard_v2pa_factor_layout.addWidget(self.v2pa_factor_lineedit)
-        v2pa_factor_box.setLayout(standard_v2pa_factor_layout)
+
+        self.full_scale_spl_label = Label("满幅声压级")
+        self.full_scale_spl_lineedit = LineEdit()
+        self.full_scale_spl_lineedit.setReadOnly(True)
+        self.full_scale_spl_lineedit.setText("—")
+        self.full_scale_spl_unit_label = Label("dB SPL")
+        tooltip = "按峰值为 1 的正弦波 RMS 换算，不代表设备实际无失真测量上限。"
+        self.full_scale_spl_label.setToolTip(tooltip)
+        self.full_scale_spl_lineedit.setToolTip(tooltip)
+        self.full_scale_spl_unit_label.setToolTip(tooltip)
+        full_scale_row = QHBoxLayout()
+        full_scale_row.addWidget(self.full_scale_spl_label)
+        full_scale_row.addStretch()
+        full_scale_row.addWidget(self.full_scale_spl_lineedit)
+        full_scale_row.addWidget(self.full_scale_spl_unit_label)
+        result_layout = QVBoxLayout()
+        result_layout.addLayout(standard_v2pa_factor_layout)
+        result_layout.addLayout(full_scale_row)
+        v2pa_factor_box.setLayout(result_layout)
 
         return v2pa_factor_box
 
@@ -1634,7 +1658,7 @@ class InputCalibration(QWidget):
             self.unsaved_session_channels.add(current_channel)
             self.active_capture_channel = None
             self._set_calibration_mode_controls_enabled(True)
-            self.v2pa_factor_lineedit.setText(self._format_v2pa_factor_for_display(v2pa_factor))
+            self._set_factor_result_display(v2pa_factor)
             self.default_logger.info("Calibration success.")
             self.calibration_popup(success_flag=True)
             persistence_status = self._persist_complete_selected_channel_factors_if_ready()
@@ -1819,7 +1843,7 @@ class InputCalibration(QWidget):
         self.recorded_label.setText(
             f"<span style='color: red;'>{self.recorded_time} </span>" f"<span style='color: black;'>s</span>"
         )
-        self.v2pa_factor_lineedit.clear()
+        self._set_factor_result_display(None)
         self._load_selected_input_hardware()
         first_channel = self.selected_input_channels[0] if self.selected_input_channels else None
         self._refresh_channel_selector(preferred_channel=first_channel)
