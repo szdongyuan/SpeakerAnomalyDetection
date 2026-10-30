@@ -805,7 +805,13 @@ def test_play_record_default_save_saves_visible_acquisition_values_and_keeps_dia
     window.streaming_recording_checkbox.setChecked(False)
     window.recording_start_delay_ms_input.setValue(300.0)
 
-    window.on_default_btn_clicked()
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+    window.show()
+    qapp.processEvents()
+    default_button = next(b for b in window.findChildren(module.PushButton)
+                          if b.text().strip() == "设为默认")
+    QTest.mouseClick(default_button, Qt.LeftButton)
 
     assert saved == [
         ("PLAY_AND_RECORD", {"use_streaming_recording": False, "recording_start_delay_ms": 300.0})
@@ -949,3 +955,45 @@ def test_new_items_missing_acquisition_default_use_false(qapp, monkeypatch):
     play_option_list.set_sound_item("播放与录制")
     assert play_option_list.config[0].detail["use_streaming_recording"] is False
     assert play_option_list.config[0].detail["recording_start_delay_ms"] == 100.0
+
+
+@pytest.mark.parametrize("class_name", ["PlayRecordConfigWindow", "RecordConfigWindow",
+                                      "ImportAudioConfigWindow", "ImportStimulusAudioConfigWindow"])
+def test_config_button_order(qapp, monkeypatch, class_name):
+    from PyQt5.QtCore import QPoint, Qt
+    from PyQt5.QtTest import QTest
+    from ui import acquisition_config_window as module
+    data = {"stimulus_info": {"total_time": 1.0, "sample_rate": 44100},
+            "total_time": 1.0, "sample_rate": 44100}
+    calls = []
+    cls = getattr(module, class_name)
+    for method in ("on_default_btn_clicked", "on_click_cancel_btn", "on_click_ok_btn"):
+        monkeypatch.setattr(cls, method, lambda self, checked=False, method=method: calls.append(method))
+    devices = {"mic": {"name": "mic", "samplerate": 44100}}
+    if class_name != "ImportAudioConfigWindow":
+        devices["speaker"] = {"name": "speaker", "samplerate": 44100}
+    window = cls(data, **devices)
+    try:
+        window.show()
+        qapp.processEvents()
+        row = window.main_layout.itemAt(window.main_layout.count() - 1).layout()
+        default = next((b for b in window.findChildren(module.PushButton)
+                        if b.text().strip() == "设为默认"), None)
+        if class_name in ("PlayRecordConfigWindow", "RecordConfigWindow"):
+            expected = [default, None, window.cancel_btn, window.ok_btn]
+        else:
+            expected = [window.cancel_btn, None, window.ok_btn]
+        assert [row.itemAt(i).widget() for i in range(row.count())] == expected
+        assert row.itemAt(1).spacerItem() is not None
+        buttons = [b for b in expected if b is not None]
+        positions = [b.mapTo(window, QPoint()).x() for b in buttons]
+        assert positions == sorted(positions)
+        assert len(set(positions)) == len(positions)
+        assert window.ok_btn.isDefault()
+        for button in buttons:
+            QTest.mouseClick(button, Qt.LeftButton)
+        expected_calls = [{window.cancel_btn: "on_click_cancel_btn", window.ok_btn: "on_click_ok_btn"}.get(
+            b, "on_default_btn_clicked") for b in buttons]
+        assert calls == expected_calls
+    finally:
+        window.close()

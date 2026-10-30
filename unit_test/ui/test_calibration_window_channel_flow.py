@@ -1,3 +1,4 @@
+import math
 import os
 import queue
 import sqlite3
@@ -8,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import pytest
-from PyQt5.QtCore import QCoreApplication, QEvent, Qt, QThread, QTimer
+from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QRect, Qt, QThread, QTimer
 from PyQt5.QtGui import QColor, QValidator
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QSizePolicy
@@ -350,6 +351,150 @@ def test_factor_display_is_truncated_and_fixed_to_three_decimals(qapp, monkeypat
         widget.close()
 
 
+@pytest.mark.parametrize(
+    "factor, factor_text, level_text",
+    [(0.0019, "0.001", "36.54"), (20e-6 * 10 ** (114 / 20), "10.023", "110.99")],
+)
+def test_full_scale_spl_uses_full_precision_factor(qapp, monkeypatch, factor, factor_text, level_text):
+    widget = _build_widget(monkeypatch, saved_channels=[0], saved_factors={0: factor})
+    try:
+        assert widget.v2pa_factor_lineedit.text() == factor_text
+        assert widget.full_scale_spl_lineedit.text() == level_text
+        assert widget.full_scale_spl_lineedit.isReadOnly()
+        assert widget.full_scale_spl_label.text() == "量程上限"
+        assert widget.full_scale_spl_unit_label.text() == "dB SPL"
+        for control in (widget.full_scale_spl_label, widget.full_scale_spl_lineedit, widget.full_scale_spl_unit_label):
+            assert control.toolTip() == "按峰值为 1 的正弦波 RMS 换算，不代表设备实际无失真测量上限。"
+        assert calibration_window.InputCalibration._full_scale_spl_from_factor(factor) == pytest.approx(
+            20 * math.log10(factor / (math.sqrt(2) * 20e-6))
+        )
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize("channels", [[], [0]])
+def test_full_scale_spl_missing_channel_or_factor(qapp, monkeypatch, channels):
+    widget = _build_widget(monkeypatch, saved_channels=channels)
+    try:
+        assert widget.v2pa_factor_lineedit.text() == ""
+        assert widget.full_scale_spl_lineedit.text() == "—"
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize("factor", [None, 0, -1, float("nan"), float("inf"), float("-inf")])
+def test_full_scale_spl_undefined_factor(factor):
+    assert calibration_window.InputCalibration._full_scale_spl_from_factor(factor) is None
+
+
+def test_full_scale_spl_doubling_factor_adds_six_decibels():
+    calculate = calibration_window.InputCalibration._full_scale_spl_from_factor
+    assert calculate(0.0038) - calculate(0.0019) == pytest.approx(20 * math.log10(2))
+
+
+@pytest.mark.parametrize("factor", [float.fromhex("0x1.fffffffffffffp+1023"), float.fromhex("0x0.0000000000001p-1022")])
+def test_full_scale_spl_extreme_finite_factors_do_not_overflow(factor):
+    level = calibration_window.InputCalibration._full_scale_spl_from_factor(factor)
+    assert math.isfinite(level)
+    assert level == pytest.approx(20 * math.log10(factor) + 20 * math.log10(1 / (math.sqrt(2) * 20e-6)))
+
+
+def test_full_scale_spl_switches_calibrated_missing_and_no_channel(qapp, monkeypatch):
+    widget = _build_widget(monkeypatch, saved_channels=[0, 1], saved_factors={0: 0.0019})
+    try:
+        for channel, expected in [(0, "36.54"), (1, "—"), (0, "36.54")]:
+            widget.channel_combo_box.setCurrentIndex(widget.channel_combo_box.findData(channel))
+            qapp.processEvents()
+            assert widget.full_scale_spl_lineedit.text() == expected
+        widget.selected_input_channels = []
+        widget._refresh_channel_selector()
+        assert widget.current_channel is None
+        assert widget.full_scale_spl_lineedit.text() == "—"
+    finally:
+        widget.close()
+
+
+def test_full_scale_spl_manual_edit_waits_for_acceptance_and_reopens_saved_factor(qapp, monkeypatch):
+    saved_factors = {0: 0.0019}
+    save_calls = []
+
+    def save_factor(channel, factor, *, hardware_id):
+        save_calls.append((channel, factor, hardware_id))
+        saved_factors[channel] = factor
+
+    monkeypatch.setattr(calibration_window, "save_manual_mic_channel_v2pa_factor", save_factor)
+    widget = _build_widget(monkeypatch, saved_channels=[0], saved_factors=saved_factors)
+    try:
+        _enter_manual_mode(widget, qapp)
+        widget.v2pa_factor_lineedit.setText("0.003")
+        widget.v2pa_factor_lineedit.textEdited.emit("0.003")
+        assert widget.full_scale_spl_lineedit.text() == "36.54"
+        assert save_calls == []
+        widget.v2pa_factor_lineedit.editingFinished.emit()
+        assert widget.full_scale_spl_lineedit.text() == "40.51"
+        assert save_calls == [(0, 0.003, "mic-1")]
+    finally:
+        widget.close()
+    reopened = _build_widget(monkeypatch, saved_channels=[0], saved_factors=saved_factors)
+    try:
+        assert reopened.full_scale_spl_lineedit.text() == "40.51"
+        assert save_calls == [(0, 0.003, "mic-1")]
+    finally:
+        reopened.close()
+
+
+def test_full_scale_spl_reloads_selected_device_factor(qapp, monkeypatch):
+    widget = _build_widget(monkeypatch, saved_channels=[0], saved_factors={0: 0.0019})
+    try:
+        assert widget.full_scale_spl_lineedit.text() == "36.54"
+        second_device = dict(widget.selected_input_device, hardware_id="mic-2")
+        monkeypatch.setattr(
+            calibration_window.SoundDeviceManager,
+            "get_startup_devices",
+            lambda self: {"mic": second_device, "mic_channels": [0]},
+        )
+        monkeypatch.setattr(
+            calibration_window, "load_mic_channel_v2pa_factors",
+            lambda *, hardware_id: {0: 0.0038} if hardware_id == "mic-2" else {0: 0.0019},
+        )
+        widget._reload_selected_input_hardware()
+        assert widget.selected_input_device["hardware_id"] == "mic-2"
+        assert widget.v2pa_factor_lineedit.text() == "0.003"
+        assert widget.full_scale_spl_lineedit.text() == "42.56"
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize("scale", [0.7, 1.0])
+@pytest.mark.parametrize("mode", [INPUT_CALIBRATION_MODE_STANDARD_SPL, INPUT_CALIBRATION_MODE_MANUAL])
+def test_full_scale_spl_layout_fits_real_dialog(qapp, monkeypatch, scale, mode):
+    monkeypatch.setattr(calibration_window.ui_style_const, "_FONT_SCALE", scale)
+    _install_calibration_window_startup_devices(monkeypatch)
+    monkeypatch.setattr(calibration_window, "load_mic_channel_v2pa_factors", lambda: {0: 0.0019})
+    window = calibration_window.CalibrationWindow()
+    try:
+        widget = window.input_cal_wnd
+        window.tabwidget.setCurrentIndex(1)
+        widget._user_selected_calibration_mode(mode)
+        window.show()
+        qapp.processEvents()
+        box = widget.v2pa_factor_box
+        first_row = widget.v2pa_factor_lineedit.geometry()
+        second_row = widget.full_scale_spl_lineedit.geometry()
+        assert first_row.bottom() < second_row.top()
+        assert widget.full_scale_spl_lineedit.isReadOnly()
+        assert widget.full_scale_spl_lineedit.text() == "36.54"
+        for control in (widget.full_scale_spl_label, widget.full_scale_spl_lineedit, widget.full_scale_spl_unit_label):
+            assert control.isVisible()
+            assert control.height() >= control.minimumSizeHint().height()
+            assert control.width() >= control.fontMetrics().horizontalAdvance(control.text())
+            assert box.rect().contains(control.geometry())
+            assert window.rect().contains(QRect(control.mapTo(window, QPoint()), control.size()))
+        assert widget.rect().contains(box.geometry())
+    finally:
+        window.close()
+
+
 def test_high_precision_history_mode_and_channel_refresh_do_not_save(qapp, monkeypatch):
     save_calls = []
     monkeypatch.setattr(
@@ -365,14 +510,18 @@ def test_high_precision_history_mode_and_channel_refresh_do_not_save(qapp, monke
     )
     try:
         assert widget.v2pa_factor_lineedit.text() == "1.234"
+        assert widget.full_scale_spl_lineedit.text() == "92.80"
 
         _enter_manual_mode(widget, qapp)
+        assert widget.full_scale_spl_lineedit.text() == "92.80"
         widget.channel_combo_box.setCurrentIndex(1)
         qapp.processEvents()
+        assert widget.full_scale_spl_lineedit.text() == "98.37"
         widget.standard_spl_mode_radio.click()
         qapp.processEvents()
 
         assert widget.v2pa_factor_lineedit.text() == "2.345"
+        assert widget.full_scale_spl_lineedit.text() == "98.37"
         assert save_calls == []
     finally:
         widget.close()
@@ -467,6 +616,7 @@ def test_standard_completion_keeps_full_session_factor_but_displays_truncated_va
         assert widget.session_channel_factors == {1: 1.234567}
         assert replace_calls == [({1: 1.234567}, {1: 94}, "mic-1")]
         assert widget.v2pa_factor_lineedit.text() == "1.234"
+        assert widget.full_scale_spl_lineedit.text() == "92.80"
     finally:
         widget.close()
 
@@ -489,7 +639,12 @@ def test_manual_factor_save_is_exact_idempotent_and_channel_isolated(qapp, monke
         widget._refresh_channel_selector(preferred_channel=3)
         _enter_manual_mode(widget, qapp)
 
-        _user_edit_factor(widget, "1.234")
+        assert widget.full_scale_spl_lineedit.text() == "—"
+        widget.v2pa_factor_lineedit.setText("1.234")
+        widget.v2pa_factor_lineedit.textEdited.emit("1.234")
+        assert widget.full_scale_spl_lineedit.text() == "—"
+        assert save_calls == []
+        widget.v2pa_factor_lineedit.editingFinished.emit()
         widget.v2pa_factor_lineedit.editingFinished.emit()
 
         assert save_calls == [(3, 1.234, "mic-1")]
@@ -498,6 +653,7 @@ def test_manual_factor_save_is_exact_idempotent_and_channel_isolated(qapp, monke
         assert widget.unsaved_session_channels == {1}
         assert widget.calibrated_channels == {1, 3}
         assert widget.v2pa_factor_lineedit.text() == "1.234"
+        assert widget.full_scale_spl_lineedit.text() == "92.80"
         assert widget._manual_factor_dirty is False
     finally:
         widget.close()
@@ -558,6 +714,7 @@ def test_invalid_manual_factor_restores_exact_database_or_empty_snapshot(
         assert save_calls == []
         assert len(warnings) == 1
         assert widget.v2pa_factor_lineedit.text() == expected_text
+        assert widget.full_scale_spl_lineedit.text() == ("92.80" if saved_factors else "—")
         assert widget._manual_factor_dirty is False
     finally:
         widget.close()
@@ -594,6 +751,7 @@ def test_failed_manual_override_restores_unsaved_standard_session_snapshot(qapp,
         assert widget.unsaved_session_channels == {1}
         assert widget.calibrated_channels == {1}
         assert widget.v2pa_factor_lineedit.text() == "2.500"
+        assert widget.full_scale_spl_lineedit.text() == "98.93"
         assert len(warnings) == 1
         assert errors and "mic-1" in errors[-1] and "1" in errors[-1]
     finally:
@@ -2463,7 +2621,7 @@ def test_stop_active_capture_reenables_calibration_mode(qapp, monkeypatch):
         "stream_record_without_play",
         lambda *args, **kwargs: (processor, 44100),
     )
-    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1])
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1], saved_factors={1: 0.0019})
     try:
         assert widget.clicked_calibration() is True
         assert widget.calibration_mode_box.isEnabled() is False
@@ -2472,6 +2630,8 @@ def test_stop_active_capture_reenables_calibration_mode(qapp, monkeypatch):
 
         assert widget.active_capture_channel is None
         assert widget.calibration_mode_box.isEnabled() is True
+        assert widget.v2pa_factor_lineedit.text() == "0.001"
+        assert widget.full_scale_spl_lineedit.text() == "36.54"
     finally:
         widget.close()
 
@@ -2484,7 +2644,7 @@ def test_stream_completion_failure_reenables_calibration_mode(qapp, monkeypatch)
         "stream_record_without_play",
         lambda *args, **kwargs: (processor, 44100),
     )
-    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1])
+    widget = _build_widget(monkeypatch, saved_channels=[1], startup_channels=[1], saved_factors={1: 0.0019})
     try:
         monkeypatch.setattr(widget, "_calculate_spl_from_data", lambda data: (_ for _ in ()).throw(ValueError("bad")))
         monkeypatch.setattr(widget, "calibration_popup", lambda success_flag=True: popup_calls.append(success_flag))
@@ -2496,6 +2656,8 @@ def test_stream_completion_failure_reenables_calibration_mode(qapp, monkeypatch)
 
         assert widget.active_capture_channel is None
         assert widget.calibration_mode_box.isEnabled() is True
+        assert widget.v2pa_factor_lineedit.text() == "0.001"
+        assert widget.full_scale_spl_lineedit.text() == "36.54"
         assert popup_calls == [False]
     finally:
         widget.close()
@@ -2633,6 +2795,7 @@ def test_non_final_channel_calibration_stays_in_session_without_persisting(qapp,
         assert widget.calibrated_channels == {1}
         assert widget.current_channel == 3
         assert widget.v2pa_factor_lineedit.text() == ""
+        assert widget.full_scale_spl_lineedit.text() == "—"
         assert popup_calls == [True]
         assert button_states == [False, True]
     finally:
@@ -2862,6 +3025,7 @@ def test_final_persistence_failure_keeps_visible_session_result_when_saved_data_
 
         assert widget.current_channel == 3
         assert widget.v2pa_factor_lineedit.text() == "3.500"
+        assert widget.full_scale_spl_lineedit.text() == "101.85"
         assert widget.session_channel_factors == {3: 3.5}
         assert widget.session_channel_standard_spl == {3: 114}
         assert widget.unsaved_session_channels == {3}
@@ -2923,7 +3087,8 @@ def test_reset_clears_persisted_session_state_and_selects_first_post_reload_chan
         widget.session_channel_standard_spl = {2: 94, 4: 114}
         widget.unsaved_session_channels = {2, 4}
         widget.pending_persistence_failure = True
-        widget.v2pa_factor_lineedit.setText("4.5")
+        widget._refresh_current_channel_display()
+        assert widget.full_scale_spl_lineedit.text() == "104.03"
 
         widget.reset_btn_clicked()
 
@@ -2938,6 +3103,7 @@ def test_reset_clears_persisted_session_state_and_selects_first_post_reload_chan
         assert widget.pending_persistence_failure is False
         assert widget.calibration_mode_box.isEnabled() is True
         assert widget.v2pa_factor_lineedit.text() == ""
+        assert widget.full_scale_spl_lineedit.text() == "—"
     finally:
         widget.close()
 
@@ -2990,7 +3156,8 @@ def test_reset_clear_failure_refreshes_ui_and_reenables_parent_button(qapp, monk
         widget.session_channel_standard_spl = {4: 114}
         widget.unsaved_session_channels = {4}
         widget.pending_persistence_failure = True
-        widget.v2pa_factor_lineedit.setText("4.5")
+        widget._refresh_current_channel_display()
+        assert widget.full_scale_spl_lineedit.text() == "104.03"
         monkeypatch.setattr(widget, "_set_parent_calibration_button_enabled", lambda enabled: button_states.append(enabled))
         monkeypatch.setattr(widget.default_logger, "error", lambda message: errors.append(message))
 
@@ -3004,6 +3171,7 @@ def test_reset_clear_failure_refreshes_ui_and_reenables_parent_button(qapp, monk
         assert widget.unsaved_session_channels == set()
         assert widget.pending_persistence_failure is False
         assert widget.v2pa_factor_lineedit.text() == ""
+        assert widget.full_scale_spl_lineedit.text() == "—"
         assert button_states == [True]
         assert errors
         assert "clear failed" in errors[-1]
@@ -3494,3 +3662,141 @@ def test_close_event_stops_active_input_capture_after_switching_to_output(qapp, 
         assert window.input_cal_wnd.streaming_poll_timer.isActive() is False
     finally:
         window.close()
+
+
+def test_blank_click_commits_manual_factor(qapp, monkeypatch):
+    saves = []
+    monkeypatch.setattr(calibration_window, "save_manual_mic_channel_v2pa_factor",
+                        lambda *args, **kwargs: saves.append((args, kwargs)))
+    widget = _build_widget(monkeypatch, saved_channels=[0], saved_factors={0: 1.0})
+    try:
+        _enter_manual_mode(widget, qapp)
+        widget.show()
+        widget.activateWindow()
+        qapp.processEvents()
+        editor = widget.v2pa_factor_lineedit
+        editor.setFocus()
+        editor.selectAll()
+        QTest.keyClicks(editor, "2.000")
+        assert saves == []
+        QTest.mouseClick(widget, Qt.LeftButton, pos=QPoint(15, widget.height() - 10))
+        qapp.processEvents()
+        assert saves == [((0, 2.0), {"hardware_id": "mic-1"})]
+        assert widget.full_scale_spl_lineedit.text() == "96.99"
+        QTest.mouseClick(widget, Qt.LeftButton, pos=QPoint(15, widget.height() - 10))
+        assert len(saves) == 1
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize("target", ["page", "group", "label", "margin"])
+@pytest.mark.parametrize("text", ["2.000", "", "0", "9" * 310, "save_failure"])
+def test_blank_click_targets_validate_once(qapp, monkeypatch, target, text):
+    _install_calibration_window_startup_devices(monkeypatch)
+    monkeypatch.setattr(calibration_window, "load_mic_channel_v2pa_factors", lambda: {0: 1.0})
+    saves, warnings = [], []
+    def save(*args, **kwargs):
+        saves.append((args, kwargs))
+        if text == "save_failure":
+            raise sqlite3.OperationalError("storage unavailable")
+    monkeypatch.setattr(calibration_window, "save_manual_mic_channel_v2pa_factor", save)
+    monkeypatch.setattr(calibration_window.MessageBox, "warning", lambda *args: warnings.append(args))
+    window = calibration_window.CalibrationWindow()
+    try:
+        widget = window.input_cal_wnd
+        window.tabwidget.setCurrentIndex(1)
+        _enter_manual_mode(widget, qapp)
+        window.show()
+        window.activateWindow()
+        qapp.processEvents()
+        editor = widget.v2pa_factor_lineedit
+        editor.setFocus()
+        editor.selectAll()
+        QTest.keyClick(editor, Qt.Key_Backspace)
+        QTest.keyClicks(editor, "2.000" if text == "save_failure" else text)
+        QTest.mouseClick(editor, Qt.LeftButton)
+        assert saves == []
+        assert warnings == []
+        receiver, point = {
+            "page": (widget, QPoint(2, widget.height() - 2)),
+            "group": (widget.v2pa_factor_box, QPoint(2, 2)),
+            "label": (widget.full_scale_spl_label, QPoint(2, 2)),
+            "margin": (window, QPoint(2, 2)),
+        }[target]
+        QTest.mouseClick(receiver, Qt.LeftButton, pos=point)
+        qapp.processEvents()
+        success = text == "2.000"
+        assert widget.v2pa_factor_lineedit.text() == ("2.000" if success else "1.000")
+        assert widget.full_scale_spl_lineedit.text() == ("96.99" if success else "90.97")
+        assert len(saves) == int(success or text == "save_failure")
+        assert len(warnings) == int(not success)
+        QTest.mouseClick(receiver, Qt.LeftButton, pos=point)
+        assert len(saves) == int(success or text == "save_failure")
+        assert len(warnings) == int(not success)
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize("key", [Qt.Key_Return, Qt.Key_Tab])
+def test_manual_factor_real_keyboard_finish(qapp, monkeypatch, key):
+    saves = []
+    monkeypatch.setattr(calibration_window, "save_manual_mic_channel_v2pa_factor",
+                        lambda *args, **kwargs: saves.append((args, kwargs)))
+    widget = _build_widget(monkeypatch, saved_channels=[0], saved_factors={0: 1.0})
+    try:
+        _enter_manual_mode(widget, qapp)
+        widget.show()
+        widget.activateWindow()
+        qapp.processEvents()
+        widget.v2pa_factor_lineedit.setFocus()
+        widget.v2pa_factor_lineedit.selectAll()
+        QTest.keyClicks(widget.v2pa_factor_lineedit, "2.000")
+        QTest.keyClick(widget.v2pa_factor_lineedit, key)
+        qapp.processEvents()
+        assert saves == [((0, 2.0), {"hardware_id": "mic-1"})]
+    finally:
+        widget.close()
+
+
+def test_blank_click_scope_and_destroyed_window(qapp, monkeypatch):
+    from PyQt5.QtWidgets import QWidget
+    _install_calibration_window_startup_devices(monkeypatch)
+    monkeypatch.setattr(calibration_window, "load_mic_channel_v2pa_factors", lambda: {0: 1.0})
+    saves = []
+    monkeypatch.setattr(calibration_window, "save_manual_mic_channel_v2pa_factor",
+                        lambda *args, **kwargs: saves.append((args, kwargs)))
+    window = calibration_window.CalibrationWindow()
+    other = QWidget()
+    try:
+        widget = window.input_cal_wnd
+        window.tabwidget.setCurrentIndex(1)
+        window.show()
+        window.activateWindow()
+        qapp.processEvents()
+        QTest.mouseClick(widget, Qt.LeftButton, pos=QPoint(2, 2))
+        assert saves == []  # Standard mode.
+        _enter_manual_mode(widget, qapp)
+        QTest.mouseClick(widget, Qt.LeftButton, pos=QPoint(2, 2))
+        assert saves == []  # No edit.
+        widget.v2pa_factor_lineedit.setFocus()
+        widget.v2pa_factor_lineedit.selectAll()
+        QTest.keyClicks(widget.v2pa_factor_lineedit, "2.000")
+        other.show()
+        other.activateWindow()
+        qapp.processEvents()
+        baseline = list(saves)  # Existing focus-loss behavior may save.
+        QTest.mouseClick(other, Qt.LeftButton, pos=QPoint(2, 2))
+        assert saves == baseline
+        window.tabwidget.setCurrentIndex(0)
+        qapp.processEvents()
+        baseline = list(saves)
+        QTest.mouseClick(window.output_cal_wnd, Qt.LeftButton, pos=QPoint(2, 2))
+        QTest.mouseClick(window, Qt.LeftButton, pos=QPoint(2, 2))
+        assert saves == baseline
+        window.close()
+        window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QTest.mouseClick(other, Qt.LeftButton, pos=QPoint(2, 2))
+        assert saves == baseline
+    finally:
+        other.close()
