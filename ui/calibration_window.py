@@ -4,7 +4,7 @@ import threading
 from decimal import Decimal, ROUND_DOWN, localcontext
 
 import numpy as np
-from PyQt5.QtCore import QObject, Qt, QRegularExpression, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QObject, Qt, QRegularExpression, QTimer, pyqtSignal
 from PyQt5.QtGui import QRegularExpressionValidator
 from PyQt5.QtWidgets import (
     QApplication,
@@ -92,6 +92,13 @@ class CalibrationWindow(QDialog):
         cal_wnd_layout.addLayout(btn_layout)
         self.setLayout(cal_wnd_layout)
         self._sync_calibration_button_state()
+
+    def mousePressEvent(self, event):
+        if (event.button() == Qt.LeftButton
+                and self.tabwidget.currentWidget() is self.input_cal_wnd
+                and self.childAt(event.pos()) is None):
+            self.input_cal_wnd._finish_manual_edit_from_background()
+        super().mousePressEvent(event)
 
     def _sync_calibration_button_state(self, *_args):
         self.cal_btn.setVisible(True)
@@ -940,6 +947,26 @@ class InputCalibration(QWidget):
         self.streaming_poll_timer.timeout.connect(self._poll_streaming_queue)
 
         self.init_ui()
+        for background in [self, *self.findChildren(GroupBox), *self.findChildren(Label)]:
+            background.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if (event.type() == QEvent.MouseButtonPress
+                and event.button() == Qt.LeftButton
+                and watched.childAt(event.pos()) is None):
+            self._finish_manual_edit_from_background()
+        return super().eventFilter(watched, event)
+
+    def _finish_manual_edit_from_background(self):
+        if (self.calibration_mode != INPUT_CALIBRATION_MODE_MANUAL
+                or not self.isVisible()
+                or not self._manual_factor_dirty
+                or not self.v2pa_factor_lineedit.hasFocus()):
+            return
+        # Explicitly validate intermediate text before clearing focus: Qt may
+        # suppress editingFinished when the validator does not accept it.
+        self._manual_factor_editing_finished()
+        self.v2pa_factor_lineedit.clearFocus()
 
     @staticmethod
     def _format_channel_labels(channels):
@@ -1438,7 +1465,7 @@ class InputCalibration(QWidget):
         standard_v2pa_factor_layout.addStretch()
         standard_v2pa_factor_layout.addWidget(self.v2pa_factor_lineedit)
 
-        self.full_scale_spl_label = Label("满幅声压级")
+        self.full_scale_spl_label = Label("量程上限")
         self.full_scale_spl_lineedit = LineEdit()
         self.full_scale_spl_lineedit.setReadOnly(True)
         self.full_scale_spl_lineedit.setText("—")

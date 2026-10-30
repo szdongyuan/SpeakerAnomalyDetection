@@ -361,7 +361,7 @@ def test_full_scale_spl_uses_full_precision_factor(qapp, monkeypatch, factor, fa
         assert widget.v2pa_factor_lineedit.text() == factor_text
         assert widget.full_scale_spl_lineedit.text() == level_text
         assert widget.full_scale_spl_lineedit.isReadOnly()
-        assert widget.full_scale_spl_label.text() == "满幅声压级"
+        assert widget.full_scale_spl_label.text() == "量程上限"
         assert widget.full_scale_spl_unit_label.text() == "dB SPL"
         for control in (widget.full_scale_spl_label, widget.full_scale_spl_lineedit, widget.full_scale_spl_unit_label):
             assert control.toolTip() == "按峰值为 1 的正弦波 RMS 换算，不代表设备实际无失真测量上限。"
@@ -3662,3 +3662,141 @@ def test_close_event_stops_active_input_capture_after_switching_to_output(qapp, 
         assert window.input_cal_wnd.streaming_poll_timer.isActive() is False
     finally:
         window.close()
+
+
+def test_blank_click_commits_manual_factor(qapp, monkeypatch):
+    saves = []
+    monkeypatch.setattr(calibration_window, "save_manual_mic_channel_v2pa_factor",
+                        lambda *args, **kwargs: saves.append((args, kwargs)))
+    widget = _build_widget(monkeypatch, saved_channels=[0], saved_factors={0: 1.0})
+    try:
+        _enter_manual_mode(widget, qapp)
+        widget.show()
+        widget.activateWindow()
+        qapp.processEvents()
+        editor = widget.v2pa_factor_lineedit
+        editor.setFocus()
+        editor.selectAll()
+        QTest.keyClicks(editor, "2.000")
+        assert saves == []
+        QTest.mouseClick(widget, Qt.LeftButton, pos=QPoint(15, widget.height() - 10))
+        qapp.processEvents()
+        assert saves == [((0, 2.0), {"hardware_id": "mic-1"})]
+        assert widget.full_scale_spl_lineedit.text() == "96.99"
+        QTest.mouseClick(widget, Qt.LeftButton, pos=QPoint(15, widget.height() - 10))
+        assert len(saves) == 1
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize("target", ["page", "group", "label", "margin"])
+@pytest.mark.parametrize("text", ["2.000", "", "0", "9" * 310, "save_failure"])
+def test_blank_click_targets_validate_once(qapp, monkeypatch, target, text):
+    _install_calibration_window_startup_devices(monkeypatch)
+    monkeypatch.setattr(calibration_window, "load_mic_channel_v2pa_factors", lambda: {0: 1.0})
+    saves, warnings = [], []
+    def save(*args, **kwargs):
+        saves.append((args, kwargs))
+        if text == "save_failure":
+            raise sqlite3.OperationalError("storage unavailable")
+    monkeypatch.setattr(calibration_window, "save_manual_mic_channel_v2pa_factor", save)
+    monkeypatch.setattr(calibration_window.MessageBox, "warning", lambda *args: warnings.append(args))
+    window = calibration_window.CalibrationWindow()
+    try:
+        widget = window.input_cal_wnd
+        window.tabwidget.setCurrentIndex(1)
+        _enter_manual_mode(widget, qapp)
+        window.show()
+        window.activateWindow()
+        qapp.processEvents()
+        editor = widget.v2pa_factor_lineedit
+        editor.setFocus()
+        editor.selectAll()
+        QTest.keyClick(editor, Qt.Key_Backspace)
+        QTest.keyClicks(editor, "2.000" if text == "save_failure" else text)
+        QTest.mouseClick(editor, Qt.LeftButton)
+        assert saves == []
+        assert warnings == []
+        receiver, point = {
+            "page": (widget, QPoint(2, widget.height() - 2)),
+            "group": (widget.v2pa_factor_box, QPoint(2, 2)),
+            "label": (widget.full_scale_spl_label, QPoint(2, 2)),
+            "margin": (window, QPoint(2, 2)),
+        }[target]
+        QTest.mouseClick(receiver, Qt.LeftButton, pos=point)
+        qapp.processEvents()
+        success = text == "2.000"
+        assert widget.v2pa_factor_lineedit.text() == ("2.000" if success else "1.000")
+        assert widget.full_scale_spl_lineedit.text() == ("96.99" if success else "90.97")
+        assert len(saves) == int(success or text == "save_failure")
+        assert len(warnings) == int(not success)
+        QTest.mouseClick(receiver, Qt.LeftButton, pos=point)
+        assert len(saves) == int(success or text == "save_failure")
+        assert len(warnings) == int(not success)
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize("key", [Qt.Key_Return, Qt.Key_Tab])
+def test_manual_factor_real_keyboard_finish(qapp, monkeypatch, key):
+    saves = []
+    monkeypatch.setattr(calibration_window, "save_manual_mic_channel_v2pa_factor",
+                        lambda *args, **kwargs: saves.append((args, kwargs)))
+    widget = _build_widget(monkeypatch, saved_channels=[0], saved_factors={0: 1.0})
+    try:
+        _enter_manual_mode(widget, qapp)
+        widget.show()
+        widget.activateWindow()
+        qapp.processEvents()
+        widget.v2pa_factor_lineedit.setFocus()
+        widget.v2pa_factor_lineedit.selectAll()
+        QTest.keyClicks(widget.v2pa_factor_lineedit, "2.000")
+        QTest.keyClick(widget.v2pa_factor_lineedit, key)
+        qapp.processEvents()
+        assert saves == [((0, 2.0), {"hardware_id": "mic-1"})]
+    finally:
+        widget.close()
+
+
+def test_blank_click_scope_and_destroyed_window(qapp, monkeypatch):
+    from PyQt5.QtWidgets import QWidget
+    _install_calibration_window_startup_devices(monkeypatch)
+    monkeypatch.setattr(calibration_window, "load_mic_channel_v2pa_factors", lambda: {0: 1.0})
+    saves = []
+    monkeypatch.setattr(calibration_window, "save_manual_mic_channel_v2pa_factor",
+                        lambda *args, **kwargs: saves.append((args, kwargs)))
+    window = calibration_window.CalibrationWindow()
+    other = QWidget()
+    try:
+        widget = window.input_cal_wnd
+        window.tabwidget.setCurrentIndex(1)
+        window.show()
+        window.activateWindow()
+        qapp.processEvents()
+        QTest.mouseClick(widget, Qt.LeftButton, pos=QPoint(2, 2))
+        assert saves == []  # Standard mode.
+        _enter_manual_mode(widget, qapp)
+        QTest.mouseClick(widget, Qt.LeftButton, pos=QPoint(2, 2))
+        assert saves == []  # No edit.
+        widget.v2pa_factor_lineedit.setFocus()
+        widget.v2pa_factor_lineedit.selectAll()
+        QTest.keyClicks(widget.v2pa_factor_lineedit, "2.000")
+        other.show()
+        other.activateWindow()
+        qapp.processEvents()
+        baseline = list(saves)  # Existing focus-loss behavior may save.
+        QTest.mouseClick(other, Qt.LeftButton, pos=QPoint(2, 2))
+        assert saves == baseline
+        window.tabwidget.setCurrentIndex(0)
+        qapp.processEvents()
+        baseline = list(saves)
+        QTest.mouseClick(window.output_cal_wnd, Qt.LeftButton, pos=QPoint(2, 2))
+        QTest.mouseClick(window, Qt.LeftButton, pos=QPoint(2, 2))
+        assert saves == baseline
+        window.close()
+        window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QTest.mouseClick(other, Qt.LeftButton, pos=QPoint(2, 2))
+        assert saves == baseline
+    finally:
+        other.close()
