@@ -102,7 +102,7 @@ def test_record_golden_sample_missing_speaker_prompts_before_output_work(qapp, m
     )
     dialog = operation_sequence.AnalysisModelSelect.__new__(operation_sequence.AnalysisModelSelect)
     dialog.select_list = SimpleNamespace(config=[seq], data_struct=data_struct, speaker=None)
-    dialog.mic = {"samplerate": 48000}
+    dialog.mic = {"samplerate": 48000, "index": 5}
     dialog.speaker = None
     warnings = []
     monkeypatch.setattr(operation_sequence.MessageBox, "warning", lambda *args: warnings.append(args))
@@ -180,7 +180,7 @@ def test_record_golden_sample_rejects_invalid_selected_device_before_work(
     assert data_struct.store_wave_data is None
 
 
-def test_record_golden_sample_stimulus_setup_exception_restores_runtime_stimulus_state(qapp, monkeypatch):
+def test_record_golden_sample_stimulus_setup_exception_preserves_runtime_stimulus_state(qapp, monkeypatch):
     seeded_stimulus = np.array([1.0], dtype=np.float32)
     seeded_info = {"sample_rate": 44100}
     data_struct = SimpleNamespace(
@@ -201,8 +201,8 @@ def test_record_golden_sample_stimulus_setup_exception_restores_runtime_stimulus
     dialog.select_list = SimpleNamespace(config=[seq], data_struct=data_struct)
     dialog.using_config_path = "unused.json"
     dialog.default_logger = SimpleNamespace(error=lambda *args, **kwargs: None)
-    dialog.mic = {"samplerate": 48000}
-    dialog.speaker = {"samplerate": 48000}
+    dialog.mic = {"samplerate": 48000, "index": 5}
+    dialog.speaker = {"samplerate": 48000, "index": 7}
     dialog.set_data_struct_stimulus_signal = lambda *args, **kwargs: (_ for _ in ()).throw(
         RuntimeError("setup failed")
     )
@@ -268,7 +268,7 @@ def test_record_golden_sample_runtime_rate_failure_preserves_runtime_stimulus_st
     assert data_struct.alignment_sample_count == 1
 
 
-def test_record_golden_sample_dict_generation_failure_restores_runtime_stimulus_state(qapp, monkeypatch):
+def test_record_golden_sample_dict_generation_failure_preserves_runtime_stimulus_state(qapp, monkeypatch):
     seeded_stimulus = np.array([1.0], dtype=np.float32)
     seeded_info = {"sample_rate": 44100}
     data_struct = SimpleNamespace(
@@ -289,8 +289,8 @@ def test_record_golden_sample_dict_generation_failure_restores_runtime_stimulus_
     dialog.select_list = SimpleNamespace(config=[seq], data_struct=data_struct)
     dialog.using_config_path = "unused.json"
     dialog.default_logger = SimpleNamespace(error=lambda *args, **kwargs: None)
-    dialog.mic = {"samplerate": 48000}
-    dialog.speaker = {"samplerate": 48000}
+    dialog.mic = {"samplerate": 48000, "index": 5}
+    dialog.speaker = {"samplerate": 48000, "index": 7}
     dialog.set_data_struct_stimulus_signal = lambda *args, **kwargs: None
     warnings = []
 

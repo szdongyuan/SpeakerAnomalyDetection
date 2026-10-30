@@ -272,7 +272,7 @@ def test_applied_config_callbacks_reload_and_invalidate(calibrated, monkeypatch,
 
 
 @pytest.mark.parametrize("voltage", [1.0, 3.0])
-def test_golden_sample_prepares_own_amplitude_and_restores_snapshot(calibrated, monkeypatch, voltage):
+def test_golden_sample_prepares_own_amplitude_and_preserves_ordinary_state(calibrated, monkeypatch, voltage):
     win = window(calibrated, voltage=voltage)
     ds = win.data_struct
     ds.sample_rate = 44100

@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from base.acquisition_recording_defaults import normalize_play_record_detail
+from base.data_struct.golden_sample_context import create_golden_analysis_input, create_golden_context
 from base import soundcard_calibration_manager as calibration_manager
 from base.output_calibration import resolve_output_amplitude
 from base.soundcard_calibration_manager import MicChannelCalibrationResult
@@ -59,6 +60,8 @@ def _load_class_method(
 
 
 def _load_record_golden_sample_method(namespace: dict):
+    namespace.setdefault("create_golden_context", create_golden_context)
+    namespace.setdefault("create_golden_analysis_input", create_golden_analysis_input)
     namespace.setdefault("resolve_output_amplitude", resolve_output_amplitude)
     namespace.setdefault("build_recording_wav_calibration_metadata", lambda *args, **kwargs: {"recorded_channels": []})
     namespace.setdefault("AnalysisV2paBatch", calibration_manager.AnalysisV2paBatch)
@@ -71,10 +74,7 @@ def _load_record_golden_sample_method(namespace: dict):
         namespace,
         helper_names=(
             "_safe_dialog_attr",
-            "_snapshot_golden_sample_runtime_state",
-            "_restore_golden_sample_runtime_state",
         ),
-        global_names=("_RUNTIME_ATTR_MISSING",),
     )
 
 
