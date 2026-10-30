@@ -44,7 +44,7 @@ class BaseConfigWindow(QDialog):
         self.resize(350, 350)
         self.main_layout = QVBoxLayout(self)
 
-    def create_cancel_ok_buttons(self, include_default=False):
+    def create_cancel_ok_buttons(self, include_default=False, *, default_first=False):
         btn_layout = QHBoxLayout()
         self.cancel_btn = PushButton(" 取  消 ")
         self.cancel_btn.clicked.connect(self.on_click_cancel_btn)
@@ -52,12 +52,18 @@ class BaseConfigWindow(QDialog):
         self.ok_btn.setDefault(True)
         self.ok_btn.clicked.connect(self.on_click_ok_btn)
 
-        btn_layout.addWidget(self.cancel_btn)
-        btn_layout.addStretch()
         if include_default:
             default_btn = PushButton(" 设为默认 ")
             default_btn.clicked.connect(self.on_default_btn_clicked)
+        if include_default and default_first:
             btn_layout.addWidget(default_btn)
+            btn_layout.addStretch()
+            btn_layout.addWidget(self.cancel_btn)
+        else:
+            btn_layout.addWidget(self.cancel_btn)
+            btn_layout.addStretch()
+            if include_default:
+                btn_layout.addWidget(default_btn)
         btn_layout.addWidget(self.ok_btn)
         self._refresh_ok_button_state()
         return btn_layout
@@ -114,7 +120,7 @@ class PlayRecordConfigWindow(BaseConfigWindow):
     def init_ui(self):
         in_group_box = self.create_in_group()
         out_group_box = self.create_out_group()
-        btn_layout = self.create_cancel_ok_buttons(include_default=True)
+        btn_layout = self.create_cancel_ok_buttons(include_default=True, default_first=True)
         self.main_layout.addWidget(in_group_box)
         self.main_layout.addStretch()
         self.main_layout.addWidget(out_group_box)
@@ -320,7 +326,7 @@ class RecordConfigWindow(BaseConfigWindow):
 
     def init_ui(self):
         in_group_box = self.create_in_group()
-        btn_layout = self.create_cancel_ok_buttons(include_default=True)
+        btn_layout = self.create_cancel_ok_buttons(include_default=True, default_first=True)
         self.main_layout.addWidget(in_group_box)
         self.main_layout.addStretch()
         self.main_layout.addLayout(btn_layout)
