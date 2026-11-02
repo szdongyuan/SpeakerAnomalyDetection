@@ -35,6 +35,8 @@ class CalibrationCoefficientEditor(QObject):
         self._editable = True
         self._closed = False
         self._actions = {}
+        self._confirmation_surfaces = set()
+        self._preediting = False
         self._blocked_target = None
         self._awaiting_press = False
         line_edit.textEdited.connect(self._text_edited)
@@ -73,6 +75,13 @@ class CalibrationCoefficientEditor(QObject):
         self._actions[widget] = action
         widget.installEventFilter(self)
 
+    def register_confirmation_surface(self, widget):
+        """Confirm drafts on an explicitly owned noninteractive blank surface."""
+        if self._closed:
+            return
+        self._confirmation_surfaces.add(widget)
+        widget.installEventFilter(self)
+
     def close(self):
         """Discard and detach on forced teardown; normal exits preflight first.
 
@@ -93,6 +102,11 @@ class CalibrationCoefficientEditor(QObject):
             if not sip.isdeleted(widget):
                 widget.removeEventFilter(self)
         self._actions.clear()
+        for widget in self._confirmation_surfaces:
+            if not sip.isdeleted(widget):
+                widget.removeEventFilter(self)
+        self._confirmation_surfaces.clear()
+        self._preediting = False
         self._blocked_target = None
         self._awaiting_press = False
         self.parent().removeEventFilter(self)
@@ -143,7 +157,18 @@ class CalibrationCoefficientEditor(QObject):
         if watched is self.parent() and event.type() == QEvent.Close:
             self.before_action("exit")
             self.close()
+        elif watched is self._line and event.type() == QEvent.InputMethod:
+            self._preediting = bool(event.preeditString())
+        elif (watched is self._line and event.type() == QEvent.KeyPress
+              and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+              and event.modifiers() in (Qt.NoModifier, Qt.KeypadModifier)):
+            if self._preediting:
+                return False  # Let the native editor finish IME composition.
+            if not event.isAutoRepeat():
+                self.commit_pending()
+            return True
         elif watched is self._line and event.type() == QEvent.FocusOut:
+            self._preediting = False
             target = QApplication.focusWidget()
             # QApplication moves focus before dispatching the press to the
             # target widget's filters. Capture that target before a save/error
@@ -158,6 +183,10 @@ class CalibrationCoefficientEditor(QObject):
             if self.commit_pending() and mouse_action:
                 self._blocked_target = None
                 self._awaiting_press = False
+        elif (watched in self._confirmation_surfaces
+              and event.type() == QEvent.MouseButtonPress
+              and event.button() == Qt.LeftButton):
+            self.commit_pending()
         elif watched in self._actions:
             if event.type() == QEvent.MouseButtonPress:
                 if self._blocked_target is watched and self._awaiting_press:

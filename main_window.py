@@ -895,8 +895,13 @@ class MainWindow(QMainWindow):
         calibration_options = {}
         input_device = self.mic
         if (self.mic or {}).get("backend") == "vkinging":
+            from base.input_calibration_range import resolve_test_full_scale_peak_volts
+
+            sequence = getattr(self, "sequence_window", None)
+            peak = resolve_test_full_scale_peak_volts(getattr(sequence, "sequence_config", None))
             calibration_options = dict(ve_profile_store=self.ve_profile_store,
-                                       ve_calibration_store=self.ve_calibration_store)
+                                       ve_calibration_store=self.ve_calibration_store,
+                                       test_full_scale_peak_volts=peak)
         dlg = CalibrationWindow(
             input_device=input_device,
             input_channels=self.mic_channels,

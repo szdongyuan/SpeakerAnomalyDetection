@@ -1,4 +1,5 @@
 import os
+import math
 from types import SimpleNamespace
 from unittest import mock
 
@@ -46,11 +47,13 @@ def test_direct_coefficient_focus_out_saves_selected_channel(qapp):
     widget.calibration_popup = mock.Mock()
     with mock.patch("ui.calibration_window.save_mic_channel_factor", create=True) as save:
         _edit_coefficient(widget, "2.5", qapp)
+        assert widget.full_scale_spl_lineedit.text() == "—"
         widget.standard_spl_i.setFocus()
         qapp.processEvents()
         save.assert_called_once_with(2.5, DEVICE, 1)
     assert changed == [True]
     assert widget.saved_v2pa_factors == {1: 2.5}
+    assert widget.full_scale_spl_lineedit.text() == "98.93"
     assert widget.current_channel == 1
     assert widget.streaming_processor is None
     widget.calibration_popup.assert_not_called()
@@ -111,9 +114,12 @@ def test_manual_admission_change_discards_before_disable(qapp, change):
     from unit_test.ui.test_ve3668n_calibration import CalibrationBridgeFake
     bridge = CalibrationBridgeFake(None)
     widget = InputCalibration(dict(DEVICE), [1], recording_bridge=bridge)
+    widget.saved_v2pa_factors = {1: 1.25}
+    widget._refresh_channel_display()
     widget.calibration_popup = mock.Mock()
     with mock.patch("ui.calibration_window.save_mic_channel_factor") as save:
         _edit_coefficient(widget, "2.5", qapp)
+        assert widget.full_scale_spl_lineedit.text() == "92.91"
         if change == "busy":
             bridge.service.busy = True
         elif change == "device":
@@ -128,7 +134,8 @@ def test_manual_admission_change_discards_before_disable(qapp, change):
         widget.standard_spl_i.setFocus()
         qapp.processEvents()
         save.assert_not_called()
-        assert widget.v2pa_factor_lineedit.text() == ""
+        assert widget.v2pa_factor_lineedit.text() == "1.250000"
+        assert widget.full_scale_spl_lineedit.text() == ("92.91" if change == "busy" else "—")
     widget.close()
 
 
@@ -172,11 +179,13 @@ def test_manual_mic_persistence_preserves_same_value_measurement(qapp, tmp_path,
         with mock.patch("ui.calibration_window.save_mic_channel_factor",
                         side_effect=lambda *args: manager.save_mic_channel_factor(*args, calibration_path=str(path))) as save:
             _edit_coefficient(widget, "" if text is None else text, qapp)
+            assert widget.full_scale_spl_lineedit.text() == "92.91"
             widget.standard_spl_ii.setFocus()
             qapp.processEvents()
             record = manager.load_mic_channel_calibrations(DEVICE, str(path))[1]
             if text == "2.123456789012345":
                 assert record["v2pa_factor"] == 2.123457
+                assert widget.full_scale_spl_lineedit.text() == "97.51"
                 assert widget.saved_v2pa_factors[widget.current_channel] == 2.123457
                 assert record["standard_spl_db"] is None
                 assert record["sample_rate_hz"] is None
@@ -188,6 +197,7 @@ def test_manual_mic_persistence_preserves_same_value_measurement(qapp, tmp_path,
                 assert changed == []
                 save.assert_not_called()
                 assert widget.saved_v2pa_factors == {1: 1.25}
+                assert widget.full_scale_spl_lineedit.text() == "92.91"
                 assert widget.coefficient_editor._factor == 1.25
                 if text == "2.5e-23":
                     assert widget.v2pa_factor_lineedit.text() == "1.250000"
@@ -228,10 +238,13 @@ def test_manual_mic_failed_write_preserves_confirmed_cache_and_signal(qapp, erro
     widget.calibration_popup = mock.Mock()
     with mock.patch("ui.calibration_window.save_mic_channel_factor", side_effect=error("denied")):
         _edit_coefficient(widget, "2.5", qapp)
+        confirmed_spl = f"{20 * math.log10(1.123456789012345 / (math.sqrt(2) * 20e-6)):.2f}"
+        assert widget.full_scale_spl_lineedit.text() == confirmed_spl
         widget.standard_spl_i.setFocus()
         qapp.processEvents()
         assert widget.saved_v2pa_factors == {1: 1.123456789012345}
         assert widget.v2pa_factor_lineedit.text() == "1.123457"
+        assert widget.full_scale_spl_lineedit.text() == confirmed_spl
         assert changed == []
         widget.calibration_popup.assert_called_once()
     widget.close()
@@ -263,16 +276,18 @@ def test_manual_mic_commit_rechecks_admission_without_timer(qapp, change):
     widget.close()
 
 
-def test_automatic_capture_keeps_existing_blank_result_display(qapp):
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_automatic_capture_keeps_existing_blank_result_display(qapp, confirmed):
     from PyQt5.QtTest import QTest
     widget = InputCalibration(dict(DEVICE), [1])
-    widget.saved_v2pa_factors = {1: 1.25}
+    widget.saved_v2pa_factors = {1: 1.25} if confirmed else {}
     widget._refresh_channel_display()
     with mock.patch("ui.calibration_window.save_mic_channel_factor") as save:
         assert widget.clicked_calibration()
         QTest.qWait(150)
         assert widget.v2pa_factor_lineedit.text() == ""
         assert widget.v2pa_factor_lineedit.isReadOnly()
+        assert widget.full_scale_spl_lineedit.text() == ("92.91" if confirmed else "—")
         save.assert_not_called()
     widget.close_recording()
     widget.close()
@@ -692,11 +707,13 @@ def test_selector_change_refreshes_saved_factor_and_status(qapp):
     assert widget.current_channel == 0
     assert widget.channel_status_label.text() == "状态: 已校准"
     assert widget.v2pa_factor_lineedit.text() == "1.250000"
+    assert widget.full_scale_spl_lineedit.text() == "92.91"
 
     widget.channel_combo_box.setCurrentIndex(1)
     assert widget.current_channel == 2
     assert widget.channel_status_label.text() == "状态: 未校准"
     assert widget.v2pa_factor_lineedit.text() == ""
+    assert widget.full_scale_spl_lineedit.text() == "—"
 
 
 def test_factor_display_is_editable_without_manual_mode_controls(qapp):
@@ -916,8 +933,49 @@ def test_completed_calibration_round_trips_through_runtime_resolver(qapp, tmp_pa
             str(calibration_path),
         )
 
+        from base.soundcard_calibration_manager import load_mic_channel_v2pa_factors
+        with mock.patch("ui.calibration_window.load_mic_channel_v2pa_factors",
+                        side_effect=lambda device: load_mic_channel_v2pa_factors(device, str(calibration_path))):
+            reopened = InputCalibration(dict(DEVICE), [1])
+        try:
+            assert reopened.saved_v2pa_factors == {1: factor}
+            assert reopened.full_scale_spl_lineedit.text() == widget.full_scale_spl_lineedit.text() == "94.97"
+        finally:
+            reopened.close_recording()
+            reopened.close()
+
     assert factor == 1.584893
     assert calibration_path.exists()
+
+
+def test_saved_full_precision_spl_survives_channel_switch_and_reopen(qapp, tmp_path):
+    from base import soundcard_calibration_manager as manager
+    path = tmp_path / "mic.json"
+    with mock.patch.object(manager.SoundDeviceManager, "get_api_info", return_value={"name": "Test API"}):
+        manager.save_mic_channel_calibration(.000000019, DEVICE, 1, 94, 44100, 10,
+                                             calibration_path=str(path))
+        before = path.read_bytes()
+        with mock.patch("ui.calibration_window.load_mic_channel_v2pa_factors",
+                        side_effect=lambda device: manager.load_mic_channel_v2pa_factors(device, str(path))):
+            for _ in range(2):
+                widget = InputCalibration(dict(DEVICE), [1, 0])
+                changes = []
+                widget.calibration_state_changed.connect(changes.append)
+                try:
+                    assert widget.current_channel == 0
+                    assert widget.full_scale_spl_lineedit.text() == "—"
+                    widget._select_channel(1)
+                    assert widget.v2pa_factor_lineedit.text() == "0.000000"
+                    assert widget.full_scale_spl_lineedit.text() == "-63.46"
+                    widget._sync_coefficient_editability()
+                    assert widget.full_scale_spl_lineedit.text() == "-63.46"
+                    widget._select_channel(0)
+                    assert widget.full_scale_spl_lineedit.text() == "—"
+                    assert changes == []
+                    assert path.read_bytes() == before
+                finally:
+                    widget.close_recording()
+                    widget.close()
 
 
 @pytest.mark.parametrize("processor", [
@@ -999,6 +1057,7 @@ def test_success_saves_current_channel_then_advances_without_starting_next(qapp)
     assert save.call_args.kwargs["input_channel"] == 0
     assert widget.saved_v2pa_factors[0] == 1.584893
     assert widget.current_channel == 2
+    assert widget.full_scale_spl_lineedit.text() == "—"
     assert widget.channel_combo_box.currentData() == 2
     assert widget.streaming_processor is None
     start_next.assert_not_called()
@@ -1259,6 +1318,7 @@ def test_reset_clears_only_selected_channels_and_emits_change(qapp):
     ):
         widget = InputCalibration(DEVICE, [0, 2])
         widget.channel_combo_box.setCurrentIndex(1)
+        assert widget.full_scale_spl_lineedit.text() == "98.93"
         changes = []
         widget.calibration_state_changed.connect(changes.append)
         with mock.patch(
@@ -1273,6 +1333,7 @@ def test_reset_clears_only_selected_channels_and_emits_change(qapp):
     assert widget.current_channel == 0
     assert widget.channel_combo_box.currentData() == 0
     assert widget.channel_status_label.text() == "状态: 未校准"
+    assert widget.full_scale_spl_lineedit.text() == "—"
 
 
 def test_reset_stops_capture_before_clearing(qapp):
@@ -1350,6 +1411,7 @@ def test_reset_failure_preserves_displayed_state_and_restores_controls(qapp, err
     assert widget.current_channel == 0
     assert widget.channel_status_label.text() == "状态: 已校准"
     assert widget.v2pa_factor_lineedit.text() == "1.250000"
+    assert widget.full_scale_spl_lineedit.text() == "92.91"
     assert widget.channel_combo_box.isEnabled() is True
     assert changes == []
     assert widget.calibration_popup.call_args.kwargs["success_flag"] is False
@@ -1380,10 +1442,13 @@ def test_auto_precision_is_shared_by_storage_cache_popup_and_completed_channel(q
     assert save.call_args.kwargs["v2pa_factor"] == expected
     assert widget.saved_v2pa_factors == {0: expected}
     assert widget.current_channel == 2
+    assert widget.full_scale_spl_lineedit.text() == "—"
     assert widget.calibration_popup.call_args.kwargs["message"] == f"校准成功\n本次校准结果：{text} Pa/V\n下次校准通道：In3"
     widget._select_channel(0)
     assert widget.v2pa_factor_lineedit.text() == text
     assert widget.coefficient_editor._factor == expected
+    level = 20 * math.log10(expected / (math.sqrt(2) * 20e-6))
+    assert widget.full_scale_spl_lineedit.text() == f"{level:.2f}"
 
 
 def test_auto_tiny_factor_never_saves_or_publishes_success(qapp):

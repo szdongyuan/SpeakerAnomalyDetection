@@ -1,10 +1,11 @@
+import math
 import os
 import sys
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from numbers import Integral
+from numbers import Integral, Real
 
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
@@ -31,7 +32,10 @@ from base.ve3668n_calibration import verify_ve_calibration_result
 from base.ve3668n_calibration_settings import (
     VECalibrationSettingsError, build_ve_calibration_device, load_ve_calibration_settings,
 )
-from base.ve3668n_input import calibration_applicability_key, calibration_fingerprint, validate_device_snapshot
+from base.ve3668n_input import (
+    calibration_applicability_key, calibration_fingerprint, validate_device_snapshot,
+    validate_voltage_range,
+)
 from base.ve3668n_stores import VEStoreIOError
 from ui.recording_service_bridge import RecordingProcessorFacade, RecordingServiceBridge
 from base.soundcard_audio_processor import SoundcardAudioProcessor
@@ -45,6 +49,7 @@ from base.soundcard_calibration_manager import (
 )
 from ui.calibration_coefficient_editor import CalibrationCoefficientEditor
 from consts import ui_style_const, error_code
+from consts.acoustic_analysis.common_consts import REFERENCE_PRESSURE_PA
 from consts.running_consts import DEFAULT_DIR
 from consts.ve3668n_consts import (
     VE_CALIBRATION_SETTINGS_RELATIVE_PATH, VE_CALIBRATION_DEFAULT_SAMPLE_RATE,
@@ -57,11 +62,12 @@ from ui.dialog_enter_policy import install_dialog_enter_policy
 class CalibrationWindow(QDialog):
 
     def __init__(self, input_device=None, input_channels=None, *, recording_bridge=None,
-                 ve_profile_store=None, ve_calibration_store=None):
+                 ve_profile_store=None, ve_calibration_store=None, test_full_scale_peak_volts=None):
         super().__init__()
         self.recording_bridge = recording_bridge
         self.ve_profile_store = ve_profile_store
         self.ve_calibration_store = ve_calibration_store
+        self.test_full_scale_peak_volts = test_full_scale_peak_volts
         self.input_device = input_device
         self.input_channels = list(input_channels or [])
         self.init_ui()
@@ -89,6 +95,7 @@ class CalibrationWindow(QDialog):
             recording_bridge=self.recording_bridge,
             ve_profile_store=self.ve_profile_store,
             ve_calibration_store=self.ve_calibration_store,
+            test_full_scale_peak_volts=self.test_full_scale_peak_volts,
         )
         input_panel = QGroupBox(self)
         panel_layout = QVBoxLayout(input_panel)
@@ -109,6 +116,8 @@ class CalibrationWindow(QDialog):
         cal_wnd_layout.addLayout(btn_layout)
         self.setLayout(cal_wnd_layout)
         self.setStyleSheet(ui_style_const.qpushbutton_style + ui_style_const.qgroupbox_style)
+        for surface in (self, input_panel):
+            self.input_cal_wnd.coefficient_editor.register_confirmation_surface(surface)
 
     def create_btn_box(self):
         """
@@ -220,12 +229,22 @@ class InputCalibration(QWidget):
     calibration_availability_changed = pyqtSignal()
 
     def __init__(self, input_device=None, input_channels=None, *, recording_bridge=None,
-                 ve_profile_store=None, ve_calibration_store=None):
+                 ve_profile_store=None, ve_calibration_store=None, test_full_scale_peak_volts=None):
         super().__init__()
         self.recording_bridge = recording_bridge
         self.ve_profile_store = ve_profile_store
         self.ve_calibration_store = ve_calibration_store
         self._ve_input = (input_device or {}).get("backend") == "vkinging"
+        self.test_full_scale_peak_volts = test_full_scale_peak_volts
+        if self._ve_input:
+            if type(test_full_scale_peak_volts) not in (int, float):
+                self.test_full_scale_peak_volts = None
+            else:
+                try:
+                    _, self.test_full_scale_peak_volts = validate_voltage_range(
+                        -test_full_scale_peak_volts, test_full_scale_peak_volts)
+                except ValueError:
+                    self.test_full_scale_peak_volts = None
         self._ve_capture_context = None
         self._ve_accepted_audio = None
         self._ve_calibration_records = {}
@@ -258,6 +277,8 @@ class InputCalibration(QWidget):
             parent=self,
         )
         self.coefficient_editor.register_action(self.channel_combo_box, "channel")
+        for surface in (self, *self.findChildren(QGroupBox), *self.findChildren(QLabel)):
+            self.coefficient_editor.register_confirmation_surface(surface)
         self._display_coefficient_context = None
         self._initialize_calibration_state()
         # The shared bridge has no busy-change signal. Poll only panel admission;
@@ -293,18 +314,62 @@ class InputCalibration(QWidget):
         count = device.get("max_input_channels")
         return isinstance(count, Integral) and 0 <= self.current_channel < count
 
-    def _sync_coefficient_editability(self):
+    def _display_context_is_current(self):
+        device = self.input_device
+        if (self._recording_closed or not self.calibration_available
+                or not isinstance(device, Mapping) or not device.get("available", True)
+                or self.current_channel is None or self.current_channel not in self.input_channels):
+            return False
+        if self._ve_input:
+            if self.current_channel not in device.get("physical_channels", ()):
+                return False
+        else:
+            count = device.get("max_input_channels")
+            if not isinstance(count, Integral) or not 0 <= self.current_channel < count:
+                return False
         try:
-            enabled = (self._coefficient_available()
-                       and self._coefficient_context() == self._display_coefficient_context)
+            return self._coefficient_context() == self._display_coefficient_context
         except ValueError:
             # Live VE config may become unsupported; disable/discard until the
             # existing explicit refresh path can report its domain diagnostic.
-            enabled = False
+            return False
+
+    def _sync_coefficient_editability(self):
+        context_is_current = self._display_context_is_current()
+        enabled = self._coefficient_available() and context_is_current
         was_editable = not self.v2pa_factor_lineedit.isReadOnly()
         if enabled != was_editable:
             self.coefficient_editor.set_editable(enabled)
             self.calibration_availability_changed.emit()
+        self._refresh_full_scale_spl_display(context_is_current=context_is_current)
+
+    @staticmethod
+    def _full_scale_spl_from_factor(factor, peak=1.0):
+        for value in (factor, peak):
+            if isinstance(value, bool) or not isinstance(value, Real):
+                return None
+            try:
+                if not math.isfinite(value) or value <= 0:
+                    return None
+            except OverflowError:
+                # A non-representable numeric input cannot produce a display value.
+                return None
+        return (20 * (math.log10(factor) + math.log10(peak)
+                      - math.log10(REFERENCE_PRESSURE_PA))
+                - 10 * math.log10(2))
+
+    def _refresh_full_scale_spl_display(self, *, context_is_current=None):
+        if context_is_current is None:
+            context_is_current = self._display_context_is_current()
+        factor = self.saved_v2pa_factors.get(self.current_channel) if context_is_current else None
+        peak = 1.0
+        if self._ve_input:
+            record = self._ve_calibration_records.get(self.current_channel)
+            if record is None or record["status"] != "valid":
+                factor = None
+            peak = self.test_full_scale_peak_volts
+        level = self._full_scale_spl_from_factor(factor, peak)
+        self.full_scale_spl_lineedit.setText("—" if level is None else f"{level:.2f}")
 
     def _save_coefficient(self, context, factor):
         try:
@@ -474,6 +539,7 @@ class InputCalibration(QWidget):
         if self._ve_input:
             self.standard_spl_i.setEnabled(False)
             self.standard_spl_ii.setEnabled(False)
+        self._refresh_full_scale_spl_display()
 
     def _on_channel_changed(self, index):
         if not self.coefficient_editor.before_action("channel"):
@@ -483,6 +549,7 @@ class InputCalibration(QWidget):
             return
         if not self.calibration_available or index < 0:
             self.current_channel = None
+            self._refresh_full_scale_spl_display()
             return
         if self.active_capture_channel is not None:
             pinned_index = self.channel_combo_box.findData(
@@ -530,11 +597,15 @@ class InputCalibration(QWidget):
             self._refresh_channel_display()
 
     def _refresh_channel_display(self):
+        if self._recording_closed:
+            self._refresh_full_scale_spl_display()
+            return
         factor = self.saved_v2pa_factors.get(self.current_channel)
         self._display_coefficient_context = self._coefficient_context(
             self._ve_display_device if self._ve_input else None)
         self.coefficient_editor.show_value(self._display_coefficient_context, factor)
         self.coefficient_editor.set_editable(self._coefficient_available())
+        self._refresh_full_scale_spl_display()
         if self._ve_input:
             record = self._ve_calibration_records.get(self.current_channel)
             status = record["status"] if record is not None else "none"
@@ -660,9 +731,8 @@ class InputCalibration(QWidget):
         """
         Create a QGroupBox to display the sound pressure v2pa_factor.
 
-        This method creates a QGroupBox containing a label and an editable line edit
-        for the current channel's confirmed Pa/V coefficient. The layout
-        uses a horizontal box layout to arrange the elements horizontally.
+        This method retains the editable confirmed coefficient and adds a
+        read-only theoretical full-scale SPL result on the second row.
 
         Returns:
             QGroupBox: A QGroupBox containing the sound pressure v2pa_factor label and line edit.
@@ -678,7 +748,26 @@ class InputCalibration(QWidget):
         standard_v2pa_factor_layout.addWidget(v2pa_factor_label)
         standard_v2pa_factor_layout.addItem(h_spacer_v2pa_factor_center)
         standard_v2pa_factor_layout.addWidget(self.v2pa_factor_lineedit)
-        v2pa_factor_box.setLayout(standard_v2pa_factor_layout)
+        self.full_scale_spl_label = QLabel("量程上限")
+        self.full_scale_spl_lineedit = QLineEdit("—")
+        self.full_scale_spl_lineedit.setReadOnly(True)
+        self.full_scale_spl_unit_label = QLabel("dB SPL")
+        if not self._ve_input:
+            tooltip = "按峰值为 1 的正弦波 RMS 换算，不代表设备实际无失真测量上限。"
+        elif self.test_full_scale_peak_volts is not None:
+            tooltip = (f"按当前测试量程 ±{self.test_full_scale_peak_volts:g} V 的正弦波 RMS 换算，"
+                       "不代表设备实际无失真测量上限。")
+        else:
+            tooltip = "当前测试量程不可用，无法换算量程上限；不影响输入校准。"
+        full_scale_layout = QHBoxLayout()
+        for control in (self.full_scale_spl_label, self.full_scale_spl_lineedit,
+                        self.full_scale_spl_unit_label):
+            control.setToolTip(tooltip)
+            full_scale_layout.addWidget(control)
+        result_layout = QVBoxLayout()
+        result_layout.addLayout(standard_v2pa_factor_layout)
+        result_layout.addLayout(full_scale_layout)
+        v2pa_factor_box.setLayout(result_layout)
 
         return v2pa_factor_box
 
@@ -1328,6 +1417,7 @@ class InputCalibration(QWidget):
         self.coefficient_editor.close()
         self.coefficient_state_timer.stop()
         self._recording_closed = True
+        self._refresh_full_scale_spl_display()
         self.cancel_calibration()
         if self._owns_recording_bridge:
             self.recording_bridge.shutdown()
