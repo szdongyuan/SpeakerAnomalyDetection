@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QCoreApplication, QEvent, QObject, Qt, QTimer
+from PyQt5.QtGui import QInputMethodEvent, QKeyEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QApplication, QComboBox, QDialog, QLineEdit, QPushButton, QVBoxLayout, QWidget,
@@ -274,18 +275,41 @@ def test_invalidation_before_focus_loss_drops_old_draft(host, invalidate):
 
 
 @pytest.mark.parametrize("key", [Qt.Key_Return, Qt.Key_Enter])
-def test_return_does_not_save_or_activate_action(host, key):
+def test_return_saves_once_without_activating_action(host, key):
     for action in ("calibrate", "reset", "exit"):
         button = getattr(host, action)
         host.editor.register_action(button, action)
         button.clicked.connect(lambda: host.actions.append(True))
     edit(host, "2.5")
     QTest.keyClick(host.line, key)
-    assert host.saved == []
+    assert host.saved == [(("device", 1), 2.5)]
     assert host.actions == []
-    assert host.line.text() == "2.5"
+    assert host.line.text() == "2.500000"
+    QTest.keyClick(host.line, key)
     QTest.keyClick(host.line, Qt.Key_Tab)
     assert host.saved == [(("device", 1), 2.5)]
+
+
+@pytest.mark.parametrize("key", [Qt.Key_Return, Qt.Key_Enter])
+def test_preedit_and_held_enter_do_not_submit_draft(host, key):
+    edit(host, "2.5")
+    QApplication.sendEvent(host.line, QInputMethodEvent("拼", []))
+    QTest.keyClick(host.line, key)
+    assert host.saved == []
+    QApplication.sendEvent(host.line, QInputMethodEvent("", []))
+    QApplication.sendEvent(host.line, QKeyEvent(
+        QEvent.KeyPress, key, Qt.NoModifier, "", True))
+    assert host.saved == []
+    QTest.keyClick(host.line, key)
+    assert host.saved == [(("device", 1), 2.5)]
+
+
+def test_mouse_selection_inside_editor_does_not_submit(host):
+    edit(host, "2.5")
+    QTest.mouseClick(host.line, Qt.LeftButton)
+    host.line.selectAll()
+    assert host.saved == []
+    assert host.line.selectedText() == "2.5"
 
 
 @pytest.mark.parametrize("ending", ["explicit", "parent-close", "delete-editor"])

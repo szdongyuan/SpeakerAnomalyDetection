@@ -2,6 +2,7 @@
 from dataclasses import replace
 from copy import deepcopy
 import json
+import math
 import os
 from pathlib import Path
 import threading
@@ -134,15 +135,17 @@ def _edit_manual(widget, text):
 
 def test_manual_ve_focus_out_persists_current_physical_channel(setup):
     from PyQt5.QtWidgets import QApplication
-    widget = setup.make()
+    widget = setup.make(test_full_scale_peak_volts=.1)
     changes = []
     widget.calibration_state_changed.connect(changes.append)
     _edit_manual(widget, "1.234567890123456e0")
+    assert widget.full_scale_spl_lineedit.text() == "—"
     widget.standard_spl_ii.setFocus()
     QApplication.processEvents()
     record = setup.calibrations.get_record(widget.input_device, 7)
     assert record is not None
     assert record["v2pa_factor"] == 1.234568
+    assert widget.full_scale_spl_lineedit.text() == "72.80"
     assert record["standard_spl"] is None
     assert record["calibration_sample_rate"] is None
     assert record["calibration_duration_seconds"] is None
@@ -175,17 +178,19 @@ def test_manual_ve_rechecks_context_before_save(setup, change):
 @pytest.mark.parametrize("text", [None, "73.000", "2.123456789012345", "2.5e-23"])
 def test_manual_ve_edit_and_same_value_preserve_expected_record(setup, text):
     from PyQt5.QtWidgets import QApplication
-    widget = setup.make()
+    widget = setup.make(test_full_scale_peak_volts=.1)
     old = seed_old(setup, widget)
     before = setup.calibrations.path.read_bytes()
     changed = []
     widget.calibration_state_changed.connect(changed.append)
     _edit_manual(widget, "" if text is None else text)
+    assert widget.full_scale_spl_lineedit.text() == "108.24"
     widget.standard_spl_i.setFocus()
     QApplication.processEvents()
     record = setup.calibrations.get_record(widget.input_device, 7)
     if text == "2.123456789012345":
         assert record["v2pa_factor"] == 2.123457
+        assert widget.full_scale_spl_lineedit.text() == "77.51"
         assert widget.saved_v2pa_factors[widget.current_channel] == 2.123457
         assert record["standard_spl"] is None
         assert record["calibration_sample_rate"] is None
@@ -196,6 +201,7 @@ def test_manual_ve_edit_and_same_value_preserve_expected_record(setup, text):
         assert record == old
         assert changed == []
         assert widget.saved_v2pa_factors == {7: 73.0}
+        assert widget.full_scale_spl_lineedit.text() == "108.24"
         assert widget.coefficient_editor._factor == 73.0
         if text == "2.5e-23":
             assert widget.v2pa_factor_lineedit.text() == "73.000000"
@@ -203,33 +209,39 @@ def test_manual_ve_edit_and_same_value_preserve_expected_record(setup, text):
 
 
 def test_manual_ve_atomic_failure_restores_old_record_and_display(setup, monkeypatch):
-    widget = setup.make()
+    widget = setup.make(test_full_scale_peak_volts=.1)
     old = seed_old(setup, widget)
     before = setup.calibrations.path.read_bytes()
     changed = []
     widget.calibration_state_changed.connect(changed.append)
     monkeypatch.setattr("base.ve3668n_stores.os.replace", mock.Mock(side_effect=OSError("denied")))
     _edit_manual(widget, "2.5")
+    assert widget.full_scale_spl_lineedit.text() == "108.24"
     assert not widget.coefficient_editor.commit_pending()
     assert setup.calibrations.path.read_bytes() == before
     assert widget._ve_calibration_records[7] == old
     assert widget.saved_v2pa_factors == {7: 73.0}
     assert widget.v2pa_factor_lineedit.text() == "73.000000"
+    assert widget.full_scale_spl_lineedit.text() == "108.24"
     assert changed == []
     widget.calibration_popup.assert_called_once()
 
 
 def test_manual_ve_channel_change_saves_old_then_reset_only_new_channel(setup):
-    widget = setup.make()
+    widget = setup.make(test_full_scale_peak_volts=.1)
     seed_old(setup, widget, channel=1, factor=5)
     widget._select_channel(7)
     _edit_manual(widget, "2.5")
     widget.channel_combo_box.setCurrentIndex(1)
     assert widget.current_channel == 1
+    assert widget.full_scale_spl_lineedit.text() == "84.95"
     assert setup.calibrations.get_factor(widget.input_device, 7) == 2.5
     widget.reset_btn_clicked()
     assert setup.calibrations.get_record(widget.input_device, 1) is None
     assert setup.calibrations.get_factor(widget.input_device, 7) == 2.5
+    assert widget.full_scale_spl_lineedit.text() == "—"
+    widget._select_channel(7)
+    assert widget.full_scale_spl_lineedit.text() == "78.93"
 
 
 def test_manual_ve_forced_close_discards_draft_and_stops_admission_timer(setup):
@@ -243,7 +255,7 @@ def test_manual_ve_forced_close_discards_draft_and_stops_admission_timer(setup):
 
 
 def test_manual_ve_replaces_invalidated_record_without_capture(setup):
-    widget = setup.make()
+    widget = setup.make(test_full_scale_peak_volts=.1)
     seed_old(setup, widget)
     changed = deepcopy(widget.input_device)
     changed["input_config"]["unit"] = "g"
@@ -251,10 +263,12 @@ def test_manual_ve_replaces_invalidated_record_without_capture(setup):
         setup.calibrations.observe(changed)
     widget.refresh_ve_calibration_state()
     assert widget._ve_calibration_records[7]["status"] == "invalidated"
+    assert widget.full_scale_spl_lineedit.text() == "—"
     _edit_manual(widget, "2.5")
     assert widget.coefficient_editor.commit_pending()
     assert setup.calibrations.get_factor(widget.input_device, 7) == 2.5
     assert widget._ve_calibration_records[7]["status"] == "valid"
+    assert widget.full_scale_spl_lineedit.text() == "78.93"
     assert setup.bridge.sessions == []
 
 
@@ -265,8 +279,11 @@ def test_manual_ve_replaces_invalidated_record_without_capture(setup):
 ])
 def test_manual_ve_obsolete_source_changes_keep_draft_without_storage_io(setup, overrides):
     from PyQt5.QtTest import QTest
-    widget = setup.make()
+    widget = setup.make(test_full_scale_peak_volts=.1)
     old = seed_old(setup, widget)
+    before = setup.calibrations.path.read_bytes()
+    changed = []
+    widget.calibration_state_changed.connect(changed.append)
     _edit_manual(widget, "2.5")
     widget.input_device["input_config"].update(overrides)
     with mock.patch.object(setup.profiles, "load", side_effect=AssertionError("poll read profile")), \
@@ -276,6 +293,9 @@ def test_manual_ve_obsolete_source_changes_keep_draft_without_storage_io(setup, 
         assert widget.v2pa_factor_lineedit.text() == "2.5"
         assert widget.saved_v2pa_factors == {7: 73.0}
         assert widget._ve_calibration_records[7] == old
+        assert widget.full_scale_spl_lineedit.text() == "108.24"
+    assert setup.calibrations.path.read_bytes() == before
+    assert changed == []
     assert widget.coefficient_editor.commit_pending()
     assert setup.calibrations.get_factor(widget._current_ve_device(), 7) == 2.5
     widget.calibration_popup.assert_not_called()
@@ -303,12 +323,15 @@ def release(widget, session):
 
 @pytest.mark.parametrize("edit", ["change", "corrupt", "delete"])
 def test_independent_settings_freeze_request_and_success_provenance(setup, edit):
-    widget = setup.make(96000, channels=(7,))
+    widget = setup.make(96000, channels=(7,), test_full_scale_peak_volts=.1)
+    seed_old(setup, widget, factor=10)
+    assert widget.full_scale_spl_lineedit.text() == "90.97"
     source_before = deepcopy(widget.input_device)
     profile_before = setup.profiles.path.read_bytes()
     finished = []
     widget.calibration_finished.connect(finished.append)
     session, audio = offered(widget)
+    assert widget.full_scale_spl_lineedit.text() == "90.97"
     request = session.request
     assert request.sample_rate == request.device["input_config"]["sample_rate"] == 48000
     assert request.target_samples == 480000
@@ -334,6 +357,8 @@ def test_independent_settings_freeze_request_and_success_provenance(setup, edit)
     assert record["fingerprint"]["range_min"] == -2.5
     assert record["fingerprint"]["range_max"] == 2.5
     assert record["status"] == "valid"
+    level = 20 * math.log10(record["v2pa_factor"] * .1 / (math.sqrt(2) * 20e-6))
+    assert widget.full_scale_spl_lineedit.text() == f"{level:.2f}"
     assert finished == [True]
     assert widget.input_device == source_before
     assert setup.profiles.path.read_bytes() == profile_before
@@ -360,7 +385,7 @@ def test_next_click_rereads_both_fields_without_invalidating_success(setup):
 
 @pytest.mark.parametrize("failure", ["field", "encoding", "permission"])
 def test_settings_failure_preserves_old_record_controls_and_can_retry(setup, monkeypatch, failure):
-    widget = setup.make(channels=(7,))
+    widget = setup.make(channels=(7,), test_full_scale_peak_volts=.1)
     seed_old(setup, widget)
     before = setup.calibrations.path.read_bytes()
     finished, changed = [], []
@@ -387,6 +412,7 @@ def test_settings_failure_preserves_old_record_controls_and_can_retry(setup, mon
     assert widget.channel_combo_box.isEnabled()
     assert widget.standard_spl_i.isEnabled() and widget.standard_spl_ii.isEnabled()
     assert widget.v2pa_factor_lineedit.text() == "73.000000"
+    assert widget.full_scale_spl_lineedit.text() == "108.24"
     assert setup.calibrations.path.read_bytes() == before
     assert finished == changed == []
     widget.default_logger.error.assert_called_once()
@@ -910,10 +936,12 @@ def test_ve_display_is_three_state_with_editable_pa_per_volt_and_reminder(setup)
 
 
 def test_fs_only_refresh_keeps_display_selection_record_and_no_popup(setup):
-    widget = setup.make()
+    widget = setup.make(test_full_scale_peak_volts=.1)
     seed_old(setup, widget)
     before = setup.calibrations.path.read_bytes()
     display = widget.v2pa_factor_lineedit.text()
+    changed = []
+    widget.calibration_state_changed.connect(changed.append)
     for rate in (44100, 48000, 51200, 44100):
         setup.profiles.set_sample_rate(widget.input_device, rate, setup.calibrations)
         widget.refresh_ve_calibration_state()
@@ -921,16 +949,19 @@ def test_fs_only_refresh_keeps_display_selection_record_and_no_popup(setup):
         assert widget.v2pa_factor_lineedit.text() == display
         assert widget.channel_status_label.text() == "状态: 校准有效"
         assert setup.calibrations.path.read_bytes() == before
+        assert widget.full_scale_spl_lineedit.text() == "108.24"
+    assert changed == []
     widget.calibration_popup.assert_not_called()
 
 
 @pytest.mark.parametrize("outcome", ["cancel", "failure", "save_failure"])
 def test_new_attempt_retains_old_valid_display_and_reenables_controls(setup, outcome, monkeypatch):
-    widget = setup.make(channels=(7,))
+    widget = setup.make(channels=(7,), test_full_scale_peak_volts=.1)
     seed_old(setup, widget)
     before = setup.calibrations.path.read_bytes()
     session, audio = offered(widget)
     assert widget.v2pa_factor_lineedit.text() == "73.000000"
+    assert widget.full_scale_spl_lineedit.text() == "108.24"
     assert not widget.channel_combo_box.isEnabled()
     assert not widget.standard_spl_i.isEnabled() and not widget.standard_spl_ii.isEnabled()
     if outcome == "cancel":
@@ -946,12 +977,13 @@ def test_new_attempt_retains_old_valid_display_and_reenables_controls(setup, out
     assert widget.saved_v2pa_factors == {7: 73.0}
     assert widget.v2pa_factor_lineedit.text() == "73.000000"
     assert widget.channel_status_label.text() == "状态: 校准有效"
+    assert widget.full_scale_spl_lineedit.text() == "108.24"
     assert widget.channel_combo_box.isEnabled()
     assert widget.standard_spl_i.isEnabled() and widget.standard_spl_ii.isEnabled()
 
 
 def test_reset_clears_only_current_ve_device_channel_without_profile_write(setup):
-    widget = setup.make()
+    widget = setup.make(test_full_scale_peak_volts=.1)
     other = seed_old(setup, widget, 1, 2)
     seed_old(setup, widget, 7)
     before_profile = setup.profiles.path.read_bytes()
@@ -964,6 +996,7 @@ def test_reset_clears_only_current_ve_device_channel_without_profile_write(setup
     assert setup.profiles.path.read_bytes() == before_profile
     assert widget.saved_v2pa_factors == {1: 2.0}
     assert widget.channel_status_label.text() == "状态: 未校准，仅电压数据"
+    assert widget.full_scale_spl_lineedit.text() == "—"
     assert changed == [True]
     widget.reset_btn_clicked()
     assert changed == [True]
@@ -1084,6 +1117,14 @@ def test_main_dialog_handoff_reaches_input_child_without_queue_reads(setup, monk
         assert child.ve_calibration_store is setup.calibrations
         assert child.recording_bridge is setup.bridge
         assert child.calibration_available
+        expected_peak = .1 if queue_detail and queue_detail.get("ve_range_index") == 5 else None
+        assert dialog.test_full_scale_peak_volts == expected_peak
+        assert child.test_full_scale_peak_volts == expected_peak
+        assert child.full_scale_spl_lineedit.text() == "—"
+        if expected_peak is not None:
+            assert "±0.1 V" in child.full_scale_spl_lineedit.toolTip()
+        else:
+            assert "当前测试量程不可用" in child.full_scale_spl_lineedit.toolTip()
         source = child._current_ve_device()
         assert source["input_config"]["sample_rate"] == 48000
         assert source["input_config"]["range_max"] == 2.5
@@ -1189,7 +1230,7 @@ def test_dialog_controls_wait_for_owned_release_after_unsuccessful_capture(setup
 
 @pytest.mark.parametrize("field,value", [("input_mode", "AC"), ("unit", "g")])
 def test_unsupported_conditions_before_start_do_not_redisplay_invalidated_factor(setup, field, value):
-    widget = setup.make(channels=(7,))
+    widget = setup.make(channels=(7,), test_full_scale_peak_volts=.1)
     old = seed_old(setup, widget)
     original_device = deepcopy(widget.input_device)
     widget.input_device["input_config"][field] = value
@@ -1198,17 +1239,19 @@ def test_unsupported_conditions_before_start_do_not_redisplay_invalidated_factor
     assert widget.v2pa_factor_lineedit.text() == ""
     assert "配置已变更，需重新校准" in widget.channel_status_label.text()
     assert 7 not in widget.saved_v2pa_factors
+    assert widget.full_scale_spl_lineedit.text() == "—"
     assert setup.calibrations.get_record(original_device, 7) == {**old, "status": "invalidated"}
     widget.input_device["input_config"][field] = original_device["input_config"][field]
     assert widget.refresh_ve_calibration_state()
     assert 7 not in widget.saved_v2pa_factors
     assert setup.calibrations.get_record(original_device, 7)["status"] == "invalidated"
+    assert widget.full_scale_spl_lineedit.text() == "—"
 
 
 def test_reset_atomic_failure_preserves_valid_record_and_display(setup, monkeypatch):
     from base import ve3668n_stores
 
-    widget = setup.make(channels=(7,))
+    widget = setup.make(channels=(7,), test_full_scale_peak_volts=.1)
     seed_old(setup, widget)
     before = setup.calibrations.path.read_bytes()
     changed = []
@@ -1218,6 +1261,7 @@ def test_reset_atomic_failure_preserves_valid_record_and_display(setup, monkeypa
     assert setup.calibrations.path.read_bytes() == before
     assert not changed
     assert widget.v2pa_factor_lineedit.text() == "73.000000"
+    assert widget.full_scale_spl_lineedit.text() == "108.24"
 
 
 def test_queued_events_after_dialog_close_done_and_reject_cannot_save(setup, ui_qapp):
@@ -1422,7 +1466,7 @@ def test_default_owned_real_service_destroy_reaps_active_worker(setup, ui_qapp, 
 
 @pytest.mark.parametrize("raw,expected,text", [(38.645595158142605, 38.645595, "38.645595"), (9.9999996, 10.0, "10.000000"), (2.5, 2.5, "2.500000")])
 def test_ve_auto_precision_is_shared_by_storage_cache_popup_and_completed_channel(setup, monkeypatch, raw, expected, text):
-    widget = setup.make()
+    widget = setup.make(test_full_scale_peak_volts=.1)
     monkeypatch.setattr(widget, "calculate_v2pa_factor", lambda *_: raw)
     session, audio = offered(widget)
     with mock.patch.object(setup.calibrations, "save", wraps=setup.calibrations.save) as save:
@@ -1432,10 +1476,13 @@ def test_ve_auto_precision_is_shared_by_storage_cache_popup_and_completed_channe
     assert setup.calibrations.get_factor(widget.input_device, 7) == expected
     assert widget.saved_v2pa_factors == {7: expected}
     assert widget.current_channel == 1
+    assert widget.full_scale_spl_lineedit.text() == "—"
     assert widget.calibration_popup.call_args.kwargs["message"] == f"校准成功\n本次校准结果：{text} Pa/V\n下次校准通道：In2"
     widget._select_channel(7)
     assert widget.v2pa_factor_lineedit.text() == text
     assert widget.coefficient_editor._factor == expected
+    level = 20 * math.log10(expected * .1 / (math.sqrt(2) * 20e-6))
+    assert widget.full_scale_spl_lineedit.text() == f"{level:.2f}"
 
 
 def test_ve_auto_tiny_factor_never_saves_or_publishes_success(setup, monkeypatch):
@@ -1486,12 +1533,14 @@ def test_open_manual_and_capture_read_only_independent_text_once(setup):
                               wraps=calibration.load_ve_calibration_settings) as text_load:
         widget = calibration.InputCalibration(
             device, [7], recording_bridge=setup.bridge,
-            ve_profile_store=setup.profiles, ve_calibration_store=setup.calibrations)
+            ve_profile_store=setup.profiles, ve_calibration_store=setup.calibrations,
+            test_full_scale_peak_volts=.1)
         try:
             assert widget.calibration_available
             assert widget.refresh_ve_calibration_state()
             _edit_manual(widget, "2.5")
             assert widget.coefficient_editor.commit_pending()
+            assert widget.full_scale_spl_lineedit.text() == "78.93"
             text_load.assert_not_called()
             session, audio = offered(widget)
             text_load.assert_called_once_with()
@@ -1504,3 +1553,51 @@ def test_open_manual_and_capture_read_only_independent_text_once(setup):
         finally:
             widget.close_recording()
             widget.close()
+
+
+@pytest.mark.parametrize("peak,expected", [(10., "130.97"), (5., "124.95"),
+    (2.5, "118.93"), (1., "110.97"), (.5, "104.95"), (.1, "90.97"), (.02, "76.99")])
+def test_real_vk_records_display_all_test_ranges_without_store_changes(setup, peak, expected):
+    from PyQt5.QtTest import QTest
+    widget = setup.make(test_full_scale_peak_volts=peak)
+    seed_old(setup, widget, factor=10)
+    before = setup.calibrations.path.read_bytes()
+    changed = []
+    widget.calibration_state_changed.connect(changed.append)
+    assert widget.full_scale_spl_lineedit.text() == expected
+    assert f"±{peak:g} V" in widget.full_scale_spl_lineedit.toolTip()
+    widget._select_channel(1)
+    assert widget.full_scale_spl_lineedit.text() == "—"
+    widget._select_channel(7)
+    assert widget.full_scale_spl_lineedit.text() == expected
+    assert widget.refresh_ve_calibration_state()
+    QTest.qWait(150)
+    assert widget.full_scale_spl_lineedit.text() == expected
+    assert setup.calibrations.path.read_bytes() == before
+    assert changed == []
+
+
+@pytest.mark.parametrize("options", [{}, {"test_full_scale_peak_volts": True},
+                                   {"test_full_scale_peak_volts": 3.}])
+def test_unavailable_test_range_allows_real_manual_save_and_capture(setup, options):
+    widget = setup.make(channels=(7,), **options)
+    assert widget.test_full_scale_peak_volts is None
+    assert widget.full_scale_spl_lineedit.text() == "—"
+    _edit_manual(widget, "2.5")
+    assert widget.coefficient_editor.commit_pending()
+    assert setup.calibrations.get_factor(widget.input_device, 7) == 2.5
+    before = setup.calibrations.path.read_bytes()
+    changed = []
+    widget.calibration_state_changed.connect(changed.append)
+    assert widget.refresh_ve_calibration_state()
+    widget._sync_coefficient_editability()
+    assert setup.calibrations.path.read_bytes() == before
+    assert changed == []
+    session, audio = offered(widget)
+    assert session.request.device["input_config"]["range_max"] == 2.5
+    assert widget.full_scale_spl_lineedit.text() == "—"
+    accept(widget, session, audio)
+    release(widget, session)
+    assert setup.calibrations.get_record(widget.input_device, 7)["status"] == "valid"
+    assert changed == [True]
+    assert widget.full_scale_spl_lineedit.text() == "—"

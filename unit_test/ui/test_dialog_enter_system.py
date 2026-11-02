@@ -407,7 +407,7 @@ def test_calibration_enter_never_clicks_buttons(opened, monkeypatch, enter, ui_q
     assert callbacks == ["clicked_calibration_button"]
 
 
-def test_calibration_enter_keeps_dirty_coefficient_until_focus_out(opened, monkeypatch, enter, ui_qapp):
+def test_calibration_enter_confirms_coefficient_once_without_buttons(opened, monkeypatch, enter, ui_qapp):
     saves = []
     monkeypatch.setattr("ui.calibration_window.load_mic_channel_v2pa_factors", lambda device: {})
     monkeypatch.setattr("ui.calibration_window.save_mic_channel_factor", lambda *args: saves.append(args))
@@ -420,13 +420,16 @@ def test_calibration_enter_keeps_dirty_coefficient_until_focus_out(opened, monke
     clicks = watch_buttons(window)
     enter(line)
     ui_qapp.processEvents()
-    assert saves == []
+    assert len(saves) == 1
     assert clicks == []
-    assert line.text() == "2.123456789012345"
+    assert line.text() == "2.123457"
+    enter(line)
+    assert len(saves) == 1
+    assert clicks == []
     window.input_cal_wnd.standard_spl_i.setFocus()
     ui_qapp.processEvents()
     assert len(saves) == 1
-    assert saves[0][0] == 2.123456789012345
+    assert saves[0][0] == 2.123457
     assert saves[0][2] == 1
     assert window.input_calibration_flag
 
@@ -456,7 +459,7 @@ def test_enter_keeps_existing_validation(opened, monkeypatch, enter, kind):
         auxiliary.setFocusPolicy(Qt.StrongFocus)
     elif kind == "serial":
         monkeypatch.setattr("ui.serial_discrete_input_config_dialog.list_ports", SimpleNamespace(comports=lambda: []))
-        window = opened(SerialDiscreteInputConfigDialog({}))
+        window = opened(SerialDiscreteInputConfigDialog({"serial_settings": {"port": ""}}))
         auxiliary = window.test_btn
     else:
         window = opened(RecordConfigWindow({"sample_rate": 123},
