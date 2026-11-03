@@ -2,13 +2,13 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from base.ve3668n_input import (
+from base.vkinging_input import (
     validate_device_snapshot,
     validate_sample_rate,
     validate_voltage_range,
 )
 from consts import model_consts
-from consts.ve3668n_consts import (
+from consts.vkinging_consts import (
     VE_CALIBRATION_DEFAULT_RANGE_VOLTS,
     VE_CALIBRATION_DEFAULT_SAMPLE_RATE,
     VE_CALIBRATION_SETTINGS_RELATIVE_PATH,

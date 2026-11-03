@@ -2,8 +2,8 @@ from collections.abc import Mapping
 from numbers import Integral
 
 from base.soundcard_calibration_manager import load_mic_channel_calibrations
-from base.ve3668n_wav_metadata import build_ve_recording_metadata
-from consts.ve3668n_consts import VE_BACKEND
+from base.vkinging_wav_metadata import build_ve_recording_metadata
+from consts.vkinging_consts import VE_BACKEND
 
 
 def _normalize_input_channels(input_channels):

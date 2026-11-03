@@ -5,20 +5,20 @@ from pathlib import Path
 
 import pytest
 
-from base import ve3668n_stores as stores
-from consts.ve3668n_consts import VE_RANGE_LIMITS
-from unit_test.base.ve3668n_fakes import device_info, input_config
+from base import vkinging_stores as stores
+from consts.vkinging_consts import VE_RANGE_LIMITS
+from unit_test.base.vkinging_fakes import device_info, input_config
 
 
 def make_stores(tmp_path):
     return (
-        stores.VEInputProfileStore(tmp_path / "configs/ve3668n_input_profiles.json"),
-        stores.VECalibrationStore(tmp_path / "configs/ve3668n_input_calibration.json"),
+        stores.VEInputProfileStore(tmp_path / "configs/vkinging_input_profiles.json"),
+        stores.VECalibrationStore(tmp_path / "configs/vkinging_input_calibration.json"),
     )
 
 
 def measured_record(device, channel, factor=10.0, rate=51200):
-    from base.ve3668n_input import calibration_fingerprint
+    from base.vkinging_input import calibration_fingerprint
 
     return {
         "status": "valid",
@@ -71,6 +71,61 @@ def test_direct_factor_preserves_profile_version(tmp_path):
     assert calibrations.get_factor(device, 7) == 12.3456789012345
     assert read_json(calibrations.path)["schema_version"] == 2
     assert read_json(profiles.path)["schema_version"] == 1
+
+
+def test_high_channel_factors_reload_with_full_precision_and_preserve_other_records(tmp_path):
+    profiles, calibrations = make_stores(tmp_path)
+    device = device_info(model="VK-TEST-12", physical_channels=[11, 8], max_input_channels=12)
+    other = device_info(machine_id="other", model="VK-TEST-OTHER")
+    preserved = save_measurement(calibrations, other, 7)
+    profiles.set_sample_rate(device, 48000, calibrations)
+    factors = {11: 12.3456789012345, 8: 0.123456789012345}
+    records = {channel: save_factor(calibrations, device, channel, v2pa_factor=factor)
+               for channel, factor in factors.items()}
+
+    profiles, reopened = make_stores(tmp_path)
+    assert profiles.load(device, reopened) == input_config(48000)
+    for channel, factor in factors.items():
+        assert reopened.get_factor(device, channel) == factor
+        assert reopened.get_record(device, channel) == records[channel]
+        assert records[channel]["fingerprint"]["model"] == "VK-TEST-12"
+    assert reopened.get_record(other, 7) == preserved
+    assert read_json(profiles.path)["schema_version"] == 1
+    assert read_json(reopened.path)["schema_version"] == 2
+
+
+@pytest.mark.parametrize("channel", [0, 8, 11, 31, 10000])
+def test_canonical_decimal_channel_keys_require_matching_fingerprint(tmp_path, channel):
+    _, calibrations = make_stores(tmp_path)
+    device = device_info(model="VK-TEST-OTHER", physical_channels=[channel],
+                         max_input_channels=channel + 1)
+    record = measured_record(device, channel, factor=12.3456789012345)
+    payload = {"schema_version": 2, "devices": {
+        device["machine_id"]: {"channels": {str(channel): record}},
+    }}
+    write_json(calibrations.path, payload)
+    original = calibrations.path.read_bytes()
+    assert calibrations.get_factor(device, channel) == record["v2pa_factor"]
+    assert calibrations.path.read_bytes() == original
+    record["fingerprint"]["physical_channel"] = channel + 1
+    write_json(calibrations.path, payload)
+    with pytest.raises(stores.VEStoreFormatError, match="channel key"):
+        calibrations.get_factor(device, channel)
+
+
+@pytest.mark.parametrize("first_model,second_model", [
+    ("VK-TEST-12", "VK-TEST-OTHER"), ("VK-ß", "VK-SS"),
+])
+def test_same_machine_different_model_never_reuses_factor_and_invalidation_is_sticky(
+    tmp_path, first_model, second_model,
+):
+    _, calibrations = make_stores(tmp_path)
+    device = device_info(model=first_model)
+    record = save_factor(calibrations, device, 7, v2pa_factor=12.3456789012345)
+    assert calibrations.get_factor(device_info(model=second_model), 7) is None
+    _, reopened = make_stores(tmp_path)
+    assert reopened.get_factor(device, 7) is None
+    assert reopened.get_record(device, 7) == {**record, "status": "invalidated"}
 
 
 @pytest.mark.parametrize("version", [1, 2])
@@ -589,8 +644,11 @@ def test_record_status_has_only_two_stored_values(tmp_path, status):
         calibrations.get_factor(device_info(), 7)
 
 
-@pytest.mark.parametrize("channel_key", ["", "07", "7.0", "-1", "8", "true", "AIN8", "51200", "٧"])
-def test_calibration_channel_keys_are_physical_indices_not_rates(tmp_path, channel_key):
+@pytest.mark.parametrize("channel_key", [
+    "", "01", "07", "1.0", "7.0", "-1", "+1", " 1", "1 ", "\t1", "1\n",
+    "8", "11", "31", "true", "AIN8", "51200", "٧", "１１", "١١",
+])
+def test_calibration_channel_keys_reject_noncanonical_or_mismatched_indices(tmp_path, channel_key):
     _, calibrations = make_stores(tmp_path)
     payload = document("calibration")
     channels = payload["devices"]["test-machine-1"]["channels"]
@@ -601,7 +659,7 @@ def test_calibration_channel_keys_are_physical_indices_not_rates(tmp_path, chann
 
 
 @pytest.mark.parametrize("field,bad_value", [
-    ("backend", "sounddevice"), ("model", "VE3668N-other"),
+    ("backend", "sounddevice"), ("model", "VK-\u0085X"),
     ("machine_id", "other"), ("machine_id", ""),
     ("physical_channel", 1), ("physical_channel", True), ("physical_channel", 7.0),
     ("input_mode", None), ("input_mode", " "), ("unit", False), ("unit", ""),
@@ -971,8 +1029,8 @@ def test_default_paths_are_separate_and_old_soundcard_registry_is_untouched(tmp_
 
     monkeypatch.setattr(soundcard, "_atomic_write_json", no_legacy_writes)
     profiles, calibrations = stores.VEInputProfileStore(), stores.VECalibrationStore()
-    assert profiles.path == tmp_path / "configs/ve3668n_input_profiles.json"
-    assert calibrations.path == tmp_path / "configs/ve3668n_input_calibration.json"
+    assert profiles.path == tmp_path / "configs/vkinging_input_profiles.json"
+    assert calibrations.path == tmp_path / "configs/vkinging_input_calibration.json"
     assert not profiles.path.exists()
     assert not calibrations.path.exists()
     device = device_info()
@@ -990,6 +1048,75 @@ def test_default_paths_are_separate_and_old_soundcard_registry_is_untouched(tmp_
     assert read_json(calibrations.path) == {"schema_version": 2, "devices": {}}
     assert legacy_path.read_bytes() == old_bytes
     assert soundcard.load_mic_input_calibration() == {"version": 2, "devices": []}
+
+
+def test_default_paths_ignore_old_configuration_files(tmp_path, monkeypatch):
+    from consts import model_consts
+
+    monkeypatch.setattr(model_consts, "DEFAULT_DIR", str(tmp_path))
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    legacy = [config_dir / "ve3668n_input_profiles.json",
+              config_dir / "ve3668n_input_calibration.json"]
+    for path in legacy:
+        path.write_bytes(b"not valid json: must never be read")
+    profiles, calibrations = stores.VEInputProfileStore(), stores.VECalibrationStore()
+    assert profiles.path == (config_dir / "vkinging_input_profiles.json").resolve()
+    assert calibrations.path == (config_dir / "vkinging_input_calibration.json").resolve()
+    device = device_info()
+    assert profiles.load(device, calibrations) == input_config()
+    assert calibrations.get_factor(device, 7) is None
+    assert not profiles.path.exists()
+    assert not calibrations.path.exists()
+    profiles.set_sample_rate(device, 44100, calibrations)
+    calibrations.save_factor(device, 7, v2pa_factor=12.3456789012345,
+                             calibrated_at="2026-11-03T10:00:00+08:00")
+    profiles, calibrations = stores.VEInputProfileStore(), stores.VECalibrationStore()
+    original = [path.read_bytes() for path in (profiles.path, calibrations.path)]
+    assert profiles.load(device, calibrations) == input_config(44100)
+    assert calibrations.get_factor(device, 7) == 12.3456789012345
+    assert [path.read_bytes() for path in (profiles.path, calibrations.path)] == original
+    assert all(path.read_bytes() == b"not valid json: must never be read" for path in legacy)
+
+
+@pytest.mark.parametrize("kind", ["profile", "calibration"])
+def test_corrupt_new_default_file_never_falls_back_to_old_configuration(tmp_path, monkeypatch, kind):
+    from consts import model_consts
+
+    monkeypatch.setattr(model_consts, "DEFAULT_DIR", str(tmp_path))
+    config_dir = tmp_path / "configs"
+    for name, old_kind in (("profiles", "profile"), ("calibration", "calibration")):
+        write_json(config_dir / f"ve3668n_input_{name}.json", document(old_kind))
+    profiles, calibrations = stores.VEInputProfileStore(), stores.VECalibrationStore()
+    target = profiles if kind == "profile" else calibrations
+    target.path.write_bytes(b"corrupt current file")
+    original = {path: path.read_bytes() for path in config_dir.iterdir()}
+    with pytest.raises(stores.VEStoreFormatError):
+        profiles.load(device_info(), calibrations)
+    assert {path: path.read_bytes() for path in config_dir.iterdir()} == original
+
+
+def test_explicit_paths_ignore_adjacent_default_and_old_configuration_files(tmp_path, monkeypatch):
+    from consts import model_consts
+
+    monkeypatch.setattr(model_consts, "DEFAULT_DIR", str(tmp_path))
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    for prefix in ("vkinging", "ve3668n"):
+        for name in ("profiles", "calibration"):
+            (config_dir / f"{prefix}_input_{name}.json").write_bytes(b"unrelated corrupt file")
+    original = {path: path.read_bytes() for path in config_dir.iterdir()}
+    profiles = stores.VEInputProfileStore(config_dir / "explicit-profile.json")
+    calibrations = stores.VECalibrationStore(config_dir / "explicit-calibration.json")
+    device = device_info()
+    assert profiles.load(device, calibrations) == input_config()
+    assert not profiles.path.exists()
+    assert not calibrations.path.exists()
+    profiles.set_sample_rate(device, 48000, calibrations)
+    save_factor(calibrations, device, 7)
+    assert profiles.load(device, calibrations) == input_config(48000)
+    assert calibrations.get_factor(device, 7) == 10.0
+    assert all(path.read_bytes() == data for path, data in original.items())
 
 
 def test_frozen_input_and_return_values_do_not_share_mutable_state(tmp_path):

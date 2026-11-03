@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QWidget
 
 from consts.recording_preview_consts import RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
 from ui.acquisition_config_window import RecordConfigWindow
-from unit_test.base.ve3668n_fakes import device_info
+from unit_test.base.vkinging_fakes import device_info
 
 
 @pytest.mark.parametrize("vk", [False, True], ids=["soundcard", "ve"])

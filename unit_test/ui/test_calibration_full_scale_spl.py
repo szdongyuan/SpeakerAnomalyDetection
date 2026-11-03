@@ -27,8 +27,8 @@ def panel_factory(ui_qapp, monkeypatch, tmp_path):
 
     def make(*, device=None, channels=(0,), factors=None, vk=False, dialog=False, **kwargs):
         if vk:
-            from base.ve3668n_stores import VECalibrationStore
-            from unit_test.base.ve3668n_fakes import device_info
+            from base.vkinging_stores import VECalibrationStore
+            from unit_test.base.vkinging_fakes import device_info
             device = device_info(physical_channels=[0, 1])
             store = VECalibrationStore(tmp_path / f"calibration-{len(panels)}.json")
             for channel, factor in (factors or {}).items():
@@ -192,7 +192,7 @@ def test_coefficient_confirmation_refreshes_saved_result_once(
 @pytest.mark.parametrize("failure", ["invalid", "save", "busy", "context"])
 def test_failed_confirmation_keeps_saved_result_and_rolls_back(
         panel_factory, monkeypatch, ui_qapp, vk, gesture, failure):
-    from unit_test.ui.test_ve3668n_calibration import CalibrationBridgeFake
+    from unit_test.ui.test_vkinging_calibration import CalibrationBridgeFake
 
     bridge = CalibrationBridgeFake(None)
     window = panel_factory(vk=vk, dialog=True, factors={0: 1.25},
@@ -261,7 +261,7 @@ def layout_font(ui_qapp):
 
 @pytest.mark.parametrize("backend", ["soundcard", "vk"])
 def test_full_scale_dialog_layout(panel_factory, ui_qapp, layout_font, backend):
-    from unit_test.ui.test_ve3668n_calibration import CalibrationBridgeFake
+    from unit_test.ui.test_vkinging_calibration import CalibrationBridgeFake
 
     bridge = CalibrationBridgeFake(None)
     dialog = panel_factory(
@@ -385,7 +385,7 @@ def test_poll_clears_stale_soundcard_context(panel_factory, change):
 
 
 def test_busy_and_capture_keep_confirmed_result_but_close_clears_it(panel_factory):
-    from unit_test.ui.test_ve3668n_calibration import CalibrationBridgeFake
+    from unit_test.ui.test_vkinging_calibration import CalibrationBridgeFake
     bridge = CalibrationBridgeFake(None)
     widget = panel_factory(recording_bridge=bridge)
     bridge.service.busy = True

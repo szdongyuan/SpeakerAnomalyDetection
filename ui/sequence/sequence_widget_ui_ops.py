@@ -10,7 +10,7 @@ from base.recording_channel_selection import (
     RecordingChannelSelectionError,
     canonicalize_recording_input_channels,
 )
-from base.ve3668n_input import validate_physical_channels
+from base.vkinging_input import validate_physical_channels
 from base.product_test_project_config import (
     PRODUCT_TRIGGER_MODE_MIXED,
     classify_project_trigger_mode,

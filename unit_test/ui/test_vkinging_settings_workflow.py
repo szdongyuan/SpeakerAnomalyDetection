@@ -13,22 +13,22 @@ from base.recording_capture import RecordingCapture
 from base.recording_process_protocol import RecordingResult
 from base.recording_result_reader import RecordingAudio
 from base.sequence_queue_references import SequenceQueueReferenceScanner
-from base.ve3668n_capture import Ve3668nInputStream
+from base.vkinging_capture import VkingingInputStream
 from base.wav_calibration_metadata import inspect_wav_calibration_metadata
 from consts.recording_preview_consts import (
     PREVIEW_TIME_MODE_CUMULATIVE, RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
 )
-from consts.ve3668n_consts import VE_RANGE_LABELS
+from consts.vkinging_consts import VE_RANGE_LABELS
 from ui.acquisition_config_window import RecordConfigWindow
 from ui.hardware_window import HardwareSelectionState
 from ui.operation_sequence import AnalysisModelSelect
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.shared_queue_save_dialog import SharedQueueSaveDialog
 from unit_test.base.test_sequence_queue_references import project, write_json
-from unit_test.base.ve3668n_fakes import CaptureSDK, device_info
-from unit_test.ui.test_ve3668n_hardware import controls, confirm, select_device
-from unit_test.ui.test_ve3668n_queue_parameters import condition_host, enter_condition
-from unit_test.ui.test_ve3668n_recording import (
+from unit_test.base.vkinging_fakes import CaptureSDK, device_info
+from unit_test.ui.test_vkinging_hardware import controls, confirm, select_device
+from unit_test.ui.test_vkinging_queue_parameters import condition_host, enter_condition
+from unit_test.ui.test_vkinging_recording import (
     host_factory, finish_ve_capture, save_calibration,
 )
 
@@ -173,7 +173,7 @@ def test_discovery_queue_edit_shared_save_condition_capture(
             sdk = CaptureSDK()
             sdk.values_by_physical_channel = {7: .0125, 1: -.025}
             capture = RecordingCapture(request, ve_stream_factory=lambda **kwargs:
-                Ve3668nInputStream(**kwargs, sdk_factory=lambda: sdk))
+                VkingingInputStream(**kwargs, sdk_factory=lambda: sdk))
             capture.start()
             result = capture.wait(5)
             assert isinstance(result, RecordingResult), result
@@ -223,7 +223,7 @@ def test_queue_editor_after_startup_uses_saved_profile_for_missing_rate(
     from pathlib import Path
     from unittest.mock import Mock
     import main_window
-    from unit_test.ui.test_ve3668n_prewarm_trigger import _WindowHarness, _discovery
+    from unit_test.ui.test_vkinging_prewarm_trigger import _WindowHarness, _discovery
     from unit_test.test_product_test_project_config_dialog import (
         make_manager, prepare_project,
     )

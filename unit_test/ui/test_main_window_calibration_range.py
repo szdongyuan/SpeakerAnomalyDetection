@@ -5,7 +5,7 @@ from unittest import mock
 
 import pytest
 
-from unit_test.base.ve3668n_fakes import device_info
+from unit_test.base.vkinging_fakes import device_info
 from unit_test.test_input_calibration_runtime import DEVICE, ROOT, _load_method
 
 
@@ -15,8 +15,8 @@ def _queue(detail):
 
 @pytest.fixture
 def opening(monkeypatch):
-    from base import ve3668n_calibration_settings as settings
-    from base import ve3668n_recording_config as recording
+    from base import vkinging_calibration_settings as settings
+    from base import vkinging_recording_config as recording
     from ui import calibration_window as calibration
     from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 

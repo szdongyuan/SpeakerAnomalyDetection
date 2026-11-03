@@ -7,12 +7,12 @@ import time
 
 import pytest
 
-from base.ve3668n_discovery import discover_devices
-from base.ve3668n_resource import VeResourceController
+from base.vkinging_discovery import discover_devices
+from base.vkinging_resource import VeResourceController
 from base.ve_startup_policy import VeStartupBudget
 from base.recording_process_protocol import VePrewarmRequest
 from base.vkinging_sdk import VkDaqError
-from unit_test.base.ve3668n_fakes import (
+from unit_test.base.vkinging_fakes import (
     CaptureSDK, DiscoveryClock, DiscoverySDK, capture_request, device_info, discovery_record,
 )
 

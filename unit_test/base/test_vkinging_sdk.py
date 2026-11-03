@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-from unit_test.base.ve3668n_fakes import FakeVkDaqDLL
+from unit_test.base.vkinging_fakes import FakeVkDaqDLL
 
 
 def forbidden_native_io(*args, **kwargs):
@@ -666,7 +666,7 @@ def test_invalid_actual_count_is_rejected_before_interpreting_samples(count):
 
 
 @pytest.mark.parametrize("field,value", [
-    *[("channel_count", value) for value in (None, 0, -1, True, 2.0, "2", 9)],
+    *[("channel_count", value) for value in (None, 0, -1, True, 2.0, "2")],
     *[("samples_per_channel", value) for value in (None, 0, -1, True, 4.0, "4", 2049, 2**31)],
     *[("timeout_seconds", value) for value in (None, -1, True, 0.201, float("nan"), float("inf"), "0.1")],
 ])
@@ -850,3 +850,22 @@ def test_fake_trace_records_actual_caller_thread_and_pid():
     assert fake.trace[0]["thread_id"] == thread.ident
     assert fake.trace[0]["thread_id"] != threading.get_ident()
     assert fake.trace[0]["pid"] == os.getpid()
+
+
+@pytest.mark.parametrize("count", [9, 12, 16, 32, 257])
+def test_sdk_read_allocates_every_configured_channel(count):
+    from base.vkinging_sdk import VkDaqClient
+
+    fake = FakeVkDaqDLL()
+    def fill(task, buffer, requested, layout, timeout):
+        assert len(buffer) == count * requested
+        assert layout == 1
+        for index in range(len(buffer)):
+            buffer[index] = index + .25
+        return requested
+    fake.VkDaqGetTaskData.side_effect = fill
+    buffer, returned = VkDaqClient(dll=fake).read_task_data(
+        "task", channel_count=count, samples_per_channel=3, timeout_seconds=.1)
+    assert returned == 3
+    assert len(buffer) == count * 3
+    assert buffer[-1] == count * 3 - .75

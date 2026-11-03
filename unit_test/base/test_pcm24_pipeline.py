@@ -15,8 +15,8 @@ from base.wav_calibration_metadata import read_wav_calibration_metadata
 from ui.sequence.analysis_task_builder import build_analysis_task_request
 from unit_test.base.test_recording_capture import request
 from unit_test.base.test_recording_finalization import capture_audio, read_result
-from unit_test.base.test_ve3668n_capture import start_capture
-from unit_test.base.ve3668n_fakes import CaptureSDK, wav_metadata
+from unit_test.base.test_vkinging_capture import start_capture
+from unit_test.base.vkinging_fakes import CaptureSDK, wav_metadata
 
 
 def riff_chunks(path):

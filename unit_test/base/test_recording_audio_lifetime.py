@@ -13,8 +13,8 @@ from base.recording_process_protocol import RecordingEvent, RecordingFailure
 from base.recording_worker_pipeline import WorkerCaptureState
 from unit_test.base.recording_process_fakes import FakeBackend, FakeStream, known_audio
 from unit_test.base.test_recording_capture import request
-from unit_test.base.ve3668n_fakes import CaptureSDK, capture_request
-from unit_test.base.test_ve3668n_resource import prewarm_request
+from unit_test.base.vkinging_fakes import CaptureSDK, capture_request
+from unit_test.base.test_vkinging_resource import prewarm_request
 
 
 class HardExit(BaseException):

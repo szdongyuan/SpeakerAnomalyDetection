@@ -149,8 +149,8 @@ def test_started_log_follows_actual_send_without_queue_envelope(caplog, failure)
 
 
 def test_ve_resource_reuse_keeps_binding_and_start_observations(tmp_path, caplog):
-    from base.ve3668n_resource import VeResourceController
-    from unit_test.base.ve3668n_fakes import CaptureSDK, capture_request
+    from base.vkinging_resource import VeResourceController
+    from unit_test.base.vkinging_fakes import CaptureSDK, capture_request
     caplog.set_level(logging.INFO)
     sdk = CaptureSDK()
     controller = VeResourceController(sdk_factory=lambda: sdk, bind_timeout=1, detach_timeout=1)

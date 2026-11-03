@@ -97,7 +97,7 @@ def test_manual_normal_dialog_close_commits_once(qapp, entry, fails):
 
 
 def test_manual_forced_bridge_close_discards_without_write(qapp):
-    from unit_test.ui.test_ve3668n_calibration import CalibrationBridgeFake
+    from unit_test.ui.test_vkinging_calibration import CalibrationBridgeFake
     bridge = CalibrationBridgeFake(None)
     widget = InputCalibration(dict(DEVICE), [1], recording_bridge=bridge)
     widget.calibration_popup = mock.Mock()
@@ -111,7 +111,7 @@ def test_manual_forced_bridge_close_discards_without_write(qapp):
 
 @pytest.mark.parametrize("change", ["busy", "device", "channel", "unavailable"])
 def test_manual_admission_change_discards_before_disable(qapp, change):
-    from unit_test.ui.test_ve3668n_calibration import CalibrationBridgeFake
+    from unit_test.ui.test_vkinging_calibration import CalibrationBridgeFake
     bridge = CalibrationBridgeFake(None)
     widget = InputCalibration(dict(DEVICE), [1], recording_bridge=bridge)
     widget.saved_v2pa_factors = {1: 1.25}
@@ -252,7 +252,7 @@ def test_manual_mic_failed_write_preserves_confirmed_cache_and_signal(qapp, erro
 
 @pytest.mark.parametrize("change", ["busy", "device", "channel", "unavailable", "capture"])
 def test_manual_mic_commit_rechecks_admission_without_timer(qapp, change):
-    from unit_test.ui.test_ve3668n_calibration import CalibrationBridgeFake
+    from unit_test.ui.test_vkinging_calibration import CalibrationBridgeFake
     bridge = CalibrationBridgeFake(None)
     widget = InputCalibration(dict(DEVICE), [1], recording_bridge=bridge)
     widget.calibration_popup = mock.Mock()

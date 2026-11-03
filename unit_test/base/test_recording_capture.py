@@ -36,7 +36,7 @@ from unit_test.base.recording_process_fakes import (
 @pytest.mark.parametrize("log_failure", [False, True])
 def test_closed_writer_publishes_slot_before_blocked_success_log(tmp_path, log_failure):
     from base.streaming_file_writer import StreamingWavWriter
-    from unit_test.base.test_ve3668n_capture import start_persistent_capture
+    from unit_test.base.test_vkinging_capture import start_persistent_capture
 
     entered, unblock = threading.Event(), threading.Event()
     writers, records, finalized = [], [], []
@@ -90,7 +90,7 @@ def test_closed_writer_publishes_slot_before_blocked_success_log(tmp_path, log_f
 @pytest.mark.parametrize("fault", ["before_super", "physical_close", "after_super"])
 def test_capture_deferral_preserves_subclass_finalize_failure_ownership(tmp_path, monkeypatch, fault):
     from base.streaming_file_writer import StreamingWavWriter
-    from unit_test.base.test_ve3668n_capture import start_persistent_capture
+    from unit_test.base.test_vkinging_capture import start_persistent_capture
 
     writers, calls, closers = [], [], []
 
@@ -139,7 +139,7 @@ def request(tmp_path, **overrides):
 
 def direct_anomaly_capture(tmp_path, monkeypatch):
     from base import recording_capture as module
-    from unit_test.base.ve3668n_fakes import capture_request, DiscoveryClock
+    from unit_test.base.vkinging_fakes import capture_request, DiscoveryClock
     from unit_test.base.test_ve_resource_diagnostics import sink
     capture = RecordingCapture(capture_request(tmp_path / "direct.wav", target_samples=512000),
                                backend=FakeBackend())

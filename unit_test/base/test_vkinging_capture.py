@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from base.ve3668n_capture import Ve3668nInputStream
-from base.ve3668n_capture_timing import VeCaptureDeadline
+from base.vkinging_capture import VkingingInputStream
+from base.vkinging_capture_timing import VeCaptureDeadline
 from base.recording_capture import RecordingCapture
 from base.recording_process_protocol import RecordingResult, RecordingFailure
 from base.wav_calibration_metadata import (
@@ -27,7 +27,7 @@ from consts.recording_preview_consts import (
 from unit_test.base.recording_process_fakes import (
     ControlledMetadataAppender, ControlledWriter, FakeStatus, MetadataFileFaults,
 )
-from unit_test.base.ve3668n_fakes import CaptureSDK, DiscoveryClock, capture_request, wav_metadata
+from unit_test.base.vkinging_fakes import CaptureSDK, DiscoveryClock, capture_request, wav_metadata
 
 
 @pytest.fixture(autouse=True)
@@ -43,7 +43,7 @@ def make_stream(tmp_path, sdk=None, **request_options):
     clock = DiscoveryClock()
     stop = threading.Event()
     blocks, failures = [], []
-    stream = Ve3668nInputStream(
+    stream = VkingingInputStream(
         capture_request(tmp_path / "native.wav", **request_options),
         lambda data, frames, time_info, status: blocks.append(data.copy()),
         lambda stage, message: failures.append((stage, message)), stop, lambda: sdk, clock,
@@ -56,9 +56,93 @@ def finish_stream(stream):
     stream.close()
 
 
+def twelve_channel_capture_options(sdk, channels):
+    from unit_test.base.vkinging_fakes import device_info, discovery_record, wav_metadata_v2
+
+    sdk.record = discovery_record(
+        name="FreshDev", machine_id="test-machine-1", model="VK-TEST-12",
+        channels=tuple(f"FreshDev/AIN{i}" for i in range(1, 13)))
+    device = device_info(model="VK-TEST-12", physical_channels=list(range(12)),
+                         max_input_channels=12)
+    metadata = wav_metadata_v2(tuple("none" for _ in channels), 51200,
+                               physical_channels=channels)
+    metadata["acquisition"].update(model=device["model"], machine_id=device["machine_id"])
+    return dict(device=device, channels=channels, calibration_metadata=metadata)
+
+
+@pytest.mark.parametrize("requested_model,fresh_model", [
+    ("VK-TEST-12", "VK-OTHER-12"), ("VK-ß", "VK-SS"),
+])
+def test_native_rejects_changed_model_before_creating_task(
+        tmp_path, requested_model, fresh_model):
+    sdk = CaptureSDK()
+    options = twelve_channel_capture_options(sdk, (11, 1, 8))
+    options["device"]["model"] = requested_model
+    options["calibration_metadata"]["acquisition"]["model"] = requested_model
+    sdk.record["Model"] = fresh_model
+    stream, _, _, blocks, failures = make_stream(tmp_path, sdk, **options)
+    assert not stream.start()
+    finish_stream(stream)
+    assert failures and failures[0][0] == "device"
+    assert "model" in failures[0][1]
+    assert not blocks and stream.handles_released
+    assert sdk.calls("create_task") == 0
+    assert sdk.calls("close") == 1
+
+
+@pytest.mark.parametrize("channels", [(11, 1, 8), (11,), tuple(range(12))])
+def test_twelve_channel_native_routes_read_count_and_physical_slots(tmp_path, channels):
+    sdk = CaptureSDK(counts=(2, 1))
+    sdk.values_by_physical_channel = {i: i + .25 for i in range(12)}
+    stream, _, _, blocks, failures = make_stream(
+        tmp_path, sdk, **twelve_channel_capture_options(sdk, channels))
+    assert stream.start()
+    finish_stream(stream)
+    assert not failures and stream.handles_released
+    configured = next(row for row in sdk.trace if row["operation"] == "create_iepe_voltage_channel")
+    assert configured["args"][1] == ",".join(f"FreshDev/AIN{i + 1}" for i in channels)
+    reads = [row for row in sdk.trace if row["operation"] == "read_task_data"]
+    assert reads and all(row["kwargs"]["channel_count"] == len(channels) for row in reads)
+    physical = np.concatenate(blocks)
+    assert physical.shape == (9, max(channels) + 1)
+    np.testing.assert_array_equal(physical[:, channels],
+                                  np.tile([i + .25 for i in channels], (9, 1)))
+    unused = sorted(set(range(physical.shape[1])) - set(channels))
+    assert not physical[:, unused].any()
+
+
+def test_short_read_keeps_high_physical_channel_order():
+    import ctypes
+    from base.vkinging_capture import to_physical_slots
+
+    buffer = (ctypes.c_double * 9)(11.25, 11.5, 1.25, 1.5, 8.25, 8.5,
+                                  float("nan"), float("nan"), float("nan"))
+    physical = to_physical_slots(buffer, 2, (11, 1, 8))
+    assert physical.shape == (2, 12)
+    np.testing.assert_array_equal(physical[:, (11, 1, 8)],
+                                  [[11.25, 1.25, 8.25], [11.5, 1.5, 8.5]])
+
+
+@pytest.mark.parametrize("channels", [(11, 1, 8), (11,), tuple(range(12))])
+def test_twelve_channel_native_wav_preserves_selected_order(tmp_path, channels):
+    sdk = CaptureSDK(counts=(2, 1))
+    sdk.values_by_physical_channel = {i: (i + 1) / 16 for i in range(12)}
+    capture, _, _, _ = start_capture(
+        tmp_path, sdk, request_options=twelve_channel_capture_options(sdk, channels))
+    outcome = capture.wait(3)
+    assert isinstance(outcome, RecordingResult), outcome
+    assert outcome.metadata_appended and outcome.handles_released
+    audio, rate = sf.read(outcome.path, dtype="float32", always_2d=True)
+    assert rate == 51200
+    np.testing.assert_array_equal(audio, np.tile([(i + 1) / 16 for i in channels], (7, 1)))
+    metadata = inspect_wav_calibration_metadata(outcome.path).metadata
+    assert metadata["acquisition"]["model"] == "VK-TEST-12"
+    assert [row["physical_input_channel"] for row in metadata["recorded_channels"]] == list(channels)
+
+
 @pytest.mark.parametrize("limit", [10.0, 5.0, 2.5, 1.0, .5, .1, .02])
 def test_single_capture_applies_requested_voltage_range(tmp_path, limit):
-    from unit_test.base.ve3668n_fakes import device_info, input_config
+    from unit_test.base.vkinging_fakes import device_info, input_config
 
     config = input_config(range_min=-limit, range_max=limit)
     metadata = wav_metadata(("none", "none"), sample_rate=51200)
@@ -358,7 +442,7 @@ def start_capture(tmp_path, sdk=None, *, request_options=None, **dependencies):
     clock = DiscoveryClock()
     streams = []
     def factory(**kwargs):
-        stream = Ve3668nInputStream(**kwargs, sdk_factory=lambda: sdk, clock=clock)
+        stream = VkingingInputStream(**kwargs, sdk_factory=lambda: sdk, clock=clock)
         streams.append(stream)
         return stream
     capture = RecordingCapture(capture_request(tmp_path / "capture.wav", **(request_options or {})),
@@ -368,7 +452,7 @@ def start_capture(tmp_path, sdk=None, *, request_options=None, **dependencies):
 
 
 def start_persistent_capture(tmp_path, sdk=None, **dependencies):
-    from base.ve3668n_resource import VeResourceController
+    from base.vkinging_resource import VeResourceController
 
     sdk = sdk or CaptureSDK()
     clock = DiscoveryClock()
@@ -433,7 +517,7 @@ def test_ve_writer_release_uncertainty_keeps_capture_slot_closed(tmp_path):
 
 
 def test_ve_adapter_release_uncertainty_keeps_capture_slot_closed(tmp_path):
-    from base.ve3668n_capture_timing import VeCaptureProgress
+    from base.vkinging_capture_timing import VeCaptureProgress
 
     adapters = []
 
@@ -893,7 +977,7 @@ def test_shared_capture_native_failure_wakes_owner_and_preserves_release_state(t
 def test_read_failure_beats_cancel_and_cleanup_errors_in_shared_capture(tmp_path):
     sdk = CaptureSDK(failures=["read_task_data", "stop_task", "clear_task", "close"])
     capture = RecordingCapture(capture_request(tmp_path / "v.wav"), ve_stream_factory=lambda **kwargs:
-                               Ve3668nInputStream(**kwargs, sdk_factory=lambda: sdk, clock=DiscoveryClock()))
+                               VkingingInputStream(**kwargs, sdk_factory=lambda: sdk, clock=DiscoveryClock()))
     sdk.hooks["read_task_data"] = lambda *args, **kwargs: capture.cancel()
     capture.start()
     outcome = capture.wait(3)
@@ -1063,13 +1147,13 @@ def test_cancel_at_additional_native_boundaries_drops_returned_data(tmp_path, ph
 @pytest.mark.parametrize("value", [None, True, 0, -1, float("inf"), float("nan")])
 def test_native_control_waits_cannot_be_configured_unbounded(tmp_path, field, value):
     with pytest.raises(ValueError, match=field):
-        Ve3668nInputStream(capture_request(tmp_path / "v.wav"), lambda *args: None,
+        VkingingInputStream(capture_request(tmp_path / "v.wav"), lambda *args: None,
                           lambda *args: None, threading.Event(), lambda: CaptureSDK(),
                           DiscoveryClock(), **{field: value})
 
 
 def test_mandatory_metadata_reader_close_failure_transfers_open_handle(tmp_path, monkeypatch):
-    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    from unit_test.base.vkinging_fakes import MetadataOwnershipFaults
     faults = MetadataOwnershipFaults(tmp_path / "capture.wav", readback_open=2,
                                      close_failures=("readback",))
     faults.install(monkeypatch)
@@ -1100,7 +1184,7 @@ def test_mandatory_metadata_reader_close_failure_transfers_open_handle(tmp_path,
 def test_metadata_primary_fault_reaches_capture_with_separate_cleanup_diagnostics(
     tmp_path, monkeypatch, caplog, processing, close_stages, first,
 ):
-    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    from unit_test.base.vkinging_fakes import MetadataOwnershipFaults
     faults = MetadataOwnershipFaults(tmp_path / "capture.wav", readback_open=2,
                                      processing_failure=processing, close_failures=close_stages,
                                      read_after_backend=processing == "readback")
@@ -1131,7 +1215,7 @@ def test_legacy_metadata_write_fault_keeps_warning_only_when_handles_release(
 ):
     from base.recording_process_protocol import RecordingRequest
     from unit_test.base.recording_process_fakes import FakeBackend, device_info, known_audio
-    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    from unit_test.base.vkinging_fakes import MetadataOwnershipFaults
     path = tmp_path / "legacy.wav"
     metadata = {"recorded_channels": [
         {"wav_channel_index": 0, "physical_input_channel": 0, "calibrated": False},
@@ -1177,7 +1261,7 @@ def test_legacy_metadata_write_fault_keeps_warning_only_when_handles_release(
 def test_metadata_ordinary_exception_cannot_bypass_capture_ownership_handoff(
     tmp_path, monkeypatch, caplog, error_type, stage, close_fails,
 ):
-    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    from unit_test.base.vkinging_fakes import MetadataOwnershipFaults
     close_order = (("temporary", "source") if stage == "temporary" else (stage,)) if close_fails else ()
     faults = MetadataOwnershipFaults(tmp_path / "capture.wav", readback_open=2,
                                      processing_failure=stage, close_failures=close_order,
@@ -1210,7 +1294,7 @@ def test_uncalibrated_main_capture_preserves_voltage_and_cumulative_preview(tmp_
     request = capture_request(tmp_path / "uncalibrated.wav", streaming=streaming, preview_time_mode=PREVIEW_TIME_MODE_CUMULATIVE)
     sdk = CaptureSDK()
     def stream_factory(**kwargs):
-        return Ve3668nInputStream(**kwargs, sdk_factory=lambda: sdk)
+        return VkingingInputStream(**kwargs, sdk_factory=lambda: sdk)
     capture = RecordingCapture(request, ve_stream_factory=stream_factory)
     capture.start()
     outcome = capture.wait(3)

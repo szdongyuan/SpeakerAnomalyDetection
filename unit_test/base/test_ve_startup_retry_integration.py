@@ -19,13 +19,13 @@ from base.recording_process_protocol import (
 )
 from base.recording_service import RecordingService, _Worker, _PendingVeRelease
 from base.ve_startup_policy import VeStartupBudget
-from unit_test.base.ve3668n_fakes import DiscoveryClock, capture_request
-from unit_test.base.test_ve3668n_service import (
+from unit_test.base.vkinging_fakes import DiscoveryClock, capture_request
+from unit_test.base.test_vkinging_service import (
     _ServiceProcess, _service_prewarm_probe, _prewarm_started, _prewarm_detaching,
     _prewarm_result,
 )
 from unit_test.base.test_recording_service import Events, eventually
-from unit_test.base.test_ve3668n_service import read_trace
+from unit_test.base.test_vkinging_service import read_trace
 
 
 @pytest.fixture
@@ -597,7 +597,7 @@ def test_capture_legacy_vk_factory_receives_no_new_optional_kwargs(tmp_path):
 
 
 def test_controller_default_cold_budget_is_created_once_at_bind(monkeypatch, tmp_path):
-    from base.ve3668n_resource import VeResourceController
+    from base.vkinging_resource import VeResourceController
 
     clock = DiscoveryClock()
     controller = VeResourceController(sdk_factory=lambda: pytest.fail("no SDK needed"), clock=clock)
@@ -615,7 +615,7 @@ def test_prewarm_start_does_not_block_worker_cancel(monkeypatch, tmp_path):
     import time
     from base import recording_worker as module
     from base.recording_process_protocol import VePrewarmRequest
-    from base.ve3668n_capture_timing import VeCaptureProgress
+    from base.vkinging_capture_timing import VeCaptureProgress
 
     commands, sent = queue.Queue(), queue.Queue()
     entered, cancelled, finish = threading.Event(), threading.Event(), threading.Event()
@@ -722,8 +722,8 @@ def test_worker_retry_proof_precedes_started_on_real_capture_path(monkeypatch, t
     import time
     from base import recording_worker as module
     from base.recording_process_protocol import VePrewarmRequest
-    from base.ve3668n_resource import VeResourceController
-    from unit_test.base.ve3668n_fakes import CaptureSDK
+    from base.vkinging_resource import VeResourceController
+    from unit_test.base.vkinging_fakes import CaptureSDK
 
     commands, sent = queue.Queue(), queue.Queue()
     entered, gate = threading.Event(), threading.Event()
@@ -821,8 +821,8 @@ def test_worker_retry_proof_precedes_started_on_real_capture_path(monkeypatch, t
 
 
 def test_native_start_failure_waits_bounded_cleanup_before_terminal_snapshot(tmp_path):
-    from base.ve3668n_resource import VeResourceController
-    from unit_test.base.ve3668n_fakes import CaptureSDK
+    from base.vkinging_resource import VeResourceController
+    from unit_test.base.vkinging_fakes import CaptureSDK
 
     entered, gate, returned = threading.Event(), threading.Event(), threading.Event()
     def stop(*args):

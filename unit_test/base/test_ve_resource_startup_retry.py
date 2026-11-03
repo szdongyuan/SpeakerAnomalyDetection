@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from base.ve3668n_resource import VeResourceController
+from base.vkinging_resource import VeResourceController
 from base.ve_startup_policy import VeStartupBudget
 from base.vkinging_sdk import VkDaqError
-from unit_test.base.ve3668n_fakes import CaptureSDK, capture_request
+from unit_test.base.vkinging_fakes import CaptureSDK, capture_request
 
 
 class Clock:

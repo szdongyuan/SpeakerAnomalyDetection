@@ -1,8 +1,8 @@
 """Read-only voltage range for the input calibration result display."""
 from collections.abc import Mapping
 
-from base.ve3668n_input import voltage_limits_for_range
-from consts.ve3668n_consts import VE_RANGE_INDEX_CONFIG_KEY
+from base.vkinging_input import voltage_limits_for_range
+from consts.vkinging_consts import VE_RANGE_INDEX_CONFIG_KEY
 
 
 def resolve_test_full_scale_peak_volts(sequence_config):

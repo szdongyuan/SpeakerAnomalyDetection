@@ -8,7 +8,7 @@ import numpy as np
 
 from base.recording_preview_config import validate_recording_preview_time_mode
 from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
-from base.ve3668n_input import (
+from base.vkinging_input import (
     normalize_machine_id,
     validate_device_snapshot,
     validate_input_config,
@@ -16,7 +16,7 @@ from base.ve3668n_input import (
     validate_sample_rate,
     ve_acquisition_signature,
 )
-from base.ve3668n_wav_metadata import validate_ve_wav_metadata
+from base.vkinging_wav_metadata import validate_ve_wav_metadata
 from base.ve_startup_policy import VeStartupBudget
 from consts.recording_preview_consts import (
     MAIN_RECORDING_LIVE_MAX_POINTS,
@@ -25,7 +25,7 @@ from consts.recording_preview_consts import (
     PREVIEW_TIME_MODE_CUMULATIVE,
     PREVIEW_TIME_MODE_RELATIVE_LATEST,
 )
-from consts.ve3668n_consts import VE_BACKEND
+from consts.vkinging_consts import VE_BACKEND
 
 
 VE_PREWARM_COMMAND = "prewarm_ve"

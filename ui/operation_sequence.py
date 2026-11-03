@@ -29,8 +29,8 @@ from base.recording_defaults import RecordingDefaultsStore, recording_profile_ke
 from base.sequence_queue_references import SequenceQueueReferenceScanner, queue_path_key
 from base.config_deletion import ConfigDeletionService
 from base.product_test_project_config import ProductTestProjectConfigManager
-from base.ve3668n_recording_config import resolve_ve_recording_config
-from consts.ve3668n_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY
+from base.vkinging_recording_config import resolve_ve_recording_config
+from consts.vkinging_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY
 from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.shared_queue_save_dialog import SharedQueueSaveDialog
 from base.recording_preview_config import resolve_recording_preview_time_mode

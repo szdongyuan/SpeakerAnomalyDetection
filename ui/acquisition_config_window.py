@@ -14,8 +14,8 @@ from base.sound_device_manager import SoundDeviceManager
 from base.config_number_format import config_number_decimals
 from base.recording_defaults import RecordingDefaultsStore, recording_profile_key
 from base.recording_settings import resolve_startup_trim_ms
-from base.ve3668n_input import validate_range_index
-from base.ve3668n_recording_config import resolve_ve_recording_config
+from base.vkinging_input import validate_range_index
+from base.vkinging_recording_config import resolve_ve_recording_config
 from base.recording_preview_config import (
     resolve_recording_preview_time_mode,
     validate_recording_preview_time_mode,
@@ -26,7 +26,7 @@ from consts.recording_preview_consts import (
     RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
 )
 from consts.running_consts import DEFAULT_DIR
-from consts.ve3668n_consts import (
+from consts.vkinging_consts import (
     VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY, VE_RANGE_LABELS,
     VE_SAMPLE_RATE_MIN, VE_SAMPLE_RATE_MAX, VE_SAMPLE_RATES,
 )

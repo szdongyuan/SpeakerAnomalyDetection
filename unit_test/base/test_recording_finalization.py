@@ -225,7 +225,7 @@ def test_soundcard_metadata_survives_capture_to_reader(tmp_path, calibrated):
 
 def prepared_ve_result(tmp_path, thresholds, *, limit=.02):
     from base.wav_calibration_metadata import append_owned_recording_calibration_metadata_result
-    from unit_test.base.ve3668n_fakes import capture_request
+    from unit_test.base.vkinging_fakes import capture_request
     seed = capture_request(tmp_path / "ve.wav")
     device, metadata = seed.device.to_dict(), seed.calibration_metadata.to_dict()
     device["input_config"].update(range_min=-limit, range_max=limit)

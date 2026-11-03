@@ -17,7 +17,7 @@ from consts.recording_preview_consts import (
     RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
 )
 from consts.running_consts import DEFAULT_DIR
-from consts.ve3668n_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY
+from consts.vkinging_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY
 
 
 def test_profiles_survive_new_store_instances(tmp_path):

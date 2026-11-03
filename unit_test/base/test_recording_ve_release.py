@@ -9,13 +9,13 @@ import pytest
 
 from base.recording_process_protocol import RecordingEvent, VeLifecycleCounts, VeReleaseOutcome
 from base.recording_service import RecordingService, _Worker
-from base.ve3668n_input import ve_acquisition_signature
-from unit_test.base.ve3668n_fakes import capture_request
+from base.vkinging_input import ve_acquisition_signature
+from unit_test.base.vkinging_fakes import capture_request
 from unit_test.base.test_recording_service import Events, eventually, request as ordinary_request
 
 
 def changed_request(tmp_path, change):
-    from unit_test.base.ve3668n_fakes import device_info, input_config, wav_metadata
+    from unit_test.base.vkinging_fakes import device_info, input_config, wav_metadata
 
     if change == "rate":
         return capture_request(tmp_path / "B.wav", request_id="B", sample_rate=48000)

@@ -9,7 +9,7 @@ import pytest
 
 from base.recording_process_protocol import RecordingEvent, RecordingResult, WorkerFatal
 from base.recording_worker import _send_loop, recording_worker
-from unit_test.base.ve3668n_fakes import capture_request
+from unit_test.base.vkinging_fakes import capture_request
 
 
 def capture(request_id):
@@ -91,7 +91,7 @@ def test_sender_ordinary_progress_diagnostics_are_numeric_only(monkeypatch):
 def test_worker_reuses_sampler_and_records_enqueue_payload_and_cleanup(tmp_path, monkeypatch):
     from base import recording_worker as module
     from base.recording_process_protocol import RecordingCancelled
-    from base.ve3668n_capture_timing import VeCaptureProgress
+    from base.vkinging_capture_timing import VeCaptureProgress
     from unit_test.base.test_recording_capture_diagnostics import diagnostics, events
 
     diag, records = diagnostics(monkeypatch)
@@ -424,7 +424,7 @@ def test_generation_fatal_diagnostic_names_empty_exception_type():
 def test_two_request_lifecycle_burst_delivers_one_fatal_when_control_queue_saturates(
         tmp_path, monkeypatch):
     from base import recording_worker as module
-    from base.ve3668n_capture_timing import VeCaptureProgress
+    from base.vkinging_capture_timing import VeCaptureProgress
 
     requests = (
         capture_request(tmp_path / "A.wav", request_id="A"),
@@ -1039,7 +1039,7 @@ def test_parent_watch_never_inspects_pipeline_during_active_to_finalizer_transit
         tmp_path, monkeypatch):
     from base import recording_worker as module
     from base.recording_worker_pipeline import WorkerCapturePipeline
-    from base.ve3668n_capture_timing import VeCaptureProgress
+    from base.vkinging_capture_timing import VeCaptureProgress
 
     request = capture_request(tmp_path / "parent-death.wav", request_id="parent-death")
     commands = queue.Queue()
@@ -1146,7 +1146,7 @@ def test_parent_watch_never_inspects_pipeline_during_active_to_finalizer_transit
 def test_worker_lost_slot_snapshot_is_fatal_instead_of_opening_capacity(
         tmp_path, monkeypatch):
     from base import recording_worker as module
-    from base.ve3668n_capture_timing import VeCaptureProgress
+    from base.vkinging_capture_timing import VeCaptureProgress
 
     request = capture_request(tmp_path / "lost.wav", request_id="lost")
     commands = queue.Queue()

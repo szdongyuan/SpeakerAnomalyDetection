@@ -12,11 +12,73 @@ from scipy.io import wavfile
 
 from base import wav_calibration_metadata as wav_metadata_io
 from base.recording_process_protocol import FrozenConfig
-from consts.ve3668n_consts import VE_RANGE_LIMITS
-from unit_test.base.ve3668n_fakes import wav_metadata, wav_metadata_v2
+from consts.vkinging_consts import VE_RANGE_LIMITS
+from unit_test.base.vkinging_fakes import wav_metadata, wav_metadata_v2
 from unit_test.base.test_wav_calibration_metadata import (
     _append_raw_chunk, _chunk, _install_bounded_open, _metadata_list_chunk,
 )
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+@pytest.mark.parametrize("model", ["VK-TEST-12", "VK-TEST-OTHER", " vk-ß ", " ve3668n "])
+def test_actual_model_high_channel_wav_round_trip_preserves_file_provenance(
+    tmp_path, schema_version, model,
+):
+    factory = wav_metadata if schema_version == 1 else wav_metadata_v2
+    sources = ("measured", "measured") if schema_version == 1 else ("calibrated", "calibrated")
+    payload = factory(sources, physical_channels=(11, 8))
+    payload["acquisition"]["model"] = model
+    factors = (12.3456789012345, 0.123456789012345)
+    for channel, factor in zip(payload["recorded_channels"], factors):
+        channel["v2pa_factor"] = factor
+    path = tmp_path / "actual-model.wav"
+    audio = np.array([[2.5, -7.0], [-4.0, 1.5]], dtype=np.float32)
+    wavfile.write(path, 44100, audio)
+    original = path.read_bytes()
+
+    assert wav_metadata_io.normalize_wav_calibration_metadata(payload) == payload
+    assert wav_metadata_io.append_wav_calibration_metadata(path, payload)
+    written = path.read_bytes()
+    result = wav_metadata_io.inspect_wav_calibration_metadata(path)
+    assert result.metadata == payload
+    assert result.metadata["acquisition"]["model"] == model
+    assert [channel["physical_input_channel"] for channel in result.metadata["recorded_channels"]] == [11, 8]
+    for index, factor in enumerate(factors):
+        resolution = wav_metadata_io.resolve_wav_channel_v2pa_factor(result, index)
+        assert resolution.factor == factor
+        assert resolution.used_file_metadata
+    assert written[8:len(original)] == original[8:]
+    assert path.read_bytes() == written
+    rate, actual = wavfile.read(path)
+    assert rate == 44100
+    np.testing.assert_array_equal(actual, audio)
+
+
+@pytest.mark.parametrize("model", [None, True, 12, "", " \t ", "VK-\x00X", "VK-\u0085X", "VK-\u009bX"])
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_wav_rejects_invalid_model_text(schema_version, model):
+    payload = wav_metadata() if schema_version == 1 else wav_metadata_v2()
+    payload["acquisition"]["model"] = model
+    assert wav_metadata_io.normalize_wav_calibration_metadata(payload) is None
+
+
+def test_new_recording_builder_copies_canonical_actual_model_and_high_channel_factors(tmp_path):
+    from base.vkinging_stores import VECalibrationStore
+    from base.vkinging_wav_metadata import build_ve_recording_metadata
+    from unit_test.base.vkinging_fakes import device_info, input_config
+
+    device = device_info(model=" vk-ß ", physical_channels=[11, 8], max_input_channels=12)
+    calibrations = VECalibrationStore(tmp_path / "calibrations.json")
+    factors = (12.3456789012345, 0.123456789012345)
+    for physical, factor in zip((11, 8), factors):
+        calibrations.save_factor(device, physical, v2pa_factor=factor,
+                                 calibrated_at="2026-11-03T10:00:00+08:00")
+    payload = build_ve_recording_metadata(device, (11, 8), input_config(), calibrations)
+    assert payload["schema_version"] == 2
+    assert payload["acquisition"]["model"] == "VK-ß"
+    assert [channel["physical_input_channel"] for channel in payload["recorded_channels"]] == [11, 8]
+    assert [channel["v2pa_factor"] for channel in payload["recorded_channels"]] == list(factors)
+    assert all(channel["factor_source"] == "calibrated" for channel in payload["recorded_channels"])
 
 
 def test_v2_nullable_calibration_round_trip_and_resolution(tmp_path):
@@ -77,7 +139,7 @@ def test_version_and_calibrated_source_cannot_be_mixed(schema_version, source):
 
 
 def test_v2_mixed_measurement_null_and_none_channels_resolve_without_rewriting(tmp_path):
-    from base.ve3668n_wav_metadata import resolve_ve_wav_channel_v2pa_factor
+    from base.vkinging_wav_metadata import resolve_ve_wav_channel_v2pa_factor
 
     payload = wav_metadata_v2(("calibrated", "calibrated", "none"),
                               physical_channels=(7, 1, 3))
@@ -162,14 +224,14 @@ def test_schema_requires_every_declared_field(section, field, schema_version):
     *(('root', 'schema_version', value) for value in (0, 3, True, 1.0, '1', None)),
     *(('root', 'recorded_channels', value) for value in (None, [], {}, 'channels')),
     *(('acquisition', field, value) for field, value in (
-        ('model', 'VE3668N-extra'), ('model', None), ('machine_id', ''),
+        ('model', 'VK-\u0085X'), ('model', None), ('machine_id', ''),
         ('machine_id', True), ('input_mode', 'voltage'), ('unit', 'Pa'),
         ('range_min', -1.0), ('range_max', '10'), ('range_max', float('inf')),
     )),
     *((section, 'sample_rate', value) for section in ('acquisition', 'calibration')
       for value in (0, -1, True, False, 44100.0, '51200', None)),
     *(('channel', 'wav_channel_index', value) for value in (-1, True, 0.0, '0', 2)),
-    *(('channel', 'physical_input_channel', value) for value in (-1, 8, True, 7.0, '7')),
+    *(('channel', 'physical_input_channel', value) for value in (-1, False, True, 7.0, '7')),
     *(('channel', 'v2pa_factor', value) for value in (
         None, 0, -10, float('nan'), float('inf'), float('-inf'), True, '10', 10**400,
     )),
@@ -223,7 +285,7 @@ def test_historical_positive_rates_are_not_new_acquisition_whitelist(tmp_path, c
 
 
 def test_frozen_mapping_is_serializable_and_normalized_snapshots_are_independent(tmp_path):
-    from base.ve3668n_wav_metadata import validate_ve_wav_metadata
+    from base.vkinging_wav_metadata import validate_ve_wav_metadata
 
     payload = wav_metadata()
     expected = deepcopy(payload)
@@ -241,13 +303,13 @@ def test_frozen_mapping_is_serializable_and_normalized_snapshots_are_independent
 
 
 def test_ve_factor_resolution_is_file_local_and_explicit():
-    from base import ve3668n_wav_metadata
+    from base import vkinging_wav_metadata
 
     payload = FrozenConfig.snapshot(wav_metadata())
-    measured = ve3668n_wav_metadata.resolve_ve_wav_channel_v2pa_factor(payload, 0)
+    measured = vkinging_wav_metadata.resolve_ve_wav_channel_v2pa_factor(payload, 0)
     assert measured.factor == 10.0
     assert measured.state == 'calibrated'
-    none = ve3668n_wav_metadata.resolve_ve_wav_channel_v2pa_factor(payload, 1)
+    none = vkinging_wav_metadata.resolve_ve_wav_channel_v2pa_factor(payload, 1)
     assert none.factor == 1.0
     assert none.state == 'none'
     assert none.diagnostic
@@ -261,10 +323,10 @@ def test_ve_factor_resolution_is_file_local_and_explicit():
 
 @pytest.mark.parametrize('index', [2, -1, True, 0.0, '0'])
 def test_known_ve_invalid_channel_never_uses_legacy_index_coercion_or_factor_one(index):
-    from base import ve3668n_wav_metadata
+    from base import vkinging_wav_metadata
 
     payload = wav_metadata()
-    result = ve3668n_wav_metadata.resolve_ve_wav_channel_v2pa_factor(payload, index)
+    result = vkinging_wav_metadata.resolve_ve_wav_channel_v2pa_factor(payload, index)
     assert result.factor is None
     assert result.state == 'invalid'
     with pytest.raises(ValueError, match='VE.*invalid'):

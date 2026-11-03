@@ -10,10 +10,10 @@ from consts.recording_preview_consts import (
     PREVIEW_TIME_MODE_CUMULATIVE,
     RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
 )
-from consts.ve3668n_consts import VE_RANGE_LABELS
+from consts.vkinging_consts import VE_RANGE_LABELS
 from ui.acquisition_config_window import RecordConfigWindow
 from ui.operation_sequence import OptionList
-from unit_test.base.ve3668n_fakes import device_info
+from unit_test.base.vkinging_fakes import device_info
 
 
 @pytest.fixture

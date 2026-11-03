@@ -8,7 +8,7 @@ import threading
 
 import pytest
 
-from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+from base.vkinging_prewarm_lifetime import VePrewarmLifetime
 
 
 def signature(machine_id="test-machine-1", channels=(7, 1), rate=51200, limit=10.0):

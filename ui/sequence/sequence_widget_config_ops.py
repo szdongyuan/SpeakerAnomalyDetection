@@ -262,7 +262,7 @@ class SequenceWidgetConfigOpsMixin:
 
     def _current_ve_recording_device(self, device):
         """Resolve the loaded queue, reading the injected profile only for a missing rate."""
-        from base.ve3668n_recording_config import resolve_ve_recording_device
+        from base.vkinging_recording_config import resolve_ve_recording_device
 
         sequence = getattr(self, "sequence_config", None)
         detail = sequence[0]["seq1"]["acq"]["detail"] if sequence else {}

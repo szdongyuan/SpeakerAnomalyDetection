@@ -19,7 +19,7 @@ def activate_audio_manager(window):
 @pytest.fixture
 def audio_manager_window(ui_qapp, monkeypatch):
     import main_window as module
-    from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+    from base.vkinging_prewarm_lifetime import VePrewarmLifetime
     from ui import video_controller
 
     monkeypatch.setattr(module, "restore_or_default", lambda **kwargs: ({}, {}, [], []))

@@ -4,12 +4,12 @@ import pickle
 import pytest
 
 from unit_test.base.recording_process_fakes import device_info as legacy_device
-from unit_test.base.ve3668n_fakes import capture_request, device_info, input_config, wav_metadata
+from unit_test.base.vkinging_fakes import capture_request, device_info, input_config, wav_metadata
 
 
 @pytest.mark.parametrize("limit", [10.0, 5.0, 2.5, 1.0, .5, .1, .02])
 def test_full_signature_and_prewarm_wire_round_trip(limit):
-    from base.ve3668n_input import ve_acquisition_signature
+    from base.vkinging_input import ve_acquisition_signature
     from base.recording_process_protocol import VePrewarmRequest, VeReleaseOutcome
 
     device = device_info(input_config=input_config(96000, range_min=-limit, range_max=limit))
@@ -27,7 +27,7 @@ def test_full_signature_and_prewarm_wire_round_trip(limit):
 
 
 def test_signature_rejects_request_rate_different_from_snapshot():
-    from base.ve3668n_input import ve_acquisition_signature
+    from base.vkinging_input import ve_acquisition_signature
 
     with pytest.raises(ValueError, match="sample_rate.*match"):
         ve_acquisition_signature(device_info(), (7, 1), 48000)
@@ -313,7 +313,7 @@ def test_lifecycle_counts_are_nonnegative_strict_integers(field, value):
 
 def test_release_payloads_and_private_event_kinds_are_typed_and_serializable():
     from base import recording_process_protocol as protocol
-    from consts.ve3668n_consts import VE_BACKEND
+    from consts.vkinging_consts import VE_BACKEND
 
     assert hasattr(protocol, "VeReleaseOutcome"), "missing VE release wire contract"
     signature = (VE_BACKEND, "test-machine-1", (7, 1), 51200, "IEPE", "V", -10.0, 10.0)
@@ -346,7 +346,7 @@ def test_release_payloads_and_private_event_kinds_are_typed_and_serializable():
 ])
 def test_generation_lifecycle_events_require_canonical_empty_request_id(kind, request_id):
     from base import recording_process_protocol as protocol
-    from consts.ve3668n_consts import VE_BACKEND
+    from consts.vkinging_consts import VE_BACKEND
 
     payloads = {
         "release_ve": None,
@@ -378,7 +378,7 @@ def test_generation_lifecycle_events_require_canonical_empty_request_id(kind, re
 ])
 def test_release_outcome_scalar_and_signature_contract(values):
     from base.recording_process_protocol import VeReleaseOutcome
-    from consts.ve3668n_consts import VE_BACKEND
+    from consts.vkinging_consts import VE_BACKEND
 
     valid = dict(generation=1,
                  released_signature=(VE_BACKEND, "machine", (7, 1), 51200, "IEPE", "V", -10.0, 10.0),
@@ -414,7 +414,7 @@ def _prewarm_request(**changes):
 
 def _prewarm_result(**changes):
     from base.recording_process_protocol import VePrewarmResult
-    from consts.ve3668n_consts import VE_BACKEND
+    from consts.vkinging_consts import VE_BACKEND
 
     values = dict(
         warmup_id="warm-1", generation=2, attempt=1,

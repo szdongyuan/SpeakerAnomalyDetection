@@ -26,8 +26,8 @@ from PyQt5.QtWidgets import (
 from base.log_manager import LogManager
 from base.sound_device_manager import SoundDeviceManager
 from base.hardware_selection import is_ve_input, save_ve_selection, restore_or_default, save_if_changed
-from base.ve3668n_stores import VEInputProfileStore, VECalibrationStore
-from ui.ve3668n_hardware_controls import VE3668NHardwareControls
+from base.vkinging_stores import VEInputProfileStore, VECalibrationStore
+from ui.vkinging_hardware_controls import VkingingHardwareControls
 from ui.vkinging_presentation import device_display_name, ve_failure_text
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
@@ -351,7 +351,7 @@ class HardwareSelectionController:
         self._rendering_devices = False
         self.profile_store = profile_store if profile_store is not None else VEInputProfileStore()
         self.calibration_store = calibration_store if calibration_store is not None else VECalibrationStore()
-        self.view.ve_controls = VE3668NHardwareControls(view,
+        self.view.ve_controls = VkingingHardwareControls(view,
             profile_store=self.profile_store, calibration_store=self.calibration_store,
             initial_device=model.state.mic_device, initial_channels=model.state.mic_channels,
             discovery_factory=discovery_factory, busy_check=self.busy_check)

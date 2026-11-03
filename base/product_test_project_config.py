@@ -14,9 +14,9 @@ from base.hardware_trigger.serial_product_port_plan import build_serial_product_
 from base.load_config import LoadUiConfig
 from base.analysis_config_validation import validate_analysis_config
 from base.recording_preview_config import resolve_recording_preview_time_mode
-from base.ve3668n_input import validate_range_index, validate_sample_rate
+from base.vkinging_input import validate_range_index, validate_sample_rate
 from consts import error_code
-from consts.ve3668n_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY, VE_RANGE_LABELS
+from consts.vkinging_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY, VE_RANGE_LABELS
 from consts.product_test_project_consts import (
     CONDITION_NAME_KEY,
     EXPORT_RAW_AUDIO_CSV_KEY,

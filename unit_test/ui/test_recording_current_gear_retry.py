@@ -340,7 +340,7 @@ def test_csv_readiness_event_allows_first_fresh_frame_without_auto_start(ui_qapp
 @pytest.mark.parametrize("stage", ["capture_release_timeout", "release"])
 def test_ve_release_failure_keeps_current_round_and_file_lease(ui_qapp, tmp_path, monkeypatch, stage):
     from pathlib import Path
-    from unit_test.base.ve3668n_fakes import capture_request
+    from unit_test.base.vkinging_fakes import capture_request
     host, service, context, session = product_host(tmp_path)
     request = capture_request(Path(session.request.path), request_id=session.request.request_id)
     context.request = session.request = request

@@ -41,14 +41,14 @@ from base.recording_process_protocol import (
 )
 from base.recording_result_reader import ResultReader
 from base.recording_worker import recording_worker
-from base.ve3668n_capture_timing import VeCaptureDeadline
-from base.ve3668n_input import ve_acquisition_signature
+from base.vkinging_capture_timing import VeCaptureDeadline
+from base.vkinging_input import ve_acquisition_signature
 from base.ve_startup_policy import VeStartupBudget
 from consts.recording_timeout_consts import (
     VE_CAPTURE_RELEASE_SLOW_SECONDS, VE_CAPTURE_RELEASE_TIMEOUT_SECONDS,
 )
 from consts.recording_preview_consts import MAIN_RECORDING_FINAL_MAX_POINTS
-from consts.ve3668n_consts import VE_BACKEND
+from consts.vkinging_consts import VE_BACKEND
 
 
 # Fixed categories: unknown/malformed wire kinds never create dictionary keys.

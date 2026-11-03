@@ -1,4 +1,4 @@
-"""Pure, closed-schema VE3668N input contracts; no device or storage I/O.
+"""Pure, closed-schema VK input contracts; no device or storage I/O.
 
 Validation raises ValueError and accepts Mapping snapshots (including frozen
 ones). Returned dictionaries own their data; channel sequences become tuples.
@@ -6,15 +6,14 @@ These values can be frozen or serialized without importing the recording layer.
 """
 from collections.abc import Mapping, Sequence
 import math
+import unicodedata
 
-from consts.ve3668n_consts import (
+from consts.vkinging_consts import (
     VE_BACKEND,
     VE_DEFAULT_SAMPLE_RATE,
     VE_DEVICE_SNAPSHOT_FIELDS,
     VE_INPUT_CONFIG_FIELDS,
     VE_INPUT_MODE,
-    VE_MAX_INPUT_CHANNELS,
-    VE_MODEL,
     VE_RANGE_INDEX_CONFIG_KEY,
     VE_RANGE_LIMITS,
     VE_SAMPLE_RATE_MAX,
@@ -111,10 +110,12 @@ def create_input_config(sample_rate=VE_DEFAULT_SAMPLE_RATE, *, range_index=0):
 
 
 def normalize_model(value):
-    """Match the entire trimmed model, case-insensitively, and canonicalize it."""
-    if _nonempty_text(value, "model").casefold() != VE_MODEL.casefold():
-        raise ValueError(f"model must be {VE_MODEL}")
-    return VE_MODEL
+    """Trim padding and uppercase ASCII without merging non-ASCII identities."""
+    model = _nonempty_text(value, "model")
+    if any(unicodedata.category(char) == "Cc" for char in model):
+        raise ValueError("model must be text without control characters")
+    ascii_upper = str.maketrans("abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    return model.translate(ascii_upper)
 
 
 def normalize_machine_id(value):
@@ -123,9 +124,9 @@ def normalize_machine_id(value):
 
 
 def validate_physical_channel(value):
-    """Return one strict Python integer AIN index (0 through 7)."""
-    if type(value) is not int or not 0 <= value < VE_MAX_INPUT_CHANNELS:
-        raise ValueError("physical_channel must be an integer from 0 through 7")
+    """Return one strict nonnegative Python integer AIN index."""
+    if type(value) is not int or value < 0:
+        raise ValueError("physical_channel must be a nonnegative integer")
     return value
 
 
@@ -152,8 +153,8 @@ def _validate_device_fields(device):
         raise ValueError("address must be a string or None")
     channels = validate_physical_channels(device["physical_channels"])
     maximum = device["max_input_channels"]
-    if type(maximum) is not int or not 1 <= maximum <= VE_MAX_INPUT_CHANNELS:
-        raise ValueError("max_input_channels must be an integer from 1 through 8")
+    if type(maximum) is not int or maximum < 1:
+        raise ValueError("max_input_channels must be a positive integer")
     if max(channels) >= maximum:
         raise ValueError("max_input_channels must cover every physical_channel")
     if type(device["available"]) is not bool:
@@ -222,7 +223,7 @@ def calibration_fingerprint(device, physical_channel, config):
     validate_calibration_conditions(device["input_config"])
     conditions = validate_calibration_conditions(config)
     return {
-        "backend": VE_BACKEND, "model": VE_MODEL,
+        "backend": VE_BACKEND, "model": identity["model"],
         "machine_id": identity["machine_id"],
         "physical_channel": validate_physical_channel(physical_channel),
         **conditions,

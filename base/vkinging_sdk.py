@@ -9,8 +9,8 @@ import os
 from pathlib import Path
 import re
 
-from base.ve3668n_input import validate_sample_rate, validate_voltage_range
-from consts.ve3668n_consts import VE_MAX_INPUT_CHANNELS, VE_RANGE_MAX, VE_RANGE_MIN
+from base.vkinging_input import validate_sample_rate, validate_voltage_range
+from consts.vkinging_consts import VE_RANGE_MAX, VE_RANGE_MIN
 
 
 class VkDaqError(RuntimeError):
@@ -325,8 +325,8 @@ class VkDaqClient:
         still requires hardware verification before capture acceptance.
         """
         task_name = _text_argument(task, "task")
-        if type(channel_count) is not int or not 1 <= channel_count <= VE_MAX_INPUT_CHANNELS:
-            raise ValueError("channel_count must be an integer from 1 through 8")
+        if type(channel_count) is not int or channel_count < 1:
+            raise ValueError("channel_count must be a positive integer")
         if type(samples_per_channel) is not int or not 1 <= samples_per_channel <= 2048:
             raise ValueError("samples_per_channel must be an integer from 1 through 2048")
         if type(timeout_seconds) not in (int, float) or not 0 <= timeout_seconds <= 0.2:

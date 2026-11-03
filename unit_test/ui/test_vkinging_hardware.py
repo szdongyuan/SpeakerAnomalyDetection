@@ -14,17 +14,17 @@ from PyQt5.QtWidgets import QMainWindow, QAction, QApplication, QLabel
 from PyQt5.QtTest import QTest
 
 from ui import hardware_window as hardware_ui
-from base.ve3668n_discovery import DiscoveryEvent, DiscoveryResult
+from base.vkinging_discovery import DiscoveryEvent, DiscoveryResult
 from base.log_manager import LogManager
-from base.ve3668n_stores import VEInputProfileStore, VECalibrationStore
-from base.ve3668n_input import validate_device_snapshot
-from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+from base.vkinging_stores import VEInputProfileStore, VECalibrationStore
+from base.vkinging_input import validate_device_snapshot
+from base.vkinging_prewarm_lifetime import VePrewarmLifetime
 from base.recording_process_protocol import VeLifecycleCounts
 from base.recording_service import VePrewarmCompletion
-from unit_test.base.ve3668n_fakes import device_info
-from unit_test.base.test_ve3668n_stores import save_measurement
-from unit_test.base.test_ve3668n_hardware_selection import fake_soundcards
-from unit_test.ui.test_ve3668n_recording import host_factory, capture_audio, finish_ve_capture
+from unit_test.base.vkinging_fakes import device_info
+from unit_test.base.test_vkinging_stores import save_measurement
+from unit_test.base.test_vkinging_hardware_selection import fake_soundcards
+from unit_test.ui.test_vkinging_recording import host_factory, capture_audio, finish_ve_capture
 from ui.acquisition_config_window import RecordConfigWindow
 from ui.vkinging_presentation import device_display_name, ve_failure_text
 from consts.recording_preview_consts import (
@@ -126,6 +126,51 @@ def select_device(controller, machine_id):
             model.item(row).setCheckState(Qt.Checked)
             return
     raise AssertionError(f"No discovered device {machine_id}")
+
+
+def test_twelve_channel_selection_save_reopen_offline_and_fresh_reconnect(controls, ui_qapp):
+    from base import hardware_selection
+
+    device = device_info(model="VK-TEST-12", physical_channels=list(range(12)),
+                         max_input_channels=12)
+    controller = controls.create(hardware_ui.HardwareSelectionState(
+        mic_device=device, mic_channels=[]))
+    confirm(controller, ui_qapp, device)
+    table = controller.view.mic_channel_table.model()
+    assert table.rowCount() == 12 and table.item(11).text() == "AIN12"
+    for channel in (11, 1, 8):
+        table.item(channel).setCheckState(Qt.Checked)
+    assert controller.model.state.mic_channels == [11, 1, 8]
+    controller._on_ok_clicked()
+    assert controller.view.result() == QDialog.Accepted
+    saved = controls.path.read_bytes()
+    placeholder, _, channels, _ = hardware_selection.restore_or_default(path=controls.path)
+    assert placeholder["available"] is False and placeholder["model"] is None
+    assert placeholder["max_input_channels"] == 12
+    assert channels == [11, 1, 8]
+
+    reopened = controls.create(hardware_ui.HardwareSelectionState(
+        mic_device=placeholder, mic_channels=channels))
+    assert not reopened.view.mic_channel_table.isEnabled()
+    reopened.view.ve_controls.discovery.service.deliver(())
+    ui_qapp.processEvents()
+    assert reopened.model.state.mic_device["available"] is False
+    assert reopened.view.mic_channel_table.model().rowCount() == 0
+    assert controls.path.read_bytes() == saved
+    reopened.refresh_and_render(try_restore=True)
+    fresh = device_info(model="VK-RECONNECTED-12", name="FreshAlias",
+                        physical_channels=list(range(12)), max_input_channels=12)
+    confirm(reopened, ui_qapp, fresh)
+    assert reopened.model.state.mic_channels == [11, 1, 8]
+    assert reopened.model.state.mic_device["model"] == "VK-RECONNECTED-12"
+    assert reopened.model.state.mic_device["name"] == "FreshAlias"
+    assert reopened.view.mic_channel_table.isEnabled()
+    assert reopened.view.mic_channel_table.checked_payloads() == [1, 8, 11]
+    reopened._on_ok_clicked()
+    assert reopened.view.result() == QDialog.Accepted
+    assert controls.path.read_bytes() == saved
+    assert not controls.profiles.path.exists() and not controls.calibrations.path.exists()
+    assert not controls.defaults.calls and not controls.defaults.pair.writes
 
 
 def test_driver_selects_vk_inventory_and_gates_channels(controls, ui_qapp):
@@ -982,7 +1027,7 @@ def test_main_accepted_native_signature_change_publishes_then_releases(
     main_window_harness, controls, ui_qapp, monkeypatch, change,
 ):
     from base import hardware_selection
-    from base.ve3668n_input import ve_acquisition_signature
+    from base.vkinging_input import ve_acquisition_signature
 
     window = main_window_harness.create()
     window.ve_discovery.service.deliver([device_info()])

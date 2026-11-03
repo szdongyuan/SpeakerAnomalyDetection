@@ -19,7 +19,7 @@ from consts.recording_preview_consts import (
 )
 from ui.acquisition_config_window import RecordConfigWindow
 from ui.operation_sequence import AnalysisModelSelect, OptionList
-from unit_test.base.ve3668n_fakes import device_info
+from unit_test.base.vkinging_fakes import device_info
 
 
 @pytest.fixture

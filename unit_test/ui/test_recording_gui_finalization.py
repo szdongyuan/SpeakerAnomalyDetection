@@ -417,7 +417,7 @@ def test_display_shape_changes_invalidate_preparation(tmp_path):
 
 def test_capture_slot_release_precedes_potentially_blocked_timing_log(tmp_path, monkeypatch):
     from base.log_manager import LogManager
-    from unit_test.base.test_ve3668n_capture import start_persistent_capture
+    from unit_test.base.test_vkinging_capture import start_persistent_capture
     entered, release = threading.Event(), threading.Event()
     logger = LogManager.set_log_handler("core")
     original_info = logger.info

@@ -1,8 +1,6 @@
-"""Stable VE3668N input schema and acquisition constants."""
+"""Stable VK input schema and acquisition constants."""
 
 VE_BACKEND = "vkinging"
-VE_MODEL = "VE3668N"
-VE_MAX_INPUT_CHANNELS = 8
 VE_INPUT_SCHEMA_VERSION = 1
 VE_CALIBRATION_SCHEMA_VERSION = 2
 VE_WAV_SCHEMA_VERSION = 2

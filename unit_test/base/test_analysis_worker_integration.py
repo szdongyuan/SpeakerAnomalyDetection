@@ -161,7 +161,7 @@ def test_spawn_worker_runs_real_spl_and_writes_atomic_artifacts(tmp_path):
 def test_pcm24_worker_load_preserves_raw_voltage_and_calibration_at_algorithm_entry(tmp_path, monkeypatch):
     from base import analysis_worker
     from base.save_data import save_audio_with_calibration_metadata
-    from unit_test.base.ve3668n_fakes import wav_metadata
+    from unit_test.base.vkinging_fakes import wav_metadata
     source = np.array([[0.5, 8.25], [2**-25, -2**-25],
                        [0.001953125, -3]], dtype=np.float32)
     expected = np.array([[0.5, 8388607 / 8388608], [0, -1 / 8388608],

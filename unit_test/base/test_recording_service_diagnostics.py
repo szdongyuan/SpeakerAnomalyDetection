@@ -288,7 +288,7 @@ def test_put_return_race_keeps_commit_and_full_producer_duration(service, monkey
 
 
 def test_normal_ve_parent_event_budget(tmp_path):
-    from unit_test.base.ve3668n_fakes import capture_request
+    from unit_test.base.vkinging_fakes import capture_request
     records, finished = [], threading.Event()
     class Capture(logging.Handler):
         def emit(self, record):
@@ -299,7 +299,7 @@ def test_normal_ve_parent_event_budget(tmp_path):
     logger = logging.Logger("parent-diagnostic-budget", logging.INFO)
     logger.addHandler(Capture())
     service = RecordingService(
-        backend_factory="unit_test.base.ve3668n_fakes:capture_dependencies",
+        backend_factory="unit_test.base.vkinging_fakes:capture_dependencies",
         backend_options={"trace_path": str(tmp_path / "sdk.jsonl"), "read_delay": .005})
     service._logger = logger
     try:
@@ -467,7 +467,7 @@ def test_warning_submission_uses_frozen_clock_outside_admission_lock(monkeypatch
 
 
 def test_next_request_has_independent_warning_opportunity(monkeypatch, tmp_path):
-    from unit_test.base.ve3668n_fakes import capture_request
+    from unit_test.base.vkinging_fakes import capture_request
     probe = target_probe(monkeypatch, tmp_path)
     probe.clock.advance(1)
     probe.service._tick()

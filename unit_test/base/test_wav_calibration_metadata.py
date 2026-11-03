@@ -16,8 +16,8 @@ resolve_wav_channel_v2pa_factor = wav_calibration_metadata.resolve_wav_channel_v
 
 @pytest.mark.parametrize("schema_version", [1, 2])
 def test_ve_adapter_marks_neutral_calibrated_resolution_as_file_metadata(schema_version):
-    from base.ve3668n_wav_metadata import resolve_ve_wav_channel_v2pa_factor
-    from unit_test.base.ve3668n_fakes import wav_metadata, wav_metadata_v2
+    from base.vkinging_wav_metadata import resolve_ve_wav_channel_v2pa_factor
+    from unit_test.base.vkinging_fakes import wav_metadata, wav_metadata_v2
 
     payload = wav_metadata() if schema_version == 1 else wav_metadata_v2()
     assert resolve_ve_wav_channel_v2pa_factor(payload, 0).state == "calibrated"
@@ -665,7 +665,7 @@ def test_structured_append_safe_rejection_preserves_legacy_bool_api(tmp_path):
 
 
 def test_diagnostic_reader_close_failure_transfers_uncertain_ownership(tmp_path, monkeypatch):
-    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults, wav_metadata
+    from unit_test.base.vkinging_fakes import MetadataOwnershipFaults, wav_metadata
     path = tmp_path / "reader-owned.wav"
     wavfile.write(path, 44100, np.array([[8.25, 2.5]], dtype=np.float32))
     assert wav_calibration_metadata.append_wav_calibration_metadata(path, wav_metadata())
@@ -713,7 +713,7 @@ def test_metadata_ownership_fields_keep_legacy_positional_and_false_only_results
 def test_append_first_fault_survives_nested_close_failures(
     tmp_path, monkeypatch, processing, close_stages, first, close_order,
 ):
-    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    from unit_test.base.vkinging_fakes import MetadataOwnershipFaults
     path = tmp_path / "first-fault.wav"
     _write_wav(path)
     original = path.read_bytes()
@@ -745,7 +745,7 @@ def test_append_first_fault_survives_nested_close_failures(
 def test_reader_first_fault_keeps_provenance_and_close_diagnostics(
     tmp_path, monkeypatch, after_backend, close_fails, error_type,
 ):
-    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults, wav_metadata
+    from unit_test.base.vkinging_fakes import MetadataOwnershipFaults, wav_metadata
     path = tmp_path / "reader-first-fault.wav"
     wavfile.write(path, 44100, np.array([[8.25, 2.5]], dtype=np.float32))
     assert wav_calibration_metadata.append_wav_calibration_metadata(path, wav_metadata())
@@ -774,7 +774,7 @@ def test_reader_first_fault_keeps_provenance_and_close_diagnostics(
 @pytest.mark.parametrize("close_fails", [False, True])
 @pytest.mark.parametrize("error_type", [OSError, ValueError, RuntimeError, MemoryError])
 def test_legacy_bool_append_logs_primary_write_failure(tmp_path, monkeypatch, close_fails, error_type):
-    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    from unit_test.base.vkinging_fakes import MetadataOwnershipFaults
     path = tmp_path / "legacy-write.wav"
     _write_wav(path)
     faults = MetadataOwnershipFaults(path, processing_failure="temporary",
@@ -795,7 +795,7 @@ def test_legacy_bool_append_logs_primary_write_failure(tmp_path, monkeypatch, cl
 def test_append_ordinary_exception_preserves_first_error_and_local_ownership(
     tmp_path, monkeypatch, error_type, stage, close_fails,
 ):
-    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    from unit_test.base.vkinging_fakes import MetadataOwnershipFaults
     path = tmp_path / "ordinary-append.wav"
     _write_wav(path)
     original = path.read_bytes()
@@ -826,7 +826,7 @@ def test_append_ordinary_exception_preserves_first_error_and_local_ownership(
 
 @pytest.mark.parametrize("stage", ["temporary", "validation", "readback"])
 def test_metadata_file_boundary_does_not_normalize_base_exception(tmp_path, monkeypatch, stage):
-    from unit_test.base.ve3668n_fakes import MetadataOwnershipFaults
+    from unit_test.base.vkinging_fakes import MetadataOwnershipFaults
     class ControlFlow(BaseException):
         pass
     path = tmp_path / "control-flow.wav"

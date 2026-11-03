@@ -4,9 +4,9 @@ from copy import deepcopy
 import pytest
 from PyQt5.QtWidgets import QDialog, QGroupBox, QTableView
 from ui import hardware_window as hardware_ui
-from unit_test.ui.test_ve3668n_hardware import controls, confirm, main_window_harness
-from unit_test.base.ve3668n_fakes import device_info
-from unit_test.ui.test_ve3668n_recording import host_factory
+from unit_test.ui.test_vkinging_hardware import controls, confirm, main_window_harness
+from unit_test.base.vkinging_fakes import device_info
+from unit_test.ui.test_vkinging_recording import host_factory
 from base import hardware_selection
 
 
@@ -174,7 +174,7 @@ def test_input_calibration_starts_without_output(controls, monkeypatch):
 
 
 def test_public_cancel_ignores_malformed_legacy_output_arguments(controls, monkeypatch):
-    from unit_test.ui.test_ve3668n_hardware import ControlledDiscovery
+    from unit_test.ui.test_vkinging_hardware import ControlledDiscovery
     monkeypatch.setattr(hardware_ui.HardwareSelectionView, "on_exec", lambda self: QDialog.Rejected)
     result = hardware_ui.open_hardware_selection_window(
         driver="MME", speaker_device=object(), speaker_channels=object(),

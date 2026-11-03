@@ -18,8 +18,8 @@ from base.recording_process_protocol import RecordingResult
 from base.recording_service import RecordingCallbacks, RecordingService, RecordingSession
 from unit_test.base.recording_process_fakes import ControlledWriter, FakeBackend, known_audio
 from unit_test.base.test_recording_capture import request
-from unit_test.base.test_ve3668n_capture import make_stream
-from unit_test.base.ve3668n_fakes import CaptureSDK
+from unit_test.base.test_vkinging_capture import make_stream
+from unit_test.base.vkinging_fakes import CaptureSDK
 from unit_test.logging_test_support import isolated_project_logger, managed_handlers
 
 
@@ -243,7 +243,7 @@ def test_ve_cleanup_failure_reaches_project_file(tmp_path, monkeypatch, caplog, 
         assert sdk.operations()[-3:] == ("stop_task", "clear_task", "close")
         assert failures == [(stage, "ve-cleanup-probe")]
         assert not stream.handles_released
-        logged = read_project_log(state, "ve3668n_capture.py")
+        logged = read_project_log(state, "vkinging_capture.py")
         assert b"core ERROR [VE cleanup]" in logged
         assert f"event=failed operation={stage}".encode("ascii") in logged
         assert b"RuntimeError: ve-cleanup-probe" in logged and b"Traceback" in logged
@@ -319,11 +319,11 @@ def test_worker_logger_setup_failure_closes_endpoints_before_threads(monkeypatch
 
 @pytest.mark.parametrize("setup_failure", [False, True])
 def test_discovery_pipe_failure_preserves_cleanup(tmp_path, monkeypatch, caplog, setup_failure):
-    from base import log_manager, ve3668n_discovery as discovery
-    from unit_test.base import ve3668n_fakes
+    from base import log_manager, vkinging_discovery as discovery
+    from unit_test.base import vkinging_fakes
 
-    sdk = ve3668n_fakes.DiscoverySDK()
-    monkeypatch.setattr(ve3668n_fakes, "DiscoverySDK", lambda: sdk)
+    sdk = vkinging_fakes.DiscoverySDK()
+    monkeypatch.setattr(vkinging_fakes, "DiscoverySDK", lambda: sdk)
     connection = Mock()
     connection.send_bytes.side_effect = OSError("discovery-pipe-probe")
     original_thread = threading.Thread
@@ -342,17 +342,17 @@ def test_discovery_pipe_failure_preserves_cleanup(tmp_path, monkeypatch, caplog,
             monkeypatch.setattr(log_manager.LogManager, "set_log_handler", Mock(side_effect=error))
             with pytest.raises(PermissionError) as raised:
                 discovery._discovery_worker(
-                    connection, "unit_test.base.ve3668n_fakes.DiscoverySDK", "{}", 65536)
+                    connection, "unit_test.base.vkinging_fakes.DiscoverySDK", "{}", 65536)
             assert raised.value is error
         else:
             discovery._discovery_worker(
-                connection, "unit_test.base.ve3668n_fakes.DiscoverySDK", "{}", 65536)
+                connection, "unit_test.base.vkinging_fakes.DiscoverySDK", "{}", 65536)
         assert sdk.closed and sdk.trace[0] == ("devices",)
         connection.close.assert_called_once_with()
         connection.send_bytes.assert_called_once()
         assert len(watchers) == 1 and not watchers[0].is_alive()
         if not setup_failure:
-            data = read_project_log(state, "ve3668n_discovery.py")
+            data = read_project_log(state, "vkinging_discovery.py")
             assert b"core WARNING Discovery result pipe closed" in data
             assert b"OSError: discovery-pipe-probe" in data and b"Traceback" in data
             record, = [r for r in caplog.records if r.name == "core"]
@@ -360,7 +360,7 @@ def test_discovery_pipe_failure_preserves_cleanup(tmp_path, monkeypatch, caplog,
 
 
 def test_discovery_logger_exists_before_supervisor(tmp_path, monkeypatch):
-    from base.ve3668n_discovery import DiscoveryService
+    from base.vkinging_discovery import DiscoveryService
 
     with isolated_project_logger(tmp_path, monkeypatch) as state:
         original_start = threading.Thread.start
@@ -387,7 +387,7 @@ def test_discovery_logger_exists_before_supervisor(tmp_path, monkeypatch):
 
 
 def test_discovery_callback_failure_reaches_project_file(tmp_path, monkeypatch, caplog):
-    from base.ve3668n_discovery import DiscoveryService
+    from base.vkinging_discovery import DiscoveryService
 
     called = threading.Event()
     received = []
@@ -399,7 +399,7 @@ def test_discovery_callback_failure_reaches_project_file(tmp_path, monkeypatch, 
 
     with isolated_project_logger(tmp_path, monkeypatch) as state:
         service = DiscoveryService(
-            sdk_factory="unit_test.base.ve3668n_fakes.discovery_factory",
+            sdk_factory="unit_test.base.vkinging_fakes.discovery_factory",
             sdk_options={"trace_path": str(tmp_path / "discovery-trace.jsonl")},
             on_result=fail_callback)
         try:
@@ -414,7 +414,7 @@ def test_discovery_callback_failure_reaches_project_file(tmp_path, monkeypatch, 
             assert service.wait_closed(3)
             service._supervisor.join(3)
             assert not service._supervisor.is_alive()
-        data = read_project_log(state, "ve3668n_discovery.py")
+        data = read_project_log(state, "vkinging_discovery.py")
         assert b"core ERROR Discovery callback failed" in data
         assert b"RuntimeError: discovery-callback-probe" in data and b"Traceback" in data
         record, = [r for r in caplog.records if r.name == "core"]
@@ -481,7 +481,7 @@ def test_worker_fatal_and_sender_exit_cleanup_reach_project_file(
 
 
 def test_discovery_retirement_diagnostics_reach_project_file(tmp_path, monkeypatch, caplog):
-    from base import ve3668n_discovery as discovery
+    from base import vkinging_discovery as discovery
 
     with isolated_project_logger(tmp_path, monkeypatch) as state:
         service = discovery.DiscoveryService()
@@ -512,7 +512,7 @@ def test_discovery_retirement_diagnostics_reach_project_file(tmp_path, monkeypat
         service._reap_unconfirmed()
         assert resources.released and service._unreaped is None and service.wait_idle(0)
         child.close.assert_called_once_with()
-        data = read_project_log(state, "ve3668n_discovery.py")
+        data = read_project_log(state, "vkinging_discovery.py")
         assert b"core WARNING Late launch-probe" in data
         assert b"core WARNING Late discovery retirement: helper terminate: OSError: retire-terminate-probe; helper kill: OSError: retire-kill-probe; helper death unconfirmed after kill; service quarantined until reaped" in data
         assert b"core ERROR Discovery helper kill retry failed" in data

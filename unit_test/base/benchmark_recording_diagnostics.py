@@ -123,8 +123,8 @@ def distribution(values):
 
 def make_request(path, *, duration=1, channels=5, hardware=False, args=None):
     from base.recording_process_protocol import RecordingRequest
-    from base.ve3668n_input import create_input_config
-    from base.ve3668n_wav_metadata import validate_ve_wav_metadata
+    from base.vkinging_input import create_input_config
+    from base.vkinging_wav_metadata import validate_ve_wav_metadata
     physical = tuple(range(channels))
     device = dict(backend='vkinging', model='VE3668N',
                   machine_id=args.machine_id if hardware else 'test-machine-1',
@@ -145,7 +145,7 @@ def make_request(path, *, duration=1, channels=5, hardware=False, args=None):
 
 def fake_dependencies(**options):
     """Real worker/controller/capture, with only the native SDK boundary faked."""
-    from unit_test.base.ve3668n_fakes import CaptureSDK
+    from unit_test.base.vkinging_fakes import CaptureSDK
     class SDK(CaptureSDK):
         def _call(self, operation, *args, **kwargs):
             pass  # Synthetic SDK has no failures and does no per-read tracing/I/O.

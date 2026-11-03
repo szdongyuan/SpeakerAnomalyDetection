@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import QComboBox, QFileDialog, QInputDialog, QLabel, QMenu,
 from base.load_config import LoadUiConfig
 from base.sequence_queue_references import SequenceQueueReferenceScanner
 from base.product_test_project_config import ProductTestProjectConfigManager
-from consts.ve3668n_consts import VE_BACKEND
+from consts.vkinging_consts import VE_BACKEND
 from consts import error_code, ui_style_const
 from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
 from ui.confirmation_message_box import ConfirmationMessageBox

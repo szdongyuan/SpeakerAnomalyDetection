@@ -13,7 +13,7 @@ from base.product_test_project_config import (
     flatten_test_conditions,
     iter_test_conditions,
 )
-from consts.ve3668n_consts import VE_BACKEND
+from consts.vkinging_consts import VE_BACKEND
 from consts import error_code
 from consts.recording_preview_consts import RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
 from consts.product_test_project_consts import (

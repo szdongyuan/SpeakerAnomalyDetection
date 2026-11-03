@@ -9,10 +9,10 @@ import tempfile
 
 from base.log_manager import LogManager
 from base.recording_preview_config import validate_recording_preview_time_mode
-from base.ve3668n_input import validate_range_index, validate_sample_rate
+from base.vkinging_input import validate_range_index, validate_sample_rate
 from consts.recording_preview_consts import RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
 from consts.running_consts import DEFAULT_DIR
-from consts.ve3668n_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY
+from consts.vkinging_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY
 
 
 def recording_profile_key(mic):

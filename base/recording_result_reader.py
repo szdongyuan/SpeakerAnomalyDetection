@@ -19,7 +19,7 @@ from base.wav_calibration_metadata import (
 )
 from consts.recording_result_consts import RECORDING_SAMPLE_DIGEST_ALGORITHM
 from consts.wav_format_consts import WAV_PCM24_SUBTYPE
-from consts.ve3668n_consts import VE_BACKEND
+from consts.vkinging_consts import VE_BACKEND
 
 
 @dataclass(frozen=True)

@@ -14,7 +14,7 @@ import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from base.sound_device_manager import SoundDeviceManager
-from base.ve3668n_input import normalize_machine_id, validate_device_snapshot, validate_physical_channels
+from base.vkinging_input import normalize_machine_id, validate_device_snapshot, validate_physical_channels
 from consts import error_code, model_consts
 
 
@@ -217,11 +217,11 @@ def unavailable_ve_selection(record):
     """Retain explicit identity/routes even when the saved record is corrupt."""
     raw = record if isinstance(record, dict) else {}
     device = {
-        "backend": "vkinging", "model": "VE3668N",
-        "machine_id": raw.get("machine_id"), "name": "VE3668N",
+        "backend": "vkinging", "model": None,
+        "machine_id": raw.get("machine_id"), "name": "VK 设备",
         "address": None, "physical_channels": raw.get("physical_channels", []),
-        "max_input_channels": 8, "input_config": None, "available": False,
-        "diagnostic": "正在检查 VE3668N；确认设备和配置前不可用",
+        "max_input_channels": None, "input_config": None, "available": False,
+        "diagnostic": "正在检查 VK 设备；确认设备和配置前不可用",
     }
     try:
         if (set(raw) != {"schema_version", "backend", "machine_id", "physical_channels"}
@@ -230,6 +230,7 @@ def unavailable_ve_selection(record):
             raise ValueError("input_selection schema_version/backend/fields invalid")
         device["machine_id"] = normalize_machine_id(raw["machine_id"])
         device["physical_channels"] = list(validate_physical_channels(raw["physical_channels"]))
+        device["max_input_channels"] = max(device["physical_channels"]) + 1
     except ValueError as exc:
         device["selection_error"] = str(exc)
         device["diagnostic"] = f"VE 输入选择损坏，不可用；请重新选择设备和通道：{exc}"
@@ -262,7 +263,7 @@ def resolve_ve_input(device, channels, discovered_devices, *, profile_store,
     except (ValueError, OSError) as exc:
         # Config/identity boundary: retain the exact choice, never substitute a
         # profile default or another input when validation or storage fails.
-        unavailable["diagnostic"] = f"VE3668N 不可用：{exc}"
+        unavailable["diagnostic"] = f"VK 设备不可用：{exc}"
         return unavailable
 
 
