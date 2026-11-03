@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from base.load_config import LoadUiConfig
 from base.output_calibration import OutputCalibrationCache, resolve_output_amplitude
+from base.vkinging_input import is_vkinging_device
 from base.acquisition_recording_defaults import (
     normalize_play_record_detail,
     normalize_record_only_detail,
@@ -210,6 +211,7 @@ def _build_method_namespace():
         Key_Z = "z"
 
     namespace = {
+        "is_vkinging_device": is_vkinging_device,
         "resolve_output_amplitude": resolve_output_amplitude,
         "QApplication": DummyApplication,
         "QSignalBlocker": DummySignalBlocker,

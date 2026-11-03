@@ -1,15 +1,18 @@
 import json
 import os
 from dataclasses import dataclass
+from collections.abc import Mapping
 
 os.environ["SD_ENABLE_ASIO"] = "1"
 
 import sounddevice as sd
 
 from base.audio_sample_rate import resolve_input_sample_rate, resolve_output_sample_rate
+from base.vkinging_input import is_vkinging_device, validate_physical_channels
 from base.hardware_management import (
     HardwareManagementRepository,
     MissingHardwareTablesError,
+    HardwareValidationError,
     augment_runtime_device,
     build_selected_device_payload,
 )
@@ -44,10 +47,14 @@ class SoundDeviceManager(object):
 
     @staticmethod
     def change_default_device(mic_id, speaker_id):
+        if is_vkinging_device(mic_id) or is_vkinging_device(speaker_id):
+            return
         sd.default.device = (mic_id, speaker_id)
 
     @staticmethod
     def change_default_input_device(mic_id):
+        if is_vkinging_device(mic_id):
+            return
         previous_default = tuple(sd.default.device)
         previous_output_id = previous_default[1]
         sd.default.device = (mic_id, previous_output_id)
@@ -73,6 +80,8 @@ class SoundDeviceManager(object):
     def get_device_hostapi_name(device):
         if not device:
             return None
+        if is_vkinging_device(device):
+            return device["hostapi_name"]
 
         return SoundDeviceManager.get_api_info(device.get("hostapi")).get("name")
 
@@ -80,6 +89,8 @@ class SoundDeviceManager(object):
     def serialize_device(device):
         if not device:
             return None
+        if is_vkinging_device(device):
+            return dict(device)
         hostapi_name = SoundDeviceManager.get_device_hostapi_name(device)
         payload = {
             "name": device.get("name"),
@@ -92,6 +103,12 @@ class SoundDeviceManager(object):
 
     @staticmethod
     def _normalize_mic_channels(mic_channels=None, mic=None, fallback=None):
+        if is_vkinging_device(mic):
+            available = SoundDeviceManager.channels_for_device(mic)
+            if mic_channels is None:
+                return available
+            # A sparse physical selection must never be replaced by a gap or another input.
+            return SoundDeviceManager.restore_saved_mic_channels_strict(mic, mic_channels)
         if fallback is None:
             fallback = [0]
 
@@ -147,6 +164,11 @@ class SoundDeviceManager(object):
     def channels_for_device(device, device_type="mic"):
         if not device:
             return []
+        if is_vkinging_device(device):
+            if device_type == "speaker":
+                return []
+            physical_channels = device.get("physical_channels", ())
+            return list(validate_physical_channels(physical_channels)) if physical_channels else []
         if device_type == "speaker":
             max_channels = int(device.get("max_output_channels") or 0)
         else:
@@ -157,6 +179,8 @@ class SoundDeviceManager(object):
 
     @staticmethod
     def restore_mic_channels(mic, saved_channels):
+        if is_vkinging_device(mic) and saved_channels is not None:
+            return SoundDeviceManager.restore_saved_mic_channels_strict(mic, saved_channels)
         available_channels = SoundDeviceManager.channels_for_device(mic, "mic")
         if not available_channels:
             return []
@@ -342,11 +366,11 @@ class SoundDeviceManager(object):
     @staticmethod
     def _devices_have_registered_hardware_ids(mic, speaker):
         return (
-            isinstance(mic, dict)
+            isinstance(mic, Mapping)
             and bool(mic.get("hardware_id"))
             and (
                 speaker is None
-                or (isinstance(speaker, dict) and bool(speaker.get("hardware_id")))
+                or (isinstance(speaker, Mapping) and bool(speaker.get("hardware_id")))
             )
         )
 
@@ -421,12 +445,13 @@ class SoundDeviceManager(object):
 
     @staticmethod
     def _match_registered_runtime_device(asset, current_devices):
-        matches = [
-            device
-            for device in current_devices
-            if device.get("name") == asset.get("device_name")
-            and SoundDeviceManager.get_device_hostapi_name(device) == asset.get("hostapi_name")
-        ]
+        if is_vkinging_device(asset):
+            matches = [device for device in current_devices
+                       if is_vkinging_device(device) and device.get("hardware_id") == asset.get("hardware_id")]
+        else:
+            matches = [device for device in current_devices
+                       if device.get("name") == asset.get("device_name")
+                       and SoundDeviceManager.get_device_hostapi_name(device) == asset.get("hostapi_name")]
         if len(matches) == 1:
             return "ok", matches[0]
         if matches:
@@ -435,6 +460,9 @@ class SoundDeviceManager(object):
 
     @staticmethod
     def _runtime_mic_supports_channels(runtime_mic, mic_channels):
+        if is_vkinging_device(runtime_mic):
+            return bool(mic_channels) and set(mic_channels).issubset(
+                SoundDeviceManager.channels_for_device(runtime_mic))
         try:
             max_input_channels = int(runtime_mic.get("max_input_channels") or 0)
         except (TypeError, ValueError):
@@ -566,7 +594,7 @@ class SoundDeviceManager(object):
             for asset in registered_assets
         )
 
-    def _try_resolve_registered_startup_devices(self, saved_devices, runtime_devices):
+    def _try_resolve_registered_startup_devices(self, saved_devices, runtime_devices, *, discovery_complete=False):
         if not self._saved_devices_have_registered_hardware_ids(saved_devices):
             return None
         if "speaker" not in saved_devices:
@@ -613,6 +641,25 @@ class SoundDeviceManager(object):
                 can_retry_saved_devices=True,
             )
 
+        preserved_speaker = None
+        if is_vkinging_device(mic_asset):
+            # Record-only input selection keeps the independent output reference;
+            # output availability does not determine whether this input can record.
+            if saved_speaker is not None:
+                preserved_speaker = (augment_runtime_device(saved_speaker, speaker_asset)
+                                     if speaker_asset is not None else dict(saved_speaker))
+                if speaker_asset is not None:
+                    # Only explicit snapshot metadata can establish an API match
+                    # here; resolving a bare hostapi integer would make a native call.
+                    output_matches = [item for item in runtime_devices
+                                      if item.get("name") == speaker_asset["device_name"]
+                                      and item.get("hostapi_name") == speaker_asset["hostapi_name"]
+                                      and type(item.get("index")) is int and item["index"] >= 0
+                                      and self._runtime_speaker_has_output_capacity(item)]
+                    if len(output_matches) == 1:
+                        preserved_speaker = augment_runtime_device(output_matches[0], speaker_asset)
+            speaker_required = False
+
         if mic_asset is None or (speaker_required and speaker_asset is None):
             try:
                 can_complete_selection = self._registered_assets_can_complete_selection(repository)
@@ -637,8 +684,15 @@ class SoundDeviceManager(object):
                 can_retry_saved_devices=False,
             )
 
+        if is_vkinging_device(saved_mic) and not is_vkinging_device(mic_asset):
+            return self._build_unavailable_startup_result(
+                "已保存设备的驱动与注册硬件不一致，请重新选择设备。", can_retry_saved_devices=False)
+
         try:
             channel_rows = repository.list_channels(mic_asset["hardware_id"], direction="input")
+        except HardwareValidationError as exc:
+            return self._build_unavailable_startup_result(
+                f"已注册硬件的校准条件无效，请重新校准。{exc}", can_retry_saved_devices=True)
         except MissingHardwareTablesError:
             return self._build_unavailable_startup_result(
                 "已注册硬件当前不可用，请检查设备连接后重试。",
@@ -662,6 +716,19 @@ class SoundDeviceManager(object):
                 can_retry_saved_devices=True,
             )
 
+        if is_vkinging_device(mic_asset):
+            registered_channels = tuple(row["channel_index"] for row in channel_rows)
+            if not discovery_complete and not any(is_vkinging_device(item) for item in runtime_devices):
+                # Registration is a saved identity, not evidence that the native device is online.
+                pending_mic = dict(mic_asset, name=mic_asset["device_name"], physical_channels=registered_channels)
+                return {
+                    "mic": pending_mic, "speaker": preserved_speaker, "mic_channels": mic_channels,
+                    "fallback_targets": [], "startup_notice_message": "正在等待验证已注册的 vkinging 设备。",
+                    "startup_device_error_reason": None, "device_available": False,
+                    "can_retry_saved_devices": True, "startup_recovery_action": None,
+                    "validation_pending": True,
+                }
+
         mic_match_status, runtime_mic = self._match_registered_runtime_device(mic_asset, runtime_devices)
         if speaker_required:
             speaker_match_status, runtime_speaker = self._match_registered_runtime_device(
@@ -683,6 +750,13 @@ class SoundDeviceManager(object):
                 can_retry_saved_devices=True,
             )
 
+        if is_vkinging_device(mic_asset):
+            runtime_mic = dict(runtime_mic)
+            runtime_mic["physical_channels"] = tuple(
+                channel for channel in validate_physical_channels(runtime_mic.get("physical_channels"))
+                if channel in registered_channels
+            )
+
         if not self._runtime_mic_supports_channels(runtime_mic, mic_channels):
             return self._build_unavailable_startup_result(
                 "已保存的麦克风通道不存在或配置无效，请检查设备连接或重新选择设备。",
@@ -696,6 +770,14 @@ class SoundDeviceManager(object):
 
         mic = augment_runtime_device(runtime_mic, mic_asset)
         speaker = augment_runtime_device(runtime_speaker, speaker_asset) if speaker_required else None
+        if is_vkinging_device(mic):
+            return {
+                "mic": mic, "speaker": preserved_speaker, "mic_channels": mic_channels,
+                "fallback_targets": [], "startup_notice_message": None,
+                "startup_device_error_reason": None, "device_available": True,
+                "can_retry_saved_devices": True, "startup_recovery_action": None,
+                "validation_pending": False,
+            }
         try:
             if speaker_required:
                 self.change_default_device(mic["index"], speaker["index"])
@@ -719,7 +801,25 @@ class SoundDeviceManager(object):
             "startup_recovery_action": None,
         }
 
+    def complete_vkinging_startup_discovery(self, devices, ordinary_devices=()):
+        """Complete deferred restoration from verified snapshots, including empty discovery.
+
+        Ordinary output snapshots must carry name and hostapi_name explicitly;
+        this path never queries PortAudio or changes its defaults.
+        """
+        saved = self.load_selected_devices()
+        runtime = [dict(device) for device in devices]
+        runtime.extend(dict(device) for device in ordinary_devices
+                       if device.get("name") and device.get("hostapi_name"))
+        result = self._try_resolve_registered_startup_devices(saved, runtime, discovery_complete=True)
+        return result or self._build_unavailable_startup_result(
+            "已保存的 vkinging 注册配置无效，请重新选择设备。", can_retry_saved_devices=False)
+
     def _resolve_saved_startup_devices(self, saved_devices):
+        if isinstance(saved_devices, dict) and is_vkinging_device(saved_devices.get("mic")):
+            result = self._try_resolve_registered_startup_devices(saved_devices, [])
+            return result if result is not None else self._build_unavailable_startup_result(
+                "已保存的 vkinging 注册配置无效，请重新选择设备。", can_retry_saved_devices=False)
         try:
             all_devices = self.get_device_info()
         except Exception as e:
@@ -799,6 +899,9 @@ class SoundDeviceManager(object):
         }
 
     def get_startup_devices(self):
+        saved_devices = self.load_selected_devices()
+        if isinstance(saved_devices, dict) and is_vkinging_device(saved_devices.get("mic")):
+            return self._resolve_saved_startup_devices(saved_devices)
         try:
             self.refresh_available_device()
         except Exception as e:

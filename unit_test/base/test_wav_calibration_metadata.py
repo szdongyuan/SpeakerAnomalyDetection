@@ -807,3 +807,81 @@ def _append_test_nonzero_padded_odd_icmt(path):
         file_size = wav_file.tell()
         wav_file.seek(4)
         wav_file.write(struct.pack("<I", file_size - 8))
+
+
+def test_provenance_resolver_refuses_vkinging_default_one():
+    from unit_test.base.test_vkinging_wav import metadata
+    data = metadata()
+    data['recorded_channels'][0].update(calibrated=False, v2pa_factor=None,
+                                        standard_spl=None, calibration_conditions=None)
+    with pytest.raises(ValueError, match='uncalibrated'):
+        resolve_wav_channel_v2pa_factor(data, 0)
+    data['schema_version'] = 999
+    with pytest.raises(ValueError):
+        resolve_wav_channel_v2pa_factor(data, 0)
+
+
+def test_legacy_append_cannot_claim_vkinging_provenance_success(tmp_path):
+    from unit_test.base.test_vkinging_wav import metadata
+    path = tmp_path / 'legacy.wav'
+    wavfile.write(path, 51200, np.ones((2, 3), dtype=np.float32))
+    original = path.read_bytes()
+    assert append_wav_calibration_metadata(path, metadata()) is False
+    assert path.read_bytes() == original
+
+
+def test_inspection_rejects_riff_without_wave_format_or_data(tmp_path):
+    from base.wav_calibration_metadata import inspect_wav_calibration_metadata
+    path = tmp_path / 'empty-riff.wav'
+    path.write_bytes(b'RIFF\x04\x00\x00\x00WAVE')
+    assert inspect_wav_calibration_metadata(path).status == 'legacy_invalid'
+
+
+@pytest.mark.parametrize('marked', [True, False], ids=['vkinging', 'legacy'])
+def test_deeply_nested_json_is_invalid_without_losing_source(tmp_path, marked):
+    from consts.vkinging_consts import VKINGING_WAV_CHUNK_ID, VKINGING_WAV_MARKER
+    path = tmp_path / 'deep-json.wav'
+    wavfile.write(path, 4000, np.ones(1, dtype=np.float32))
+    if marked:
+        original = path.read_bytes()
+        marker = wav_metadata._build_chunk(VKINGING_WAV_CHUNK_ID, VKINGING_WAV_MARKER)
+        payload = original[8:12] + marker + original[12:]
+        path.write_bytes(b'RIFF' + struct.pack('<I', len(payload)) + payload)
+    # CPython's C JSON decoder and Python recursion can have different limits.
+    depth = max(10000, sys.getrecursionlimit() + 100)
+    _append_test_info_comment(path, 'mic_calibration=' + '[' * depth + '0' + ']' * depth)
+
+    inspection = wav_metadata.inspect_wav_calibration_metadata(path)
+    assert inspection.source == ('vkinging' if marked else 'legacy')
+    assert inspection.status == ('vkinging_invalid' if marked else 'legacy_invalid')
+    assert inspection.metadata is None
+    assert inspection.reason
+    assert read_wav_calibration_metadata(path) is None
+
+
+def test_public_normalizer_rejects_excessively_nested_vkinging_snapshot():
+    nested = 0
+    for _ in range(1100):
+        nested = [nested]
+    assert normalize_wav_calibration_metadata({'backend': 'vkinging', 'recorded_channels': nested}) is None
+
+@pytest.mark.parametrize('damage,expected', [('absent', True), ('metadata', True), ('riff', False)])
+def test_inspection_separates_calibration_damage_from_riff_damage(tmp_path, damage, expected):
+    path = tmp_path / 'structure.wav'
+    wavfile.write(path, 48000, np.array([2., -3.], dtype=np.float32))
+    if damage == 'metadata':
+        comment = b'mic_calibration=broken\0'
+        subchunk = b'ICMT' + struct.pack('<I', len(comment)) + comment + b'\0'*(len(comment) % 2)
+        payload = b'INFO' + subchunk
+        data = bytearray(path.read_bytes())
+        data.extend(b'LIST' + struct.pack('<I', len(payload)) + payload)
+        struct.pack_into('<I', data, 4, len(data)-8)
+        path.write_bytes(data)
+    elif damage == 'riff':
+        data = bytearray(path.read_bytes())
+        struct.pack_into('<I', data, 4, len(data)+100)
+        path.write_bytes(data)
+    inspection = wav_metadata.inspect_wav_calibration_metadata(path)
+    assert inspection.source == 'legacy'
+    assert inspection.structure_valid is expected
+    assert read_wav_calibration_metadata(path) is None

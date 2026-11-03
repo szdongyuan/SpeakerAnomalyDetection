@@ -37,6 +37,7 @@ DEFAULT_RECORD_ONLY_DETAIL = {
     "monitor_gain_db": 0.0,
     "use_streaming_recording": False,
     "recording_start_delay_ms": 100.0,
+    "vkinging_range_index": 0,
 }
 
 DEFAULT_LOG = {

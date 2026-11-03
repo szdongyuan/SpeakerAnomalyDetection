@@ -17,6 +17,9 @@ class DataDealStruct(object):
 
             self.store_wave_data = None
             self.store_wave_data_multi = None
+            self.wav_calibration_inspection = None
+            self.wav_physical_channel_indices = ()
+            self.analysis_prerequisite_failures = {}
             self.wav_calibration_metadata = None
             self.wav_calibration_metadata_authoritative = False
             self.wav_calibration_warning_shown = False
@@ -37,6 +40,9 @@ class DataDealStruct(object):
             self._initialized = True
 
     def clear_data(self):
+        self.wav_calibration_inspection = None
+        self.wav_physical_channel_indices = ()
+        self.analysis_prerequisite_failures = {}
         self.store_wave_data = None
         self.store_wave_data_multi = None
         self.wav_calibration_metadata = None
@@ -50,6 +56,23 @@ class DataDealStruct(object):
         # self.hd_flag = 0
         # self.fr_flag = 0
         # self.ai_flag = 0
+
+    def set_wav_calibration_inspection(self, inspection):
+        """Attach an owned file snapshot after decoding/verification, before analysis.
+
+        Callers must provide inspect_wav_calibration_metadata's result for the
+        actual saved WAV, never synthesize it from current database coefficients.
+        """
+        from copy import deepcopy
+        inspection = deepcopy(inspection)
+        self.wav_calibration_inspection = inspection
+        self.wav_calibration_metadata = inspection.metadata
+        self.wav_calibration_metadata_authoritative = True
+        self.wav_calibration_warning_shown = False
+        self.analysis_prerequisite_failures = {}
+        self.wav_physical_channel_indices = tuple(
+            ch["physical_channel_index"] for ch in (inspection.metadata or {}).get("recorded_channels", [])
+        ) if inspection.source == "vkinging" and inspection.metadata else ()
 
     def add_stft_or_fft_count(self, text):
         if text in ["频响 (FR) ", "谐波失真 (HD) ", "快速傅里叶变换 (FFT) ", "FR", "HD", "FFT"]:

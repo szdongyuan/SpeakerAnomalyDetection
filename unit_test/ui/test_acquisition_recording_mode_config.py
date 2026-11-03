@@ -66,6 +66,39 @@ def test_acquisition_defaults_include_recording_start_delay_ms():
     assert DEFAULT_RECORD_ONLY_DETAIL["recording_start_delay_ms"] == 100.0
 
 
+def test_range_defaults_affect_only_new_items_and_do_not_rewrite_history(tmp_path, qapp, monkeypatch):
+    from base.acquisition_recording_defaults import normalize_record_only_detail
+
+    path = tmp_path / "defaults.json"
+    historical = {"sample_rate": 44100, "custom": {"keep": True}}
+    assert DEFAULT_RECORD_ONLY_DETAIL["vkinging_range_index"] == 0
+    assert save_acquisition_default("RECORD_ONLY", {"vkinging_range_index": 5}, path=path)
+    defaults = load_acquisition_defaults(path)
+    option_list = _build_option_list_for_new_item(monkeypatch)
+    monkeypatch.setattr("ui.operation_sequence.load_acquisition_defaults", lambda: defaults)
+    option_list.set_sound_item("录制音频")
+    assert option_list.config[0].detail["vkinging_range_index"] == 5
+    assert normalize_record_only_detail(historical)["vkinging_range_index"] == 0
+    assert "vkinging_range_index" not in historical
+    assert save_acquisition_default("RECORD_ONLY", {"vkinging_range_index": 6}, path=path)
+    assert option_list.config[0].detail["vkinging_range_index"] == 5
+
+
+@pytest.mark.parametrize("value", [True, 2.0, "2", None, -1, 7])
+def test_range_normalization_and_default_storage_preserve_explicit_invalid_values(tmp_path, value):
+    from base.acquisition_recording_defaults import normalize_record_only_detail
+
+    detail = {"vkinging_range_index": value}
+    normalized = normalize_record_only_detail(detail)
+    assert normalized["vkinging_range_index"] == value
+    assert type(normalized["vkinging_range_index"]) is type(value)
+    path = tmp_path / "defaults.json"
+    assert save_acquisition_default("RECORD_ONLY", detail, path=path)
+    loaded = load_acquisition_defaults(path)["RECORD_ONLY"]["vkinging_range_index"]
+    assert loaded == value
+    assert type(loaded) is type(value)
+
+
 @pytest.mark.parametrize("value", [None, "bad", True, False, -1, float("nan"), float("inf"), float("-inf")])
 def test_recording_start_delay_ms_invalid_values_default_to_100(tmp_path, value):
     path = tmp_path / "acquisition_default_config.json"

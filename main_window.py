@@ -9,6 +9,9 @@ from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QDialog
 from base.log_manager import LogManager
 from base.db_manager import DataSave, ensure_system_database_ready
 from base.sound_device_manager import SoundDeviceManager
+from base.vkinging_service import VkingingService
+from base.vkinging_input import is_vkinging_device
+from ui.vkinging_bridge import VkingingBridge
 from consts.model_consts import SYSTEM_DATABASE_PATH
 from consts.running_consts import APP_DISPLAY_NAME
 from ui.custom_ui_widget.widgets import PushButton, MenuBar, Label, Action, MessageBox
@@ -27,8 +30,12 @@ from ui.ui_src import ui_resources
 
 class MainWindow(QMainWindow):
 
-    def __init__(self):
+    def __init__(self, vkinging_service=None, vkinging_bridge=None):
         super().__init__()
+        self.vkinging_service = (vkinging_bridge.service if vkinging_bridge is not None else
+                                 vkinging_service if vkinging_service is not None else
+                                 VkingingService(logger=LogManager.set_log_handler("core")))
+        self.vkinging_bridge = vkinging_bridge or VkingingBridge(self.vkinging_service, self)
         self.setWindowTitle(APP_DISPLAY_NAME)
         # set up statusbar object data
         self.user_name = None
@@ -46,7 +53,8 @@ class MainWindow(QMainWindow):
         self.startup_device_error_reason = startup_devices.get("startup_device_error_reason")
         self.startup_can_retry_saved_devices = bool(startup_devices.get("can_retry_saved_devices", False))
         self.startup_recovery_action = startup_devices.get("startup_recovery_action")
-        if not self.device_workflow_available:
+        self._vkinging_validation_pending = bool(startup_devices.get("validation_pending", False))
+        if not self.device_workflow_available and not self._vkinging_validation_pending:
             self.mic = None
             self.speaker = None
             self.mic_channels = []
@@ -185,6 +193,8 @@ class MainWindow(QMainWindow):
         main_window.setObjectName("MainWindow")
         layout = QVBoxLayout()
         self.sequence_window = SequenceWindow()
+        self.sequence_window.vkinging_service = self.__dict__.get("vkinging_service")
+        self.sequence_window.vkinging_bridge = self.__dict__.get("vkinging_bridge")
         menu_bar = self.init_menu()
         title_widget = self.set_title()
         layout.addWidget(title_widget)
@@ -284,6 +294,9 @@ class MainWindow(QMainWindow):
         )
 
     def _schedule_startup_device_recovery_if_needed(self):
+        if self.__dict__.get("_vkinging_validation_pending", False):
+            self.vkinging_bridge.request_discovery(self, self._on_startup_vkinging_discovery)
+            return
         if (
             not self.device_workflow_available
             or self.startup_device_error_reason
@@ -291,6 +304,26 @@ class MainWindow(QMainWindow):
             or self.startup_device_fallback_targets
         ):
             QTimer.singleShot(0, self.show_startup_device_warning)
+
+    def _on_startup_vkinging_discovery(self, event):
+        if self.__dict__.get('_closing', False):
+            return
+        if event.kind not in ("succeeded", "failed", "cancelled"):
+            return
+        self._vkinging_validation_pending = False
+        result = SoundDeviceManager().complete_vkinging_startup_discovery(self.vkinging_bridge.devices)
+        available = result.get("device_available", False)
+        self.startup_device_error_reason = result.get("startup_device_error_reason")
+        self.startup_device_notice_message = None
+        self.startup_can_retry_saved_devices = result.get("can_retry_saved_devices", False)
+        # Preserve the saved independent output even if this input is disconnected.
+        self._apply_audio_devices(result.get("mic") or self.mic,
+                                  result.get("speaker") or self.speaker,
+                                  result.get("mic_channels") or self.mic_channels,
+                                  available=available,
+                                  message=event.reason or self.startup_device_error_reason or "")
+        if not available:
+            MessageBox.warning(self, "设备发现", event.reason or self.startup_device_error_reason or "vkinging 设备不可用")
 
     @staticmethod
     def _audio_device_selection_complete(speaker, mic, mic_channels):
@@ -364,6 +397,7 @@ class MainWindow(QMainWindow):
             mic=self.mic,
             speaker=self.speaker,
             mic_channels=self.mic_channels,
+            **({"vkinging_bridge": self.vkinging_bridge} if self.__dict__.get("vkinging_bridge") is not None else {}),
         )
         analysis_model_select_dialog.exec()
         if not hasattr(analysis_model_select_dialog, "config_saved") or analysis_model_select_dialog.config_saved:
@@ -445,9 +479,14 @@ class MainWindow(QMainWindow):
             self._warn_hardware_change_during_audio_workflow()
             return
         # 将当前驱动/设备/通道作为初始值回填到硬件选择窗口
-        driver_name = None
+        if self.__dict__.get("vkinging_bridge") is not None and self.vkinging_bridge.busy:
+            self._warn_hardware_change_during_audio_workflow()
+            return
+        driver_name = self.mic.get("hostapi_name") if is_vkinging_device(self.mic) else None
         try:
-            if self.speaker and self.speaker.get("hostapi") is not None:
+            if is_vkinging_device(self.mic):
+                driver_name = "vkinging"
+            elif self.speaker and self.speaker.get("hostapi") is not None:
                 driver_name = SoundDeviceManager.get_api_info(int(self.speaker.get("hostapi"))).get("name")
             elif self.mic and self.mic.get("hostapi") is not None:
                 driver_name = SoundDeviceManager.get_api_info(int(self.mic.get("hostapi"))).get("name")
@@ -459,12 +498,17 @@ class MainWindow(QMainWindow):
         previous_mic_channels = list(self.mic_channels or [])
         was_available = bool(self.device_workflow_available)
 
-        speaker, mic, mic_channels = open_hardware_selection_window(
+        selection = open_hardware_selection_window(
             driver=driver_name,
             speaker_device=self.speaker,
             mic_device=self.mic,
             mic_channels=self.mic_channels,
+            **({"vkinging_bridge": self.vkinging_bridge} if self.__dict__.get("vkinging_bridge") is not None else {}),
+            return_status=True,
         )
+        if not selection.accepted:
+            return
+        speaker, mic, mic_channels = selection.devices
         if self._audio_device_selection_complete(speaker, mic, mic_channels):
             self.startup_device_error_reason = None
             self.startup_device_notice_message = None
@@ -481,7 +525,10 @@ class MainWindow(QMainWindow):
             return
 
         message = self.startup_device_error_reason or "音频设备未完成选择，请在【硬件-硬件选择】中完成设置。"
-        self._apply_audio_devices(None, None, [], available=False, message=message)
+        if is_vkinging_device(self.mic):
+            self._apply_audio_devices(self.mic, self.speaker, self.mic_channels, available=False, message=message)
+        else:
+            self._apply_audio_devices(None, None, [], available=False, message=message)
 
     def show_startup_device_warning(self):
         message = self.startup_device_error_reason or self.startup_device_notice_message
@@ -507,6 +554,11 @@ class MainWindow(QMainWindow):
         self._retry_or_select_startup_devices()
 
     def _retry_or_select_startup_devices(self):
+        if is_vkinging_device(self.mic) and self.__dict__.get("vkinging_bridge") is not None:
+            if not self.vkinging_bridge.busy:
+                self._vkinging_validation_pending = True
+                self.vkinging_bridge.request_discovery(self, self._on_startup_vkinging_discovery)
+            return
         if self.startup_recovery_action == "register_hardware":
             self.on_hardware_management_window_init(startup_register_recovery=True)
             return
@@ -566,12 +618,17 @@ class MainWindow(QMainWindow):
         self._open_hardware_selection_for_recovery()
 
     def _open_hardware_selection_for_recovery(self):
-        speaker, mic, mic_channels = open_hardware_selection_window(
+        selection = open_hardware_selection_window(
             driver=None,
             speaker_device=self.speaker,
             mic_device=self.mic,
             mic_channels=self.mic_channels,
+            **({"vkinging_bridge": self.vkinging_bridge} if self.__dict__.get("vkinging_bridge") is not None else {}),
+            return_status=True,
         )
+        if not selection.accepted:
+            return
+        speaker, mic, mic_channels = selection.devices
         if self._audio_device_selection_complete(speaker, mic, mic_channels):
             self.startup_device_error_reason = None
             self.startup_device_notice_message = None
@@ -582,12 +639,29 @@ class MainWindow(QMainWindow):
         message = "音频设备未完成选择，请在【硬件-硬件选择】中完成设置。"
         self.startup_device_error_reason = message
         self.startup_recovery_action = None
-        self._apply_audio_devices(None, None, [], available=False, message=message)
+        if is_vkinging_device(self.mic):
+            self._apply_audio_devices(self.mic, self.speaker, self.mic_channels, available=False, message=message)
+        else:
+            self._apply_audio_devices(None, None, [], available=False, message=message)
         MessageBox.warning(self, "提示", message)
 
     def on_calibration_window_init(self):
+        if self.__dict__.get("vkinging_bridge") is not None and self.vkinging_bridge.busy:
+            MessageBox.warning(self, "提示", "输入设备正在使用或不可用。")
+            return
         # calibration the mic and speaker
-        dlg = CalibrationWindow()
+        options = {}
+        if is_vkinging_device(self.mic):
+            import copy
+            sequence = getattr(self.sequence_window, "sequence_config", None)
+            acquisition = sequence[0]["seq1"]["acq"] if sequence else None
+            options = dict(vkinging_bridge=self.vkinging_bridge, selected_mic=copy.deepcopy(self.mic),
+                           mic_channels=list(self.mic_channels), acq_config=copy.deepcopy(acquisition))
+        try:
+            dlg = CalibrationWindow(**options)
+        except ValueError as exc:
+            MessageBox.warning(self, "提示", str(exc))
+            return
         dlg.speaker = self.speaker
         dlg.exec()
         if getattr(dlg, "output_calibration_changed", False):
@@ -622,6 +696,7 @@ class MainWindow(QMainWindow):
             return
         hardware_management_window = open_hardware_management_window(
             parent=self,
+            **({"vkinging_bridge": self.vkinging_bridge} if self.__dict__.get("vkinging_bridge") is not None else {}),
             audio_workflow_active_provider=lambda: self._sequence_audio_workflow_active(
                 getattr(self, "sequence_window", None)
             ),
@@ -679,7 +754,12 @@ class MainWindow(QMainWindow):
             self._apply_audio_devices(None, None, [], available=False, message=message)
             return
 
-        self._apply_audio_devices(mic, speaker, self.mic_channels, available=True)
+        # Asset edits update snapshots, not evidence that an input is connected.
+        sequence_window = self.__dict__.get("sequence_window")
+        message = getattr(sequence_window, "audio_devices_unavailable_message",
+                          self.startup_device_error_reason or self.startup_device_notice_message or "")
+        self._apply_audio_devices(mic, speaker, self.mic_channels,
+                                  available=self.device_workflow_available, message=message)
 
     def on_selected_audio_hardware_deleted(self, hardware_id):
         if self._sequence_audio_workflow_active(getattr(self, "sequence_window", None)):
@@ -721,6 +801,15 @@ class MainWindow(QMainWindow):
                 pass
 
     def closeEvent(self, event):
+        if self.__dict__.get('_closing', False):
+            event.accept()
+            return
+        self._closing = True
+        sequence_window = self.__dict__.get('sequence_window')
+        if sequence_window is not None:
+            sequence_window._dispose_vkinging_recording()
+        if self.__dict__.get("vkinging_bridge") is not None:
+            self.vkinging_bridge.close()
         if hasattr(SequenceWindow, "tcp_server") and SequenceWindow.tcp_server:
             SequenceWindow.tcp_server.stop()
             SequenceWindow.tcp_server = None

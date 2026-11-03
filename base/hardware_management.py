@@ -4,9 +4,14 @@ import os
 import sqlite3
 import uuid
 from contextlib import contextmanager
+from collections.abc import Mapping
 
 from consts import model_consts
 from consts import audio_consts
+from base.vkinging_input import is_vkinging_device, validate_physical_channels, validate_sample_rate
+from consts.vkinging_consts import (
+    VKINGING_HOSTAPI_NAME, VKINGING_INPUT_MODE, VKINGING_UNIT, VKINGING_RANGE_LIMITS,
+)
 
 
 class HardwareManagementError(Exception):
@@ -35,9 +40,9 @@ def infer_hardware_type(max_input_channels, max_output_channels):
     return "other"
 
 
-def build_channel_placeholders(hardware_id, max_input_channels, max_output_channels):
+def build_channel_placeholders(hardware_id, max_input_channels, max_output_channels, physical_channels=None):
     placeholders = []
-    for index in range(max_input_channels):
+    for index in physical_channels if physical_channels is not None else range(max_input_channels):
         placeholders.append(
             {
                 "channel_id": str(uuid.uuid1()),
@@ -61,11 +66,13 @@ def build_channel_placeholders(hardware_id, max_input_channels, max_output_chann
 
 
 def match_runtime_device(asset, runtime_devices, get_hostapi_name):
-    matches = [
-        device
-        for device in runtime_devices
-        if device.get("name") == asset.get("device_name") and get_hostapi_name(device) == asset.get("hostapi_name")
-    ]
+    if is_vkinging_device(asset):
+        matches = [device for device in runtime_devices
+                   if is_vkinging_device(device) and device.get("hardware_id") == asset.get("hardware_id")]
+    else:
+        matches = [device for device in runtime_devices
+                   if device.get("name") == asset.get("device_name")
+                   and get_hostapi_name(device) == asset.get("hostapi_name")]
     if not matches:
         raise HardwareRuntimeMatchError("registered hardware is not currently available")
     if len(matches) > 1:
@@ -193,6 +200,7 @@ class HardwareManagementRepository:
                 """,
                 params,
             ).fetchall()
+            self._validate_stored_input_conditions(connection, hardware_id, rows)
         return [_row_to_dict(row) for row in rows]
 
     def get_channel_calibration(self, hardware_id, direction, channel_index, calibration_type=None):
@@ -216,6 +224,7 @@ class HardwareManagementRepository:
                 """,
                 params,
             ).fetchone()
+            self._validate_stored_input_conditions(connection, hardware_id, [row])
         return _row_to_dict(row)
 
     def list_channel_calibrations(self, hardware_id, direction, calibration_type=None):
@@ -238,9 +247,31 @@ class HardwareManagementRepository:
                 """,
                 params,
             ).fetchall()
+            self._validate_stored_input_conditions(connection, hardware_id, rows)
         return [_row_to_dict(row) for row in rows]
 
-    def update_mic_channel_calibrations(self, hardware_id, channel_factors, channel_standard_spl):
+    @staticmethod
+    def _validate_stored_input_conditions(connection, hardware_id, rows):
+        calibrated_inputs = [row for row in rows if row is not None
+                             and row["direction"] == "input" and row["calibration_type"] == "mic_v2pa"]
+        if not calibrated_inputs:
+            return
+        asset = connection.execute(
+            "SELECT hostapi_name FROM hardware_assets WHERE hardware_id = ?", (hardware_id,)
+        ).fetchone()
+        if asset is None or asset["hostapi_name"] != VKINGING_HOSTAPI_NAME:
+            return
+        for row in calibrated_inputs:
+            try:
+                conditions = json.loads(row["coefficients_json"])
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise HardwareValidationError(
+                    f"invalid input conditions JSON for {hardware_id} channel {row['channel_index']}"
+                ) from exc
+            _input_conditions_json(conditions)
+
+    def update_mic_channel_calibrations(self, hardware_id, channel_factors, channel_standard_spl,
+                                      channel_conditions=None):
         self._require_tables()
         _validate_required_text(hardware_id, "hardware_id")
         if not channel_factors:
@@ -252,17 +283,26 @@ class HardwareManagementRepository:
         for channel_index, standard_spl in channel_standard_spl.items():
             normalized_standard_spl_by_channel[_validate_channel_index(channel_index)] = standard_spl
 
+        asset = self.get_asset(hardware_id)
+        vkinging = is_vkinging_device(asset)
+        conditions_by_channel = {
+            _validate_channel_index(channel): value for channel, value in (channel_conditions or {}).items()
+        }
+
         normalized_rows = []
         for channel_index, factor_value in channel_factors.items():
             normalized_channel = _validate_channel_index(channel_index)
             if normalized_channel not in normalized_standard_spl_by_channel:
                 raise HardwareValidationError("standard_spl is required for mic_v2pa calibration")
             standard_spl = normalized_standard_spl_by_channel[normalized_channel]
+            if vkinging and standard_spl is not None and standard_spl not in (94, 114):
+                raise HardwareValidationError("standard_spl must be 94 or 114")
             normalized_rows.append(
                 (
                     normalized_channel,
                     _validate_finite_positive(factor_value, "factor_value"),
                     _validate_optional_standard_spl(standard_spl),
+                    _input_conditions_json(conditions_by_channel.get(normalized_channel)) if vkinging else None,
                 )
             )
 
@@ -270,7 +310,7 @@ class HardwareManagementRepository:
         with self._connection() as connection:
             # 内层管理 sqlite 事务（为_connection的返回值），批量更新成功提交，异常回滚。
             with connection:
-                for normalized_channel, factor_value, standard_spl in normalized_rows:
+                for normalized_channel, factor_value, standard_spl, coefficients_json in normalized_rows:
                     self._require_channel_placeholder(connection, hardware_id, "input", normalized_channel)
                     connection.execute(
                         f"""
@@ -279,7 +319,7 @@ class HardwareManagementRepository:
                             factor_value = ?,
                             standard_spl = ?,
                             max_voltage = NULL,
-                            coefficients_json = NULL,
+                            coefficients_json = ?,
                             updated_at = DATETIME('now', '+8 hours')
                         WHERE hardware_id = ? AND direction = 'input' AND channel_index = ?
                         """,
@@ -287,6 +327,7 @@ class HardwareManagementRepository:
                             "mic_v2pa",
                             factor_value,
                             standard_spl,
+                            coefficients_json,
                             hardware_id,
                             normalized_channel,
                         ),
@@ -417,13 +458,29 @@ class HardwareManagementRepository:
         _validate_required_text(hostapi_name, "hostapi_name")
         _validate_required_text(runtime_device.get("name"), "device_name")
         _validate_required_text(display_name, "display_name")
-        _validate_samplerate(samplerate)
+        _validate_samplerate(samplerate, hostapi_name)
         _validate_bit_depth(bit_depth)
         _validate_latency(latency_ms)
 
-        hardware_id = str(uuid.uuid1())
+        vkinging = hostapi_name == VKINGING_HOSTAPI_NAME
+        physical_channels = None
+        if vkinging:
+            if not is_vkinging_device(runtime_device):
+                raise HardwareValidationError("runtime hostapi_name must be vkinging")
+            hardware_id = runtime_device.get("hardware_id")
+            if not isinstance(hardware_id, str) or not hardware_id.strip():
+                raise HardwareValidationError("hardware_id must be the SDK MachineId")
+            try:
+                physical_channels = validate_physical_channels(runtime_device.get("physical_channels"))
+            except ValueError as exc:
+                raise HardwareValidationError(str(exc)) from exc
+        else:
+            hardware_id = str(uuid.uuid1())
         max_input_channels = int(runtime_device.get("max_input_channels", 0) or 0)
         max_output_channels = int(runtime_device.get("max_output_channels", 0) or 0)
+        if vkinging:
+            max_input_channels = max(physical_channels) + 1
+            max_output_channels = 0
         asset = {
             "hardware_id": hardware_id,
             "hardware_type": infer_hardware_type(max_input_channels, max_output_channels),
@@ -437,60 +494,93 @@ class HardwareManagementRepository:
             "max_output_channels": max_output_channels,
             "updated_at": None,
         }
-        channels = build_channel_placeholders(hardware_id, max_input_channels, max_output_channels)
+        if vkinging:
+            channels = build_channel_placeholders(hardware_id, max_input_channels, max_output_channels, physical_channels)
+        else:
+            channels = build_channel_placeholders(hardware_id, max_input_channels, max_output_channels)
 
         with self._connection() as connection:
             with connection:
-                connection.execute(
-                    """
-                    INSERT INTO hardware_assets (
-                        hardware_id,
-                        hardware_type,
-                        display_name,
-                        device_name,
-                        hostapi_name,
-                        samplerate,
-                        bit_depth,
-                        latency_ms,
-                        max_input_channels,
-                        max_output_channels
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        asset["hardware_id"],
-                        asset["hardware_type"],
-                        asset["display_name"],
-                        asset["device_name"],
-                        asset["hostapi_name"],
-                        asset["samplerate"],
-                        asset["bit_depth"],
-                        asset["latency_ms"],
-                        asset["max_input_channels"],
-                        asset["max_output_channels"],
-                    ),
-                )
-                connection.executemany(
-                    """
-                    INSERT INTO hardware_channel_calibrations (
-                        channel_id,
-                        hardware_id,
-                        direction,
-                        channel_index,
-                        channel_label
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """,
-                    [
-                        (
-                            channel["channel_id"],
-                            channel["hardware_id"],
-                            channel["direction"],
-                            channel["channel_index"],
-                            channel["channel_label"],
+                existing = connection.execute(
+                    "SELECT * FROM hardware_assets WHERE hardware_id = ?", (hardware_id,)
+                ).fetchone() if vkinging else None
+                if existing is not None:
+                    if existing["hostapi_name"] != hostapi_name:
+                        raise HardwareValidationError("hardware_id conflicts with another hostapi")
+                    connection.execute(
+                        "UPDATE hardware_assets SET device_name = ?, max_input_channels = ?, "
+                        "updated_at = DATETIME('now', '+8 hours') WHERE hardware_id = ?",
+                        (asset["device_name"], max_input_channels, hardware_id),
+                    )
+                    # Reconnection changes the SDK route, not the registered settings or factors.
+                    existing_indices = {
+                        row[0] for row in connection.execute(
+                            "SELECT channel_index FROM hardware_channel_calibrations "
+                            "WHERE hardware_id = ? AND direction = 'input'", (hardware_id,)
                         )
-                        for channel in channels
-                    ],
-                )
+                    }
+                    channels = [channel for channel in channels if channel["channel_index"] not in existing_indices]
+                    asset = dict(existing)
+                    asset.update(device_name=runtime_device["name"], max_input_channels=max_input_channels)
+                else:
+                    self._insert_asset(connection, asset)
+                self._insert_channel_placeholders(connection, channels)
         return dict(asset)
+
+    @staticmethod
+    def _insert_asset(connection, asset):
+        connection.execute(
+            """
+            INSERT INTO hardware_assets (
+                hardware_id,
+                hardware_type,
+                display_name,
+                device_name,
+                hostapi_name,
+                samplerate,
+                bit_depth,
+                latency_ms,
+                max_input_channels,
+                max_output_channels
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                asset["hardware_id"],
+                asset["hardware_type"],
+                asset["display_name"],
+                asset["device_name"],
+                asset["hostapi_name"],
+                asset["samplerate"],
+                asset["bit_depth"],
+                asset["latency_ms"],
+                asset["max_input_channels"],
+                asset["max_output_channels"],
+            ),
+        )
+
+    @staticmethod
+    def _insert_channel_placeholders(connection, channels):
+        connection.executemany(
+            """
+            INSERT INTO hardware_channel_calibrations (
+                channel_id,
+                hardware_id,
+                direction,
+                channel_index,
+                channel_label
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    channel["channel_id"],
+                    channel["hardware_id"],
+                    channel["direction"],
+                    channel["channel_index"],
+                    channel["channel_label"],
+                )
+                for channel in channels
+            ],
+        )
 
     def register_hardware_asset(self, *args, **kwargs):
         return self.register_asset(*args, **kwargs)
@@ -510,7 +600,8 @@ class HardwareManagementRepository:
             _validate_required_text(update_fields["display_name"], "display_name")
             update_fields["display_name"] = update_fields["display_name"].strip()
         if "samplerate" in update_fields:
-            _validate_samplerate(update_fields["samplerate"])
+            asset = self.get_asset(hardware_id)
+            _validate_samplerate(update_fields["samplerate"], asset.get("hostapi_name") if asset else None)
             update_fields["samplerate"] = int(update_fields["samplerate"])
         if "bit_depth" in update_fields:
             _validate_bit_depth(update_fields["bit_depth"])
@@ -553,6 +644,19 @@ def _row_to_dict(row):
 def _validate_required_text(value, field_name):
     if value is None or str(value).strip() == "":
         raise HardwareValidationError(f"{field_name} is required")
+
+
+def _input_conditions_json(conditions):
+    keys = {"input_mode", "unit", "range_min", "range_max"}
+    if not isinstance(conditions, Mapping) or set(conditions) != keys:
+        raise HardwareValidationError("input conditions must contain only input_mode, unit, range_min and range_max")
+    if conditions["input_mode"] != VKINGING_INPUT_MODE or conditions["unit"] != VKINGING_UNIT:
+        raise HardwareValidationError("input conditions require IEPE mode and V unit")
+    minimum, maximum = conditions["range_min"], conditions["range_max"]
+    if (type(minimum) not in (int, float) or type(maximum) not in (int, float)
+            or maximum not in VKINGING_RANGE_LIMITS or minimum != -maximum):
+        raise HardwareValidationError("input conditions contain an unsupported voltage range")
+    return json.dumps(dict(conditions), allow_nan=False)
 
 
 def _validate_direction(value):
@@ -624,7 +728,13 @@ def _validate_output_coefficients(coefficients):
     return normalized
 
 
-def _validate_samplerate(value):
+def _validate_samplerate(value, hostapi_name=None):
+    if hostapi_name == VKINGING_HOSTAPI_NAME:
+        try:
+            validate_sample_rate(value)
+        except ValueError as exc:
+            raise HardwareValidationError(str(exc)) from exc
+        return
     if value not in audio_consts.VALID_SAMPLE_RATES:
         raise HardwareValidationError("samplerate must be 44100 or 48000")
 

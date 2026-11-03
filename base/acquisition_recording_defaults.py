@@ -4,6 +4,8 @@ import os
 import tempfile
 from copy import deepcopy
 
+from consts.vkinging_consts import VKINGING_RANGE_INDEX_CONFIG_KEY
+
 from consts.running_consts import (
     DEFAULT_DIR,
     DEFAULT_PLAY_AND_RECORD_DETAIL,
@@ -79,6 +81,12 @@ def normalize_play_record_detail(detail):
 
 def normalize_record_only_detail(detail):
     normalized = _without_recording_start_delay_runtime_fields(detail) if isinstance(detail, dict) else {}
+    # Historical items use the built-in value. Preserve explicit invalid values
+    # for strict backend validation and harmless soundcard round trips.
+    normalized.setdefault(
+        VKINGING_RANGE_INDEX_CONFIG_KEY,
+        DEFAULT_RECORD_ONLY_DETAIL[VKINGING_RANGE_INDEX_CONFIG_KEY],
+    )
     normalized["total_time"] = _as_float(
         normalized.get("total_time"),
         DEFAULT_RECORD_ONLY_DETAIL["total_time"],

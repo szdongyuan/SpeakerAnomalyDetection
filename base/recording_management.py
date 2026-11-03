@@ -100,7 +100,7 @@ class RecordingManager(object):
             err_msg = "Failed to save the recorded signal file. %s" % (str(e)[:40])
             return error_code.INVALID_SAVE, err_msg
 
-    def save_signal_info_to_db(self, audio_info: dict, stimulus_parameter: dict):
+    def save_signal_info_to_db(self, audio_info: dict, stimulus_parameter: dict, *, replace_existing=False):
         try:
             with DataSave(self.db_path) as database:
                 if stimulus_parameter:
@@ -117,11 +117,36 @@ class RecordingManager(object):
                         name = stimulus_data[0][1] + "-" + stimulus_data[0][2] + "-" + stimulus_data[0][0].split("-")[0]
                         stimulus_data[0] += (name,)
                         insert_columns = model_consts.DB_STIMULUS_SCALAR_COLUMNS
-                    database.insert_data_into_db(
+                    insert_code, insert_message = database.insert_data_into_db(
                         "stimulus_signal_table", insert_columns, stimulus_data
                     )
+                    if insert_code != error_code.OK:
+                        return error_code.INVALID_SAVE, insert_message
                     ret_msg = "Successfully saved the recording and stimulus signals to the database."
-                database.insert_data_into_db("audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data])
+                # A replay can persist the same canonical path and metadata.
+                # Check that unique path explicitly (including NULL fields),
+                # instead of retrying its existing primary key and hiding the
+                # resulting insertion failure. Conflicting metadata is an
+                # actual save failure and must leave the old row untouched.
+                query_code, rows = database.query(
+                    'audio_data_table', model_consts.DB_AUDIO_COLUMNS, {'file_path': audio_info['file_path']})
+                if query_code != error_code.OK:
+                    return error_code.INVALID_SAVE, rows
+                if rows:
+                    if len(rows) == 1 and tuple(rows[0][1:]) == tuple(audio_data[1:]):
+                        return error_code.OK, ret_msg
+                    if len(rows) == 1 and replace_existing:
+                        update_code, update_message = database.update_table_data(
+                            'audio_data_table', dict(zip(model_consts.DB_AUDIO_COLUMNS[1:], audio_data[1:])),
+                            {'audio_data_id': rows[0][0]})
+                        if update_code != error_code.OK:
+                            return error_code.INVALID_SAVE, update_message
+                        return error_code.OK, ret_msg
+                    return error_code.INVALID_SAVE, 'Recording path already exists with different metadata.'
+                insert_code, insert_message = database.insert_data_into_db(
+                    "audio_data_table", model_consts.DB_AUDIO_COLUMNS, [audio_data])
+                if insert_code != error_code.OK:
+                    return error_code.INVALID_SAVE, insert_message
                 return error_code.OK, ret_msg
         except Exception as e:
             err_msg = "Failed to save the recording and stimulus signals to the database. %s" % (str(e)[:40])

@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from base import stimulus_resolver
+from base.wav_calibration_metadata import WavCalibrationInspection
 from ui.sequence import sequence_widget
 
 
@@ -18,7 +19,8 @@ def _valid_wav_calibration_metadata(monkeypatch):
             {"wav_channel_index": 0, "v2pa_factor": 2.5, "standard_spl": 94.0, "calibrated": True}
         ]
     }
-    monkeypatch.setattr(sequence_widget, "read_wav_calibration_metadata", lambda path, logger=None: metadata)
+    monkeypatch.setattr(sequence_widget, "inspect_wav_calibration_metadata",
+                        lambda path, logger=None: WavCalibrationInspection("legacy", "legacy_valid", metadata))
 
 
 class _Button:
