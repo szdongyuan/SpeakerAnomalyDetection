@@ -1,7 +1,10 @@
+import copy
+import uuid
 import math
 import sys
 import threading
 from decimal import Decimal, ROUND_DOWN, localcontext
+from os import unlink
 
 import numpy as np
 from PyQt5.QtCore import QEvent, QObject, Qt, QRegularExpression, QTimer, pyqtSignal
@@ -17,6 +20,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from base.vkinging_input import (
+    is_vkinging_device, resolve_calibration_range_index,
+    resolve_vkinging_input_config, VkingingCaptureRequest,
+)
+from base.vkinging_service import _exception_text
+from base.acquisition_recording_defaults import load_acquisition_defaults
 from base.audio_sample_rate import resolve_input_sample_rate
 from base.hardware_management import HardwareManagementError
 from base.input_calibration_preferences import load_input_calibration_mode, save_input_calibration_mode
@@ -33,6 +42,7 @@ from base.soundcard_calibration_manager import (
     load_mic_channel_v2pa_factors,
     replace_mic_channel_v2pa_factors,
     save_manual_mic_channel_v2pa_factor,
+    save_mic_channel_v2pa_factor,
 )
 from consts import error_code, model_consts, ui_style_const
 from consts.acoustic_analysis.common_consts import REFERENCE_PRESSURE_PA
@@ -56,10 +66,12 @@ from ui.custom_ui_widget.widgets import (
 
 class CalibrationWindow(QDialog):
 
-    def __init__(self):
+    def __init__(self, **input_options):
         super().__init__()
+        self._input_options = input_options
         self.init_ui()
         self.finished.connect(self.output_cal_wnd._invalidate_playback_attempt)
+        self.finished.connect(self.input_cal_wnd.stop_active_streaming_capture)
 
     def init_ui(self):
         """
@@ -79,7 +91,7 @@ class CalibrationWindow(QDialog):
 
         self.tabwidget = TabWidget()
         self.output_cal_wnd = OutputCalibration()
-        self.input_cal_wnd = InputCalibration()
+        self.input_cal_wnd = InputCalibration(**self._input_options)
         self.tabwidget.addTab(self.output_cal_wnd, "输出校准")
         self.tabwidget.addTab(self.input_cal_wnd, "输入校准")
 
@@ -921,8 +933,16 @@ class InputCalibration(QWidget):
 
     calibration_mode_changed = pyqtSignal(str)
 
-    def __init__(self):
+    def __init__(self, *, vkinging_bridge=None, selected_mic=None, mic_channels=None, acq_config=None):
         super().__init__()
+        self.vkinging_bridge = vkinging_bridge
+        self._injected_mic = copy.deepcopy(selected_mic)
+        self._injected_channels = tuple(mic_channels or ())
+        self._acq_config = copy.deepcopy(acq_config)
+        self._vkinging_request = None
+        self._vkinging_terminal = None
+        self._vkinging_cleanup_diagnostics = ()
+        self._vkinging_conditions = None
         self.default_logger = LogManager.set_log_handler("core")  # Configures and retrieves the logger
         self.stop_timer = False  # Initializes the stop timer flag to False
         self.selected_input_device = None
@@ -990,10 +1010,19 @@ class InputCalibration(QWidget):
         self.v2pa_factor_lineedit.setText(
             "" if factor is None else self._format_v2pa_factor_for_display(factor)
         )
-        level = self._full_scale_spl_from_factor(factor)
+        if is_vkinging_device(self.selected_input_device):
+            self.v2pa_factor_lineedit.setText("" if factor is None else format(factor, ".17g"))
+            peak = self._input_conditions()["range_max"]
+            level = self._full_scale_spl_from_factor(None if factor is None else factor * peak)
+        else:
+            level = self._full_scale_spl_from_factor(factor)
         self.full_scale_spl_lineedit.setText("—" if level is None else f"{level:.2f}")
 
     def _load_selected_input_hardware(self):
+        if is_vkinging_device(self._injected_mic):
+            self.selected_input_device = copy.deepcopy(self._injected_mic)
+            self.selected_input_channels = list(self._injected_channels)
+            return
         saved_devices = SoundDeviceManager.load_selected_devices() or {}
         saved_channels = SoundDeviceManager.normalize_channel_indices(saved_devices.get("mic_channels"))
 
@@ -1071,6 +1100,9 @@ class InputCalibration(QWidget):
         return complete_factors, session_standard_spl
 
     def _persist_complete_selected_channel_factors_if_ready(self):
+        if is_vkinging_device(self.selected_input_device):
+            # Already committed individually, preserving each channel range.
+            return not self.pending_persistence_failure
         complete_factors, session_standard_spl = self._complete_selected_channel_calibration_payload()
         if complete_factors is None:
             return None
@@ -1129,11 +1161,18 @@ class InputCalibration(QWidget):
         self._manual_factor_dirty = False
         self._manual_edit_snapshot = self._capture_manual_edit_snapshot(factor)
 
+        self.channel_status_label.setToolTip("")
         if self.current_channel is None:
             self.channel_status_label.setText("未选择输入通道")
             return
 
-        if self.active_capture_channel == self.current_channel:
+        terminal = self._vkinging_terminal
+        if terminal is not None and terminal["channel"] == self.current_channel:
+            status = "已取消" if terminal["kind"] == "cancelled" else "校准失败"
+            if self._vkinging_request is not None:
+                status += "，等待释放"
+            self.channel_status_label.setToolTip(terminal["message"])
+        elif self.active_capture_channel == self.current_channel:
             status = "录制中"
         else:
             status = "已校准" if self.current_channel in self._known_calibrated_channels() else "未校准"
@@ -1187,6 +1226,8 @@ class InputCalibration(QWidget):
             self._manual_factor_dirty = True
 
     def _manual_factor_editing_finished(self):
+        if is_vkinging_device(self.selected_input_device):
+            return self._save_vkinging_manual()
         if self.calibration_mode != INPUT_CALIBRATION_MODE_MANUAL or not self._manual_factor_dirty:
             return
 
@@ -1449,11 +1490,12 @@ class InputCalibration(QWidget):
             GroupBox: A GroupBox containing the sound pressure v2pa_factor label and line edit.
         """
         v2pa_factor_box = GroupBox("校准结果")
-        v2pa_factor_label = Label("声压换算系数（Pa/归一化幅值）：")
+        vkinging = is_vkinging_device(self._injected_mic)
+        v2pa_factor_label = Label("声压换算系数（Pa/V）：" if vkinging else "声压换算系数（Pa/归一化幅值）：")
         self.v2pa_factor_lineedit = LineEdit()
         self.v2pa_factor_lineedit.setReadOnly(True)
         validator = QRegularExpressionValidator(
-            QRegularExpression(r"[0-9]+(?:\.[0-9]{0,3})?"),
+            QRegularExpression(r"[0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?" if vkinging else r"[0-9]+(?:\.[0-9]{0,3})?"),
             self.v2pa_factor_lineedit,
         )
         self.v2pa_factor_lineedit.setValidator(validator)
@@ -1471,6 +1513,10 @@ class InputCalibration(QWidget):
         self.full_scale_spl_lineedit.setText("—")
         self.full_scale_spl_unit_label = Label("dB SPL")
         tooltip = "按峰值为 1 的正弦波 RMS 换算，不代表设备实际无失真测量上限。"
+        if vkinging:
+            conditions = self._input_conditions()
+            tooltip = f"IEPE / V，实际量程 {conditions['range_min']:g} 至 {conditions['range_max']:g} V；按该峰值正弦波 RMS 换算。"
+            v2pa_factor_label.setText(v2pa_factor_label.text() + f" IEPE ±{conditions['range_max']:g} V")
         self.full_scale_spl_label.setToolTip(tooltip)
         self.full_scale_spl_lineedit.setToolTip(tooltip)
         self.full_scale_spl_unit_label.setToolTip(tooltip)
@@ -1561,6 +1607,8 @@ class InputCalibration(QWidget):
         """
 
         self._reload_selected_input_hardware(preferred_channel=self.current_channel)
+        if is_vkinging_device(self.selected_input_device):
+            return self._start_vkinging_calibration()
         if self.selected_input_device is None:
             MessageBox.warning(self, "提示", "未选择输入设备，请先在硬件中设置麦克风设备！")
             return False
@@ -1795,6 +1843,12 @@ class InputCalibration(QWidget):
             self.recorded_time = 10
 
     def stop_active_streaming_capture(self):
+        if self.vkinging_bridge is not None:
+            request = self._vkinging_request
+            self._vkinging_request = None
+            if request is not None:
+                self.vkinging_bridge.cancel(request.request_id)
+            self.vkinging_bridge.unsubscribe(self)
         self.stop_timer = True
         self.update_ui_timer.stop()
         self.streaming_poll_timer.stop()
@@ -1834,6 +1888,179 @@ class InputCalibration(QWidget):
         v2pa_factor = 10 ** (deviation_value / 20)
         return v2pa_factor
 
+    def _input_conditions(self, index=None):
+        device = self.selected_input_device or self._injected_mic
+        if index is None:
+            index = resolve_calibration_range_index(self._acq_config, load_acquisition_defaults())
+        config = resolve_vkinging_input_config({"vkinging_range_index": index}, device)
+        return {key: config[key] for key in ("input_mode", "unit", "range_min", "range_max")}
+
+    def _vkinging_available(self):
+        return (self.vkinging_bridge is not None and not self.vkinging_bridge.busy
+                and self._vkinging_request is None)
+
+    def _save_vkinging_manual(self):
+        if self.calibration_mode != INPUT_CALIBRATION_MODE_MANUAL or not self._manual_factor_dirty:
+            return
+        snapshot = self._manual_edit_snapshot
+        if snapshot is None:
+            return
+        try:
+            if not self._vkinging_available() or self.active_capture_channel is not None:
+                raise ValueError("设备正在使用或不可用")
+            factor = float(self.v2pa_factor_lineedit.text().strip())
+            if not math.isfinite(factor) or factor <= 0:
+                raise ValueError("校准系数必须为有限正数")
+            channel = self.current_channel
+            if channel is None or channel != snapshot["channel"] or channel not in self.selected_input_channels:
+                raise ValueError("输入通道已改变")
+            conditions = self._input_conditions()
+            save_manual_mic_channel_v2pa_factor(channel, factor,
+                hardware_id=self._selected_mic_hardware_id(), input_conditions=conditions)
+        except (ValueError, HardwareManagementError) + model_consts.SQLITE_REPOSITORY_EXCEPTIONS as exc:
+            self._reject_manual_edit(str(exc), snapshot)
+            return
+        self._clear_vkinging_terminal_for_channels((channel,))
+        self.session_channel_factors[channel] = factor
+        self.session_channel_standard_spl[channel] = None
+        self.calibrated_channels.add(channel)
+        self.pending_persistence_failure = False
+        self._refresh_current_channel_display()
+
+    def _start_vkinging_calibration(self):
+        if not self._vkinging_available() or self.current_channel not in self.selected_input_channels:
+            MessageBox.warning(self, "提示", "输入设备正在使用或不可用。")
+            return False
+        try:
+            range_index = resolve_calibration_range_index(self._acq_config, load_acquisition_defaults())
+            conditions = self._input_conditions(range_index)
+            device = self.selected_input_device
+            request = VkingingCaptureRequest(uuid.uuid4().hex, "calibration", device,
+                (self.current_channel,), device["samplerate"], device["bit_depth"],
+                range_index, device["samplerate"] * 10, calibration_target_spl=94 if self.standard_spl_flag else 114)
+        except ValueError as exc:
+            MessageBox.warning(self, "提示", str(exc))
+            return False
+        self._vkinging_terminal = None
+        self.channel_status_label.setToolTip("")
+        self._vkinging_request = request
+        self._vkinging_conditions = conditions
+        if not self.vkinging_bridge.start_capture(self, request, self._on_vkinging_calibration):
+            self._vkinging_request = None
+            return False
+        self.active_capture_channel = self.current_channel
+        self._set_calibration_mode_controls_enabled(False)
+        self._refresh_channel_selector(preferred_channel=self.current_channel)
+        self._set_parent_calibration_button_enabled(False)
+        return True
+
+    def _on_vkinging_calibration(self, event):
+        request = self._vkinging_request
+        if request is None or event.request_id != request.request_id:
+            return
+        if event.kind not in ("succeeded", "failed", "cancelled", "released"):
+            return
+        if event.kind in ("failed", "cancelled") and self._vkinging_terminal is None:
+            message = event.reason or ("输入校准已取消" if event.kind == "cancelled" else "输入校准失败")
+            cleanup = getattr(event, "cleanup_error", None)
+            if cleanup:
+                message += "；资源清理失败：" + cleanup
+            if not event.resources_released:
+                message += "。资源尚未确认释放，请等待；若设备持续不可用，请重启应用后重试。"
+            self._vkinging_terminal = dict(kind=event.kind, channel=request.channels[0], message=message)
+            if self.isVisible():
+                MessageBox.warning(self, "提示", message)
+            self._refresh_current_channel_display()
+        # A failed request remains owned until an explicit release acknowledgement;
+        # a late success can neither save data nor erase the original failure.
+        if self._vkinging_terminal is not None and event.kind == "succeeded":
+            return
+        if not event.resources_released:
+            return
+        self._vkinging_request = None
+        channel = request.channels[0]
+        self.active_capture_channel = None
+        self._set_calibration_mode_controls_enabled(True)
+        if (event.kind == "succeeded" and self.isVisible() and self.current_channel == channel
+                and self._selected_mic_hardware_id() == request.device["hardware_id"]):
+            try:
+                factor = float(event.value["factor"])
+                if not math.isfinite(factor) or factor <= 0:
+                    raise ValueError("无效校准系数")
+                save_mic_channel_v2pa_factor(channel, factor, standard_spl=request.calibration_target_spl,
+                    hardware_id=request.device["hardware_id"], input_conditions=self._vkinging_conditions)
+            except (ValueError, HardwareManagementError) + model_consts.SQLITE_REPOSITORY_EXCEPTIONS as exc:
+                MessageBox.warning(self, "提示", f"输入校准保存失败：{exc}")
+            else:
+                self.session_channel_factors[channel] = factor
+                self.session_channel_standard_spl[channel] = request.calibration_target_spl
+                self.calibrated_channels.add(channel)
+                self._cleanup_committed_vkinging_artifacts(event.value)
+                next_channel = self._next_uncalibrated_channel(channel)
+                if next_channel is not None:
+                    self.current_channel = next_channel
+        self._refresh_channel_selector(preferred_channel=self.current_channel)
+        self._set_parent_calibration_button_enabled(True)
+
+    def _cleanup_committed_vkinging_artifacts(self, descriptor):
+        # Called only after a current, visible, released result commits to DB.
+        # These are the worker's exact owned partials, never a derived target.
+        self._vkinging_cleanup_diagnostics = ()
+        for path in descriptor.get("owned_paths", ()):
+            try:
+                unlink(path)
+            except OSError as exc:
+                # Cleanup is best-effort after the coefficient has committed.
+                # Keep the failed artifact and still attempt the remaining one.
+                reason = _exception_text(exc)[:512]
+                diagnostic = f"临时文件清理失败：path={path[:400]} error={reason}"
+                self._vkinging_cleanup_diagnostics = (
+                    self._vkinging_cleanup_diagnostics + (diagnostic,))[-4:]
+                try:
+                    self.default_logger.warning(
+                        "输入校准已保存，临时文件清理失败：path=%s error=%s",
+                        path[:512], reason,
+                    )
+                except OSError as logging_error:
+                    # Log storage is another external I/O boundary. Preserve
+                    # both failures locally without recursively logging again.
+                    diagnostic = "校准清理日志写入失败：" + _exception_text(logging_error)[:512]
+                    self._vkinging_cleanup_diagnostics = (
+                        self._vkinging_cleanup_diagnostics + (diagnostic,))[-4:]
+
+    def _clear_vkinging_terminal_for_channels(self, channels):
+        if self._vkinging_terminal is not None and self._vkinging_terminal["channel"] in channels:
+            self._vkinging_terminal = None
+            self.channel_status_label.setToolTip("")
+
+    def _reset_vkinging(self):
+        if not self._vkinging_available():
+            MessageBox.warning(self, "提示", "输入设备正在使用或不可用。")
+            return
+        try:
+            clear_mic_channel_v2pa_factors(hardware_id=self._selected_mic_hardware_id(),
+                                         channel_indices=self.selected_input_channels)
+        except (ValueError, HardwareManagementError) + model_consts.SQLITE_REPOSITORY_EXCEPTIONS as exc:
+            MessageBox.warning(self, "提示", f"输入校准复位失败：{exc}")
+            self._refresh_current_channel_display()
+            return
+        self._clear_vkinging_terminal_for_channels(self.selected_input_channels)
+        self.session_channel_factors.clear()
+        self.session_channel_standard_spl.clear()
+        self.calibrated_channels.clear()
+        self.unsaved_session_channels.clear()
+        self.pending_persistence_failure = False
+        self._refresh_channel_selector(preferred_channel=self.current_channel)
+
+    def hideEvent(self, event):
+        if self._vkinging_request is not None:
+            self.stop_active_streaming_capture()
+        super().hideEvent(event)
+
+    def closeEvent(self, event):
+        self.stop_active_streaming_capture()
+        super().closeEvent(event)
+
     def reset_btn_clicked(self):
         """
         This method is triggered when the reset button is clicked.
@@ -1841,6 +2068,8 @@ class InputCalibration(QWidget):
         It resets the recorded time to 10 seconds and updates the recorded label to display the new time in red.
         Additionally, it clears the v2pa_factor line edit and stops any ongoing streaming recording.
         """
+        if is_vkinging_device(self.selected_input_device):
+            return self._reset_vkinging()
         self.stop_active_streaming_capture()
         self.stop_timer = False
         self.calibrated_channels.clear()

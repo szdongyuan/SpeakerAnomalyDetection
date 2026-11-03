@@ -114,25 +114,31 @@ def load_mic_channel_v2pa_factors(hardware_id=None, db_path=None):
     return factors
 
 
-def save_mic_channel_v2pa_factor(channel_index, v2pa_factor, standard_spl=None, hardware_id=None, db_path=None):
+def save_mic_channel_v2pa_factor(channel_index, v2pa_factor, standard_spl=None, hardware_id=None, db_path=None,
+                               input_conditions=None):
     normalized_channel = _normalize_channel_index(channel_index)
     resolved_hardware_id = _resolve_mic_hardware_id(hardware_id)
     normalized_spl = _normalize_standard_spl(standard_spl)
     if normalized_spl is None:
         raise ValueError("standard_spl is required for standard SPL calibration")
+    condition_args = {"channel_conditions": {normalized_channel: input_conditions}} if input_conditions is not None else {}
     _repository(db_path).update_mic_channel_calibrations(
         resolved_hardware_id,
         {normalized_channel: _normalize_positive_factor(v2pa_factor)},
         channel_standard_spl={normalized_channel: normalized_spl},
+        **condition_args,
     )
 
 
-def save_manual_mic_channel_v2pa_factor(channel_index, v2pa_factor, hardware_id=None, db_path=None):
+def save_manual_mic_channel_v2pa_factor(channel_index, v2pa_factor, hardware_id=None, db_path=None,
+                                      input_conditions=None):
     normalized_channel = _normalize_channel_index(channel_index)
+    condition_args = {"channel_conditions": {normalized_channel: input_conditions}} if input_conditions is not None else {}
     _repository(db_path).update_mic_channel_calibrations(
         _resolve_mic_hardware_id(hardware_id),
         {normalized_channel: _normalize_positive_factor(v2pa_factor)},
         channel_standard_spl={normalized_channel: None},
+        **condition_args,
     )
 
 

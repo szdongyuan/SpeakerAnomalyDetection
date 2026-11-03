@@ -208,6 +208,9 @@ class TestRecordingManager(object):
     @mock.patch("base.recording_management.DataSave")
     def test_save_signal_info_to_db(self, mock_database, mock_stimulus, mock_audio, input_ret, result_ret):
         mock_database.return_value.__enter__.return_value = input_ret["database_set"]
+        if isinstance(input_ret['database_set'], mock.Mock):
+            input_ret['database_set'].insert_data_into_db.return_value = (error_code.OK, 'inserted')
+            input_ret['database_set'].query.return_value = (error_code.OK, [])
         mock_stimulus.side_effect = input_ret["stimulus_info_db_set"]
         mock_audio.return_value = input_ret["audio_info_db_set"]
         result = RecordingManager().save_signal_info_to_db(input_ret["audio_info"], input_ret["stimulus_parameter"])

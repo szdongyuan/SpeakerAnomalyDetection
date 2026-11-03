@@ -1,8 +1,11 @@
+import copy
 import json
 import os
 import re
 import threading
 import weakref
+import math
+import uuid
 from datetime import datetime
 from types import SimpleNamespace
 import time
@@ -41,13 +44,19 @@ from base.load_config import LoadUiConfig
 from base.output_calibration import OutputCalibrationCache, resolve_output_amplitude
 from ui.sequence.barcode_router import BarcodeRouter
 from base.log_manager import LogManager
+from base.vkinging_input import is_vkinging_device, resolve_vkinging_input_config, VkingingCaptureRequest
+from base.vkinging_recording_preparation import (
+    VkingingRecordingPreparation, publish_replay, restore_replay, format_recording_error,
+)
 from base.play_and_record import (
     get_recorded_info,
     stream_play_and_record,
     stream_record_without_play,
 )
 from base.recording_management import RecordingManager
-from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
+from base.recording_calibration_snapshot import (
+    build_recording_wav_calibration_metadata, build_vkinging_recording_wav_calibration_metadata,
+)
 from base.save_data import (
     ensure_test_result_file,
     save_recorded_data_to_json,
@@ -62,7 +71,9 @@ from base.soundcard_calibration_manager import (
 )
 from base.tcp_service import TcpServer, check_tcp_msg_format
 from base.streaming_file_writer import StreamingWavWriter
-from base.wav_calibration_metadata import append_wav_calibration_metadata, read_wav_calibration_metadata
+from base.wav_calibration_metadata import (
+    append_wav_calibration_metadata, inspect_wav_calibration_metadata,
+)
 from base.pre_processing.alignment_processing import AlignmentProcessing
 from base.pre_processing.split_repeat_signal import SplitRepeatSignal
 from base.acquisition_recording_defaults import normalize_play_record_detail, normalize_record_only_detail
@@ -82,7 +93,10 @@ from base.stimulus_resolver import set_data_struct_analysis_reference_signal
 from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
 from ui.sequence.sn_regex_manage_dialog import SnRegexManageDialog
-from ui.signal_analysis_window import AnalysisResultSummaryWindow, get_class_mapping
+from ui.signal_analysis_window import (
+    AnalysisResultSummaryWindow, get_class_mapping, resolve_imported_wav_v2pa_factor,
+    _record_calibration_prerequisite_failure,
+)
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.tcp_config_dialog import TcpConfigDialog
 from ui.ui_src import ui_resources
@@ -114,6 +128,9 @@ def _clear_data_struct_stimulus_runtime_state(data_struct, *, clear_sample_rate:
 def _clear_wav_calibration_runtime_state(data_struct) -> None:
     if data_struct is None:
         return
+    data_struct.wav_calibration_inspection = None
+    data_struct.wav_physical_channel_indices = ()
+    data_struct.analysis_prerequisite_failures = {}
     data_struct.wav_calibration_metadata = None
     data_struct.wav_calibration_metadata_authoritative = False
     data_struct.wav_calibration_warning_shown = False
@@ -177,13 +194,59 @@ def _resolve_runtime_sample_rate_for_mode(window, acq_mode, acq_detail):
     return None
 
 
+def _vkinging_preflight_error(window):
+    if not is_vkinging_device(getattr(window, "mic", None)):
+        return None
+    config = getattr(window, "sequence_config", None) or []
+    if not config:
+        return None
+    acq = config[0]["seq1"]["acq"]
+    mode, detail = acq.get("mode"), acq.get("detail", {}) or {}
+    if mode not in ("RECORD_ONLY", "PLAY_AND_RECORD"):
+        return None
+    if mode != "RECORD_ONLY" or detail.get("monitor_playback", False):
+        return "vkinging 仅支持录制，不支持播放录制或实时监听。"
+    try:
+        resolve_vkinging_input_config(detail, window.mic)
+        duration = float(detail.get("total_time", 5.0))
+        if not math.isfinite(duration) or not .1 <= duration <= 600:
+            return "录制时长必须在 0.1–600 秒之间。"
+        if 'recording_start_delay_ms' in detail:
+            delay = detail['recording_start_delay_ms']
+            if isinstance(delay, bool):
+                return '录制启动延迟必须为 0–1000 毫秒的有限数值。'
+            try:
+                delay = float(delay)
+            except (TypeError, ValueError, OverflowError):
+                return '录制启动延迟必须为 0–1000 毫秒的有限数值。'
+            if not math.isfinite(delay) or not 0 <= delay <= 1000:
+                return '录制启动延迟必须为 0–1000 毫秒的有限数值。'
+        channels = getattr(window, "mic_channels", None)
+        from base.vkinging_input import validate_physical_channels
+        channels = validate_physical_channels(channels)
+        if not set(channels).issubset(window.mic.get("physical_channels", ())):
+            return "选择的物理通道不可用。"
+    except (TypeError, ValueError, OverflowError) as exc:
+        return str(exc)
+    if getattr(window, "_closing", False):
+        return "窗口正在关闭。"
+    bridge = getattr(window, "vkinging_bridge", None)
+    if bridge is None:
+        return "vkinging 录制服务不可用。"
+    if bridge.busy:
+        return "vkinging 设备正忙或尚未释放，请等待或重新连接设备。"
+    return None
+
+
 class SequenceWindow(QWidget):
     tcp_server = None
     _active_instance_ref = None
 
-    def __init__(self):
+    def __init__(self, vkinging_service=None, vkinging_bridge=None):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
         super().__init__()
+        self.vkinging_service = vkinging_service
+        self.vkinging_bridge = vkinging_bridge
         self._output_calibration_cache = OutputCalibrationCache()
         self._output_calibration_config_revision = 0
         self.data_struct = DataDealStruct()
@@ -624,6 +687,8 @@ class SequenceWindow(QWidget):
         Summarize DataDealStruct.analysis_result_dict into overall OK/NG.
         Rule: all items OK -> OK; otherwise NG.
         """
+        if getattr(self.data_struct, "analysis_prerequisite_failures", None):
+            return False, "NG"
         result_dict = getattr(self.data_struct, "analysis_result_dict", None)
         if not isinstance(result_dict, dict) or len(result_dict) == 0:
             return False, "NG"
@@ -667,6 +732,8 @@ class SequenceWindow(QWidget):
     def _send_tcp_analysis_result_callback(self):
         if not getattr(self, "tcp_flag", False):
             return
+        if getattr(getattr(self, "data_struct", None), "analysis_prerequisite_failures", None):
+            return
         try:
             tcp_server = getattr(SequenceWindow, "tcp_server", None)
             if tcp_server is None:
@@ -689,6 +756,9 @@ class SequenceWindow(QWidget):
         - AI always writes (label + deviation)
         - SPL/SPLF/FR/HD/RB/PRB write only when threshold/compare (limit or golden) is enabled.
         """
+        failures = getattr(getattr(self, "data_struct", None), "analysis_prerequisite_failures", None)
+        if failures:
+            return False, "分析项不满足校准前置条件: " + ", ".join(failures)
         cfg = self.analysis_config or {}
         seq = cfg.get("display_sequence") or []
         if not isinstance(seq, list) or len(seq) == 0:
@@ -1354,6 +1424,7 @@ class SequenceWindow(QWidget):
 
     def closeEvent(self, event):
         """窗口关闭时释放硬件资源，并强制等待Excel同步完成"""
+        self._dispose_vkinging_recording()
         # Skip sync dialog if window was never shown (startup close)
         if not self.isVisible():
             if hasattr(self, "hw_manager"):
@@ -1878,6 +1949,11 @@ class SequenceWindow(QWidget):
             return
         acq_config = self.sequence_config[0]["seq1"]["acq"]
         acq_detail = acq_config["detail"]
+        inspection = inspect_wav_calibration_metadata(file_path, logger=getattr(self, "default_logger", None))
+        if not inspection.structure_valid:
+            _clear_import_analysis_runtime_state(self)
+            MessageBox.warning(self, "提示", f"WAV 文件结构无效: {inspection.reason}")
+            return
         try:
             audio_multi, sample_rate = load_audio_preserve_rate(file_path, mono=False)
         except Exception:
@@ -1888,20 +1964,11 @@ class SequenceWindow(QWidget):
             _clear_import_analysis_runtime_state(self)
             MessageBox.warning(self, "提示", "导入音频失败，请重新选择音频文件。")
             return
-        try:
-            wav_calibration_metadata = read_wav_calibration_metadata(
-                file_path,
-                logger=getattr(self, "default_logger", None),
-            )
-        except Exception as exc:
-            logger = getattr(self, "default_logger", None)
-            if logger is not None:
-                logger.warning(f"读取WAV校准数据失败: {exc}")
-            wav_calibration_metadata = None
-        self.data_struct.wav_calibration_metadata = wav_calibration_metadata
-        self.data_struct.wav_calibration_metadata_authoritative = True
-        self.data_struct.wav_calibration_warning_shown = False
-        if wav_calibration_metadata is None:
+        DataDealStruct.set_wav_calibration_inspection(self.data_struct, inspection)
+        if inspection.source == "vkinging":
+            if inspection.status not in {"vkinging_valid", "vkinging_uncalibrated"}:
+                MessageBox.warning(self, "提示", f"vkinging 校准声压分析不可用: {inspection.reason or inspection.status}。可查看原始电压波形并进行不依赖校准的分析。")
+        elif inspection.metadata is None:
             MessageBox.warning(self, "提示", _missing_file_calibration_warning_text())
             self.data_struct.wav_calibration_warning_shown = True
         audio_multi = np.asarray(audio_multi, dtype=np.float32)
@@ -1978,7 +2045,11 @@ class SequenceWindow(QWidget):
                 self.barcode_scanner_box.isChecked(),
             )
         except Exception as e:
-            self.default_logger.warning(f"Failed to persist recorded count after success: {e}")
+            message = f"Failed to persist recorded count after success: {e}"
+            if is_vkinging_device(getattr(self, 'mic', None)):
+                self._vkinging_log(message)
+            else:
+                self.default_logger.warning(message)
         finally:
             self._clear_pending_recorded_count()
 
@@ -1986,6 +2057,15 @@ class SequenceWindow(QWidget):
         self._active_recording_is_replay = bool(is_replay)
         self._active_replay_output_backup_path = None
         self._active_replay_output_replaced = False
+        if is_vkinging_device(getattr(self, "mic", None)):
+            self.recorded_path = os.path.abspath(self.recorded_path)
+            self._active_recording_output_path = self.recorded_path
+            self._active_replay_output_temp_path = None
+            if is_replay:
+                base_path, ext = os.path.splitext(self.recorded_path)
+                path = f"{base_path}.{uuid.uuid4().hex}.replay{ext or '.wav'}"
+                self._active_replay_output_temp_path = self._active_recording_output_path = path
+            return
         if is_replay:
             base_path, ext = os.path.splitext(self.recorded_path)
             if not ext:
@@ -2098,7 +2178,11 @@ class SequenceWindow(QWidget):
         try:
             return callback(*args, **kwargs)
         except Exception as e:
-            self.default_logger.warning(f"{action_name} after successful recording save failed: {e}")
+            message = f"{action_name} after successful recording save failed: {e}"
+            if is_vkinging_device(getattr(self, 'mic', None)):
+                self._vkinging_log(message)
+            else:
+                self.default_logger.warning(message)
             return None
 
     def start_this_play(self, label="not_labeled", skip_sn_regex_validation: bool = False):
@@ -2133,6 +2217,11 @@ class SequenceWindow(QWidget):
         self.update_player_btn_is_paused()
 
     def checked_work_status_message(self):
+        from base.vkinging_input import is_vkinging_device
+        backend_error = _vkinging_preflight_error(self) if is_vkinging_device(getattr(self, "mic", None)) else None
+        if backend_error:
+            MessageBox.warning(self, "提示", backend_error)
+            return True
         if not self.sequence_config:
             MessageBox.warning(
                 self,
@@ -2219,6 +2308,25 @@ class SequenceWindow(QWidget):
         )
         acq_detail = self.sequence_config[0]["seq1"]["acq"]["detail"]
         acq_mode = self.sequence_config[0]["seq1"]["acq"]["mode"]
+        if is_vkinging_device(getattr(self, "mic", None)) and acq_mode in ("RECORD_ONLY", "PLAY_AND_RECORD"):
+            backend_error = _vkinging_preflight_error(self)
+            if backend_error:
+                raise ValueError(backend_error)
+            config = resolve_vkinging_input_config(acq_detail, self.mic)
+            detail = normalize_record_only_detail(acq_detail)
+            self.data_struct.sample_rate = config["sample_rate"]
+            _clear_data_struct_stimulus_runtime_state(self.data_struct, clear_sample_rate=False)
+            self._active_input_channels = list(self.mic_channels)
+            snapshot = build_vkinging_recording_wav_calibration_metadata(
+                self._active_input_channels, device=self.mic,
+                range_index=detail["vkinging_range_index"])
+            _, recorded = LoadUiConfig.get_rec_and_play_dict_base_sequence_dict(
+                self.data_struct, detail["total_time"],
+                recording_start_delay_ms=detail["recording_start_delay_ms"])
+            recorded.update(bit_depth=config["bit_depth"], wav_calibration_metadata=snapshot,
+                            vkinging_range_index=detail["vkinging_range_index"],
+                            input_channels=list(self._active_input_channels), device=copy.deepcopy(self.mic))
+            return {}, recorded, config["sample_rate"]
         normalized_detail = None
         if acq_mode == "RECORD_ONLY":
             normalized_detail = normalize_record_only_detail(acq_detail)
@@ -2303,6 +2411,223 @@ class SequenceWindow(QWidget):
                 return None, None, None
 
         return stimulus_dict, recorded_dict, sample_rate
+
+    def _vkinging_log(self, message):
+        # Logger handlers are external I/O; a broken handler must not undo a
+        # committed database/file result or strand request ownership.
+        try:
+            self.default_logger.error(message)
+        except Exception as exc:
+            diagnostics = self.__dict__.setdefault('_vkinging_diagnostics', [])
+            diagnostics.append(f'{message}; logging failed: {exc}')
+
+    def _start_vkinging_recording(self, recorded_dict, sample_rate):
+        request = VkingingCaptureRequest(
+            request_id=uuid.uuid4().hex, purpose='main', device=recorded_dict['device'],
+            channels=tuple(recorded_dict['input_channels']), sample_rate=sample_rate,
+            bit_depth=recorded_dict['bit_depth'], range_index=recorded_dict['vkinging_range_index'],
+            target_samples=recorded_dict['num_frames'] - recorded_dict.get('prolong_frames', 0),
+            discard_initial_samples=recorded_dict.get('recording_start_delay_frames', 0),
+            output_path=self._recording_output_path(),
+            calibration_snapshot=recorded_dict['wav_calibration_metadata'])
+        self._vkinging_request = request
+        self._vkinging_recording_context = dict(canonical_path=self.recorded_path,
+            is_replay=self._active_recording_is_replay, audio_info=copy.deepcopy(self.recorded_signal_info))
+        self._vkinging_failed = False
+        self._vkinging_descriptor = None
+        self._vkinging_preparation = None
+        if getattr(self, '_vkinging_preparation_timer', None) is None:
+            self._vkinging_preparation_timer = QTimer(self)
+            self._vkinging_preparation_timer.setInterval(30)
+            self._vkinging_preparation_timer.timeout.connect(self._poll_vkinging_preparation)
+        if not self.vkinging_bridge.start_capture(self, request, self._on_vkinging_recording_event):
+            self._fail_vkinging_recording('设备正忙，未启动录制。', released=True)
+
+    def _on_vkinging_recording_event(self, event):
+        request = getattr(self, '_vkinging_request', None)
+        if not self._is_current_vkinging_recording() or request is None or event.request_id != request.request_id:
+            return
+        if self._vkinging_failed and event.kind in ('released', 'succeeded', 'failed', 'cancelled'):
+            if event.cleanup_error:
+                self._vkinging_log(f'cancelled/failed recording cleanup: {event.cleanup_error}')
+            if event.resources_released:
+                self._release_vkinging_attempt()
+            return
+        if event.kind == 'released':
+            if self._vkinging_failed and event.resources_released:
+                self._release_vkinging_attempt()
+        elif event.kind in ('failed', 'cancelled'):
+            reason = event.reason or ('录制已取消。' if event.kind == 'cancelled' else '录制失败。')
+            if event.cleanup_error:
+                reason += '; ' + event.cleanup_error
+            self._fail_vkinging_recording(reason, released=event.resources_released)
+        elif (event.kind == 'succeeded' and not self._vkinging_failed
+              and self._vkinging_preparation is None):
+            if not event.resources_released:
+                self._fail_vkinging_recording('录制资源尚未释放。', released=False)
+                return
+            self._vkinging_descriptor = event.value
+            try:
+                self._vkinging_preparation = VkingingRecordingPreparation(request, event.value)
+            except (OSError, RuntimeError) as exc:
+                # Construction only starts a new file worker. A native thread
+                # admission failure acquires no reader handles; SDK/WAV release
+                # is already proved by this event. Keep its frozen output path.
+                self._fail_vkinging_recording(
+                    f'启动录音文件准备失败: {format_recording_error(exc)}；文件已保存: {request.output_path}',
+                    released=True)
+                return
+            self._vkinging_preparation_timer.start()
+
+    def _poll_vkinging_preparation(self):
+        if not self._is_current_vkinging_recording():
+            return
+        worker = getattr(self, '_vkinging_preparation', None)
+        if worker is None:
+            return
+        prepared = worker.poll()
+        if prepared is None:
+            return
+        self._vkinging_preparation_timer.stop()
+        request = getattr(self, '_vkinging_request', None)
+        if request is None or prepared.request_id != request.request_id:
+            return
+        if self._vkinging_failed:
+            if prepared.resources_released:
+                self._release_vkinging_attempt()
+            return
+        if prepared.error is not None:
+            self._fail_vkinging_recording(prepared.error or '录音文件准备失败。',
+                                          released=prepared.resources_released)
+            return
+        if not prepared.resources_released:
+            self._fail_vkinging_recording('录音文件准备资源尚未释放。', released=False)
+            return
+        if prepared.samples is None or prepared.mono is None or prepared.inspection is None:
+            self._fail_vkinging_recording('录音文件准备结果不完整。', released=True)
+            return
+        # Keep the verified WAV on every failure after publication. The DB
+        # method normalizes its own errors; consume its return contract.
+        backup = None
+        context = self._vkinging_recording_context
+        canonical_path = context['canonical_path']
+        if context['is_replay']:
+            try:
+                backup = publish_replay(request.output_path, canonical_path)
+            except OSError as exc:
+                self._fail_vkinging_recording(
+                    f'文件已保存、替换失败: {format_recording_error(exc)}；保留文件: {request.output_path}',
+                    released=True)
+                return
+        info = copy.deepcopy(context['audio_info'])
+        info.update(file_path=canonical_path, sample_rate=request.sample_rate)
+        # Construction checks database readiness and can raise before the
+        # normalizing save method is available.
+        try:
+            manager = RecordingManager()
+        except (OSError, RuntimeError) as exc:
+            self._vkinging_database_failure(str(exc), backup)
+            return
+        code, message = manager.save_signal_info_to_db(
+            info, None, **({'replace_existing': True} if context['is_replay'] else {}))
+        if code != error_code.OK:
+            self._vkinging_database_failure(message, backup)
+            return
+        self.recorded_signal_info = info
+        self.recorded_path = canonical_path
+        DataDealStruct.set_wav_calibration_inspection(self.data_struct, prepared.inspection)
+        self.data_struct.sample_rate = request.sample_rate
+        self.data_struct.store_wave_data_multi = prepared.samples
+        self.data_struct.store_wave_data = prepared.mono
+        self.data_struct.audio_lenth = request.target_samples / request.sample_rate
+        self._active_input_channels = list(request.channels)
+        self._vkinging_request = None
+        self._vkinging_preparation = None
+        # Only our released successful partials and unique replay backup.
+        for path in (*self._vkinging_descriptor.get('owned_paths', ()), backup):
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError as exc:
+                    self._vkinging_log(f'successful recording cleanup failed: {path}: {exc}')
+        self._run_post_recording_followup('Waveform plotting', self.plot_waveform_to_workspace,
+                                         prepared.samples, request.sample_rate)
+        self._finish_recording_success(request.sample_rate)
+
+    def _vkinging_database_failure(self, message, backup):
+        request = self._vkinging_request
+        context = self._vkinging_recording_context
+        retained_path = context['canonical_path']
+        if context['is_replay']:
+            try:
+                retained_path = restore_replay(request.output_path, retained_path, backup)
+            except OSError as exc:
+                diagnostic = f'恢复原录音失败: {exc}；原录音备份: {backup}'
+                self._vkinging_log(diagnostic)
+                message += '; ' + diagnostic
+        self._fail_vkinging_recording(
+            f'文件已保存、入库失败: {message}；保留文件: {retained_path}', released=True)
+
+    def _fail_vkinging_recording(self, reason, *, released):
+        first = not getattr(self, '_vkinging_failed', False)
+        self._vkinging_failed = True
+        self._clear_pending_recorded_count()
+        self._awaiting_ok_ng = self._sn_clear_on_next_scan = False
+        if released:
+            self._release_vkinging_attempt()
+        if first:
+            self._vkinging_log(f'vkinging recording failed: {reason}; resources_released={released}')
+            guidance = ('\n资源尚未确认释放，请等待原任务完成释放；若设备持续不可用，请重启应用后重试。'
+                        if not released else '')
+            MessageBox.warning(self, '提示', f'录音失败: {reason}{guidance}')
+
+    def _release_vkinging_attempt(self):
+        self._vkinging_request = None
+        self._vkinging_preparation = None
+        self._clear_recording_output_attempt()
+        self.player_status_flag = self._record_workflow_busy = False
+        self._set_sn_input_recording_read_only(False)
+        self.data_btn.setEnabled(True)
+        self.replayer_btn.setEnabled(True)
+        self.update_player_btn_is_paused()
+
+    def _cancel_vkinging_recording(self):
+        request = getattr(self, '_vkinging_request', None)
+        if request is None:
+            return
+        worker = getattr(self, '_vkinging_preparation', None)
+        # Revoke local publication even if the native commit was already
+        # claimed and service.cancel cannot revoke its queued success anymore.
+        # Retain ownership until either SDK or reader release is acknowledged.
+        self._fail_vkinging_recording('录制已取消。', released=False)
+        if worker is None:
+            self.vkinging_bridge.cancel(request.request_id)
+
+    def _is_current_vkinging_recording(self):
+        if getattr(self, '_closing', False):
+            return False
+        reference = getattr(SequenceWindow, '_active_instance_ref', None)
+        if callable(reference) and reference() is not self:
+            self._dispose_vkinging_recording()
+            return False
+        return True
+
+    def _dispose_vkinging_recording(self):
+        if getattr(self, '_closing', False):
+            return
+        self._closing = True
+        request = getattr(self, '_vkinging_request', None)
+        bridge = getattr(self, 'vkinging_bridge', None)
+        if bridge is not None:
+            bridge.unsubscribe(self)
+            if request is not None:
+                bridge.cancel(request.request_id)
+        worker = getattr(self, '_vkinging_preparation', None)
+        if worker is not None:
+            worker.close()
+        timer = getattr(self, '_vkinging_preparation_timer', None)
+        if timer is not None:
+            timer.stop()
 
     def _should_use_streaming_recording(self):
         try:
@@ -2429,7 +2754,11 @@ class SequenceWindow(QWidget):
             try:
                 self.run()
             except Exception as e:
-                self.default_logger.warning(f"Auto-analysis after blocking recording failed: {e}")
+                message = f"Auto-analysis after blocking recording failed: {e}"
+                if is_vkinging_device(getattr(self, 'mic', None)):
+                    self._vkinging_log(message)
+                else:
+                    self.default_logger.warning(message)
 
         self._run_post_recording_followup("Player button pause update", self.update_player_btn_is_paused)
 
@@ -2478,7 +2807,8 @@ class SequenceWindow(QWidget):
                 self._finalize_successful_replay_output()
 
                 save_code, save_msg = RecordingManager().save_signal_info_to_db(
-                    self.recorded_signal_info, self.data_struct.stimulus_info
+                    self.recorded_signal_info, self.data_struct.stimulus_info,
+                    **({'replace_existing': True} if getattr(self, '_active_recording_is_replay', False) else {}),
                 )
                 if save_code == error_code.OK:
                     self.default_logger.info(f"Database save successful: {save_msg}")
@@ -2532,7 +2862,9 @@ class SequenceWindow(QWidget):
 
                 self._finalize_successful_replay_output()
 
-                save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
+                save_code, save_msg = RecordingManager().save_signal_info_to_db(
+                    self.recorded_signal_info, None,
+                    **({'replace_existing': True} if getattr(self, '_active_recording_is_replay', False) else {}))
                 if save_code == error_code.OK:
                     self.default_logger.info(f"Database save successful: {save_msg}")
                 else:
@@ -2597,6 +2929,9 @@ class SequenceWindow(QWidget):
 
         QApplication.processEvents()
 
+        if getattr(self, '_closing', False):
+            return
+
         # Replay uses the last committed count; normal recordings prepare the next count
         # without committing it until recording succeeds.
         try:
@@ -2628,6 +2963,13 @@ class SequenceWindow(QWidget):
             return
 
         self._begin_recording_output_attempt(is_replay)
+
+        if is_vkinging_device(getattr(self, "mic", None)):
+            try:
+                self._start_vkinging_recording(recorded_dict, sample_rate)
+            except (ValueError, OSError, RuntimeError) as exc:
+                self._fail_vkinging_recording(str(exc), released=True)
+            return
 
         if self._should_use_streaming_recording():
             try:
@@ -2667,6 +3009,7 @@ class SequenceWindow(QWidget):
 
         # Only reflect THIS successful run(): clear previous summary results after readiness gates pass.
         self.data_struct.analysis_result_dict.clear()
+        self.data_struct.analysis_prerequisite_failures = {}
         if self.analysis_window:
             self.analysis_window = []
         if self._analysis_result_summary_window:
@@ -2694,7 +3037,21 @@ class SequenceWindow(QWidget):
             missing_calibration_message = "麦克风未进行校准，结果仅供参考。"
             uncalibrated_raw_channels = []
             uncalibrated_raw_channel_set = set()
-            if self.mode == "RECORD_ONLY":
+            inspection = getattr(self.data_struct, "wav_calibration_inspection", None)
+            metadata = getattr(self.data_struct, "wav_calibration_metadata", None)
+            known_vkinging = ((inspection is not None and inspection.source == "vkinging")
+                              or isinstance(metadata, dict) and metadata.get("backend") == "vkinging")
+            if known_vkinging:
+                def file_v2pa_resolver(raw_channel, warn_callback=None):
+                    column = raw_channel
+                    if self.mode == "RECORD_ONLY":
+                        physical_channels = list(getattr(self.data_struct, "wav_physical_channel_indices", ()) or
+                                                 [ch["physical_channel_index"] for ch in
+                                                  (metadata or {}).get("recorded_channels", [])])
+                        column = physical_channels.index(raw_channel) if raw_channel in physical_channels else -1
+                    return resolve_imported_wav_v2pa_factor(self.data_struct, column, warn_callback=warn_callback)
+                analysis_v2pa_batch = AnalysisV2paBatch(resolver=file_v2pa_resolver)
+            elif self.mode == "RECORD_ONLY":
 
                 def record_only_v2pa_resolver(raw_channel, warn_callback=None):
                     def capture_message(message):
@@ -2873,9 +3230,9 @@ class SequenceWindow(QWidget):
             self._handle_post_analysis_exports()
             if self.count_board.mode == "test":
                 # Test mode: decide label from analysis_result_dict summary and auto-finalize.
-                can_output, _reason = self._can_output_ok_ng()
+                can_output, reason = self._can_output_ok_ng()
                 if not can_output:
-                    MessageBox.warning(self, "提示", "当前配置无法产出 OK/NG 汇总结果，无法执行测试模式自动判定。")
+                    MessageBox.warning(self, "提示", f"{reason}，无法执行测试模式自动判定。")
                 else:
                     _passed, label = self._summarize_ok_ng()
                     try:
@@ -2969,6 +3326,8 @@ class SequenceWindow(QWidget):
             self.default_logger.warning(f"mes_write_fail[{cfg_name}]: {ret.message}")
 
     def _maybe_show_analysis_result_summary(self, width: int, height: int):
+        if getattr(self.data_struct, "analysis_prerequisite_failures", None):
+            return
         result_dict = getattr(self.data_struct, "analysis_result_dict", None)
         if not isinstance(result_dict, dict) or len(result_dict) == 0:
             return
@@ -3139,6 +3498,9 @@ class SequenceWindow(QWidget):
         Export selected analysis items to Excel, if the global Excel analysis item exists in config.
         Shows retry dialog on failure allowing user to close open files and retry.
         """
+        if getattr(self.data_struct, "analysis_prerequisite_failures", None):
+            self._excel_export_cache = None
+            return
         # Find Excel exporter config(s)
         excel_cfg_list = []
         for k, v in (self.analysis_config or {}).items():
@@ -3305,6 +3667,44 @@ class SequenceWindow(QWidget):
                 head_config = head.get("config")
                 if isinstance(head_config, dict):
                     analysis_channel_config = head_config
+        inspection = getattr(self.data_struct, "wav_calibration_inspection", None)
+        metadata = getattr(self.data_struct, "wav_calibration_metadata", None)
+        known_vkinging = ((inspection is not None and inspection.source == "vkinging")
+                          or isinstance(metadata, dict) and metadata.get("backend") == "vkinging")
+        if known_vkinging and type in class_mapping and class_mapping[type]:
+            runtime_params = copy.deepcopy(params) if isinstance(params, dict) else {}
+            raw_channel = int(analysis_channel_config.get("analysis_channel", 0) or 0)
+            mapped_channel = raw_channel
+            physical_channels = list(getattr(self.data_struct, "wav_physical_channel_indices", ()) or
+                                     [ch["physical_channel_index"] for ch in
+                                      (metadata or {}).get("recorded_channels", [])])
+            if self.mode == "RECORD_ONLY":
+                physical_channels = physical_channels or list(getattr(self, "_active_input_channels", ()) or ())
+                mapped_channel = physical_channels.index(raw_channel) if raw_channel in physical_channels else -1
+            display_key = f"{key}--通道{raw_channel + 1}" if self.mode == "RECORD_ONLY" else key
+            instance = class_mapping[type](display_key)
+            instance.data_struct = self.data_struct
+            instance._sequence_analysis_key = key
+            instance._channel_mismatch = mapped_channel < 0
+            instance._channel_mismatch_info = {"raw_channel": raw_channel, "active_input_channels": physical_channels}
+            if type == "ED":
+                runtime_params.setdefault("head", {}).setdefault("config", {})["analysis_channel"] = mapped_channel
+            else:
+                runtime_params["analysis_channel"] = mapped_channel
+            golden_path = (getattr(self, "analysis_config", None) or {}).get(GOLDEN_SAMPLE_RESULT_PATH_KEY)
+            if golden_path:
+                runtime_params[GOLDEN_SAMPLE_RESULT_PATH_KEY] = golden_path
+            instance.analysis_config = runtime_params
+            if requires_v2pa:
+                try:
+                    instance.v2pa_factor = resolve_imported_wav_v2pa_factor(self.data_struct, mapped_channel)
+                except ValueError as exc:
+                    _record_calibration_prerequisite_failure(instance, exc)
+                    v2pa_warning_callback(f"{key}: {exc}")
+                    return
+                instance._use_pre_resolved_v2pa_factor = True
+            self.analysis_window.append(instance)
+            return
         if type in class_mapping.keys():
             cls_map = class_mapping.get(type)
             if cls_map:
@@ -3362,8 +3762,10 @@ class SequenceWindow(QWidget):
                         ):
                             class_instance._v2pa_raw_analysis_channel = raw_channel
                             class_instance._use_pre_resolved_v2pa_factor = True
-                    runtime_params = dict(params) if isinstance(params, dict) else {}
+                    runtime_params = copy.deepcopy(params) if isinstance(params, dict) else {}
                     runtime_params["analysis_channel"] = mapped_channel
+                    if type == "ED" and isinstance(runtime_params.get("head"), dict):
+                        runtime_params["head"].setdefault("config", {})["analysis_channel"] = mapped_channel
                     # Inject sequence-level golden baseline path into per-item params
                     if isinstance(getattr(self, "analysis_config", None), dict):
                         golden_path = self.analysis_config.get(GOLDEN_SAMPLE_RESULT_PATH_KEY)
@@ -4084,7 +4486,8 @@ class SequenceWindow(QWidget):
                 self.recorded_signal_info["sample_rate"] = sample_rate
                 self._finalize_successful_replay_output()
                 save_code, save_msg = RecordingManager().save_signal_info_to_db(
-                    self.recorded_signal_info, self.data_struct.stimulus_info
+                    self.recorded_signal_info, self.data_struct.stimulus_info,
+                    **({'replace_existing': True} if getattr(self, '_active_recording_is_replay', False) else {}),
                 )
                 if save_code == error_code.OK:
                     self.default_logger.info(f"Database save successful: {save_msg}")
@@ -4154,7 +4557,9 @@ class SequenceWindow(QWidget):
                 # Save to database
                 self.recorded_signal_info["sample_rate"] = sample_rate
                 self._finalize_successful_replay_output()
-                save_code, save_msg = RecordingManager().save_signal_info_to_db(self.recorded_signal_info, None)
+                save_code, save_msg = RecordingManager().save_signal_info_to_db(
+                    self.recorded_signal_info, None,
+                    **({'replace_existing': True} if getattr(self, '_active_recording_is_replay', False) else {}))
                 if save_code == error_code.OK:
                     self.default_logger.info(f"Database save successful: {save_msg}")
                 else:
@@ -4299,6 +4704,9 @@ class SequenceWindow(QWidget):
         can_start = can_start and not getattr(self, "player_status_flag", False)
         can_start = can_start and not getattr(self, "_record_workflow_busy", False)
         can_start = can_start and getattr(self, "audio_devices_available", True)
+        from base.vkinging_input import is_vkinging_device
+        if is_vkinging_device(getattr(self, "mic", None)):
+            can_start = can_start and _vkinging_preflight_error(self) is None
         self.player_btn.setDisabled(not can_start)
 
     def refresh_channel_windows(self) -> None:

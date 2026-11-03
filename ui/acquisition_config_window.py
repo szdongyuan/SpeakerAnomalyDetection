@@ -2,6 +2,8 @@ import sys
 from copy import deepcopy
 
 from base.log_manager import LogManager
+from base.vkinging_input import is_vkinging_device, validate_range_index
+from consts.vkinging_consts import VKINGING_RANGE_LIMITS
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QApplication, QSizePolicy
@@ -192,6 +194,8 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         return out_group_box
 
     def _required_devices_available(self):
+        if is_vkinging_device(self.mic):
+            return False
         if not self._has_device_name(self.mic):
             return False
         if self.speaker is None:
@@ -221,6 +225,9 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         return True
 
     def on_click_ok_btn(self):
+        if is_vkinging_device(self.mic):
+            MessageBox.warning(self, "提示", "vkinging 仅支持录制。")
+            return
         if not self._has_device_name(self.mic):
             return
         if self.speaker is None:
@@ -244,6 +251,9 @@ class PlayRecordConfigWindow(BaseConfigWindow):
         self.accept()
 
     def on_default_btn_clicked(self):
+        if is_vkinging_device(self.mic):
+            MessageBox.warning(self, "提示", "vkinging 仅支持录制。")
+            return
         if not self._has_device_name(self.mic):
             MessageBox.warning(self, "采样率配置", "未选择输入设备，请在硬件管理中选择设备。")
             return
@@ -312,6 +322,7 @@ class RecordConfigWindow(BaseConfigWindow):
     def __init__(self, input_data, mic=None, speaker=None, available_channels=None):
         super().__init__(mic=mic, speaker=speaker)
         self.setWindowTitle("录制音频")
+        self._explicit_vkinging_range = "vkinging_range_index" in (input_data or {})
         self.input_data = normalize_record_only_detail(input_data)
         self.available_channels = self._normalize_available_channels(available_channels)
         self.init_ui()
@@ -415,6 +426,24 @@ class RecordConfigWindow(BaseConfigWindow):
         grid_layout.addWidget(label_delay, 7, 0)
         grid_layout.addWidget(self.recording_start_delay_ms_input, 7, 1)
 
+        self.vkinging_range_combo = ComboBox()
+        for index, limit in enumerate(VKINGING_RANGE_LIMITS):
+            self.vkinging_range_combo.addItem(f"±{limit:g} V", index)
+        saved_range = self.input_data.get("vkinging_range_index", 0)
+        valid_range = type(saved_range) is int and 0 <= saved_range <= 6
+        self.vkinging_range_combo.setCurrentIndex(saved_range if valid_range else -1)
+        if not valid_range:
+            self.vkinging_range_combo.setToolTip("量程配置无效，请重新选择 0–6 对应量程。")
+        self.vkinging_range_combo.setVisible(is_vkinging_device(self.mic))
+        range_label = Label("IEPE / V 量程:")
+        range_label.setVisible(is_vkinging_device(self.mic))
+        grid_layout.addWidget(range_label, 8, 0)
+        grid_layout.addWidget(self.vkinging_range_combo, 8, 1)
+        if is_vkinging_device(self.mic):
+            explanation = "vkinging 始终使用后台采集，此选项不影响其采集方式。"
+            self.streaming_recording_checkbox.setToolTip(explanation)
+            label_streaming_recording.setToolTip(explanation)
+            self.streaming_recording_checkbox.setEnabled(False)
         in_group_box.setLayout(grid_layout)
         return in_group_box
 
@@ -422,6 +451,11 @@ class RecordConfigWindow(BaseConfigWindow):
         return self._has_device_name(self.mic) and resolve_input_sample_rate(self.mic).ok
 
     def _on_streaming_recording_toggled(self, checked):
+        if is_vkinging_device(self.mic):
+            self.monitor_checkbox.setEnabled(False)
+            self.monitor_gain_db_input.setEnabled(False)
+            self.monitor_channel_combo.setEnabled(False)
+            return
 
         self.monitor_checkbox.setEnabled(checked)
         self.monitor_gain_db_input.setEnabled(checked)
@@ -438,14 +472,23 @@ class RecordConfigWindow(BaseConfigWindow):
 
     def _collect_record_detail(self):
         result = resolve_input_sample_rate(self.mic)
-        detail = {
+        detail = dict(self.input_data)
+        detail.pop("sample_rate", None)
+        if not self._explicit_vkinging_range and not is_vkinging_device(self.mic):
+            detail.pop("vkinging_range_index", None)
+        detail.update({
             "total_time": self.time_input.value(),
             "monitor_playback": bool(self.monitor_checkbox.isChecked()),
             "monitor_gain_db": float(self.monitor_gain_db_input.value()),
             "monitor_input_channel": int(self.monitor_channel_combo.currentData()),
             "use_streaming_recording": bool(self.streaming_recording_checkbox.isChecked()),
             "recording_start_delay_ms": float(self.recording_start_delay_ms_input.value()),
-        }
+        })
+        if is_vkinging_device(self.mic):
+            selected_range = self.vkinging_range_combo.currentData()
+            detail["vkinging_range_index"] = validate_range_index(selected_range)
+            if detail["monitor_playback"]:
+                raise ValueError("vkinging 仅支持录制，不支持实时监听播放。")
         if result.ok:
             detail["sample_rate"] = int(result.sample_rate)
         return detail
@@ -469,7 +512,11 @@ class RecordConfigWindow(BaseConfigWindow):
             if not duplex_result.ok:
                 MessageBox.warning(self, "采样率配置", duplex_result.message)
                 return
-        self.final_data = self._collect_record_detail()
+        try:
+            self.final_data = self._collect_record_detail()
+        except ValueError as exc:
+            MessageBox.warning(self, "录制配置", str(exc))
+            return
         self.accept()
 
     def on_default_btn_clicked(self):
@@ -489,13 +536,18 @@ class RecordConfigWindow(BaseConfigWindow):
             if not duplex_result.ok:
                 MessageBox.warning(self, "采样率配置", duplex_result.message)
                 return
-        ok = save_acquisition_default("RECORD_ONLY", self._collect_record_detail(), logger=self.logger)
+        try:
+            detail = self._collect_record_detail()
+        except ValueError as exc:
+            MessageBox.warning(self, "录制配置", str(exc))
+            return
+        ok = save_acquisition_default("RECORD_ONLY", detail, logger=self.logger)
         self._show_default_save_result(ok)
 
     def _on_monitor_toggled(self, checked: bool):
-        self.monitor_gain_db_input.setEnabled(bool(checked))
+        self.monitor_gain_db_input.setEnabled(bool(checked) and not is_vkinging_device(self.mic))
         if hasattr(self, "monitor_channel_combo"):
-            self.monitor_channel_combo.setEnabled(bool(checked))
+            self.monitor_channel_combo.setEnabled(bool(checked) and not is_vkinging_device(self.mic))
 
 
 class ImportAudioConfigWindow(BaseConfigWindow):

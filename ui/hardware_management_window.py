@@ -15,19 +15,54 @@ from base.hardware_management import (
     HardwareManagementRepository,
 )
 from base.sound_device_manager import SoundDeviceManager, sd
+from base.vkinging_input import is_vkinging_device, validate_sample_rate
 from consts import model_consts
 from consts.audio_consts import VALID_SAMPLE_RATES, VALID_BIT_DEPTHS, DEVICE_ENUMERATION_BASE_EXCEPTIONS
+from consts.vkinging_consts import VKINGING_SAMPLE_RATE_MIN, VKINGING_SAMPLE_RATE_MAX
 from ui.custom_ui_widget.widgets import ComboBox, Label, LineEdit, MessageBox, PushButton, SpinBox, TableView
 
 
+class VkingingSampleRateControl(ComboBox):
+    """Convenience presets plus strict free-form integer entry at commit time."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setEditable(True)
+        self.setInsertPolicy(ComboBox.NoInsert)
+        for rate in (44100, 48000, 51200):
+            self.addItem(str(rate), rate)
+        self.setValue(51200)
+        self.setToolTip("可选择常用采样率，或输入 4000–102400 Hz 范围内的整数。")
+
+    def minimum(self):
+        return VKINGING_SAMPLE_RATE_MIN
+
+    def maximum(self):
+        return VKINGING_SAMPLE_RATE_MAX
+
+    def setValue(self, value):
+        self.setCurrentText(str(validate_sample_rate(value)))
+
+    def value(self):
+        # Leave invalid text visible; never clamp it or recover a previous value.
+        text = self.currentText().strip()
+        if not text.isascii() or not text.isdecimal():
+            raise ValueError("采样率必须为 4000–102400 Hz 范围内的整数。")
+        return validate_sample_rate(int(text))
+
+
 class HardwareRegistrationDialog(QDialog):
-    def __init__(self, parent=None, repository=None):
+    def __init__(self, parent=None, repository=None, vkinging_bridge=None):
         super().__init__(parent)
         self.repository = repository or HardwareManagementRepository()
+        self.vkinging_bridge = vkinging_bridge
         self._devices_by_api = {}
         self._discovery_error = None
         self._init_ui()
         self._load_devices()
+        if self.vkinging_bridge is not None:
+            self.vkinging_bridge.state_changed.connect(self._on_backend_state)
+            self._request_discovery()
 
     def _init_ui(self):
         self.setWindowTitle("注册硬件")
@@ -37,6 +72,8 @@ class HardwareRegistrationDialog(QDialog):
         self.display_name_edit = LineEdit()
         self.display_name_edit.setPlaceholderText("未填写时使用设备名称")
         self.samplerate_combo = ComboBox()
+        self.samplerate_spin = VkingingSampleRateControl()
+        self.samplerate_spin.hide()
         self.bit_depth_combo = ComboBox()
         self.latency_spin = SpinBox()
 
@@ -53,7 +90,10 @@ class HardwareRegistrationDialog(QDialog):
         form.addRow(Label("驱动"), self.api_combo)
         form.addRow(Label("显示名称"), self.display_name_edit)
         form.addRow(Label("设备"), self.device_combo)
-        form.addRow(Label("采样率"), self.samplerate_combo)
+        samplerate_layout = QHBoxLayout()
+        samplerate_layout.addWidget(self.samplerate_combo)
+        samplerate_layout.addWidget(self.samplerate_spin)
+        form.addRow(Label("采样率"), samplerate_layout)
         form.addRow(Label("位深"), self.bit_depth_combo)
 
         self.refresh_btn = PushButton("刷新")
@@ -79,6 +119,8 @@ class HardwareRegistrationDialog(QDialog):
     def _load_devices(self, preferred_api=None, preferred_device_key=None):
         self._discovery_error = None
         self._devices_by_api = self._collect_devices_by_api()
+        if self.vkinging_bridge is not None:
+            self._devices_by_api["vkinging"] = [dict(d) for d in self.vkinging_bridge.devices]
         if self._discovery_error is not None:
             MessageBox.warning(self, "提示", str(self._discovery_error))
         self.api_combo.blockSignals(True)
@@ -103,7 +145,29 @@ class HardwareRegistrationDialog(QDialog):
         else:
             self._populate_devices([])
 
+    def _on_backend_state(self, state):
+        self.refresh_btn.setEnabled(state == "idle")
+        self.register_btn.setEnabled(state == "idle")
+
+    def _request_discovery(self):
+        request_id = self.vkinging_bridge.request_discovery(self, self._on_discovery_event)
+        self._on_backend_state(self.vkinging_bridge.state)
+        return request_id
+
+    def _on_discovery_event(self, event):
+        if event.kind not in ("succeeded", "failed", "cancelled"):
+            return
+        api = self.api_combo.currentText()
+        key = self._device_restore_key(self.device_combo.currentData())
+        self._load_devices(preferred_api=api, preferred_device_key=key)
+        if self.vkinging_bridge.diagnostics:
+            MessageBox.warning(self, "设备发现", "\n".join(self.vkinging_bridge.diagnostics))
+
     def refresh_devices(self):
+        if self.vkinging_bridge is not None:
+            if self.vkinging_bridge.busy:
+                return
+            self._request_discovery()
         previous_api = self.api_combo.currentText()
         previous_device_key = self._device_restore_key(self.device_combo.currentData())
         try:
@@ -184,6 +248,8 @@ class HardwareRegistrationDialog(QDialog):
     def _device_restore_key(device):
         if not isinstance(device, dict):
             return None
+        if is_vkinging_device(device):
+            return ("vkinging", device.get("hardware_id"))
         index = device.get("index")
         name = device.get("name")
         if index is not None:
@@ -194,6 +260,8 @@ class HardwareRegistrationDialog(QDialog):
     def _device_matches_restore_key(cls, device, restore_key):
         if not isinstance(device, dict) or restore_key is None:
             return False
+        if restore_key[0] == "vkinging":
+            return is_vkinging_device(device) and device.get("hardware_id") == restore_key[1]
         if restore_key[0] == "index_name":
             return device.get("index") == restore_key[1] and device.get("name") == restore_key[2]
         return False
@@ -231,6 +299,12 @@ class HardwareRegistrationDialog(QDialog):
 
     def _on_device_changed(self, _index):
         device = self.device_combo.currentData()
+        native = is_vkinging_device(device)
+        self.samplerate_spin.setVisible(native)
+        self.samplerate_combo.setVisible(not native)
+        if native:
+            self.samplerate_spin.setValue(device.get("samplerate", 51200))
+            return
         if not device:
             self._set_samplerate_options(device_selected=False)
             return
@@ -253,15 +327,18 @@ class HardwareRegistrationDialog(QDialog):
             self.samplerate_combo.blockSignals(False)
 
     def accept_registration(self):
-        if self._discovery_error is not None:
-            MessageBox.warning(self, "提示", str(self._discovery_error))
+        if self.vkinging_bridge is not None and self.vkinging_bridge.busy:
+            MessageBox.warning(self, "提示", "设备正在使用或尚未释放，请稍后重试。")
             return
         device = self.device_combo.currentData()
+        if self._discovery_error is not None and not is_vkinging_device(device):
+            MessageBox.warning(self, "提示", str(self._discovery_error))
+            return
         if not device:
             MessageBox.warning(self, "提示", "请选择设备")
             return
         try:
-            samplerate = int(self.samplerate_combo.currentText())
+            samplerate = self.samplerate_spin.value() if is_vkinging_device(device) else int(self.samplerate_combo.currentText())
             bit_depth = int(self.bit_depth_combo.currentData())
             latency_ms = int(self.latency_spin.value())
         except (TypeError, ValueError):
@@ -330,9 +407,10 @@ class HardwareManagementTableModel(QAbstractTableModel):
 
     columns = COLUMNS
 
-    def __init__(self, repository, parent=None, load_initial=True):
+    def __init__(self, repository, parent=None, load_initial=True, mutation_allowed=None):
         super().__init__(parent)
         self.repository = repository
+        self.mutation_allowed = mutation_allowed
         self.assets = []
         self._checked_hardware_id = None
         if load_initial:
@@ -414,7 +492,7 @@ class HardwareManagementTableModel(QAbstractTableModel):
             return Qt.NoItemFlags
         flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
         field = self.columns[index.column()]
-        if field in self.EDITABLE_COLUMNS:
+        if field in self.EDITABLE_COLUMNS and (self.mutation_allowed is None or self.mutation_allowed()):
             flags |= Qt.ItemIsEditable
         if field == "display_name":
             flags |= Qt.ItemIsUserCheckable
@@ -436,12 +514,17 @@ class HardwareManagementTableModel(QAbstractTableModel):
             return True
         if role != Qt.EditRole:
             return False
+        if self.mutation_allowed is not None and not self.mutation_allowed():
+            return False
         if field not in self.EDITABLE_COLUMNS:
             return False
 
         old_asset = dict(self.assets[row])
         try:
-            normalized_value = self._normalize_value(field, value)
+            if field == "samplerate" and is_vkinging_device(old_asset):
+                normalized_value = validate_sample_rate(value)
+            else:
+                normalized_value = self._normalize_value(field, value)
         except ValueError as exc:
             MessageBox.warning(None, "提示", str(exc))
             self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
@@ -608,6 +691,31 @@ class ComboValueDelegate(FocuslessItemDelegate):
             model.setData(index, value, Qt.EditRole)
 
 
+class HardwareSampleRateDelegate(ComboValueDelegate):
+    def createEditor(self, parent, option, index):
+        asset = index.model().assets[index.row()]
+        if is_vkinging_device(asset):
+            return VkingingSampleRateControl(parent)
+        return super().createEditor(parent, option, index)
+
+    def setEditorData(self, editor, index):
+        if isinstance(editor, VkingingSampleRateControl):
+            editor.setValue(index.data(Qt.EditRole))
+        else:
+            super().setEditorData(editor, index)
+
+    def setModelData(self, editor, model, index):
+        if isinstance(editor, VkingingSampleRateControl):
+            try:
+                value = editor.value()
+            except ValueError as exc:
+                MessageBox.warning(editor, "采样率配置", str(exc))
+                return
+            model.setData(index, value, Qt.EditRole)
+        else:
+            super().setModelData(editor, model, index)
+
+
 class LatencyDelegate(QStyledItemDelegate):
     def createEditor(self, parent, _option, _index):
         editor = SpinBox(parent)
@@ -630,6 +738,7 @@ class HardwareManagementWindow(QDialog):
         on_selected_devices_updated=None,
         selected_devices_provider=None,
         audio_workflow_active_provider=None,
+        vkinging_bridge=None,
     ):
         super().__init__(parent)
         self.repository = repository or HardwareManagementRepository()
@@ -637,14 +746,15 @@ class HardwareManagementWindow(QDialog):
         self.on_selected_devices_updated = on_selected_devices_updated
         self.selected_devices_provider = selected_devices_provider
         self.audio_workflow_active_provider = audio_workflow_active_provider
+        self.vkinging_bridge = vkinging_bridge
         self.initial_load_failed = False
         self._init_ui()
         try:
-            self.model = HardwareManagementTableModel(self.repository, self)
+            self.model = HardwareManagementTableModel(self.repository, self, mutation_allowed=lambda: not self._audio_workflow_active())
         except (HardwareManagementError,) + model_consts.SQLITE_REPOSITORY_EXCEPTIONS as exc:
             self.initial_load_failed = True
             MessageBox.warning(self, "提示", str(exc))
-            self.model = HardwareManagementTableModel(self.repository, self, load_initial=False)
+            self.model = HardwareManagementTableModel(self.repository, self, load_initial=False, mutation_allowed=lambda: not self._audio_workflow_active())
         self.table.setModel(self.model)
         self.model.selection_restore_requested.connect(self._restore_selected_hardware_id)
         self.model.asset_updated.connect(self._notify_selected_devices_updated)
@@ -679,7 +789,7 @@ class HardwareManagementWindow(QDialog):
         self.table.setItemDelegate(FocuslessItemDelegate(self.table))
         self.table.setItemDelegateForColumn(
             self.model.column_index("samplerate"),
-            ComboValueDelegate([(str(rate), rate) for rate in VALID_SAMPLE_RATES], self.table),
+            HardwareSampleRateDelegate([(str(rate), rate) for rate in VALID_SAMPLE_RATES], self.table),
         )
         self.table.setItemDelegateForColumn(
             self.model.column_index("bit_depth"),
@@ -703,7 +813,10 @@ class HardwareManagementWindow(QDialog):
         self.model.set_checked_hardware_id(hardware_id)
 
     def open_registration_dialog(self):
-        dialog = HardwareRegistrationDialog(self, repository=self.repository)
+        if self._audio_workflow_active():
+            self._warn_hardware_change_during_audio_workflow()
+            return
+        dialog = HardwareRegistrationDialog(self, repository=self.repository, vkinging_bridge=self.vkinging_bridge)
         if dialog.exec_() == QDialog.Accepted:
             self.refresh()
 
@@ -748,6 +861,8 @@ class HardwareManagementWindow(QDialog):
         MessageBox.warning(self, "提示", message)
 
     def _audio_workflow_active(self):
+        if self.vkinging_bridge is not None and self.vkinging_bridge.busy:
+            return True
         if not callable(self.audio_workflow_active_provider):
             return False
         return bool(self.audio_workflow_active_provider())
@@ -766,6 +881,9 @@ class HardwareManagementWindow(QDialog):
         hardware_id = self.model.assets[row]["hardware_id"]
         result = MessageBox.question(self, "确认删除", "确认删除选中的硬件？")
         if result != MessageBox.Yes:
+            return
+        if self._audio_workflow_active():
+            self._warn_hardware_change_during_audio_workflow()
             return
         try:
             deleted = self.repository.delete_asset(hardware_id)
@@ -790,7 +908,7 @@ class HardwareManagementWindow(QDialog):
         self.refresh()
 
 
-def open_hardware_management_window(parent=None, repository=None, audio_workflow_active_provider=None):
+def open_hardware_management_window(parent=None, repository=None, audio_workflow_active_provider=None, vkinging_bridge=None):
     repository = repository or HardwareManagementRepository()
     try:
         tables_exist = repository.tables_exist()
@@ -818,6 +936,7 @@ def open_hardware_management_window(parent=None, repository=None, audio_workflow
         on_selected_devices_updated=on_selected_devices_updated,
         selected_devices_provider=selected_devices_provider,
         audio_workflow_active_provider=audio_workflow_active_provider,
+        vkinging_bridge=vkinging_bridge,
     )
     if window.initial_load_failed:
         return None

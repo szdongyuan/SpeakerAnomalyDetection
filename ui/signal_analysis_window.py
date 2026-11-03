@@ -249,7 +249,17 @@ def _missing_file_calibration_warning_text():
 
 
 def resolve_imported_wav_v2pa_factor(data_struct, raw_channel, warn_callback=None):
+    inspection = getattr(data_struct, "wav_calibration_inspection", None)
     metadata = getattr(data_struct, "wav_calibration_metadata", None)
+    if inspection is not None:
+        if inspection.source == "vkinging":
+            if inspection.status not in {"vkinging_valid", "vkinging_uncalibrated"}:
+                raise ValueError(f"vkinging 校准声压分析不可用: {inspection.reason or inspection.status}")
+            metadata = inspection.metadata
+            if not isinstance(metadata, dict) or metadata.get("backend") != "vkinging":
+                raise ValueError("vkinging 校准快照缺失")
+        elif not inspection.structure_valid:
+            raise ValueError(f"WAV 文件结构无效: {inspection.reason}")
     resolution = resolve_wav_channel_v2pa_factor(metadata, raw_channel)
     if (
         not resolution.used_file_metadata
@@ -259,6 +269,16 @@ def resolve_imported_wav_v2pa_factor(data_struct, raw_channel, warn_callback=Non
         warn_callback(_missing_file_calibration_warning_text())
         data_struct.wav_calibration_warning_shown = True
     return float(resolution.factor)
+
+
+def _record_calibration_prerequisite_failure(widget, reason):
+    failures = getattr(widget.data_struct, "analysis_prerequisite_failures", None)
+    if failures is None:
+        failures = {}
+        widget.data_struct.analysis_prerequisite_failures = failures
+    key = getattr(widget, "_sequence_analysis_key", None) or getattr(widget, "title_name", "分析项")
+    failures[key] = str(reason)
+    widget.data_struct.analysis_result_dict.pop(key, None)
 
 
 def resolve_analysis_channel_signal(
@@ -1077,29 +1097,36 @@ class AnalysisGraphWidget(QWidget):
             axis.setLabel(axis.labelText, **{"font-size": f"{font_size}px"})
 
     def _resolve_v2pa_factor_for_analysis(self):
+        analysis_config = getattr(self, "analysis_config", None) or {}
+        inspection = getattr(self.data_struct, "wav_calibration_inspection", None)
+        metadata = getattr(self.data_struct, "wav_calibration_metadata", None)
+        known_vkinging = ((inspection is not None and inspection.source == "vkinging")
+                          or isinstance(metadata, dict) and metadata.get("backend") == "vkinging")
+        # A pre-resolved live factor never overrides a frozen voltage file.
+        if known_vkinging:
+            self._use_pre_resolved_v2pa_factor = False
+            try:
+                self.v2pa_factor = resolve_imported_wav_v2pa_factor(
+                    self.data_struct, analysis_config.get("analysis_channel", 0))
+            except ValueError as exc:
+                self.v2pa_factor = None
+                _record_calibration_prerequisite_failure(self, exc)
+                MessageBox.warning(self, "提示", str(exc))
+                return False
+            return True
         if getattr(self, "_use_pre_resolved_v2pa_factor", False):
             self._use_pre_resolved_v2pa_factor = False
             if self.v2pa_factor is not None:
                 return True
-
-        analysis_config = getattr(self, "analysis_config", None) or {}
-        raw_channel = getattr(
-            self,
-            "_v2pa_raw_analysis_channel",
-            analysis_config.get("analysis_channel", 0),
-        )
+        raw_channel = getattr(self, "_v2pa_raw_analysis_channel", analysis_config.get("analysis_channel", 0))
         if getattr(self.data_struct, "wav_calibration_metadata_authoritative", False):
             self.v2pa_factor = resolve_imported_wav_v2pa_factor(
-                self.data_struct,
-                raw_channel,
-                warn_callback=lambda message: MessageBox.warning(self, "提示", message),
-            )
+                self.data_struct, raw_channel,
+                warn_callback=lambda message: MessageBox.warning(self, "提示", message))
             return True
         try:
             self.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
-                raw_channel,
-                warn_callback=lambda message: MessageBox.warning(self, "提示", message),
-            )
+                raw_channel, warn_callback=lambda message: MessageBox.warning(self, "提示", message))
             return True
         except Exception as exc:
             self.v2pa_factor = None
@@ -3939,9 +3966,7 @@ class PeakDetection(AnalysisGraphWidget):
             )
         except Exception:
             return None
-        if getattr(self, "_use_pre_resolved_v2pa_factor", False) and self.v2pa_factor is not None:
-            self._use_pre_resolved_v2pa_factor = False
-        elif not self._resolve_v2pa_factor_for_analysis():
+        if not self._resolve_v2pa_factor_for_analysis():
             return None
 
         try:
@@ -4413,33 +4438,30 @@ class PipelinePdPm(QWidget):
 
         recorded_signal, sample_rate, cfg, head, tail, pd_cls, pm_cls = context
         head_config = head.get("config", {}) or {}
-        use_pre_resolved_v2pa_factor = getattr(
-            self,
-            "_use_pre_resolved_v2pa_factor",
-            False,
-        )
-        if use_pre_resolved_v2pa_factor:
+        # ED selects its signal and calibration from the same nested WAV column.
+        inspection = getattr(self.data_struct, "wav_calibration_inspection", None)
+        metadata = getattr(self.data_struct, "wav_calibration_metadata", None)
+        known_vkinging = ((inspection is not None and inspection.source == "vkinging")
+                          or isinstance(metadata, dict) and metadata.get("backend") == "vkinging")
+        if known_vkinging or getattr(self.data_struct, "wav_calibration_metadata_authoritative", False):
             self._use_pre_resolved_v2pa_factor = False
-        needs_v2pa_resolution = not (
-            use_pre_resolved_v2pa_factor and self.v2pa_factor is not None
-        )
-        if needs_v2pa_resolution and getattr(
-            self.data_struct,
-            "wav_calibration_metadata_authoritative",
-            False,
-        ):
-            self.v2pa_factor = resolve_imported_wav_v2pa_factor(
-                self.data_struct,
-                head_config.get("analysis_channel", 0),
-                warn_callback=lambda message: MessageBox.warning(self, "提示", message),
-            )
-        elif needs_v2pa_resolution:
+            try:
+                self.v2pa_factor = resolve_imported_wav_v2pa_factor(
+                    self.data_struct, head_config.get("analysis_channel", 0),
+                    warn_callback=lambda message: MessageBox.warning(self, "提示", message))
+            except ValueError as exc:
+                self.v2pa_factor = None
+                _record_calibration_prerequisite_failure(self, exc)
+                MessageBox.warning(self, "提示", str(exc))
+                return None
+        elif getattr(self, "_use_pre_resolved_v2pa_factor", False) and self.v2pa_factor is not None:
+            self._use_pre_resolved_v2pa_factor = False
+        else:
             try:
                 self.v2pa_factor = resolve_analysis_v2pa_factor_for_channel(
                     head_config.get("analysis_channel", 0),
-                    warn_callback=lambda message: MessageBox.warning(self, "提示", message),
-                )
-            except Exception as exc:
+                    warn_callback=lambda message: MessageBox.warning(self, "提示", message))
+            except ValueError as exc:
                 MessageBox.warning(self, "提示", str(exc))
                 return None
 

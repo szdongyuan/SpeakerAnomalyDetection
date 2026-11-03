@@ -11,6 +11,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PyQt5.QtWidgets import QApplication, QWidget
+from ui.hardware_window import HardwareSelectionResult
+
+
+def _selection_reply(accepted, devices, options):
+    if options.get("return_status", False):
+        return HardwareSelectionResult(accepted, *devices)
+    return devices
 
 
 def _install_module(name, **attrs):
@@ -100,7 +107,7 @@ def main_window_module(monkeypatch):
         "ui.sequence.sequence_widget": types.SimpleNamespace(SequenceWindow=object),
         "ui.custom_ui_widget.traypopuppanel": types.SimpleNamespace(TrayPopupButton=object),
         "ui.ui_src": types.SimpleNamespace(ui_resources=object()),
-        "ui.hardware_window": types.SimpleNamespace(open_hardware_selection_window=lambda **kwargs: (None, None, [])),
+        "ui.hardware_window": types.SimpleNamespace(open_hardware_selection_window=lambda **kwargs: _selection_reply(False, (None, None, []), kwargs)),
         "ui.hardware_management_window": types.SimpleNamespace(
             open_hardware_management_window=lambda **kwargs: None
         ),
@@ -1302,7 +1309,7 @@ def test_hardware_recovery_success_enables_workflow(main_window_module, monkeypa
     window = _window(main_window_module)
     mic = {"name": "New Mic", "index": 10, "hostapi": 0}
     speaker = {"name": "New Speaker", "index": 11, "hostapi": 0}
-    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: (speaker, mic, [1]))
+    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: _selection_reply(True, (speaker, mic, [1]), kwargs))
 
     window._open_hardware_selection_for_recovery()
 
@@ -1315,7 +1322,7 @@ def test_hardware_recovery_success_enables_workflow(main_window_module, monkeypa
 def test_hardware_recovery_accepts_mic_only_completion(main_window_module, monkeypatch):
     window = _window(main_window_module)
     mic = {"name": "New Mic", "index": 10, "hostapi": 0}
-    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: (None, mic, [1]))
+    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: _selection_reply(True, (None, mic, [1]), kwargs))
 
     window._open_hardware_selection_for_recovery()
 
@@ -1331,7 +1338,7 @@ def test_hardware_recovery_accepts_mic_only_completion(main_window_module, monke
 
 def test_hardware_recovery_cancel_keeps_workflow_disabled(main_window_module, monkeypatch):
     window = _window(main_window_module)
-    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: (None, None, []))
+    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: _selection_reply(False, (None, None, []), kwargs))
     warnings = []
     monkeypatch.setattr(
         main_window_module.MessageBox,
@@ -1342,8 +1349,8 @@ def test_hardware_recovery_cancel_keeps_workflow_disabled(main_window_module, mo
     window._open_hardware_selection_for_recovery()
 
     assert window.device_workflow_available is False
-    assert window.sequence_window.available_calls[-1][0] is False
-    assert warnings
+    assert window.sequence_window.available_calls == []
+    assert warnings == []
 
 
 def test_menu_hardware_success_restores_unavailable_workflow(main_window_module, monkeypatch):
@@ -1352,7 +1359,7 @@ def test_menu_hardware_success_restores_unavailable_workflow(main_window_module,
     window.sequence_window.player_status_flag = False
     mic = {"name": "New Mic", "index": 10, "hostapi": 0}
     speaker = {"name": "New Speaker", "index": 11, "hostapi": 0}
-    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: (speaker, mic, [1]))
+    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: _selection_reply(True, (speaker, mic, [1]), kwargs))
 
     window.on_hardware_window_init()
 
@@ -1372,7 +1379,7 @@ def test_menu_hardware_mic_only_selection_clears_previous_speaker(main_window_mo
     window.mic_channels = [0]
     window.device_workflow_available = True
     window.sequence_window.player_status_flag = False
-    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: (None, mic, [1]))
+    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: _selection_reply(True, (None, mic, [1]), kwargs))
 
     window.on_hardware_window_init()
 
@@ -1395,7 +1402,12 @@ def test_menu_hardware_cancel_preserves_previous_complete_selection(main_window_
     window.mic_channels = [0]
     window.device_workflow_available = True
     window.sequence_window.player_status_flag = False
-    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: (None, None, []))
+    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: _selection_reply(False, (None, None, []), kwargs))
+
+    window.sequence_window.mic = old_mic
+    window.sequence_window.speaker = old_speaker
+    window.sequence_window.mic_channels = [0]
+    window.sequence_window.available_calls.append((True, ""))
 
     window.on_hardware_window_init()
 
@@ -1406,7 +1418,7 @@ def test_menu_hardware_cancel_preserves_previous_complete_selection(main_window_
     assert window.sequence_window.mic == old_mic
     assert window.sequence_window.speaker == old_speaker
     assert window.sequence_window.mic_channels == [0]
-    assert window.sequence_window.available_calls[-1] == (True, "")
+    assert window.sequence_window.available_calls == [(True, "")]
 
 
 def test_menu_hardware_cancel_preserves_available_devices(main_window_module, monkeypatch):
@@ -1418,23 +1430,25 @@ def test_menu_hardware_cancel_preserves_available_devices(main_window_module, mo
     window.mic_channels = [0]
     window.device_workflow_available = True
     window.sequence_window.player_status_flag = False
-    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: (old_speaker, old_mic, [0]))
+    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: _selection_reply(False, (old_speaker, old_mic, [0]), kwargs))
+
+    window.sequence_window.available_calls.append((True, ""))
 
     window.on_hardware_window_init()
 
     assert window.mic == old_mic
     assert window.speaker == old_speaker
     assert window.mic_channels == [0]
-    assert window.sequence_window.available_calls[-1] == (True, "")
+    assert window.sequence_window.available_calls == [(True, "")]
 
 
 def test_menu_hardware_cancel_keeps_unavailable_state(main_window_module, monkeypatch):
     window = _window(main_window_module)
     window.device_workflow_available = False
     window.sequence_window.player_status_flag = False
-    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: (None, None, []))
+    monkeypatch.setattr(main_window_module, "open_hardware_selection_window", lambda **kwargs: _selection_reply(False, (None, None, []), kwargs))
 
     window.on_hardware_window_init()
 
     assert window.device_workflow_available is False
-    assert window.sequence_window.available_calls[-1][0] is False
+    assert window.sequence_window.available_calls == []

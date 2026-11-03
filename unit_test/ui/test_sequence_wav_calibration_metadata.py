@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from base.data_struct.data_deal_struct import DataDealStruct
+from base.wav_calibration_metadata import WavCalibrationInspection
 from base.hardware_management import HardwareManagementRepository
 from base import recording_management
 from base import soundcard_audio_processor as soundcard
@@ -180,6 +181,9 @@ def test_record_only_wav_metadata_keeps_all_saved_input_channels(monkeypatch):
 
 def test_data_struct_initializes_and_clears_wav_calibration_runtime_fields():
     data_struct = DataDealStruct()
+    assert data_struct.wav_calibration_inspection is None
+    assert data_struct.wav_physical_channel_indices == ()
+    assert data_struct.analysis_prerequisite_failures == {}
     assert data_struct.wav_calibration_metadata is None
     assert data_struct.wav_calibration_metadata_authoritative is False
     assert data_struct.wav_calibration_warning_shown is False
@@ -190,6 +194,9 @@ def test_data_struct_initializes_and_clears_wav_calibration_runtime_fields():
 
     data_struct.clear_data()
 
+    assert data_struct.wav_calibration_inspection is None
+    assert data_struct.wav_physical_channel_indices == ()
+    assert data_struct.analysis_prerequisite_failures == {}
     assert data_struct.wav_calibration_metadata is None
     assert data_struct.wav_calibration_metadata_authoritative is False
     assert data_struct.wav_calibration_warning_shown is False
@@ -205,7 +212,8 @@ def test_import_audio_reads_wav_calibration_metadata(monkeypatch):
         "load_audio_preserve_rate",
         lambda path, mono=False: (np.array([0.1, 0.2], dtype=np.float32), 48000),
     )
-    monkeypatch.setattr(sequence_widget, "read_wav_calibration_metadata", lambda path, logger=None: metadata)
+    monkeypatch.setattr(sequence_widget, "inspect_wav_calibration_metadata",
+                        lambda path, logger=None: WavCalibrationInspection("legacy", "legacy_valid", metadata))
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", lambda parent, title, message: warnings.append(message))
 
     sequence_widget.SequenceWindow.import_audio_and_analyze(window)
@@ -225,7 +233,8 @@ def test_import_audio_missing_metadata_warns_once_and_marks_authoritative(monkey
         "load_audio_preserve_rate",
         lambda path, mono=False: (np.array([0.1, 0.2], dtype=np.float32), 48000),
     )
-    monkeypatch.setattr(sequence_widget, "read_wav_calibration_metadata", lambda path, logger=None: None)
+    monkeypatch.setattr(sequence_widget, "inspect_wav_calibration_metadata",
+                        lambda path, logger=None: WavCalibrationInspection("legacy", "legacy_absent"))
     monkeypatch.setattr(sequence_widget.MessageBox, "warning", lambda parent, title, message: warnings.append(message))
 
     sequence_widget.SequenceWindow.import_audio_and_analyze(window)
@@ -246,7 +255,8 @@ def test_import_stimulus_audio_reads_metadata_and_preserves_decoded_rate_referen
         "load_audio_preserve_rate",
         lambda path, mono=False: (np.array([0.1, 0.2], dtype=np.float32), 32000),
     )
-    monkeypatch.setattr(sequence_widget, "read_wav_calibration_metadata", lambda path, logger=None: metadata)
+    monkeypatch.setattr(sequence_widget, "inspect_wav_calibration_metadata",
+                        lambda path, logger=None: WavCalibrationInspection("legacy", "legacy_valid", metadata))
 
     def fake_reference(data_struct, detail, using_config_path=None, *, runtime_sample_rate, logger=None):
         reference_calls.append(runtime_sample_rate)

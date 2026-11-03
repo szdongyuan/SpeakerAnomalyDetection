@@ -14,6 +14,16 @@ def test_sound_device_manager_no_longer_exports_registered_repository_read_excep
     assert not hasattr(module, "REGISTERED_REPOSITORY_READ_EXCEPTIONS")
 
 
+def test_vkinging_descriptors_leave_both_portaudio_defaults_unchanged(monkeypatch):
+    default = types.SimpleNamespace(device=(10, 20))
+    monkeypatch.setattr(module.sd, "default", default)
+    mic = {"hostapi_name": "vkinging", "hardware_id": "machine-A"}
+    SoundDeviceManager.change_default_input_device(mic)
+    assert default.device == (10, 20)
+    SoundDeviceManager.change_default_device(mic, 30)
+    assert default.device == (10, 20)
+
+
 def _device(index, name, hostapi=0, samplerate=48000.0, inputs=0, outputs=0):
     return {
         "index": index,

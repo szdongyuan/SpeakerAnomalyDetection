@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from consts.audio_consts import VALID_SAMPLE_RATES
+from base.vkinging_input import is_vkinging_device, validate_sample_rate
 
 
 @dataclass(frozen=True)
@@ -30,9 +31,17 @@ def _coerce_exact_integer_sample_rate(value):
     return sample_rate
 
 
-def resolve_device_sample_rate(device, role_label: str) -> SampleRateResolution:
+def resolve_device_sample_rate(device, role_label: str, *, allow_vkinging=False) -> SampleRateResolution:
     if not device:
         return _fail(f"未选择{role_label}，请在硬件管理中选择设备。")
+    if is_vkinging_device(device):
+        if not allow_vkinging:
+            return _fail("vkinging 设备仅支持输入录制，不能作为输出设备。")
+        try:
+            sample_rate = validate_sample_rate(device.get("samplerate"))
+        except ValueError:
+            return _fail(f"{role_label}采样率无效，请在硬件管理中设置为4000至102400之间的整数。")
+        return SampleRateResolution(True, sample_rate, "")
     if not isinstance(device, dict):
         return _fail(f"{role_label}信息无效，请在硬件管理中重新选择设备。")
     if "samplerate" not in device or device.get("samplerate") in (None, ""):
@@ -46,7 +55,7 @@ def resolve_device_sample_rate(device, role_label: str) -> SampleRateResolution:
 
 
 def resolve_input_sample_rate(mic) -> SampleRateResolution:
-    return resolve_device_sample_rate(mic, "输入设备")
+    return resolve_device_sample_rate(mic, "输入设备", allow_vkinging=True)
 
 
 def resolve_output_sample_rate(speaker) -> SampleRateResolution:
@@ -54,6 +63,8 @@ def resolve_output_sample_rate(speaker) -> SampleRateResolution:
 
 
 def resolve_duplex_sample_rate(mic, speaker) -> SampleRateResolution:
+    if is_vkinging_device(mic):
+        return _fail("vkinging 输入设备仅支持录制，不支持播放录制或监听。")
     input_result = resolve_input_sample_rate(mic)
     if not input_result.ok:
         return input_result

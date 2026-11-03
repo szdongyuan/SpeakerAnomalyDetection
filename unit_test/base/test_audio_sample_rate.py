@@ -70,3 +70,38 @@ def test_duplex_succeeds_when_rates_match():
     result = resolve_duplex_sample_rate({"samplerate": 48000}, {"samplerate": "48000"})
     assert result.ok is True
     assert result.sample_rate == 48000
+
+
+def test_vkinging_input_uses_hardware_rate_without_relaxing_soundcard_or_output():
+    device = {"hostapi_name": "vkinging", "samplerate": 51200}
+    for resolver in (resolve_input_sample_rate,
+                     lambda d: resolve_device_sample_rate(d, "输入设备", allow_vkinging=True)):
+        result = resolver(device)
+        assert result.ok is True
+        assert result.sample_rate == 51200
+    assert resolve_output_sample_rate(device).ok is False
+    assert resolve_input_sample_rate({"hostapi_name": "WASAPI", "samplerate": 51200}).ok is False
+
+
+def test_vkinging_input_range_accepts_only_integer_hardware_rates():
+    for value in (4000, 100001, 102400):
+        assert resolve_input_sample_rate({"hostapi_name": "vkinging", "samplerate": value}).ok is True
+    for value in (True, 51200.0, "51200", 3999, 102401, None):
+        result = resolve_input_sample_rate({"hostapi_name": "vkinging", "samplerate": value})
+        assert result.ok is False
+        assert "采样率" in result.message
+
+
+def test_duplex_rejects_vkinging_even_at_soundcard_compatible_rate():
+    result = resolve_duplex_sample_rate(
+        {"hostapi_name": "vkinging", "samplerate": 48000}, {"samplerate": 48000})
+    assert result.ok is False
+    assert "vkinging" in result.message
+
+
+def test_vkinging_cannot_be_an_output_even_with_a_soundcard_rate():
+    for rate in (44100, 48000):
+        output = {"hostapi_name": "vkinging", "samplerate": rate}
+        assert resolve_output_sample_rate(output).ok is False
+        assert resolve_device_sample_rate(output, "输出设备").ok is False
+        assert resolve_duplex_sample_rate({"samplerate": rate}, output).ok is False

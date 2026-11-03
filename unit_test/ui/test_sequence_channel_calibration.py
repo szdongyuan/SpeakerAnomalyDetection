@@ -250,6 +250,7 @@ def _build_sequence_window(
     FakeAnalysis.reset()
     FakeNonAnalysisWidget.reset()
     namespace = {
+        "copy": copy,
         "get_class_mapping": lambda: class_mapping or {analysis_type: analysis_cls},
         "MessageBox": DummyMessageBox,
         "resolve_analysis_v2pa_factor_for_channel": resolve_impl,
@@ -1103,3 +1104,13 @@ def test_golden_sample_rb_standard_thd_missing_calibration_does_not_warn(tmp_pat
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["items"]["RB1"]["type"] == "RB"
     assert payload["items"]["RB1"]["result"] == {"value": 1.0}
+
+
+def test_record_only_ed_nested_channel_mapping_does_not_mutate_queue():
+    window = _build_sequence_window(lambda channel, **kwargs: 2.5,
+                                    mode="RECORD_ONLY", analysis_type="ED", active_input_channels=[15, 0, 8])
+    params = {"head": {"config": {"analysis_channel": 8}}, "tail": {"config": {}}}
+    original = copy.deepcopy(params)
+    window.instance_analysis_class("ED", "ED", params)
+    assert window.analysis_window[0].analysis_config["head"]["config"]["analysis_channel"] == 2
+    assert params == original

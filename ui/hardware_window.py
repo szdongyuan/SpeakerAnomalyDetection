@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QDialog, QHeaderView, QHBoxLayout, QVBoxLayout
 
@@ -13,6 +13,7 @@ from base.hardware_management import (
 )
 from base import sound_device_manager as sound_device_manager_module
 from base.sound_device_manager import SoundDeviceManager
+from base.vkinging_input import is_vkinging_device
 from consts import model_consts
 from consts.audio_consts import normalize_float_bit_depth
 from consts.running_consts import DEFAULT_DIR
@@ -180,9 +181,26 @@ class MultiCheckTableView(TableView):
         checked: List[Any] = []
         for row in range(self._model.rowCount()):
             item = self._model.item(row, 0)
-            if item and item.checkState() == Qt.Checked:
+            if item and item.isEnabled() and item.isCheckable() and item.checkState() == Qt.Checked:
                 checked.append(item.data(Qt.UserRole))
         return checked
+
+
+@dataclass(frozen=True)
+class HardwareSelectionResult:
+    """Explicit dialog acceptance alongside the compatible device tuple."""
+
+    accepted: bool
+    speaker: Optional[Dict[str, Any]] = None
+    mic: Optional[Dict[str, Any]] = None
+    mic_channels: Tuple[int, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "mic_channels", tuple(self.mic_channels))
+
+    @property
+    def devices(self):
+        return self.speaker, self.mic, list(self.mic_channels)
 
 
 @dataclass
@@ -222,8 +240,10 @@ class HardwareSelectionModel:
 
     def set_api(self, api_name: str) -> None:
         self.state.api_name = api_name
-        # 切换驱动后，清空选择（由 Controller 负责尝试恢复）
-        self.state.speaker_device = None
+        # vkinging is input-only and retains the independent output selection.
+        # Ordinary API changes clear both selections, matching the visible tables.
+        if api_name != "vkinging":
+            self.state.speaker_device = None
         self.state.mic_device = None
         self.state.mic_channels = []
 
@@ -328,14 +348,17 @@ class HardwareSelectionView(QDialog):
         return box
 
 
-class HardwareSelectionController:
+class HardwareSelectionController(QObject):
     """
     Controller：绑定信号，驱动 Model 与 View 的同步。
     """
 
-    def __init__(self, model: HardwareSelectionModel, view: HardwareSelectionView):
+    def __init__(self, model: HardwareSelectionModel, view: HardwareSelectionView, vkinging_bridge=None):
+        super().__init__(view)
+        self._backend_state_connected = False
         self.model = model
         self.view = view
+        self.vkinging_bridge = vkinging_bridge
         self._initial_state = HardwareSelectionState(
             speaker_device=model.state.speaker_device,
             mic_device=model.state.mic_device,
@@ -345,6 +368,32 @@ class HardwareSelectionController:
 
         self._bind_signals()
         self.refresh_and_render(try_restore=True)
+        if self.vkinging_bridge is not None:
+            self.vkinging_bridge.state_changed.connect(self._on_backend_state)
+            self._backend_state_connected = True
+            self.view.finished.connect(self._disconnect_backend_state)
+            self.vkinging_bridge.request_discovery(self.view, self._on_discovery_event)
+            self._on_backend_state(self.vkinging_bridge.state)
+
+    def _disconnect_backend_state(self, _result):
+        if self._backend_state_connected:
+            self._backend_state_connected = False
+            self.vkinging_bridge.state_changed.disconnect(self._on_backend_state)
+
+    def _on_backend_state(self, state):
+        available = state == "idle"
+        self.view.ok_btn.setEnabled(available)
+        self.view.driver_combo.setEnabled(available)
+        self.view.mic_device_table.setEnabled(available)
+        self.view.speaker_device_table.setEnabled(available)
+        self.view.mic_channel_table.setEnabled(available)
+
+    def _on_discovery_event(self, event):
+        if event.kind in ("succeeded", "failed", "cancelled"):
+            self._on_mic_device_checked(self.model.state.mic_device)
+            self._restore_channels(self.view.mic_channel_table, self._initial_state.mic_channels)
+            if event.kind == "failed":
+                MessageBox.warning(self.view, "设备发现", event.reason or "vkinging 设备发现失败")
 
     @staticmethod
     def _matches_restore_device(candidate: Optional[Dict[str, Any]], previous: Optional[Dict[str, Any]]) -> bool:
@@ -456,7 +505,7 @@ class HardwareSelectionController:
         model = table.model()
         for row in range(model.rowCount()):
             item = model.item(row, 0)
-            if item is None:
+            if item is None or not item.isEnabled() or not item.isCheckable():
                 continue
             payload = item.data(Qt.UserRole)
             if int(payload) in want:
@@ -467,7 +516,8 @@ class HardwareSelectionController:
         self._render_devices()
 
     def _on_speaker_device_checked(self, payload: object) -> None:
-        self.model.state.speaker_device = payload if isinstance(payload, dict) else None
+        if isinstance(payload, dict) or self.model.state.api_name != "vkinging":
+            self.model.state.speaker_device = payload if isinstance(payload, dict) else None
 
     def _on_mic_device_checked(self, payload: object) -> None:
         self.model.state.mic_device = payload if isinstance(payload, dict) else None
@@ -480,11 +530,26 @@ class HardwareSelectionController:
         except (HardwareManagementError,) + model_consts.SQLITE_REPOSITORY_EXCEPTIONS as e:
             MessageBox.warning(self.view, "提示", str(e))
             channels = []
+        routes = None
+        if is_vkinging_device(self.model.state.mic_device):
+            routes = set()
+        if routes is not None and self.vkinging_bridge is not None:
+            matches = [d for d in self.vkinging_bridge.devices
+                       if d.get("hardware_id") == self.model.state.mic_device.get("hardware_id")]
+            routes = set(matches[0]["physical_channels"]) if len(matches) == 1 else set()
         channel_options = self._mic_channel_options(channels)
         if channel_options is None:
             MessageBox.warning(self.view, "提示", "已注册麦克风通道数据无效，请检查硬件管理数据库。")
             channel_options = []
         self.view.mic_channel_table.set_options(channel_options)
+        if routes is not None:
+            table_model = self.view.mic_channel_table.model()
+            for row in range(table_model.rowCount()):
+                item = table_model.item(row, 0)
+                if item.data(Qt.UserRole) not in routes:
+                    item.setText(f"{item.text()}（不可用）")
+                    item.setCheckable(False)
+                    item.setEnabled(False)
 
     @classmethod
     def _mic_channel_options(cls, channels: List[Dict[str, Any]]) -> Optional[List[Tuple[Any, int]]]:
@@ -523,6 +588,12 @@ class HardwareSelectionController:
             MessageBox.warning(self.view, "提示", "请选择麦克风设备和麦克风通道！")
             return None
 
+        if self.vkinging_bridge is not None and self.vkinging_bridge.busy:
+            MessageBox.warning(self.view, "提示", "设备正在使用或尚未释放，请稍后重试。")
+            return
+        if is_vkinging_device(mic):
+            self._apply_vkinging_selection(mic, speaker, mic_channels)
+            return
         SoundDeviceManager.refresh_available_device()
 
         try:
@@ -613,6 +684,25 @@ class HardwareSelectionController:
         self.model.state.mic_channels = mic_channels
         self.view.accept()
 
+    def _apply_vkinging_selection(self, mic, speaker, mic_channels):
+        if self.vkinging_bridge is None or not self.vkinging_bridge.discovery_complete:
+            MessageBox.warning(self.view, "提示", "请等待 vkinging 设备验证完成。")
+            return
+        matches = [d for d in self.vkinging_bridge.devices if d.get("hardware_id") == mic.get("hardware_id")]
+        if len(matches) != 1 or not set(mic_channels).issubset(matches[0]["physical_channels"]):
+            MessageBox.warning(self.view, "提示", "已注册硬件当前不可用或所选物理通道已断开。")
+            return
+        payload = self._augment_runtime_device(matches[0], mic)
+        try:
+            SoundDeviceManager()._save_selected_devices_with_config_rollback(payload, speaker, mic_channels)
+        except (OSError, ValueError, RuntimeError) as exc:
+            MessageBox.warning(self.view, "提示", f"硬件配置保存失败：{exc}")
+            return
+        self.model.state.mic_device = payload
+        self.model.state.speaker_device = speaker
+        self.model.state.mic_channels = mic_channels
+        self.view.accept()
+
     @staticmethod
     def _is_positive_int(value: Any) -> bool:
         return isinstance(value, int) and not isinstance(value, bool) and value > 0
@@ -642,7 +732,8 @@ class HardwareSelectionController:
         matches = [
             device
             for device in runtime_index.get(asset.get("hostapi_name"), [])
-            if device.get("name") == asset.get("device_name")
+            if (device.get("hardware_id") == asset.get("hardware_id") if is_vkinging_device(asset)
+                else device.get("name") == asset.get("device_name"))
         ]
         if not matches:
             return "missing", None
@@ -664,7 +755,7 @@ class HardwareSelectionController:
             "latency_ms": asset.get("latency_ms"),
         }
         for key, value in registered_metadata.items():
-            if key not in payload:
+            if key not in payload or is_vkinging_device(asset):
                 payload[key] = value
         return payload
 
@@ -693,18 +784,13 @@ class HardwareSelectionController:
         except FileNotFoundError:
             return
 
-    def get_selected_devices(self):
-        if self.view.result() == QDialog.Accepted:
-            return (
-                self.model.state.speaker_device,
-                self.model.state.mic_device,
-                list(self.model.state.mic_channels),
-            )
-        return (
-            self._initial_state.speaker_device,
-            self._initial_state.mic_device,
-            list(self._initial_state.mic_channels),
-        )
+    def get_selected_devices(self, *, return_status=False):
+        accepted = self.view.result() == QDialog.Accepted
+        state = self.model.state if accepted else self._initial_state
+        result = HardwareSelectionResult(accepted, state.speaker_device, state.mic_device,
+                                         tuple(state.mic_channels))
+        return result if return_status else result.devices
+
 
 
 def _normalize_channel_indices(channels: Optional[Iterable[Any]]) -> List[int]:
@@ -749,12 +835,15 @@ def open_hardware_selection_window(
     mic_device: Optional[Dict[str, Any]] = None,
     mic_channels: Optional[Iterable[Any]] = None,
     repository=None,
+    vkinging_bridge=None,
+    return_status=False,
 ):
     """
     打开硬件选择窗口，并支持根据传入参数进行初始化回填：
     - driver：Host API 名称（例如 WASAPI/ASIO/MME 等）
     - speaker_device / mic_device：sounddevice 设备 dict
     - mic_channels：通道索引（0-based int）或显示字符串（Out1/In1）
+    - return_status：为 True 时返回 HardwareSelectionResult，显式区分确认和取消。
     """
 
     initial_state = HardwareSelectionState(
@@ -766,7 +855,6 @@ def open_hardware_selection_window(
 
     model = HardwareSelectionModel(initial_state=initial_state, repository=repository)
     view = HardwareSelectionView()
-    controller = HardwareSelectionController(model, view)
+    controller = HardwareSelectionController(model, view, vkinging_bridge=vkinging_bridge)
     view.exec()
-    result = controller.get_selected_devices()
-    return result
+    return controller.get_selected_devices(return_status=return_status)

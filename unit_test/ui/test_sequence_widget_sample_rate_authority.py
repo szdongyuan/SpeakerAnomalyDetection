@@ -7,6 +7,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from base import play_and_record
+from base.wav_calibration_metadata import WavCalibrationInspection
 from base.output_calibration import OutputCalibrationCache
 from ui.sequence import sequence_widget
 
@@ -320,7 +321,8 @@ def test_import_audio_preserves_file_native_samplerate(monkeypatch):
         ]
     }
     monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("input.wav", ""))
-    monkeypatch.setattr(sequence_widget, "read_wav_calibration_metadata", lambda path, logger=None: metadata)
+    monkeypatch.setattr(sequence_widget, "inspect_wav_calibration_metadata",
+                        lambda path, logger=None: WavCalibrationInspection("legacy", "legacy_valid", metadata))
     monkeypatch.setattr(
         sequence_widget,
         "load_audio_preserve_rate",
@@ -349,7 +351,8 @@ def test_import_stimulus_audio_generates_temporary_reference_at_recording_rate(m
         ]
     }
     monkeypatch.setattr(sequence_widget.QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("input.wav", ""))
-    monkeypatch.setattr(sequence_widget, "read_wav_calibration_metadata", lambda path, logger=None: metadata)
+    monkeypatch.setattr(sequence_widget, "inspect_wav_calibration_metadata",
+                        lambda path, logger=None: WavCalibrationInspection("legacy", "legacy_valid", metadata))
     monkeypatch.setattr(
         sequence_widget,
         "load_audio_preserve_rate",

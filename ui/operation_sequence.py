@@ -16,6 +16,7 @@ from base.data_struct.sequence_data import SequenceData
 from base.file_ops import FileOps
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
+from base.vkinging_input import is_vkinging_device, validate_range_index
 from base.output_calibration import resolve_output_amplitude
 from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
 from base.soundcard_calibration_manager import (
@@ -164,13 +165,14 @@ def _operation_sequence_signal_len(mode, detail, mic=None, speaker=None):
 
 class AnalysisModelSelect(QDialog):
 
-    def __init__(self, using_config_path, mic=None, speaker=None, mic_channels=None):
+    def __init__(self, using_config_path, mic=None, speaker=None, mic_channels=None, vkinging_bridge=None):
         super().__init__()
         # When main window has no active config selected ("无配置"), using_config_path can be None.
         # Fall back to the built-in default sequence config so the test-queue window can still open.
         if not using_config_path:
             using_config_path = DEFAULT_DIR + "ui/ui_config/none_path.json"
         self.using_config_path = using_config_path
+        self.vkinging_bridge = vkinging_bridge
         # When user selects a target path via “新建”, confirm should save to that path
         # without touching main window's using_config_path registry.
         self._new_target_path_selected = False
@@ -310,6 +312,8 @@ class AnalysisModelSelect(QDialog):
         for item in sound_items:
             list_item = QStandardItem(item.lstrip())
             list_item.setData(item, Qt.DisplayRole)
+            if item == "播放与录制" and is_vkinging_device(self.mic):
+                list_item.setEnabled(False)
             sound_item.appendRow(list_item)
         self.analysis_model.appendRow(sound_item)
 
@@ -414,6 +418,7 @@ class AnalysisModelSelect(QDialog):
         record_golden_btn = PushButton("录制黄金样本")
         record_golden_btn.clicked.connect(self.record_golden_sample_btn_clicked)
         record_golden_btn.setMinimumWidth(140)
+        record_golden_btn.setEnabled(not is_vkinging_device(self.mic))
 
         load_btn = PushButton("导入")
         load_btn.clicked.connect(self.load_btn_clicked)
@@ -445,6 +450,10 @@ class AnalysisModelSelect(QDialog):
         - Save analysis results into a JSON file
         - Store that JSON path into analysis_list['golden_sample_result_path'] (persisted on confirm/save)
         """
+        from base.vkinging_input import is_vkinging_device
+        if is_vkinging_device(_safe_dialog_attr(self, "mic", None)):
+            MessageBox.warning(self, "提示", "vkinging 生产录制尚未就绪。")
+            return
         if not self.select_list.config:
             MessageBox.warning(self, "提示", "请先配置测试序列")
             return
@@ -780,7 +789,26 @@ class AnalysisModelSelect(QDialog):
         save_config = [x.config_info for x in config_data]
         return save_config
 
+    def _validate_queue_input(self):
+        """Validate backend constraints before either save path publishes changes."""
+        if not is_vkinging_device(self.mic):
+            return True
+        try:
+            for item in self.select_list.config:
+                if item.mode == "PLAY_AND_RECORD":
+                    raise ValueError("vkinging 仅支持录制，不支持播放录制。")
+                if item.mode == "RECORD_ONLY":
+                    validate_range_index(item.detail.get("vkinging_range_index", 0))
+                    if item.detail.get("monitor_playback", False):
+                        raise ValueError("vkinging 不支持实时监听播放。")
+        except ValueError as exc:
+            MessageBox.warning(self, "录制配置", str(exc))
+            return False
+        return True
+
     def save_btn_clicked(self):
+        if not self._validate_queue_input():
+            return
         save_config = self.format_config_data(self.select_list.config)
         if not save_config:
             MessageBox.warning(self, "警告", "没有配置测试内容")
@@ -806,6 +834,8 @@ class AnalysisModelSelect(QDialog):
             LoadUiConfig.append_sequence_config_registry_entry(file_path)
 
     def ok_btn_clicked(self):
+        if not self._validate_queue_input():
+            return
         save_config = self.format_config_data(self.select_list.config)
 
         if not save_config:
@@ -1395,6 +1425,9 @@ class OptionList(ListView):
             event.ignore()
 
     def set_sound_item(self, item_text):
+        if item_text == "播放与录制" and is_vkinging_device(self.mic):
+            MessageBox.warning(self, "提示", "vkinging 仅支持录制。")
+            return
         list_item = QStandardItem(item_text)
         list_item.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/select_analysis_model/blank_icon.png"))
         if self.config:
