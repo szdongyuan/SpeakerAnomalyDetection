@@ -105,7 +105,7 @@ class RecordingCapture:
         self._metadata_appender = metadata_appender
         self._blocksize = blocksize
         if queue_seconds is None:
-            queue_seconds = 30.0 if self._is_ve else 2.0
+            queue_seconds = 2.0
         self.queue_capacity_frames, self.queue_capacity_bytes = capture_queue_capacity(
             request.sample_rate, len(request.channels), blocksize=blocksize, seconds=queue_seconds)
         self.started = threading.Event()

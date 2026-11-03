@@ -38,8 +38,8 @@ def request(path, backend, *, target_samples=9, trim_samples=0, sample_rate=None
 
 
 @pytest.mark.parametrize("backend,sample_rate,frames,byte_count", [
-    ("ve", 44100, 1323000, 26460000),
-    ("ve", 51200, 1536000, 30720000),
+    ("ve", 44100, 88200, 1764000),
+    ("ve", 51200, 102400, 2048000),
     ("soundcard", 100, 200, 1600),
 ])
 @pytest.mark.parametrize("options", [{}, {"queue_seconds": None}], ids=["omitted", "none"])
@@ -127,8 +127,8 @@ def ordered_audio(frames):
     return values.astype(np.float32) / np.float32(8388608)
 
 
-def test_ve_recovers_eight_seconds_of_backlog_with_exact_wav_content(tmp_path):
-    initial_frames, backlog_frames, trim = 2048, 8 * 44100, 13
+def test_ve_recovers_one_second_of_backlog_with_exact_wav_content(tmp_path):
+    initial_frames, backlog_frames, trim = 2048, 44100, 13
     audio = ordered_audio(initial_frames + backlog_frames)
     req = request(tmp_path / "recovered.wav", "ve", target_samples=len(audio), trim_samples=trim)
     with blocked_capture(req) as (capture, stream, writer):
@@ -138,7 +138,8 @@ def test_ve_recovers_eight_seconds_of_backlog_with_exact_wav_content(tmp_path):
         for start in range(initial_frames, len(audio), 2048):
             stream.feed(audio[start:start + 2048])
             assert capture._failure is None
-        assert capture.queued_frames == backlog_frames > 2 * req.sample_rate
+        assert capture.queued_frames == backlog_frames == req.sample_rate
+        assert capture.queued_frames < capture.queue_capacity_frames
         assert capture.raw_frames == len(audio)
         writer.release.set()
         outcome = capture.wait(5)
@@ -156,10 +157,10 @@ def test_ve_recovers_eight_seconds_of_backlog_with_exact_wav_content(tmp_path):
     np.testing.assert_array_equal(saved, quantize_pcm24(audio[trim:]))
 
 
-@pytest.mark.parametrize("sample_rate,byte_count", [(44100, 26460000), (51200, 30720000)])
-def test_ve_accepts_exact_thirty_second_capacity_then_fails_one_frame_over(
+@pytest.mark.parametrize("sample_rate,byte_count", [(44100, 1764000), (51200, 2048000)])
+def test_ve_accepts_exact_two_second_capacity_then_fails_one_frame_over(
         tmp_path, sample_rate, byte_count):
-    initial_frames, capacity = 2048, 30 * sample_rate
+    initial_frames, capacity = 2048, 2 * sample_rate
     req = request(tmp_path / "overflow.wav", "ve", sample_rate=sample_rate,
                   target_samples=initial_frames + capacity + 1, trim_samples=0)
     block = np.zeros((2048, 5), dtype=np.float32)
