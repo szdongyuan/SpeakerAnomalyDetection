@@ -12,7 +12,7 @@ from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.acquisition_config_window import RecordConfigWindow
 from ui.operation_sequence import AnalysisModelSelect
 from unit_test.base.test_sequence_queue_references import project, write_json
-from unit_test.base.ve3668n_fakes import device_info
+from unit_test.base.vkinging_fakes import device_info
 
 
 @pytest.fixture(scope="module")

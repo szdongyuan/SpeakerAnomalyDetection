@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from base.recording_process_protocol import FrozenConfig, RecordingResult
-from unit_test.base.ve3668n_fakes import capture_request
+from unit_test.base.vkinging_fakes import capture_request
 
 
 def calibration_request(tmp_path, rate=51200, **overrides):
@@ -32,7 +32,7 @@ def sine_volts(rate=51200, standard=94, factor=10):
 
 @pytest.mark.parametrize("rate", [44100, 48000, 51200])
 def test_verify_accepts_ten_second_raw_voltage_without_existing_factor(tmp_path, rate):
-    from base.ve3668n_calibration import verify_ve_calibration_result
+    from base.vkinging_calibration import verify_ve_calibration_result
 
     request = calibration_request(tmp_path, rate)
     volts = sine_volts(rate)
@@ -53,7 +53,7 @@ def test_verify_accepts_ten_second_raw_voltage_without_existing_factor(tmp_path,
     ("raw_frames", 512000.0), ("handles_released", False),
 ])
 def test_verify_rejects_descriptor_mismatch(tmp_path, field, value):
-    from base.ve3668n_calibration import verify_ve_calibration_result
+    from base.vkinging_calibration import verify_ve_calibration_result
 
     request = calibration_request(tmp_path)
     descriptor = replace(descriptor_for(request), **{field: value})
@@ -68,7 +68,7 @@ def test_verify_rejects_descriptor_mismatch(tmp_path, field, value):
     ("streaming", True),
 ])
 def test_verify_revalidates_frozen_request_contract(tmp_path, field, value):
-    from base.ve3668n_calibration import verify_ve_calibration_result
+    from base.vkinging_calibration import verify_ve_calibration_result
 
     request = copy(calibration_request(tmp_path))
     # Emulate a malformed value crossing a deserialization boundary.
@@ -78,12 +78,12 @@ def test_verify_revalidates_frozen_request_contract(tmp_path, field, value):
 
 
 @pytest.mark.parametrize("field,value", [
-    ("backend", "sounddevice"), ("machine_id", ""), ("model", "other"),
+    ("backend", "sounddevice"), ("machine_id", ""), ("model", "VK-\u0085X"),
     ("available", False), ("physical_channels", [1]),
     ("input_config", {"sample_rate": 51200}),
 ])
 def test_verify_requires_explicit_valid_ve_identity(tmp_path, field, value):
-    from base.ve3668n_calibration import verify_ve_calibration_result
+    from base.vkinging_calibration import verify_ve_calibration_result
 
     request = calibration_request(tmp_path)
     device = {**request.device.to_dict(), field: value}
@@ -94,7 +94,7 @@ def test_verify_requires_explicit_valid_ve_identity(tmp_path, field, value):
 
 @pytest.mark.parametrize("invalid", ["scalar", "row", "columns", "cube", "short", "double", "nan", "inf"])
 def test_verify_rejects_bad_raw_arrays_before_any_flatten(tmp_path, invalid):
-    from base.ve3668n_calibration import verify_ve_calibration_result
+    from base.vkinging_calibration import verify_ve_calibration_result
 
     request = calibration_request(tmp_path)
     volts = sine_volts()
@@ -117,7 +117,7 @@ def test_verify_rejects_bad_raw_arrays_before_any_flatten(tmp_path, invalid):
 
 
 def test_verify_accepts_reader_column_without_copy_or_file_reopen(tmp_path):
-    from base.ve3668n_calibration import verify_ve_calibration_result
+    from base.vkinging_calibration import verify_ve_calibration_result
 
     request = calibration_request(tmp_path)
     volts = sine_volts()[:, None]
@@ -129,7 +129,7 @@ def test_verify_accepts_reader_column_without_copy_or_file_reopen(tmp_path):
 
 @pytest.mark.parametrize("amplitude", [0.0, 0.5e-10, 1e-10])
 def test_ac_floor_is_strict_and_cannot_create_fake_calibration(amplitude):
-    from base.ve3668n_calibration import require_ac_signal
+    from base.vkinging_calibration import require_ac_signal
 
     volts = np.tile([amplitude, -amplitude], 3072)
     with pytest.raises(ValueError, match="无有效交流信号，无法校准"):
@@ -142,7 +142,7 @@ def test_ac_floor_is_strict_and_cannot_create_fake_calibration(amplitude):
     np.zeros((6144, 2)), np.zeros((6144, 1, 1)),
 ])
 def test_ac_rejects_dc_nonfinite_short_and_wrong_shape(volts):
-    from base.ve3668n_calibration import require_ac_signal
+    from base.vkinging_calibration import require_ac_signal
 
     with pytest.raises(ValueError):
         require_ac_signal(volts)
@@ -150,7 +150,7 @@ def test_ac_rejects_dc_nonfinite_short_and_wrong_shape(volts):
 
 @pytest.mark.parametrize("amplitude,offset", [(1.01e-10, 0), (0.25, 2.5)])
 def test_ac_above_floor_uses_float64_and_does_not_demean_algorithm_input(amplitude, offset):
-    from base.ve3668n_calibration import require_ac_signal
+    from base.vkinging_calibration import require_ac_signal
 
     volts = np.tile([amplitude, -amplitude], 3072) + offset
     before = volts.copy()
@@ -159,7 +159,7 @@ def test_ac_above_floor_uses_float64_and_does_not_demean_algorithm_input(amplitu
 
 
 def test_ac_uses_only_raw_central_interval_for_signal_energy():
-    from base.ve3668n_calibration import require_ac_signal
+    from base.vkinging_calibration import require_ac_signal
 
     volts = np.zeros(6144)
     volts[:1000] = np.tile([1., -1.], 500)
@@ -170,7 +170,7 @@ def test_ac_uses_only_raw_central_interval_for_signal_energy():
 @pytest.mark.parametrize("volts", [np.zeros(512000, np.float32), np.full(512000, 2.5, np.float32),
                                   sine_volts(factor=1e12)])
 def test_result_ac_gate_runs_even_when_optional_quality_is_disabled(tmp_path, volts):
-    from base.ve3668n_calibration import verify_ve_calibration_result
+    from base.vkinging_calibration import verify_ve_calibration_result
 
     request = calibration_request(tmp_path)
     assert request.validation_thresholds["enabled"] is False
@@ -184,7 +184,7 @@ def sine_capture_dependencies(*, standard=94, parent_pid=None):
     import os
     import time
 
-    from unit_test.base.ve3668n_fakes import CaptureSDK
+    from unit_test.base.vkinging_fakes import CaptureSDK
 
     assert parent_pid is None or os.getpid() != parent_pid
 
@@ -208,7 +208,7 @@ def sine_capture_dependencies(*, standard=94, parent_pid=None):
 
 
 def test_calibration_verification_ignores_legacy_monitor_fields(tmp_path):
-    from base.ve3668n_calibration import verify_ve_calibration_result
+    from base.vkinging_calibration import verify_ve_calibration_result
     request = calibration_request(tmp_path)
     object.__setattr__(request, "monitor", FrozenConfig.snapshot({"enabled": True, "gain_db": "corrupt"}))
     audio = sine_volts()

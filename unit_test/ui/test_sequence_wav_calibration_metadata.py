@@ -25,8 +25,8 @@ STREAMING_OPS_PATH = (
 @pytest.mark.parametrize("schema_version", [1, 2])
 def test_ve_tooltip_uses_neutral_calibrated_state_for_both_file_versions(ui_qapp, schema_version):
     from PyQt5.QtWidgets import QWidget
-    from base.ve3668n_wav_metadata import validate_ve_wav_metadata
-    from unit_test.base.ve3668n_fakes import wav_metadata, wav_metadata_v2
+    from base.vkinging_wav_metadata import validate_ve_wav_metadata
+    from unit_test.base.vkinging_fakes import wav_metadata, wav_metadata_v2
 
     payload = wav_metadata() if schema_version == 1 else wav_metadata_v2()
     if schema_version == 2:

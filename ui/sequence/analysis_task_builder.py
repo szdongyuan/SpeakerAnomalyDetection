@@ -23,7 +23,7 @@ from base.wav_calibration_metadata import (
     resolve_wav_channel_v2pa_factor,
 )
 from base.wav_channel_mapping import resolve_wav_plot_channels
-from consts.ve3668n_consts import VE_BACKEND
+from consts.vkinging_consts import VE_BACKEND
 from ui.ui_analysis_config.config_normalization import normalize_analysis_channels
 
 

@@ -28,15 +28,15 @@ from base.log_manager import LogManager
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.recording_process_protocol import FrozenConfig, RecordingRequest
 from base.recording_service import RecordingCallbacks, RecordingService
-from base.ve3668n_calibration import verify_ve_calibration_result
-from base.ve3668n_calibration_settings import (
+from base.vkinging_calibration import verify_ve_calibration_result
+from base.vkinging_calibration_settings import (
     VECalibrationSettingsError, build_ve_calibration_device, load_ve_calibration_settings,
 )
-from base.ve3668n_input import (
+from base.vkinging_input import (
     calibration_applicability_key, calibration_fingerprint, validate_device_snapshot,
     validate_voltage_range,
 )
-from base.ve3668n_stores import VEStoreIOError
+from base.vkinging_stores import VEStoreIOError
 from ui.recording_service_bridge import RecordingProcessorFacade, RecordingServiceBridge
 from base.soundcard_audio_processor import SoundcardAudioProcessor
 from base.soundcard_calibration_manager import (
@@ -51,7 +51,7 @@ from ui.calibration_coefficient_editor import CalibrationCoefficientEditor
 from consts import ui_style_const, error_code
 from consts.acoustic_analysis.common_consts import REFERENCE_PRESSURE_PA
 from consts.running_consts import DEFAULT_DIR
-from consts.ve3668n_consts import (
+from consts.vkinging_consts import (
     VE_CALIBRATION_SETTINGS_RELATIVE_PATH, VE_CALIBRATION_DEFAULT_SAMPLE_RATE,
     VE_CALIBRATION_DEFAULT_RANGE_VOLTS,
 )

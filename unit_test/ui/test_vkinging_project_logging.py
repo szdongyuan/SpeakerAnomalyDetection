@@ -8,15 +8,15 @@ import pytest
 from unit_test.logging_test_support import isolated_project_logger, managed_handlers
 
 from base import log_manager
-from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+from base.vkinging_prewarm_lifetime import VePrewarmLifetime
 from ui import acquisition_config_window as acquisition_ui
 from ui import hardware_window as hardware_ui
-from ui import ve3668n_hardware_controls as hardware_controls
+from ui import vkinging_hardware_controls as hardware_controls
 from ui.sequence.sequence_widget_recording_process_ops import SequenceWidgetRecordingProcessOpsMixin
 from ui.vkinging_presentation import ve_failure_text
-from unit_test.base.ve3668n_fakes import device_info
-from unit_test.ui.test_ve3668n_hardware import controls, main_window_harness, confirm, select_device
-from unit_test.ui.test_ve3668n_prewarm_trigger import _completion
+from unit_test.base.vkinging_fakes import device_info
+from unit_test.ui.test_vkinging_hardware import controls, main_window_harness, confirm, select_device
+from unit_test.ui.test_vkinging_prewarm_trigger import _completion
 
 
 @pytest.fixture(autouse=True)

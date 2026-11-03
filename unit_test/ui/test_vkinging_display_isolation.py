@@ -8,12 +8,12 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QDialog
 
 from base import hardware_selection
-from base.ve3668n_discovery import DiscoveryEvent, DiscoveryResult
+from base.vkinging_discovery import DiscoveryEvent, DiscoveryResult
 from ui import hardware_window as hardware_ui
 from ui.vkinging_presentation import ve_failure_text
-from unit_test.base.ve3668n_fakes import device_info
-from unit_test.base.test_ve3668n_stores import save_measurement
-from unit_test.ui.test_ve3668n_hardware import (
+from unit_test.base.vkinging_fakes import device_info
+from unit_test.base.test_vkinging_stores import save_measurement
+from unit_test.ui.test_vkinging_hardware import (
     controls, main_window_harness, confirm, select_device,
 )
 
@@ -32,7 +32,7 @@ def test_config_and_calibration_device_names_are_display_only(ui_qapp, monkeypat
                                          speaker={"name": "speaker"})
     calibration = calibration_ui.InputCalibration(device, [7])
     try:
-        expected = "VE3668N" if backend == "vkinging" else device["name"]
+        expected = "VK 设备" if backend == "vkinging" else device["name"]
         assert config.input_device_display.placeholderText() == expected
         assert config.input_device_display.toolTip() == ""
         assert calibration.input_device_label.text() == expected
@@ -44,8 +44,8 @@ def test_config_and_calibration_device_names_are_display_only(ui_qapp, monkeypat
 
 
 @pytest.mark.parametrize("name, expected", [
-    (" Dev2 ", "Dev2"), ("", "VE3668N"), (None, "VE3668N"),
-    ("Dev2 private-machine-id", "VE3668N"),
+    (" Dev2 ", "Dev2"), ("", "VK 设备"), (None, "VK 设备"),
+    ("Dev2 private-machine-id", "VK 设备"),
 ])
 @pytest.mark.parametrize("available", [False, True])
 def test_list_and_status_name_are_safe_without_mutating_payload(

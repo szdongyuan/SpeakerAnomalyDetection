@@ -34,7 +34,7 @@ class MainWindow(QMainWindow):
                  raw_audio_csv_bridge=None,
                  ve_profile_store=None, ve_calibration_store=None,
                  discovery_factory=None, hardware_selection_path=None):
-        from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+        from base.vkinging_prewarm_lifetime import VePrewarmLifetime
 
         app = QApplication.instance()
         if ve_prewarm_lifetime is None:
@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
             app.aboutToQuit.connect(raw_audio_csv_bridge.begin_shutdown)
         self.raw_audio_csv_bridge = raw_audio_csv_bridge
         self.raw_audio_csv_service = raw_audio_csv_bridge.service
-        from base.ve3668n_stores import VEInputProfileStore, VECalibrationStore
+        from base.vkinging_stores import VEInputProfileStore, VECalibrationStore
         self.ve_profile_store = ve_profile_store if ve_profile_store is not None else VEInputProfileStore()
         self.ve_calibration_store = ve_calibration_store if ve_calibration_store is not None else VECalibrationStore()
         self.ve_discovery_factory = discovery_factory
@@ -136,7 +136,7 @@ class MainWindow(QMainWindow):
 
     def _init_ve_hardware_runtime(self):
         from PyQt5.QtCore import QTimer
-        from ui.ve3668n_hardware_controls import VEDiscoveryBridge
+        from ui.vkinging_hardware_controls import VEDiscoveryBridge
         self.sequence_window.ve_profile_store = self.ve_profile_store
         self.sequence_window.ve_calibration_store = self.ve_calibration_store
         self.ve_discovery = VEDiscoveryBridge(self, discovery_factory=self.ve_discovery_factory)
@@ -195,7 +195,7 @@ class MainWindow(QMainWindow):
         if not mic.get("available"):
             return None
         try:
-            from base.ve3668n_input import ve_acquisition_signature
+            from base.vkinging_input import ve_acquisition_signature
             mic = SequenceWidgetConfigOpsMixin._current_ve_recording_device(self.sequence_window, mic)
             signature = ve_acquisition_signature(mic, channels, mic["input_config"]["sample_rate"])
         except (ValueError, OSError) as exc:
@@ -1173,7 +1173,7 @@ class MainWindow(QMainWindow):
 
 
 if __name__ == "__main__":
-    from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+    from base.vkinging_prewarm_lifetime import VePrewarmLifetime
 
     app = QApplication(sys.argv)
     ve_prewarm_lifetime = VePrewarmLifetime()

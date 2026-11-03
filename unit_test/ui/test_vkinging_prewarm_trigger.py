@@ -9,9 +9,9 @@ import pytest
 
 from base.recording_process_protocol import VeLifecycleCounts
 from base.recording_service import VePrewarmCompletion
-from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+from base.vkinging_prewarm_lifetime import VePrewarmLifetime
 from main_window import MainWindow
-from unit_test.base.ve3668n_fakes import device_info, input_config
+from unit_test.base.vkinging_fakes import device_info, input_config
 
 
 class _StatusBar:

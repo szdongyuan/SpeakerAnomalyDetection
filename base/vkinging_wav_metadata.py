@@ -9,12 +9,12 @@ from dataclasses import dataclass
 from datetime import datetime
 import math
 
-from base.ve3668n_input import (
-    validate_device_snapshot, validate_input_config, validate_physical_channel,
+from base.vkinging_input import (
+    normalize_model, validate_device_snapshot, validate_input_config, validate_physical_channel,
     validate_physical_channels, validate_voltage_range,
 )
-from consts.ve3668n_consts import (
-    VE_BACKEND, VE_INPUT_MODE, VE_MODEL, VE_UNIT, VE_WAV_SCHEMA_VERSION,
+from consts.vkinging_consts import (
+    VE_BACKEND, VE_INPUT_MODE, VE_UNIT, VE_WAV_SCHEMA_VERSION,
 )
 
 
@@ -75,8 +75,8 @@ def validate_ve_wav_metadata(payload):
     acquisition = payload["acquisition"]
     _fields(acquisition, ("model", "machine_id", "input_mode", "unit", "range_min",
                           "range_max", "sample_rate"), "acquisition")
-    for name, expected in (("model", VE_MODEL), ("input_mode", VE_INPUT_MODE),
-                           ("unit", VE_UNIT)):
+    normalize_model(acquisition["model"])
+    for name, expected in (("input_mode", VE_INPUT_MODE), ("unit", VE_UNIT)):
         value = acquisition[name]
         if type(value) is not str or value != expected:
             raise ValueError(f"{name} must be {expected!r}")

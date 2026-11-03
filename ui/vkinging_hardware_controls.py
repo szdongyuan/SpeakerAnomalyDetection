@@ -5,7 +5,7 @@ from PyQt5.QtCore import QObject, Qt, pyqtSignal, pyqtSlot
 
 from base.log_manager import LogManager
 from base.hardware_selection import is_ve_input, resolve_ve_input
-from base.ve3668n_discovery import DiscoveryService
+from base.vkinging_discovery import DiscoveryService
 from ui.vkinging_presentation import ve_failure_text
 
 
@@ -53,7 +53,7 @@ class VEDiscoveryBridge(QObject):
             self.result_ready.emit(event)
 
 
-class VE3668NHardwareControls(QObject):
+class VkingingHardwareControls(QObject):
     """Own discovery and the selected input; recording parameters are read-only."""
 
     inventory_changed = pyqtSignal()

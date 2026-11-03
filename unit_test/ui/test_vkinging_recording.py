@@ -14,8 +14,8 @@ from base.recording_calibration_snapshot import build_recording_wav_calibration_
 from base.recording_capture import RecordingCapture
 from base.recording_process_protocol import RecordingResult
 from base.recording_final_result import prepare_main_recording_result
-from base.ve3668n_capture import Ve3668nInputStream
-from base.ve3668n_stores import VECalibrationStore, VEInputProfileStore
+from base.vkinging_capture import VkingingInputStream
+from base.vkinging_stores import VECalibrationStore, VEInputProfileStore
 from base.wav_calibration_metadata import inspect_wav_calibration_metadata
 from consts.recording_preview_consts import (
     PREVIEW_TIME_MODE_CUMULATIVE,
@@ -26,7 +26,7 @@ from ui.sequence import sequence_widget_analysis_ops as analysis
 from ui.sequence import sequence_widget_streaming_ops as streaming
 from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
 from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
-from unit_test.base.ve3668n_fakes import CaptureSDK, device_info, input_config
+from unit_test.base.vkinging_fakes import CaptureSDK, device_info, input_config
 from unit_test.ui.test_streaming_event_dispatch import _WorkflowHost
 
 
@@ -119,7 +119,7 @@ def host_factory(ui_qapp, tmp_path, monkeypatch):
 
 
 def capture_audio(request):
-    capture = RecordingCapture(request, ve_stream_factory=lambda **kwargs: Ve3668nInputStream(
+    capture = RecordingCapture(request, ve_stream_factory=lambda **kwargs: VkingingInputStream(
         **kwargs, sdk_factory=CaptureSDK))
     capture.start()
     descriptor = capture.wait(5)
@@ -798,7 +798,7 @@ def test_real_service_bridge_ve_lifecycle(host_factory, ui_qapp, tmp_path, monke
     # The native owner/writer/preparation/service/Qt delivery are production code.
     # Only the external SDK and business analysis/DB are replaced.
     service = RecordingService(
-        backend_factory="unit_test.base.ve3668n_fakes:capture_dependencies",
+        backend_factory="unit_test.base.vkinging_fakes:capture_dependencies",
         backend_options={"trace_path": str(tmp_path / "sdk.jsonl"), "read_delay": .03},
         preview_interval=.01)
     if outcome == "metadata_false":
@@ -1068,7 +1068,7 @@ def test_ve_release_error_popup_is_once_only_and_failed_audio_stays_unpublished(
 @pytest.mark.parametrize("diagnostic", ["unknown configuration fault", "test-machine-1 and other-private-machine-id"])
 def test_configuration_admission_outlets_are_safe_and_keep_diagnostic_identity(
         host_factory, monkeypatch, caplog, boundary, diagnostic):
-    from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+    from base.vkinging_prewarm_lifetime import VePrewarmLifetime
     from ui.vkinging_presentation import ve_failure_text
     host = host_factory()
     host.ve_prewarm_lifetime = VePrewarmLifetime()
@@ -1104,7 +1104,7 @@ def test_configuration_admission_outlets_are_safe_and_keep_diagnostic_identity(
 
 
 def test_admission_diagnostics_distinguish_devices_with_the_same_error(host_factory, monkeypatch, caplog):
-    from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+    from base.vkinging_prewarm_lifetime import VePrewarmLifetime
     host = host_factory()
     host.ve_prewarm_lifetime = VePrewarmLifetime()
     diagnostic = "unknown configuration fault"

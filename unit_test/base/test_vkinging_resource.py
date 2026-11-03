@@ -16,15 +16,15 @@ from base.recording_process_protocol import (
     VePrewarmRequest,
 )
 from base.ve_startup_policy import VeStartupBudget
-from base.ve3668n_discovery import discover_devices
-from base.ve3668n_resource import (
+from base.vkinging_discovery import discover_devices
+from base.vkinging_resource import (
     VeResourceConfigurationError,
     VeResourceController,
     VeResourceFault,
     VeResourceReleaseOutcome,
 )
 from base.vkinging_sdk import VkDaqError
-from unit_test.base.ve3668n_fakes import (
+from unit_test.base.vkinging_fakes import (
     CaptureSDK,
     DiscoveryClock,
     capture_request,
@@ -235,9 +235,139 @@ def wait_failed(controller, timeout=2):
     assert controller.failed
 
 
+@pytest.mark.parametrize("requested_model,fresh_model", [
+    ("VK-TEST-12", "VK-OTHER-12"), ("VK-ß", "VK-SS"),
+])
+def test_prewarm_rejects_changed_model_before_creating_task(
+        requested_model, fresh_model):
+    sdk = CaptureSDK()
+    sdk.record["Model"] = fresh_model
+    controller, _ = controller_for(lambda: sdk)
+    failures = []
+    warm = controller.prewarm(
+        request=VePrewarmRequest.create(
+            "model-change", device_info(model=requested_model), (7, 1), 51200, attempt=1),
+        fail=lambda *args: failures.append(args))
+    try:
+        assert not warm.start()
+        assert failures and failures[0][0] == "device"
+        assert "model" in failures[0][1]
+        assert not warm.started.is_set()
+        assert sdk.calls("create_task") == 0
+    finally:
+        controller.release(.5)
+    assert sdk.calls("close") == 1
+
+
+@pytest.mark.parametrize("prepared_before_warmup", [False, True])
+def test_retained_resource_rejects_changed_request_model(tmp_path, prepared_before_warmup):
+    sdk = CaptureSDK(hooks={"read_task_data": lambda *a, **k: time.sleep(.001)})
+    sdk.record["Model"] = "VK-ß"
+    controller, _ = controller_for(lambda: sdk)
+    warm = controller.prewarm(
+        request=VePrewarmRequest.create(
+            "original-model", device_info(model="VK-ß"), (7, 1), 51200, attempt=1),
+        fail=lambda *_: None)
+    metadata = wav_metadata(("none", "none"), 51200)
+    metadata["acquisition"].update(model="VK-SS", machine_id="test-machine-1")
+    request = capture_request(
+        tmp_path / "different-model.wav", device=device_info(model="VK-SS"),
+        calibration_metadata=metadata)
+    blocks = []
+
+    def changed_adapter():
+        return controller.stream(
+            request=request, callback=lambda block, *_: blocks.append(block.copy()),
+            fail=lambda *_: None, stop_event=threading.Event())
+
+    adapter = changed_adapter() if prepared_before_warmup else None
+    matching = None
+    try:
+        assert warm.start() and warm.completed.wait(2)
+        with pytest.raises(VeResourceConfigurationError, match="model"):
+            if adapter is None:
+                changed_adapter()
+            else:
+                adapter.start()
+        if adapter is not None:
+            assert adapter.stop()
+            assert adapter.close()
+            assert adapter.handles_released
+        assert not controller.failed
+        assert not blocks
+        matching_metadata = deepcopy(metadata)
+        matching_metadata["acquisition"]["model"] = "VK-ß"
+        matching = controller.stream(
+            request=capture_request(
+                tmp_path / "matching-model.wav", device=device_info(model="VK-ß"),
+                calibration_metadata=matching_metadata),
+            callback=lambda *_: None, fail=lambda *_: None, stop_event=threading.Event())
+        assert matching.start()
+        wait_released(matching)
+        assert sdk.calls("create_task") == 1
+    finally:
+        if matching is not None:
+            matching.stop()
+        outcome = controller.release(.5)
+    assert outcome.success
+
+
+@pytest.mark.parametrize("channels", [(11, 1, 8), (11,), tuple(range(12))])
+def test_twelve_channel_prewarm_native_slots_and_wav_reuse(tmp_path, channels):
+    from unit_test.base.test_vkinging_capture import twelve_channel_capture_options
+    from base.wav_calibration_metadata import inspect_wav_calibration_metadata
+
+    sdk = CaptureSDK(counts=(2, 1), hooks={"read_task_data": lambda *a, **k: time.sleep(.001)})
+    options = twelve_channel_capture_options(sdk, channels)
+    sdk.values_by_physical_channel = {i: (i + 1) / 16 for i in range(12)}
+    controller, fatals = controller_for(lambda: sdk)
+    failures, blocks = [], []
+    warm = controller.prewarm(
+        request=VePrewarmRequest.create("warm-12", options["device"], channels, 51200, attempt=1),
+        fail=lambda *args: failures.append(args))
+    try:
+        assert warm.start() and warm.completed.wait(2)
+        assert warm.handles_released
+        request = capture_request(tmp_path / "slots.wav", **options)
+        adapter = controller.stream(
+            request=request, callback=lambda block, *_: blocks.append(block.copy()),
+            fail=lambda *args: failures.append(args), stop_event=threading.Event())
+        assert adapter.start()
+        wait_released(adapter)
+        physical = np.concatenate(blocks)
+        assert physical.shape == (9, max(channels) + 1)
+        np.testing.assert_array_equal(physical[:, channels],
+                                      np.tile([(i + 1) / 16 for i in channels], (9, 1)))
+        capture = RecordingCapture(
+            capture_request(tmp_path / "retained-12.wav", **options),
+            ve_stream_factory=controller.stream)
+        capture.start()
+        outcome = capture.wait(3)
+        assert isinstance(outcome, RecordingResult), outcome
+        assert outcome.handles_released and outcome.metadata_appended
+        audio, rate = sf.read(outcome.path, dtype="float32", always_2d=True)
+        assert rate == 51200
+        np.testing.assert_array_equal(audio, np.tile([(i + 1) / 16 for i in channels], (7, 1)))
+        metadata = inspect_wav_calibration_metadata(outcome.path).metadata
+        assert metadata["acquisition"]["model"] == "VK-TEST-12"
+        assert [row["physical_input_channel"] for row in metadata["recorded_channels"]] == list(channels)
+        configured = [row for row in sdk.trace if row["operation"] == "create_iepe_voltage_channel"]
+        assert len(configured) == 1
+        assert configured[0]["args"][1] == ",".join(f"FreshDev/AIN{i + 1}" for i in channels)
+        reads = [row for row in sdk.trace if row["operation"] == "read_task_data"]
+        assert reads and all(row["kwargs"]["channel_count"] == len(channels) for row in reads)
+        assert sdk.calls("start_task") == 1
+        assert sdk.calls("stop_task") == sdk.calls("clear_task") == sdk.calls("close") == 0
+        assert not failures and not fatals
+        assert len(sdk.owner_thread_ids) == 1
+    finally:
+        assert controller.release(.5).success
+    assert sdk.calls("stop_task") == sdk.calls("clear_task") == sdk.calls("close") == 1
+
+
 @pytest.mark.parametrize("limit", [10.0, 5.0, 2.5, 1.0, .5, .1, .02])
 def test_retained_resource_applies_requested_voltage_range(limit):
-    from unit_test.base.ve3668n_fakes import input_config
+    from unit_test.base.vkinging_fakes import input_config
 
     sdk = CaptureSDK(hooks={"read_task_data": lambda *a, **k: time.sleep(.001)})
     controller, _ = controller_for(lambda: sdk)
@@ -790,12 +920,12 @@ def test_compatible_adapters_reuse_started_task_without_inter_request_cleanup(tm
 
 def test_text_calibration_settings_roundtrip_restores_queue_resource_and_factor(tmp_path):
     from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
-    from base.ve3668n_calibration_settings import (
+    from base.vkinging_calibration_settings import (
         build_ve_calibration_device, load_ve_calibration_settings,
     )
-    from base.ve3668n_recording_config import resolve_ve_recording_device
-    from base.ve3668n_stores import VECalibrationStore
-    from unit_test.base.ve3668n_fakes import input_config
+    from base.vkinging_recording_config import resolve_ve_recording_device
+    from base.vkinging_stores import VECalibrationStore
+    from unit_test.base.vkinging_fakes import input_config
 
     source = device_info(input_config=input_config(96000))
     queue = {"sample_rate": 96000, "ve_range_index": 0}
@@ -1054,7 +1184,7 @@ def test_incompatible_signature_requires_successful_release(tmp_path, change):
         options["device"] = device
         sdks[-1].record["MachineId"] = "different-machine"
     if "range" in options:
-        from unit_test.base.ve3668n_fakes import input_config
+        from unit_test.base.vkinging_fakes import input_config
         limit = options.pop("range")
         options["device"] = device_info(input_config=input_config(range_min=-limit, range_max=limit))
     with pytest.raises(VeResourceConfigurationError):

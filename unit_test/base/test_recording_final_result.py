@@ -218,7 +218,7 @@ def test_quality_completion_protocol_rejects_failed_status():
 ])
 def test_ve_requires_metadata_and_finite_voltage_even_when_disabled(
         tmp_path, enabled, metadata_appended, voltage_finite, valid):
-    from unit_test.base.ve3668n_fakes import capture_request
+    from unit_test.base.vkinging_fakes import capture_request
     req = replace(capture_request(tmp_path / "ve.wav"),
                   validation_thresholds={"enabled": enabled})
     result = descriptor(req)

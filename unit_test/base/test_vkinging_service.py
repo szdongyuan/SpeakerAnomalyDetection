@@ -23,7 +23,7 @@ from base.recording_process_protocol import (
     WorkerFatal,
 )
 from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
-from base.ve3668n_capture_timing import VeCaptureProgress
+from base.vkinging_capture_timing import VeCaptureProgress
 from base.recording_service import RecordingCallbacks, RecordingService, _Worker
 from consts.recording_preview_consts import (
     MAIN_RECORDING_LIVE_WINDOW_SECONDS,
@@ -32,7 +32,7 @@ from consts.recording_preview_consts import (
     PREVIEW_TIME_MODE_RELATIVE_LATEST,
 )
 from unit_test.base.test_recording_service import Events, eventually
-from unit_test.base.ve3668n_fakes import DiscoveryClock, capture_request
+from unit_test.base.vkinging_fakes import DiscoveryClock, capture_request
 
 
 def _prewarm_request(tmp_path, warmup_id="warmup-1", *, attempt=1):
@@ -831,7 +831,7 @@ def test_prewarm_detaching_requires_ordered_target_progress(monkeypatch, tmp_pat
 def test_prewarm_service_real_worker_retries_once_in_fresh_generation(tmp_path):
     trace_path = tmp_path / "service-prewarm-native.jsonl"
     service = RecordingService(
-        backend_factory="unit_test.base.ve3668n_fakes:capture_dependencies",
+        backend_factory="unit_test.base.vkinging_fakes:capture_dependencies",
         backend_options={
             "trace_path": str(trace_path),
             "read_delay": 0,
@@ -869,7 +869,7 @@ def _spawn_recording_worker(tmp_path, *, generation=1, options=None):
     process = context.Process(
         target=recording_worker,
         args=(child_control, child_preview, generation,
-              "unit_test.base.ve3668n_fakes:capture_dependencies",
+              "unit_test.base.vkinging_fakes:capture_dependencies",
               backend_options, .25, .01),
     )
     process.start()
@@ -921,7 +921,7 @@ def _spawn_blocked_prewarm_worker(tmp_path, *, generation=1, options=None):
     process = context.Process(
         target=_blocked_prewarm_started_worker,
         args=(child_control, child_preview, generation,
-              "unit_test.base.ve3668n_fakes:capture_dependencies",
+              "unit_test.base.vkinging_fakes:capture_dependencies",
               backend_options, 2.0, .01),
     )
     process.start()
@@ -1294,7 +1294,7 @@ def services(tmp_path, monkeypatch):
     def make(options=None, **kwargs):
         trace = tmp_path / f"native-{len(owned)}.jsonl"
         service = RecordingService(
-            backend_factory="unit_test.base.ve3668n_fakes:capture_dependencies",
+            backend_factory="unit_test.base.vkinging_fakes:capture_dependencies",
             backend_options=dict(trace_path=str(trace), **(options or {})), **kwargs)
         owned.append(service)
         received = []
@@ -1930,7 +1930,7 @@ def test_spawn_cooperative_cancel_releases_each_phase_without_success(tmp_path, 
 def test_spawn_full_control_pipe_does_not_block_native_audio_or_drop_final_count(
         tmp_path, services, monkeypatch, streaming):
     from base import recording_service as module
-    from unit_test.base.ve3668n_fakes import blocked_control_worker
+    from unit_test.base.vkinging_fakes import blocked_control_worker
     monkeypatch.setattr(module, "recording_worker", blocked_control_worker)
     service, received, trace_path = services(dict(read_delay=.025))
     events = Events()
@@ -2037,7 +2037,7 @@ def test_spawn_native_process_crash_is_one_failure_then_releases(tmp_path, servi
 @pytest.mark.parametrize("operation", ["read_task_data", "stop_task", "clear_task"])
 def test_spawn_parent_death_reaps_blocked_native_owner(tmp_path, operation):
     from unit_test.base.recording_process_fakes import open_process_observer
-    from unit_test.base.ve3668n_fakes import capture_orphan_parent
+    from unit_test.base.vkinging_fakes import capture_orphan_parent
 
     context = mp.get_context("spawn")
     incoming, outgoing = context.Pipe(duplex=False)

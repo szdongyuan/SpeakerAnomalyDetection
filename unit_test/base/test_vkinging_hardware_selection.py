@@ -6,9 +6,88 @@ from types import SimpleNamespace
 import pytest
 
 from base import hardware_selection as selection
-from base.ve3668n_stores import VEInputProfileStore, VECalibrationStore
-from unit_test.base.ve3668n_fakes import device_info
-from unit_test.base.test_ve3668n_stores import save_measurement
+from base.vkinging_stores import VEInputProfileStore, VECalibrationStore
+from unit_test.base.vkinging_fakes import device_info
+from unit_test.base.test_vkinging_stores import save_measurement
+
+
+@pytest.mark.parametrize("channels", [[11, 1], [31], [0]])
+def test_restored_high_channel_selection_waits_for_real_discovery(channels):
+    selected = selection.unavailable_ve_selection(dict(
+        schema_version=1, backend="vkinging", machine_id="machine-12",
+        physical_channels=channels))
+    assert selected["available"] is False
+    assert selected["input_config"] is None
+    assert selected["physical_channels"] == channels
+    assert selected["max_input_channels"] == max(channels) + 1
+    assert selected["model"] is None
+    assert selected["name"] == "VK 设备"
+
+
+@pytest.mark.parametrize("channels", [[True], [11, 11], ["11"], [], [-1]])
+def test_corrupt_saved_channels_do_not_invent_model_or_capacity(channels):
+    selected = selection.unavailable_ve_selection(dict(
+        schema_version=1, backend="vkinging", machine_id="machine-12",
+        physical_channels=channels))
+    assert selected["available"] is False
+    assert selected["input_config"] is None
+    assert selected["model"] is None
+    assert selected["max_input_channels"] is None
+    assert selected["selection_error"]
+
+
+def test_high_channel_placeholder_resolves_before_profile_or_capture(tmp_path, monkeypatch):
+    from unit_test.base.vkinging_fakes import capture_request
+
+    placeholder = selection.unavailable_ve_selection(dict(
+        schema_version=1, backend="vkinging", machine_id="test-machine-1",
+        physical_channels=[11, 1]))
+    profiles = VEInputProfileStore(tmp_path / "profiles.json")
+    calibrations = VECalibrationStore(tmp_path / "calibrations.json")
+    snapshot = {key: value for key, value in placeholder.items() if key != "diagnostic"}
+    with pytest.raises(ValueError, match="model|available"):
+        capture_request(tmp_path / "offline.wav", device=snapshot, channels=(11, 1))
+    with pytest.raises(ValueError, match="model|available"):
+        selection.save_ve_selection(snapshot, None, [11, 1], [],
+            path=tmp_path / "hardware.json", profile_store=profiles, calibration_store=calibrations)
+
+    seen = []
+    load_profile = profiles.load
+    def checked_load(device, store):
+        assert device["available"] is True
+        assert device["model"] == "VK-TEST-12"
+        assert device["name"] == "FreshAlias"
+        assert device["max_input_channels"] == 12
+        assert device["physical_channels"] == tuple(range(12))
+        seen.append(device)
+        return load_profile(device, store)
+    monkeypatch.setattr(profiles, "load", checked_load)
+    offline = selection.resolve_ve_input(placeholder, [11, 1], [],
+        profile_store=profiles, calibration_store=calibrations)
+    assert offline["available"] is False and not seen
+    current = device_info(model="VK-TEST-12", name="FreshAlias",
+                          physical_channels=list(range(12)), max_input_channels=12)
+    resolved = selection.resolve_ve_input(placeholder, [11, 1], [current],
+        profile_store=profiles, calibration_store=calibrations)
+    assert resolved["available"] is True and len(seen) == 1
+    assert placeholder["available"] is False and placeholder["model"] is None
+    assert not list(tmp_path.iterdir())
+
+
+def test_saved_channel_eleven_missing_from_current_inventory_stays_unavailable(tmp_path):
+    placeholder = selection.unavailable_ve_selection(dict(
+        schema_version=1, backend="vkinging", machine_id="test-machine-1",
+        physical_channels=[11, 1]))
+    current = device_info(model="VK-TEST-12", physical_channels=list(range(11)),
+                          max_input_channels=12)
+    resolved = selection.resolve_ve_input(placeholder, [11, 1], [current],
+        profile_store=VEInputProfileStore(tmp_path / "profiles.json"),
+        calibration_store=VECalibrationStore(tmp_path / "calibrations.json"))
+    assert resolved["available"] is False
+    assert resolved["input_config"] is None
+    assert resolved["physical_channels"] == [11, 1]
+    assert resolved["diagnostic"]
+    assert not list(tmp_path.iterdir())
 
 
 def patch_audio_defaults(monkeypatch):
@@ -156,7 +235,7 @@ def test_legacy_fields_restore_unchanged(hardware):
 
 
 @pytest.mark.parametrize("change", [{}, {"name": "Replugged"}, {"machine_id": "other"},
-                                   {"model": "VE3668N-other"}, {"physical_channels": [1]},
+                                   {"model": "VK-OTHER-12"}, {"physical_channels": [1]},
                                    {"available": False}])
 def test_discovery_confirms_exact_identity_model_and_routes(hardware, tmp_path, change):
     path, _, _, defaults, applied = hardware
@@ -167,10 +246,11 @@ def test_discovery_confirms_exact_identity_model_and_routes(hardware, tmp_path, 
     profiles.set_sample_rate(device_info(), 48000, calibrations)
     resolved = selection.resolve_ve_input(mic, channels, [device_info(**change)],
         profile_store=profiles, calibration_store=calibrations)
-    expected = not any(key in change for key in ("machine_id", "model", "physical_channels", "available"))
+    expected = not any(key in change for key in ("machine_id", "physical_channels", "available"))
     assert resolved["available"] is expected
     assert resolved["machine_id"] == mic["machine_id"]
     if expected:
+        assert resolved["model"] == change.get("model", "VE3668N")
         assert resolved["name"] == change.get("name", "Dev1")
         assert resolved["input_config"]["sample_rate"] == 48000
     else:

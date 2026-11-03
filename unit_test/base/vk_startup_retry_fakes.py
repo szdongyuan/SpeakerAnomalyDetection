@@ -6,7 +6,7 @@ import threading
 import time
 
 from base.streaming_file_writer import StreamingWavWriter
-from unit_test.base.ve3668n_fakes import CaptureSDK
+from unit_test.base.vkinging_fakes import CaptureSDK
 
 
 def _wait_for(path, *, observe=None):

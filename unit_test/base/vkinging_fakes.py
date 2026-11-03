@@ -465,7 +465,7 @@ def capture_orphan_parent(connection, options):
     """Disposable parent of the actual recording worker with a hung fake SDK."""
     from base.recording_service import RecordingService
 
-    service = RecordingService(backend_factory="unit_test.base.ve3668n_fakes:capture_dependencies",
+    service = RecordingService(backend_factory="unit_test.base.vkinging_fakes:capture_dependencies",
                                backend_options=options, cancel_timeout=.3)
     service.start(capture_request(Path(options["trace_path"]).with_suffix(".wav")))
     path = Path(options["trace_path"])
@@ -596,7 +596,7 @@ def discovery_factory(*, trace_path=None, mode="normal", log_directory=None,
     if mode == "huge_error":
         raise RuntimeError("fake-error-" * 20000)
     if mode.startswith("wire_"):
-        from base import ve3668n_discovery
+        from base import vkinging_discovery
         payloads = {
             "wire_json": b"not-json",
             "wire_shape": b"{}",
@@ -606,7 +606,7 @@ def discovery_factory(*, trace_path=None, mode="normal", log_directory=None,
             "wire_oversize": b"x" * 131072,
             "wire_nested": b"[" * 1500 + b"]" * 1500,
         }
-        ve3668n_discovery._encode_result = lambda result, limit: payloads[mode]
+        vkinging_discovery._encode_result = lambda result, limit: payloads[mode]
 
     class TracedSDK(DiscoverySDK):
         def get_devices(self):
@@ -634,14 +634,19 @@ def discovery_factory(*, trace_path=None, mode="normal", log_directory=None,
         records = [discovery_record(machine_id="x" * 131072)]
     elif mode == "empty":
         records = []
+    elif mode == "high_channels":
+        records = [discovery_record(
+            model="VK-TEST-12",
+            channels=("Dev1/AIN12", "Dev1/AIN2", "Dev1/AIN9"),
+        )]
     return TracedSDK(records)
 
 
 def discovery_orphan_parent(connection, options):
     """Test process whose OS death must reap its blocked discovery helper."""
-    from base.ve3668n_discovery import DiscoveryService
+    from base.vkinging_discovery import DiscoveryService
 
-    service = DiscoveryService(sdk_factory="unit_test.base.ve3668n_fakes.discovery_factory",
+    service = DiscoveryService(sdk_factory="unit_test.base.vkinging_fakes.discovery_factory",
                                sdk_options=options, deadline=30)
     service.start()
     trace = Path(options["trace_path"])

@@ -15,7 +15,7 @@ from base.recording_process_protocol import (
 )
 from base.recording_service import RecordingService, _Worker
 from unit_test.base.test_recording_service import request
-from unit_test.base.ve3668n_fakes import DiscoveryClock, capture_request
+from unit_test.base.vkinging_fakes import DiscoveryClock, capture_request
 
 
 def test_blocked_finalizing_log_does_not_delay_slot_or_shutdown(tmp_path):
@@ -37,7 +37,7 @@ def test_blocked_finalizing_log_does_not_delay_slot_or_shutdown(tmp_path):
     logger = logging.Logger("gated-recording", logging.INFO)
     logger.addHandler(GatedHandler())
     service = RecordingService(
-        backend_factory="unit_test.base.ve3668n_fakes:capture_dependencies",
+        backend_factory="unit_test.base.vkinging_fakes:capture_dependencies",
         backend_options={"trace_path": str(tmp_path / "sdk.jsonl"), "read_delay": .04})
     service._logger = logger
     original_event = service._event

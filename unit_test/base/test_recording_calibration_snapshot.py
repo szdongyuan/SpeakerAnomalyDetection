@@ -8,8 +8,8 @@ from base.soundcard_calibration_manager import (
     MicCalibrationIOError,
 )
 from base.recording_process_protocol import FrozenConfig
-from base.ve3668n_stores import VECalibrationStore, VEStoreIOError
-from unit_test.base.ve3668n_fakes import device_info, input_config, wav_metadata_v2
+from base.vkinging_stores import VECalibrationStore, VEStoreIOError
+from unit_test.base.vkinging_fakes import device_info, input_config, wav_metadata_v2
 
 
 DEVICE = {
@@ -143,7 +143,7 @@ def _ve_store(tmp_path):
     return device, store
 
 
-@pytest.mark.parametrize("backend", ["soundcard", "ve"])
+@pytest.mark.parametrize("backend", ["soundcard", "ve", "vkinging-high"])
 def test_direct_factor_snapshot_wav_and_resolver_remain_frozen_after_update(tmp_path, monkeypatch, backend):
     import numpy as np
     from scipy.io import wavfile
@@ -156,16 +156,20 @@ def test_direct_factor_snapshot_wav_and_resolver_remain_frozen_after_update(tmp_
 
     factor = 0.12345678901234567
     timestamp = "2026-10-07T15:00:00+08:00"
-    if backend == "ve":
-        device = device_info()
+    if backend in ("ve", "vkinging-high"):
+        channels, device = (7, 1), device_info()
+        if backend == "vkinging-high":
+            channels = (11, 8)
+            device = device_info(model="VK-TEST-12", physical_channels=list(channels),
+                                 max_input_channels=12)
         store = VECalibrationStore(tmp_path / "ve.json")
 
         def save(value):
-            store.save_factor(device, 7, v2pa_factor=value, calibrated_at=timestamp)
+            store.save_factor(device, channels[0], v2pa_factor=value, calibrated_at=timestamp)
 
         def snapshot():
             return build_recording_wav_calibration_metadata(
-                (7, 1), device, ve_calibration_store=store,
+                channels, device, ve_calibration_store=store,
             )
     else:
         monkeypatch.setattr(manager.SoundDeviceManager, "get_api_info",
@@ -186,8 +190,10 @@ def test_direct_factor_snapshot_wav_and_resolver_remain_frozen_after_update(tmp_
     channel = expected["recorded_channels"][0]
     assert channel["calibrated"] is True
     assert channel["v2pa_factor"] == factor
-    if backend == "ve":
+    if backend in ("ve", "vkinging-high"):
         assert expected["schema_version"] == 2
+        assert expected["acquisition"]["model"] == device["model"]
+        assert [item["physical_input_channel"] for item in expected["recorded_channels"]] == list(channels)
         assert channel["factor_source"] == "calibrated"
         assert channel["calibration"]["standard_spl"] is None
         sample_rate = expected["acquisition"]["sample_rate"]
@@ -241,7 +247,7 @@ def test_ve_route_requires_store_without_creating_or_loading_a_fallback():
 
 
 def test_ve_builder_uses_one_observation_and_freezes_original_provenance(tmp_path):
-    from base import ve3668n_wav_metadata
+    from base import vkinging_wav_metadata
 
     device, store = _ve_store(tmp_path)
     records = store.observe(device)
@@ -256,7 +262,7 @@ def test_ve_builder_uses_one_observation_and_freezes_original_provenance(tmp_pat
 
     observed = ObservedStore()
     profile = input_config(44100)
-    actual = ve3668n_wav_metadata.build_ve_recording_metadata(
+    actual = vkinging_wav_metadata.build_ve_recording_metadata(
         FrozenConfig.snapshot(device), (7, 1), FrozenConfig.snapshot(profile), observed,
     )
     assert actual == wav_metadata_v2()
@@ -273,13 +279,13 @@ def test_ve_builder_uses_one_observation_and_freezes_original_provenance(tmp_pat
 
 
 def test_invalidated_record_becomes_none_snapshot_and_is_not_revived_by_rate(tmp_path):
-    from base import ve3668n_wav_metadata
+    from base import vkinging_wav_metadata
 
     device, store = _ve_store(tmp_path)
     changed = {**device, 'input_config': input_config(range_max=5.0)}
     with pytest.raises(ValueError):
         store.observe(changed)
-    actual = ve3668n_wav_metadata.build_ve_recording_metadata(
+    actual = vkinging_wav_metadata.build_ve_recording_metadata(
         device, (7, 1), input_config(44100), store,
     )
     assert actual == wav_metadata_v2(('none', 'none'))
@@ -288,25 +294,25 @@ def test_invalidated_record_becomes_none_snapshot_and_is_not_revived_by_rate(tmp
 
 
 def test_ve_builder_propagates_store_failure():
-    from base import ve3668n_wav_metadata
+    from base import vkinging_wav_metadata
 
     class BrokenStore:
         def observe(self, device):
             raise VEStoreIOError('cannot observe calibration')
 
     with pytest.raises(VEStoreIOError, match='cannot observe'):
-        ve3668n_wav_metadata.build_ve_recording_metadata(
+        vkinging_wav_metadata.build_ve_recording_metadata(
             device_info(), (7, 1), input_config(), BrokenStore(),
         )
 
 
 @pytest.mark.parametrize('channels', [(7, 7), (8,), (True,), (0,), ()])
 def test_ve_builder_rejects_invalid_or_unavailable_physical_channels(tmp_path, channels):
-    from base import ve3668n_wav_metadata
+    from base import vkinging_wav_metadata
 
     device, store = _ve_store(tmp_path)
     with pytest.raises(ValueError):
-        ve3668n_wav_metadata.build_ve_recording_metadata(device, channels, input_config(), store)
+        vkinging_wav_metadata.build_ve_recording_metadata(device, channels, input_config(), store)
 
 
 @pytest.mark.parametrize('profile', [input_config(3999), input_config(True),
@@ -314,10 +320,10 @@ def test_ve_builder_rejects_invalid_or_unavailable_physical_channels(tmp_path, c
 def test_ve_builder_requires_a_valid_current_profile_even_though_file_rates_are_historical(
     tmp_path, profile,
 ):
-    from base import ve3668n_wav_metadata
+    from base import vkinging_wav_metadata
 
     device, store = _ve_store(tmp_path)
     original = store.path.read_bytes()
     with pytest.raises(ValueError):
-        ve3668n_wav_metadata.build_ve_recording_metadata(device, (7, 1), profile, store)
+        vkinging_wav_metadata.build_ve_recording_metadata(device, (7, 1), profile, store)
     assert store.path.read_bytes() == original

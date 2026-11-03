@@ -5,7 +5,7 @@ import pytest
 import soundfile as sf
 
 from base.wav_calibration_metadata import append_wav_calibration_metadata, inspect_wav_calibration_metadata
-from unit_test.base.ve3668n_fakes import wav_metadata
+from unit_test.base.vkinging_fakes import wav_metadata
 from ui.sequence.analysis_task_builder import (
     AnalysisTaskBuildError,
     build_analysis_task_request,

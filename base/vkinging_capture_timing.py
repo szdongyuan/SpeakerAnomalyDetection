@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import math
 import time
 
-from base.ve3668n_input import validate_sample_rate
+from base.vkinging_input import validate_sample_rate
 
 
 @dataclass(frozen=True)

@@ -7,12 +7,12 @@ from types import MappingProxyType
 
 import pytest
 
-from unit_test.base.ve3668n_fakes import device_info, input_config
+from unit_test.base.vkinging_fakes import device_info, input_config
 
 
 def test_ve_acquisition_signature_is_exact_hashable_and_ordered():
-    from base.ve3668n_input import ve_acquisition_signature
-    from consts.ve3668n_consts import VE_BACKEND
+    from base.vkinging_input import ve_acquisition_signature
+    from consts.vkinging_consts import VE_BACKEND
 
     device = device_info(machine_id=" test-machine-1 ", physical_channels=[0, 2, 7],
                          input_config=input_config(48000))
@@ -30,8 +30,8 @@ def test_ve_acquisition_signature_is_exact_hashable_and_ordered():
 
 
 def test_ve_acquisition_signature_ignores_request_and_software_metadata(tmp_path):
-    from base.ve3668n_input import ve_acquisition_signature
-    from unit_test.base.ve3668n_fakes import capture_request, wav_metadata
+    from base.vkinging_input import ve_acquisition_signature
+    from unit_test.base.vkinging_fakes import capture_request, wav_metadata
 
     metadata = wav_metadata(sample_rate=51200)
     metadata["acquisition"]["machine_id"] = "test-machine-1"
@@ -55,7 +55,7 @@ def test_ve_acquisition_signature_ignores_request_and_software_metadata(tmp_path
 ])
 def test_ve_acquisition_signature_rejects_incomplete_or_invalid_acquisition(
         device, channels, rate):
-    from base.ve3668n_input import ve_acquisition_signature
+    from base.vkinging_input import ve_acquisition_signature
 
     with pytest.raises(ValueError):
         ve_acquisition_signature(device, channels, rate)
@@ -75,7 +75,7 @@ def test_ve_acquisition_signature_rejects_incomplete_or_invalid_acquisition(
     )],
 )
 def test_rate_validation_is_strict(value, accepted):
-    from base.ve3668n_input import validate_sample_rate
+    from base.vkinging_input import validate_sample_rate
 
     if accepted:
         assert validate_sample_rate(value) == value
@@ -88,7 +88,7 @@ def test_rate_validation_is_strict(value, accepted):
 @pytest.mark.parametrize("level", ["device", "input_config"])
 @pytest.mark.parametrize("field", ["sensitivity", "unknown", "index", "hostapi"])
 def test_profile_rejects_sensitivity_and_unknown_fields(level, field):
-    from base.ve3668n_input import validate_device_snapshot, validate_input_config
+    from base.vkinging_input import validate_device_snapshot, validate_input_config
 
     device = device_info()
     target = device if level == "device" else device["input_config"]
@@ -102,8 +102,8 @@ def test_profile_rejects_sensitivity_and_unknown_fields(level, field):
 
 
 def test_new_config_defaults_only_at_creation():
-    from base.ve3668n_input import create_input_config
-    from consts.ve3668n_consts import VE_DEFAULT_SAMPLE_RATE, VE_SAMPLE_RATES
+    from base.vkinging_input import create_input_config
+    from consts.vkinging_consts import VE_DEFAULT_SAMPLE_RATE, VE_SAMPLE_RATES
 
     assert VE_SAMPLE_RATES == (44100, 48000, 51200)
     assert VE_DEFAULT_SAMPLE_RATE == 51200
@@ -115,7 +115,7 @@ def test_new_config_defaults_only_at_creation():
 
 @pytest.mark.parametrize("rate", [4000, 4001, 7999, 8000, 32000, 44100, 48000, 51200, 96000, 102400])
 def test_existing_configs_restore_exact_rate(rate):
-    from base.ve3668n_input import create_input_config, validate_input_config
+    from base.vkinging_input import create_input_config, validate_input_config
 
     saved = input_config(rate)
     assert validate_input_config(saved) == saved
@@ -126,7 +126,7 @@ def test_existing_configs_restore_exact_rate(rate):
     None, True, False, 44100.0, 48000.5, "48000", 1, 3999, 102401,
 ])
 def test_invalid_rate_never_falls_back_to_default(rate):
-    from base.ve3668n_input import (
+    from base.vkinging_input import (
         create_input_config, validate_device_snapshot, validate_input_config,
     )
 
@@ -142,7 +142,7 @@ def test_invalid_rate_never_falls_back_to_default(rate):
     "sample_rate", "input_mode", "unit", "range_min", "range_max",
 ])
 def test_config_requires_every_saved_field(field):
-    from base.ve3668n_input import validate_input_config
+    from base.vkinging_input import validate_input_config
 
     saved = input_config()
     del saved[field]
@@ -158,7 +158,7 @@ def test_config_requires_every_saved_field(field):
     ("range_min", float("nan")), ("range_max", float("inf")),
 ])
 def test_config_rejects_unsupported_acquisition_conditions(field, value):
-    from base.ve3668n_input import validate_device_snapshot, validate_input_config
+    from base.vkinging_input import validate_device_snapshot, validate_input_config
 
     config = input_config(**{field: value})
     with pytest.raises(ValueError, match=field):
@@ -169,7 +169,7 @@ def test_config_rejects_unsupported_acquisition_conditions(field, value):
 
 @pytest.mark.parametrize("value", [None, [], (), "", 51200])
 def test_config_requires_a_mapping(value):
-    from base.ve3668n_input import validate_input_config
+    from base.vkinging_input import validate_input_config
 
     with pytest.raises(ValueError, match="input_config"):
         validate_input_config(value)
@@ -178,7 +178,7 @@ def test_config_requires_a_mapping(value):
 @pytest.mark.parametrize("before", [44100, 48000, 51200])
 @pytest.mark.parametrize("after", [44100, 48000, 51200])
 def test_capture_snapshot_changes_but_calibration_fingerprint_does_not(before, after):
-    from base.ve3668n_input import calibration_fingerprint, validate_device_snapshot
+    from base.vkinging_input import calibration_fingerprint, validate_device_snapshot
 
     first = validate_device_snapshot(device_info(input_config=input_config(before)))
     second = validate_device_snapshot(device_info(input_config=input_config(after)))
@@ -200,7 +200,7 @@ def test_capture_snapshot_changes_but_calibration_fingerprint_does_not(before, a
     ("range_min", -5.0), ("range_max", 5.0),
 ])
 def test_future_conditions_change_fingerprint_but_cannot_be_acquired(field, value):
-    from base.ve3668n_input import (
+    from base.vkinging_input import (
         calibration_fingerprint, validate_calibration_conditions,
         validate_device_snapshot, validate_input_config,
     )
@@ -219,7 +219,7 @@ def test_future_conditions_change_fingerprint_but_cannot_be_acquired(field, valu
 
 
 def test_device_and_physical_channel_are_part_of_calibration_identity():
-    from base.ve3668n_input import calibration_fingerprint
+    from base.vkinging_input import calibration_fingerprint
 
     first = device_info()
     other_device = device_info(machine_id="test-machine-2")
@@ -233,7 +233,7 @@ def test_device_and_physical_channel_are_part_of_calibration_identity():
     {"physical_channels": [1, 7]}, {"physical_channels": [1]}, {"available": False},
 ])
 def test_routing_display_and_selection_do_not_change_calibration_identity(overrides):
-    from base.ve3668n_input import calibration_fingerprint
+    from base.vkinging_input import calibration_fingerprint
 
     first = device_info()
     changed = device_info(**overrides)
@@ -244,7 +244,7 @@ def test_routing_display_and_selection_do_not_change_calibration_identity(overri
 
 @pytest.mark.parametrize("rate", [None, True, 44100.0, "48000", 1, 3999, 102401])
 def test_invalid_rate_is_not_a_calibration_applicability_condition(rate):
-    from base.ve3668n_input import calibration_fingerprint, validate_input_config
+    from base.vkinging_input import calibration_fingerprint, validate_input_config
 
     first = device_info()
     invalid = device_info(input_config=input_config(rate))
@@ -265,7 +265,7 @@ def test_invalid_rate_is_not_a_calibration_applicability_condition(rate):
     ("range_min", 10.0), ("range_max", -11.0), ("range_max", 10 ** 400),
 ])
 def test_calibration_conditions_require_well_formed_structure(field, value):
-    from base.ve3668n_input import calibration_fingerprint, validate_calibration_conditions
+    from base.vkinging_input import calibration_fingerprint, validate_calibration_conditions
 
     config = input_config(**{field: value})
     with pytest.raises(ValueError, match="input_mode|unit|range"):
@@ -277,7 +277,7 @@ def test_calibration_conditions_require_well_formed_structure(field, value):
 @pytest.mark.parametrize("field", ["sensitivity", "unknown", "index", "hostapi"])
 @pytest.mark.parametrize("level", ["device", "device_config", "config_argument"])
 def test_fingerprint_boundary_also_rejects_injected_fields(field, level):
-    from base.ve3668n_input import calibration_fingerprint
+    from base.vkinging_input import calibration_fingerprint
 
     device = device_info()
     config = input_config()
@@ -290,7 +290,7 @@ def test_fingerprint_boundary_also_rejects_injected_fields(field, level):
 
 @pytest.mark.parametrize("model", ["VE3668N", "ve3668n", " \tVe3668n\r\n"])
 def test_identity_is_normalized_without_using_routing_names(model):
-    from base.ve3668n_input import (
+    from base.vkinging_input import (
         calibration_fingerprint, normalize_machine_id, normalize_model,
         validate_device_snapshot,
     )
@@ -305,11 +305,10 @@ def test_identity_is_normalized_without_using_routing_names(model):
 
 
 @pytest.mark.parametrize("model", [
-    None, True, 3668, "", " \t", "VE3668", "VE3668N-plus", "prefix-VE3668N",
-    "VE3668N VE3668N", "VE 3668N", "VE3668N\nother",
+    None, True, 3668, "", " \t", "VE3668N\nother",
 ])
-def test_model_matching_is_full_not_substring(model):
-    from base.ve3668n_input import calibration_fingerprint, normalize_model, validate_device_snapshot
+def test_models_reject_empty_bad_types_and_embedded_controls(model):
+    from base.vkinging_input import calibration_fingerprint, normalize_model, validate_device_snapshot
 
     device = device_info(model=model)
     with pytest.raises(ValueError, match="model"):
@@ -322,7 +321,7 @@ def test_model_matching_is_full_not_substring(model):
 
 @pytest.mark.parametrize("machine_id", [None, True, 1, "", " \t\r\n"])
 def test_missing_stable_identity_is_not_replaced_with_name_or_address(machine_id):
-    from base.ve3668n_input import calibration_fingerprint, normalize_machine_id, validate_device_snapshot
+    from base.vkinging_input import calibration_fingerprint, normalize_machine_id, validate_device_snapshot
 
     device = device_info(machine_id=machine_id)
     with pytest.raises(ValueError, match="machine_id"):
@@ -335,7 +334,7 @@ def test_missing_stable_identity_is_not_replaced_with_name_or_address(machine_id
 
 @pytest.mark.parametrize("channels", [(7, 1), [7, 1], (0,), list(range(8)), range(8)])
 def test_physical_channels_keep_order_and_physical_capacity(channels):
-    from base.ve3668n_input import validate_device_snapshot, validate_physical_channels
+    from base.vkinging_input import validate_device_snapshot, validate_physical_channels
 
     assert validate_physical_channels(channels) == tuple(channels)
     snapshot = validate_device_snapshot(device_info(physical_channels=channels))
@@ -344,11 +343,11 @@ def test_physical_channels_keep_order_and_physical_capacity(channels):
 
 
 @pytest.mark.parametrize("channels", [
-    None, [], (), [7, 7], [0, 1, 0], [-1], [8], [True], [False],
+    None, [], (), [7, 7], [0, 1, 0], [-1], [True], [False],
     [7, True], [1.0], ["1"], [[1]], "7,1", {7, 1}, {7: 1}, 7,
 ])
 def test_physical_channels_reject_duplicates_invalid_indices_and_unordered_data(channels):
-    from base.ve3668n_input import calibration_fingerprint, validate_device_snapshot, validate_physical_channels
+    from base.vkinging_input import calibration_fingerprint, validate_device_snapshot, validate_physical_channels
 
     with pytest.raises(ValueError, match="physical_channel"):
         validate_physical_channels(channels)
@@ -359,9 +358,9 @@ def test_physical_channels_reject_duplicates_invalid_indices_and_unordered_data(
         calibration_fingerprint(device, 7, device["input_config"])
 
 
-@pytest.mark.parametrize("channel", [None, True, False, -1, 8, 1.0, "1", [1]])
+@pytest.mark.parametrize("channel", [None, True, False, -1, 1.0, "1", [1]])
 def test_fingerprint_rejects_invalid_single_physical_channel(channel):
-    from base.ve3668n_input import calibration_fingerprint, validate_physical_channel
+    from base.vkinging_input import calibration_fingerprint, validate_physical_channel
 
     with pytest.raises(ValueError, match="physical_channel"):
         validate_physical_channel(channel)
@@ -374,12 +373,12 @@ def test_fingerprint_rejects_invalid_single_physical_channel(channel):
     ("backend", " vkinging "), ("name", None), ("name", ""), ("name", " \t"),
     ("name", 1), ("address", 1), ("address", []),
     ("max_input_channels", None), ("max_input_channels", True),
-    ("max_input_channels", 0), ("max_input_channels", 9),
+    ("max_input_channels", 0), ("max_input_channels", -1),
     ("max_input_channels", 8.0), ("max_input_channels", 2),
     ("available", None), ("available", 1), ("available", "true"),
 ])
 def test_device_snapshot_fields_are_validated(field, value):
-    from base.ve3668n_input import calibration_fingerprint, validate_device_snapshot
+    from base.vkinging_input import calibration_fingerprint, validate_device_snapshot
 
     device = device_info(**{field: value})
     with pytest.raises(ValueError, match=field):
@@ -390,7 +389,7 @@ def test_device_snapshot_fields_are_validated(field, value):
 
 @pytest.mark.parametrize("address", [None, "", "192.0.2.1"])
 def test_unavailable_snapshot_and_optional_address_are_preserved(address):
-    from base.ve3668n_input import validate_device_snapshot
+    from base.vkinging_input import validate_device_snapshot
 
     device = validate_device_snapshot(device_info(address=address, available=False))
     assert device["available"] is False
@@ -402,7 +401,7 @@ def test_unavailable_snapshot_and_optional_address_are_preserved(address):
     "max_input_channels", "available", "input_config",
 ])
 def test_device_snapshot_requires_all_fields(field):
-    from base.ve3668n_input import calibration_fingerprint, validate_device_snapshot
+    from base.vkinging_input import calibration_fingerprint, validate_device_snapshot
 
     device = device_info()
     del device[field]
@@ -414,7 +413,7 @@ def test_device_snapshot_requires_all_fields(field):
 
 @pytest.mark.parametrize("value", [None, [], (), "", 1])
 def test_device_snapshot_requires_a_mapping(value):
-    from base.ve3668n_input import calibration_fingerprint, validate_device_snapshot
+    from base.vkinging_input import calibration_fingerprint, validate_device_snapshot
 
     with pytest.raises(ValueError, match="device"):
         validate_device_snapshot(value)
@@ -428,7 +427,7 @@ def test_device_snapshot_requires_a_mapping(value):
     {"backend": "sounddevice", "index": 7, "hostapi": 0},
 ])
 def test_soundcard_effective_rate_is_returned_untouched(device, rate):
-    from base.ve3668n_input import resolve_effective_input_rate
+    from base.vkinging_input import resolve_effective_input_rate
 
     assert resolve_effective_input_rate(device, rate) is rate
 
@@ -436,7 +435,7 @@ def test_soundcard_effective_rate_is_returned_untouched(device, rate):
 @pytest.mark.parametrize("rate", [4000, 4001, 7999, 8000, 32000, 44100, 48000, 51200, 96000, 102400])
 @pytest.mark.parametrize("product_rate", [22050, 96000, None])
 def test_ve_effective_rate_uses_only_its_input_config(rate, product_rate):
-    from base.ve3668n_input import resolve_effective_input_rate
+    from base.vkinging_input import resolve_effective_input_rate
 
     device = device_info(input_config=input_config(rate))
     assert resolve_effective_input_rate(device, product_rate) == rate
@@ -446,7 +445,7 @@ def test_ve_effective_rate_uses_only_its_input_config(rate, product_rate):
     None, True, False, 44100.0, 48000.5, "48000", 1, 3999, 102401,
 ])
 def test_effective_rate_never_substitutes_a_product_or_default_rate(rate):
-    from base.ve3668n_input import resolve_effective_input_rate
+    from base.vkinging_input import resolve_effective_input_rate
 
     with pytest.raises(ValueError, match="sample_rate"):
         resolve_effective_input_rate(device_info(input_config=input_config(rate)), 44100)
@@ -454,7 +453,7 @@ def test_effective_rate_never_substitutes_a_product_or_default_rate(rate):
 
 @pytest.mark.parametrize("backend", [None, "", "unknown", "VKINGING", True, 0])
 def test_unknown_backend_is_not_a_soundcard_fallback(backend):
-    from base.ve3668n_input import resolve_effective_input_rate
+    from base.vkinging_input import resolve_effective_input_rate
 
     with pytest.raises(ValueError, match="backend"):
         resolve_effective_input_rate({"backend": backend}, 96000)
@@ -462,7 +461,7 @@ def test_unknown_backend_is_not_a_soundcard_fallback(backend):
 
 @pytest.mark.parametrize("device", [[], (), "", 7])
 def test_rate_resolution_rejects_nonmapping_device_data(device):
-    from base.ve3668n_input import resolve_effective_input_rate
+    from base.vkinging_input import resolve_effective_input_rate
 
     with pytest.raises(ValueError, match="device"):
         resolve_effective_input_rate(device, 96000)
@@ -478,7 +477,7 @@ def test_rate_resolution_rejects_nonmapping_device_data(device):
     ({"machine_id": ""}, "machine_id"),
 ])
 def test_rate_resolution_cannot_bypass_ve_acquisition_validation(overrides, field):
-    from base.ve3668n_input import resolve_effective_input_rate
+    from base.vkinging_input import resolve_effective_input_rate
 
     with pytest.raises(ValueError, match=field):
         resolve_effective_input_rate(device_info(**overrides), 44100)
@@ -487,7 +486,7 @@ def test_rate_resolution_cannot_bypass_ve_acquisition_validation(overrides, fiel
 @pytest.mark.parametrize("mapping_kind", ["dict", "user_dict", "proxy", "frozen"])
 def test_all_contract_boundaries_accept_existing_mapping_snapshots(mapping_kind):
     from base.recording_process_protocol import FrozenConfig
-    from base.ve3668n_input import (
+    from base.vkinging_input import (
         calibration_fingerprint, resolve_effective_input_rate,
         validate_calibration_conditions, validate_device_snapshot, validate_input_config,
     )
@@ -513,7 +512,7 @@ def test_all_contract_boundaries_accept_existing_mapping_snapshots(mapping_kind)
 
 
 def test_normalized_snapshots_are_independent_without_mutating_the_caller():
-    from base.ve3668n_input import (
+    from base.vkinging_input import (
         calibration_fingerprint, resolve_effective_input_rate,
         validate_calibration_conditions, validate_device_snapshot, validate_input_config,
     )
@@ -549,7 +548,7 @@ def test_normalized_snapshots_are_independent_without_mutating_the_caller():
 
 def test_snapshots_freeze_and_round_trip_through_json_and_pickle():
     from base.recording_process_protocol import FrozenConfig
-    from base.ve3668n_input import (
+    from base.vkinging_input import (
         calibration_fingerprint, validate_calibration_conditions,
         validate_device_snapshot, validate_input_config,
     )
@@ -583,10 +582,10 @@ def test_snapshots_freeze_and_round_trip_through_json_and_pickle():
 @pytest.mark.parametrize("overrides", [
     {"input_config": input_config(sensitivity=1000.0)},
     {"input_config": input_config(102401)}, {"physical_channels": [7, 7]},
-    {"machine_id": " "}, {"model": "prefix VE3668N"},
+    {"machine_id": " "}, {"model": "VK-\0X"},
 ])
 def test_failed_validation_also_leaves_caller_data_unchanged(overrides):
-    from base.ve3668n_input import resolve_effective_input_rate, validate_device_snapshot
+    from base.vkinging_input import resolve_effective_input_rate, validate_device_snapshot
 
     source = device_info(**overrides)
     before = deepcopy(source)
@@ -598,7 +597,7 @@ def test_failed_validation_also_leaves_caller_data_unchanged(overrides):
 
 def test_rates_and_channels_require_python_int_not_numeric_lookalikes():
     import numpy as np
-    from base.ve3668n_input import validate_physical_channel, validate_sample_rate
+    from base.vkinging_input import validate_physical_channel, validate_sample_rate
 
     class IntSubclass(int):
         pass
@@ -612,14 +611,13 @@ def test_rates_and_channels_require_python_int_not_numeric_lookalikes():
 
 
 def test_shared_schema_constants_and_fake_data_do_not_share_mutable_state():
-    from consts import ve3668n_consts
+    from consts import vkinging_consts
 
-    assert ve3668n_consts.VE_INPUT_SCHEMA_VERSION == 1
-    assert ve3668n_consts.VE_MAX_INPUT_CHANNELS == 8
-    assert set(ve3668n_consts.VE_DEVICE_SNAPSHOT_FIELDS) == set(device_info())
-    assert set(ve3668n_consts.VE_INPUT_CONFIG_FIELDS) == set(input_config())
+    assert vkinging_consts.VE_INPUT_SCHEMA_VERSION == 1
+    assert set(vkinging_consts.VE_DEVICE_SNAPSHOT_FIELDS) == set(device_info())
+    assert set(vkinging_consts.VE_INPUT_CONFIG_FIELDS) == set(input_config())
     assert all(not isinstance(value, (dict, list, set))
-               for name, value in vars(ve3668n_consts).items() if name.startswith("VE_"))
+               for name, value in vars(vkinging_consts).items() if name.startswith("VE_"))
     first, second = device_info(), device_info()
     first["input_config"]["sample_rate"] = 44100
     first["physical_channels"].reverse()
@@ -632,11 +630,11 @@ def test_shared_schema_constants_and_fake_data_do_not_share_mutable_state():
     (6, 0.02, "±20 mV"),
 ])
 def test_seven_ranges_map_to_voltage_configs(index, limit, label):
-    from base.ve3668n_input import (
+    from base.vkinging_input import (
         create_input_config, validate_input_config, validate_range_index,
         voltage_limits_for_range,
     )
-    from consts.ve3668n_consts import VE_RANGE_LABELS, VE_RANGE_LIMITS
+    from consts.vkinging_consts import VE_RANGE_LABELS, VE_RANGE_LIMITS
 
     assert VE_RANGE_LIMITS[index] == limit
     assert VE_RANGE_LABELS[index] == label
@@ -650,7 +648,7 @@ def test_seven_ranges_map_to_voltage_configs(index, limit, label):
 
 @pytest.mark.parametrize("bad", [-1, 7, True, False, 1.0, 1.5, "1", None])
 def test_range_index_is_a_strict_enumeration(bad):
-    from base.ve3668n_input import (
+    from base.vkinging_input import (
         create_input_config, validate_range_index, voltage_limits_for_range,
     )
 
@@ -666,7 +664,69 @@ def test_range_index_is_a_strict_enumeration(bad):
     (-10, float("nan")), (-10, 10 ** 400), (False, True),
 ])
 def test_ranges_require_a_listed_symmetric_finite_pair(minimum, maximum):
-    from base.ve3668n_input import validate_input_config
+    from base.vkinging_input import validate_input_config
 
     with pytest.raises(ValueError, match="range_min|range_max"):
         validate_input_config(input_config(range_min=minimum, range_max=maximum))
+
+
+@pytest.mark.parametrize("channel", [8, 11, 31, 10000])
+def test_generic_physical_indices_and_capacity(channel):
+    from base.vkinging_input import (
+        calibration_fingerprint, validate_device_snapshot, validate_physical_channel,
+        validate_physical_channels,
+    )
+
+    assert validate_physical_channel(channel) == channel
+    assert validate_physical_channels((channel, 1)) == (channel, 1)
+    device = device_info(physical_channels=[channel, 1], max_input_channels=channel + 1)
+    snapshot = validate_device_snapshot(device)
+    assert snapshot["physical_channels"] == (channel, 1)
+    assert snapshot["max_input_channels"] == channel + 1
+    assert calibration_fingerprint(device, channel, input_config())["physical_channel"] == channel
+    with pytest.raises(ValueError, match="max_input_channels.*cover"):
+        validate_device_snapshot(device_info(physical_channels=[channel], max_input_channels=channel))
+
+
+@pytest.mark.parametrize("capacity", [9, 12, 32, 10001])
+def test_generic_capacity_without_fixed_model_ceiling(capacity):
+    from base.vkinging_input import validate_device_snapshot
+
+    assert validate_device_snapshot(device_info(max_input_channels=capacity))["max_input_channels"] == capacity
+
+
+@pytest.mark.parametrize("model,expected", [
+    (" vk-test-12 ", "VK-TEST-12"), ("vk-test-other", "VK-TEST-OTHER"),
+    ("vk-ß", "VK-ß"), ("vk-ss", "VK-SS"),
+    ("VE3668", "VE3668"), ("VE3668N-plus", "VE3668N-PLUS"),
+    ("prefix-VE3668N", "PREFIX-VE3668N"),
+    ("VE3668N VE3668N", "VE3668N VE3668N"), ("VE 3668N", "VE 3668N"),
+])
+def test_generic_model_normalization_and_fingerprint(model, expected):
+    from base.vkinging_input import calibration_fingerprint, normalize_model, validate_device_snapshot
+
+    device = device_info(model=model)
+    assert normalize_model(model) == expected
+    assert validate_device_snapshot(device)["model"] == expected
+    assert calibration_fingerprint(device, 7, input_config())["model"] == expected
+
+
+def test_non_ascii_model_identity_is_not_expanded_or_merged():
+    from base.vkinging_input import calibration_fingerprint, normalize_model
+
+    assert normalize_model("vk-ß") == "VK-ß"
+    assert normalize_model("vk-ss") == "VK-SS"
+    assert calibration_fingerprint(device_info(model="vk-ß"), 7, input_config()) != (
+        calibration_fingerprint(device_info(model="vk-ss"), 7, input_config()))
+
+
+@pytest.mark.parametrize("model", ["VK-\0X", "VK-\nX", "VK-\x7fX", "VK-\u0085X", "VK-\u009bX"])
+def test_generic_models_reject_embedded_unicode_controls(model):
+    from base.vkinging_input import calibration_fingerprint, normalize_model, validate_device_snapshot
+
+    with pytest.raises(ValueError, match="model"):
+        normalize_model(model)
+    with pytest.raises(ValueError, match="model"):
+        validate_device_snapshot(device_info(model=model))
+    with pytest.raises(ValueError, match="model"):
+        calibration_fingerprint(device_info(model=model), 7, input_config())

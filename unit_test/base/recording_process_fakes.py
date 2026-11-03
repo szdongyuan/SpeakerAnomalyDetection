@@ -689,7 +689,7 @@ def logged_recording_orphan(control, preview, generation, factory, options, *arg
 
 def persistent_ve_worker_dependencies(**options):
     """Spawn-safe persistent-controller SDK, writer and finalizer gates."""
-    from unit_test.base.ve3668n_fakes import CaptureSDK
+    from unit_test.base.vkinging_fakes import CaptureSDK
 
     trace_dir = Path(options["trace_dir"])
     trace_dir.mkdir(parents=True, exist_ok=True)

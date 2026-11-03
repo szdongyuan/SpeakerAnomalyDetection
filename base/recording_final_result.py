@@ -11,7 +11,7 @@ from base.recording_process_protocol import (
 from base.recording_settings import validate_recorded_audio_metrics
 from consts.recording_preview_consts import MAIN_RECORDING_FINAL_MAX_POINTS
 from consts.recording_result_consts import RECORDING_FINAL_ENVELOPE_VERSION
-from consts.ve3668n_consts import VE_BACKEND
+from consts.vkinging_consts import VE_BACKEND
 
 
 @dataclass(frozen=True)

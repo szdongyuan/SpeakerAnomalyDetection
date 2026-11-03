@@ -4,8 +4,8 @@ from types import MappingProxyType
 
 import pytest
 
-from base.ve3668n_recording_config import resolve_ve_recording_config
-from unit_test.base.ve3668n_fakes import input_config
+from base.vkinging_recording_config import resolve_ve_recording_config
+from unit_test.base.vkinging_fakes import input_config
 
 
 @pytest.mark.parametrize("rate", [4000, 4001, 7999, 96000])

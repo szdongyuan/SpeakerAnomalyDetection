@@ -11,10 +11,10 @@ from enum import Enum
 from numbers import Integral, Real
 from typing import Any, Optional
 
-from base.ve3668n_wav_metadata import (
+from base.vkinging_wav_metadata import (
     resolve_ve_wav_channel_v2pa_factor, validate_ve_wav_metadata,
 )
-from consts.ve3668n_consts import VE_BACKEND
+from consts.vkinging_consts import VE_BACKEND
 
 
 RIFF_ID = b"RIFF"

@@ -13,11 +13,11 @@ import time
 from base import vkinging_sdk
 from base.log_manager import LogManager
 from base.log_exit import ProcessLogDrain, run_with_log_drain, exit_with_log_drain
-from base.ve3668n_input import (
+from base.vkinging_input import (
     create_input_config, normalize_machine_id, normalize_model,
     validate_device_snapshot, validate_physical_channels,
 )
-from consts.ve3668n_consts import VE_BACKEND
+from consts.vkinging_consts import VE_BACKEND
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,7 @@ def _analog_channels(routes, name):
         terminal = route[len(name) + 1:]
         if re.fullmatch(r"(?:MIN|DIN|RAWAIN)[1-9][0-9]*", terminal):
             continue
-        if not re.fullmatch(r"AIN[1-8]", terminal):
+        if not re.fullmatch(r"AIN[1-9][0-9]*", terminal):
             raise ValueError("channels contains a malformed analog route")
         channels.append(int(terminal[3:]) - 1)
     return validate_physical_channels(channels)

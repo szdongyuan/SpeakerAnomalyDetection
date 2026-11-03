@@ -11,7 +11,7 @@ from base import soundcard_calibration_manager as mic_store
 from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
 from base.recording_process_protocol import FrozenConfig
 from base.streaming_file_writer import StreamingWavWriter
-from base.ve3668n_stores import VECalibrationStore, VEInputProfileStore
+from base.vkinging_stores import VECalibrationStore, VEInputProfileStore
 from base.wav_calibration_metadata import (
     WavCalibrationMetadataReadStatus,
     append_wav_calibration_metadata,
@@ -20,16 +20,16 @@ from base.wav_calibration_metadata import (
     resolve_wav_channel_v2pa_factor,
 )
 from ui.calibration_window import CalibrationWindow
-from unit_test.base.ve3668n_fakes import device_info
-from unit_test.ui.test_ve3668n_calibration import CalibrationBridgeFake
+from unit_test.base.vkinging_fakes import device_info
+from unit_test.ui.test_vkinging_calibration import CalibrationBridgeFake
 
 
 @pytest.fixture
 def windows(ui_qapp, tmp_path, monkeypatch):
-    from base import ve3668n_calibration_settings
+    from base import vkinging_calibration_settings
 
     # Direct VE panels must never depend on the installed calibration text.
-    monkeypatch.setattr(ve3668n_calibration_settings, "default_path",
+    monkeypatch.setattr(vkinging_calibration_settings, "default_path",
                         lambda: tmp_path / "ve_calibration_range.txt")
     opened = []
 

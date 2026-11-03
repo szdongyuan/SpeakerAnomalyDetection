@@ -8,7 +8,7 @@ class MainWindowLauncher(object):
         from consts import ui_style_const
         from ui.splash_screen_window import Splash, LoaderThread
         from base.recording_service import RecordingService
-        from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+        from base.vkinging_prewarm_lifetime import VePrewarmLifetime
         from ui.recording_service_bridge import RecordingServiceBridge
         from base.raw_audio_csv_service import RawAudioCsvService
         from ui.raw_audio_csv_service_bridge import RawAudioCsvServiceBridge

@@ -14,8 +14,8 @@ from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_process_protocol import RecordingFailure, RecordingResult
 from base.streaming_file_writer import StreamingWavWriter
 from base.wav_pcm24 import quantize_pcm24
-from unit_test.base.test_ve3668n_capture import start_persistent_capture
-from unit_test.base.ve3668n_fakes import capture_request
+from unit_test.base.test_vkinging_capture import start_persistent_capture
+from unit_test.base.vkinging_fakes import capture_request
 
 
 CATEGORIES = ("consume", "write", "waveform_lock_wait", "waveform_lock_hold",

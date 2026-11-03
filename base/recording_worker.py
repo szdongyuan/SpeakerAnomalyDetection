@@ -31,9 +31,9 @@ from base.recording_process_protocol import (
     VE_RESOURCE_RETRY,
 )
 from base.recording_worker_pipeline import WorkerCapturePipeline
-from base.ve3668n_resource import VeResourceController, VeResourceFault
+from base.vkinging_resource import VeResourceController, VeResourceFault
 from base.vkinging_sdk import VkDaqClient
-from consts.ve3668n_consts import VE_BACKEND
+from consts.vkinging_consts import VE_BACKEND
 
 
 def _send_loop(connection, outgoing, broken, latest=None, wake=None, urgent=None,

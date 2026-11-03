@@ -5,11 +5,11 @@ def device_display_name(device):
     """Return the SDK name unless it is absent or contains the full MachineId."""
     name = device.get("name")
     if not isinstance(name, str) or not name.strip():
-        return "VE3668N"
+        return "VK 设备"
     name = name.strip()
     machine_id = device.get("machine_id")
     if isinstance(machine_id, str) and machine_id and machine_id in name:
-        return "VE3668N"
+        return "VK 设备"
     return name
 
 

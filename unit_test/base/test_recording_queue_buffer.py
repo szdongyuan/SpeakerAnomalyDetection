@@ -8,10 +8,10 @@ import soundfile as sf
 
 from base.recording_capture import RecordingCapture, capture_queue_capacity
 from base.recording_process_protocol import RecordingFailure, RecordingRequest, RecordingResult
-from base.ve3668n_capture_timing import VeCaptureProgress
+from base.vkinging_capture_timing import VeCaptureProgress
 from base.wav_pcm24 import quantize_pcm24
 from unit_test.base.recording_process_fakes import ControlledWriter, device_info
-from unit_test.base.ve3668n_fakes import (
+from unit_test.base.vkinging_fakes import (
     capture_request, device_info as ve_device_info, input_config, wav_metadata,
 )
 

@@ -1,10 +1,10 @@
 """Resolve queue-owned VK acquisition parameters without SDK or storage I/O."""
 from collections.abc import Mapping
 
-from base.ve3668n_input import (
+from base.vkinging_input import (
     create_input_config, validate_sample_rate, validate_range_index, validate_device_snapshot,
 )
-from consts.ve3668n_consts import VE_DEFAULT_SAMPLE_RATE, VE_RANGE_INDEX_CONFIG_KEY
+from consts.vkinging_consts import VE_DEFAULT_SAMPLE_RATE, VE_RANGE_INDEX_CONFIG_KEY
 
 
 def resolve_ve_recording_config(detail, *, fallback_profile=None):

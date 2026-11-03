@@ -10,11 +10,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from base import ve3668n_discovery as discovery
+from base import vkinging_discovery as discovery
 from base import vkinging_sdk
-from base.ve3668n_input import validate_device_snapshot
-from consts.ve3668n_consts import VE_DEVICE_SNAPSHOT_FIELDS
-from unit_test.base.ve3668n_fakes import DiscoveryClock, DiscoverySDK, device_info, discovery_record
+from base.vkinging_input import validate_device_snapshot
+from consts.vkinging_consts import VE_DEVICE_SNAPSHOT_FIELDS
+from unit_test.base.vkinging_fakes import DiscoveryClock, DiscoverySDK, device_info, discovery_record
 
 
 @pytest.fixture(autouse=True)
@@ -43,10 +43,10 @@ def no_native_or_portaudio(monkeypatch):
 
 @pytest.mark.parametrize("model,accepted", [
     ("VE3668N", True), ("  ve3668n\t", True), ("Ve3668N", True),
-    ("VE3668", False), ("VE3668N-Pro", False), ("XVE3668N", False),
+    ("VE3668", True), ("VE3668N-Pro", True), ("XVE3668N", True),
     ("", False), (None, False), (3668, False), ("VE3668N\0", False),
 ])
-def test_full_model_match_and_closed_snapshot(model, accepted):
+def test_generic_model_and_closed_snapshot(model, accepted):
     sdk = DiscoverySDK([discovery_record(model=model)])
     result = discovery.discover_devices(sdk)
     assert len(result.devices) == int(accepted)
@@ -54,7 +54,7 @@ def test_full_model_match_and_closed_snapshot(model, accepted):
         device = result.devices[0]
         assert device == validate_device_snapshot(device)
         assert set(device) == set(VE_DEVICE_SNAPSHOT_FIELDS)
-        assert device["model"] == "VE3668N"
+        assert device["model"] == model.strip().upper()
         assert device["physical_channels"] == tuple(range(8))
         assert device["input_config"]["sample_rate"] == 51200
         assert result.diagnostics == ()
@@ -96,7 +96,7 @@ def test_analog_only_preserves_inventory_order_and_multiple_devices():
 
 @pytest.mark.parametrize("channels", [
     (), ("Dev1/MIN1", "Dev1/DIN1", "Dev1/RAWAIN1"),
-    ("Dev1/AIN0",), ("Dev1/AIN9",), ("Dev1/AIN01",),
+    ("Dev1/AIN0",), ("Dev1/AIN01",),
     ("Dev1/ain1",), ("Dev1/AIN1x",), ("Dev1/AIN1\0",),
     ("Dev1/AIN1", "Dev1/AIN1"), ("Dev1/AIN1", "Dev2/AIN2"),
     ("Dev1/AIN1", "Dev2/MIN1"), ("AIN1",), ("Dev1/AIN1/extra",),
@@ -140,7 +140,7 @@ def test_resolve_tracks_identity_not_alias_and_preserves_selection_order():
         discovery.resolve_device(sdk, "machine-1", (7, 1))
 
 
-@pytest.mark.parametrize("channels", [(), (1, 1), (True,), (8,), (-1,), "1", (1.0,)])
+@pytest.mark.parametrize("channels", [(), (1, 1), (True,), (-1,), "1", (1.0,)])
 def test_resolve_rejects_bad_selection_before_sdk_io(channels):
     sdk = DiscoverySDK()
     with pytest.raises(ValueError, match="physical_channel"):
@@ -149,7 +149,7 @@ def test_resolve_rejects_bad_selection_before_sdk_io(channels):
 
 
 @pytest.mark.parametrize("record", [
-    discovery_record(model="VE3668"),
+    discovery_record(model=""),
     discovery_record(channels=("Dev1/AIN2",)),
     discovery_record(machine_id="other"),
 ])
@@ -204,12 +204,17 @@ def track_resources(service, monkeypatch):
     return processes, pipes
 
 
-def test_spawn_success_is_async_and_closes_process_and_pipe_handles(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode,model,channels", [
+    ("normal", "VE3668N", tuple(range(8))),
+    ("high_channels", "VK-TEST-12", (11, 1, 8)),
+])
+def test_spawn_success_is_async_and_closes_process_and_pipe_handles(
+        tmp_path, monkeypatch, mode, model, channels):
     trace = tmp_path / "trace.jsonl"
     callbacks = []
     service = discovery.DiscoveryService(
-        sdk_factory="unit_test.base.ve3668n_fakes.discovery_factory",
-        sdk_options={"trace_path": str(trace)},
+        sdk_factory="unit_test.base.vkinging_fakes.discovery_factory",
+        sdk_options={"trace_path": str(trace), "mode": mode},
         on_result=lambda result: callbacks.append((result, threading.get_ident())),
     )
     processes, pipes = track_resources(service, monkeypatch)
@@ -223,6 +228,10 @@ def test_spawn_success_is_async_and_closes_process_and_pipe_handles(tmp_path, mo
         assert event.generation == generation
         assert event.status == "completed"
         assert event.result.devices[0]["machine_id"] == "machine-1"
+        device = event.result.devices[0]
+        assert device["model"] == model
+        assert device["physical_channels"] == channels
+        assert device["max_input_channels"] == max(channels) + 1
         assert event.child_pid != os.getpid()
         assert 0 < event.message_bytes <= service.max_result_bytes
         assert event.handles_released
@@ -241,13 +250,13 @@ def test_spawn_success_is_async_and_closes_process_and_pipe_handles(tmp_path, mo
 
 def fake_service(tmp_path, mode, **kwargs):
     return discovery.DiscoveryService(
-        sdk_factory="unit_test.base.ve3668n_fakes.discovery_factory",
+        sdk_factory="unit_test.base.vkinging_fakes.discovery_factory",
         sdk_options={"trace_path": str(tmp_path / "trace.jsonl"), "mode": mode}, **kwargs)
 
 
 def test_blocked_discovery_drains_tail_before_actual_terminate(tmp_path, monkeypatch):
     service = discovery.DiscoveryService(
-        sdk_factory="unit_test.base.ve3668n_fakes.discovery_factory",
+        sdk_factory="unit_test.base.vkinging_fakes.discovery_factory",
         sdk_options={"trace_path": str(tmp_path / "trace.jsonl"),
                      "mode": "block_probe", "log_directory": str(tmp_path)},
         deadline=20, retire_timeout=.05)
@@ -283,7 +292,7 @@ def test_blocked_discovery_drains_tail_before_actual_terminate(tmp_path, monkeyp
 def test_discovery_log_failure_is_reported_by_surviving_parent(
         tmp_path, monkeypatch, caplog, failure, status):
     service = discovery.DiscoveryService(
-        sdk_factory="unit_test.base.ve3668n_fakes.discovery_factory",
+        sdk_factory="unit_test.base.vkinging_fakes.discovery_factory",
         sdk_options={"trace_path": str(tmp_path / "trace.jsonl"), "mode": "block_probe",
                      "log_directory": str(tmp_path), "log_failure": failure},
         deadline=20, retire_timeout=.05)
@@ -665,7 +674,7 @@ def test_terminate_escalates_to_kill_and_confirms_death(tmp_path, monkeypatch):
 @pytest.mark.parametrize("mode", ["block_factory", "block_probe", "block_close"])
 def test_parent_death_exits_helper_even_while_native_is_blocked(tmp_path, mode):
     import _winapi
-    from unit_test.base.ve3668n_fakes import discovery_orphan_parent
+    from unit_test.base.vkinging_fakes import discovery_orphan_parent
 
     context = multiprocessing.get_context("spawn")
     receive, send = context.Pipe(duplex=False)
@@ -1011,7 +1020,7 @@ def test_empty_inventory_is_unavailable_without_synthetic_diagnostic(tmp_path):
 
 
 def test_discovery_uses_task3_binding_with_injected_native_dll_only():
-    from unit_test.base.ve3668n_fakes import FakeVkDaqDLL
+    from unit_test.base.vkinging_fakes import FakeVkDaqDLL
 
     dll = FakeVkDaqDLL()
     dll.channels = b"Dev1/AIN8,Dev1/AIN2,Dev1/MIN1,Dev1/DIN1,Dev1/RAWAIN1"
@@ -1133,3 +1142,40 @@ def test_retirement_observes_death_and_reports_only_requested_drain(monkeypatch,
         assert "pending=unknown" in caplog.text
     else:
         assert not caplog.records
+
+
+@pytest.mark.parametrize("count", [1, 8, 12, 16, 32])
+def test_sdk_inventory_drives_input_capacity(count):
+    sdk = DiscoverySDK([discovery_record(
+        model=" vk-test-other ",
+        channels=tuple(f"Dev1/AIN{i}" for i in range(1, count + 1)),
+    )])
+    result = discovery.discover_devices(sdk)
+    assert result.diagnostics == ()
+    assert len(result.devices) == 1
+    device = result.devices[0]
+    assert device["model"] == "VK-TEST-OTHER"
+    assert device["physical_channels"] == tuple(range(count))
+    assert device["max_input_channels"] == count
+    selected = discovery.resolve_device(sdk, "machine-1", (count - 1,))
+    assert selected["physical_channels"] == (count - 1,)
+    assert selected["max_input_channels"] == count
+
+
+def test_sparse_twelve_channel_order_and_capacity():
+    sdk = DiscoverySDK([discovery_record(
+        model="VK-TEST-12",
+        channels=("Dev1/AIN12", "Dev1/AIN2", "Dev1/AIN9"),
+    )])
+    device = discovery.discover_devices(sdk).devices[0]
+    assert device["physical_channels"] == (11, 1, 8)
+    assert device["max_input_channels"] == 12
+    assert discovery.resolve_device(sdk, "machine-1", (8, 11))["physical_channels"] == (8, 11)
+
+
+def test_resolve_rejects_unenumerated_valid_channel_after_sdk_io():
+    sdk = DiscoverySDK()
+    with pytest.raises(ValueError, match="unavailable"):
+        discovery.resolve_device(sdk, "machine-1", (8,))
+    assert ("devices",) in sdk.trace
+    assert ("channels", "Dev1") in sdk.trace

@@ -5,19 +5,19 @@ from pathlib import Path
 
 import pytest
 
-from base.ve3668n_calibration_settings import (
+from base.vkinging_calibration_settings import (
     VECalibrationSettingsError,
     build_ve_calibration_device,
     load_ve_calibration_settings,
 )
 from consts import model_consts
-from consts.ve3668n_consts import (
+from consts.vkinging_consts import (
     VE_CALIBRATION_DEFAULT_RANGE_VOLTS,
     VE_CALIBRATION_DEFAULT_SAMPLE_RATE,
     VE_CALIBRATION_SETTINGS_RELATIVE_PATH,
     VE_DEFAULT_SAMPLE_RATE,
 )
-from unit_test.base.ve3668n_fakes import device_info, input_config
+from unit_test.base.vkinging_fakes import device_info, input_config
 
 
 def test_missing_file_uses_independent_defaults_without_creating_file(tmp_path):

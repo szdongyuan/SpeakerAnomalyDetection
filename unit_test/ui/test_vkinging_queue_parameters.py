@@ -7,18 +7,18 @@ from unittest import mock
 import pytest
 import soundfile as sf
 
-from base.ve3668n_input import ve_acquisition_signature
-from base.ve3668n_prewarm_lifetime import VePrewarmLifetime
+from base.vkinging_input import ve_acquisition_signature
+from base.vkinging_prewarm_lifetime import VePrewarmLifetime
 from base.wav_calibration_metadata import inspect_wav_calibration_metadata
 from main_window import MainWindow
-from unit_test.base.ve3668n_fakes import device_info, input_config
-from unit_test.ui.test_ve3668n_recording import (
+from unit_test.base.vkinging_fakes import device_info, input_config
+from unit_test.ui.test_vkinging_recording import (
     RecordingHost, host_factory, capture_audio, finish_ve_capture, save_calibration,
 )
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
 from ui.vkinging_presentation import ve_failure_text
-from unit_test.ui.test_ve3668n_prewarm_trigger import _WindowHarness, _completion, _discovery
-from unit_test.ui.test_ve3668n_calibration import setup, seed_old, offered, accept, release
+from unit_test.ui.test_vkinging_prewarm_trigger import _WindowHarness, _completion, _discovery
+from unit_test.ui.test_vkinging_calibration import setup, seed_old, offered, accept, release
 
 
 class ConditionRecordingHost(RecordingHost, SequenceWidgetSerialTriggerOpsMixin):
@@ -126,7 +126,7 @@ def enter_condition(host, entry):
 
 
 def test_device_resolver_copies_identity_and_replaces_stale_profile():
-    from base.ve3668n_recording_config import resolve_ve_recording_device
+    from base.vkinging_recording_config import resolve_ve_recording_device
     device = device_info(input_config=None)
     before = deepcopy(device)
     resolved = resolve_ve_recording_device(device, {"sample_rate": 96000, "ve_range_index": 5})

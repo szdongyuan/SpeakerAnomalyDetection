@@ -17,9 +17,9 @@ from base.recording_process_protocol import RecordingFailure, RecordingRequest
 from base.recording_final_result import PreparedRecordingResult
 from base.recording_service import RecordingCallbacks, RecordingService
 from base.recording_settings import merge_audio_validation_thresholds
-from base.ve3668n_input import validate_sample_rate
-from base.ve3668n_wav_metadata import validate_ve_wav_metadata
-from consts.ve3668n_consts import VE_BACKEND
+from base.vkinging_input import validate_sample_rate
+from base.vkinging_wav_metadata import validate_ve_wav_metadata
+from consts.vkinging_consts import VE_BACKEND
 from ui.recording_service_bridge import RecordingProcessorFacade, RecordingServiceBridge
 from ui.sequence.recording_process_context import RecordingProcessContext
 from ui.sequence.sequence_widget_recording_retry_ops import SequenceWidgetRecordingRetryOpsMixin
@@ -136,7 +136,7 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         if (mic or {}).get("backend") == "vkinging":
             from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
             try:
-                from base.ve3668n_input import ve_acquisition_signature
+                from base.vkinging_input import ve_acquisition_signature
                 mic = SequenceWidgetConfigOpsMixin._current_ve_recording_device(self, mic)
                 if not mic["available"]:
                     raise ValueError("VE 输入设备不可用，请在硬件设置中刷新")

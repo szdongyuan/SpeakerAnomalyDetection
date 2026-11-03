@@ -17,12 +17,12 @@ from PyQt5.QtWidgets import QLabel, QWidget
 
 from base.recording_result_reader import RecordingAudio, ResultReader
 from base.recording_service import RecordingSession
-from base import ve3668n_calibration_settings as settings_module
-from base.ve3668n_stores import VECalibrationStore, VEInputProfileStore
+from base import vkinging_calibration_settings as settings_module
+from base.vkinging_stores import VECalibrationStore, VEInputProfileStore
 from ui import calibration_window as calibration
 from ui.vkinging_presentation import ve_failure_text
-from unit_test.base.test_ve3668n_calibration import descriptor_for, sine_volts
-from unit_test.base.ve3668n_fakes import device_info, input_config
+from unit_test.base.test_vkinging_calibration import descriptor_for, sine_volts
+from unit_test.base.vkinging_fakes import device_info, input_config
 
 
 class CalibrationBridgeFake(QObject):
@@ -66,9 +66,10 @@ def setup(ui_qapp, tmp_path, monkeypatch):
     bridge = CalibrationBridgeFake(tmp_path)
     widgets = []
 
-    def make(rate=51200, channels=(7, 1), physical_channels=(7, 1), **kwargs):
-        device = device_info(
-            input_config=input_config(rate), physical_channels=list(physical_channels))
+    def make(rate=51200, channels=(7, 1), physical_channels=(7, 1), device_overrides=None, **kwargs):
+        fields = dict(input_config=input_config(rate), physical_channels=list(physical_channels))
+        fields.update(device_overrides or {})
+        device = device_info(**fields)
         profiles.set_sample_rate(device, rate, calibrations)
         widget = calibration.InputCalibration(
             device, channels, recording_bridge=bridge,
@@ -214,7 +215,7 @@ def test_manual_ve_atomic_failure_restores_old_record_and_display(setup, monkeyp
     before = setup.calibrations.path.read_bytes()
     changed = []
     widget.calibration_state_changed.connect(changed.append)
-    monkeypatch.setattr("base.ve3668n_stores.os.replace", mock.Mock(side_effect=OSError("denied")))
+    monkeypatch.setattr("base.vkinging_stores.os.replace", mock.Mock(side_effect=OSError("denied")))
     _edit_manual(widget, "2.5")
     assert widget.full_scale_spl_lineedit.text() == "108.24"
     assert not widget.coefficient_editor.commit_pending()
@@ -319,6 +320,46 @@ def accept(widget, session, audio):
 def release(widget, session):
     session.released.set()
     widget._on_calibration_released(session)
+
+
+def test_channel_eleven_calibrates_and_full_scale_display_follows_current_identity(setup):
+    widget = setup.make(
+        channels=(11, 1), physical_channels=tuple(range(12)),
+        device_overrides=dict(model="VK-TEST-12", max_input_channels=12),
+        test_full_scale_peak_volts=.1)
+    assert [widget.channel_combo_box.itemData(i) for i in range(2)] == [11, 1]
+    assert widget.current_channel == 11
+    assert widget.full_scale_spl_lineedit.text() == "—"
+    session, audio = offered(widget)
+    assert session.request.channels == (11,)
+    assert session.request.device["model"] == "VK-TEST-12"
+    assert session.request.calibration_metadata is None
+    accept(widget, session, audio)
+    release(widget, session)
+    record = setup.calibrations.get_record(widget.input_device, 11)
+    assert record["status"] == "valid"
+    assert record["fingerprint"]["model"] == "VK-TEST-12"
+    assert record["fingerprint"]["physical_channel"] == 11
+    widget._select_channel(11)
+    expected = f"{20 * math.log10(record['v2pa_factor'] * .1 / (math.sqrt(2) * 20e-6)):.2f}"
+    assert widget.full_scale_spl_lineedit.text() == expected
+    widget._select_channel(1)
+    assert widget.v2pa_factor_lineedit.text() == ""
+    assert widget.full_scale_spl_lineedit.text() == "—"
+    widget._select_channel(11)
+    assert widget.full_scale_spl_lineedit.text() == expected
+    original = deepcopy(widget.input_device)
+    for change in (dict(machine_id="other-machine"), dict(model="VK-OTHER-12")):
+        widget.input_device.update(change)
+        assert widget.refresh_ve_calibration_state()
+        assert widget.v2pa_factor_lineedit.text() == ""
+        assert widget.full_scale_spl_lineedit.text() == "—"
+        assert 11 not in widget.saved_v2pa_factors
+        widget.input_device = deepcopy(original)
+    # Seeing another model under the same MachineId leaves the old factor invalidated.
+    assert widget.refresh_ve_calibration_state()
+    assert widget.full_scale_spl_lineedit.text() == "—"
+    assert setup.calibrations.get_record(original, 11)["status"] == "invalidated"
 
 
 @pytest.mark.parametrize("edit", ["change", "corrupt", "delete"])
@@ -477,7 +518,7 @@ def test_malformed_source_acquisition_changes_do_not_reject_capture(setup):
 
 
 def test_bad_settings_do_not_enter_refresh_manual_or_recording_config(setup):
-    from base.ve3668n_recording_config import resolve_ve_recording_device
+    from base.vkinging_recording_config import resolve_ve_recording_device
     widget = setup.make(96000, channels=(7,))
     setup.settings_path.write_text("broken", encoding="utf-8")
     assert widget.refresh_ve_calibration_state()
@@ -969,8 +1010,8 @@ def test_new_attempt_retains_old_valid_display_and_reenables_controls(setup, out
     elif outcome == "failure":
         widget._on_calibration_failed(session, SimpleNamespace(message="device disconnected"))
     else:
-        from base import ve3668n_stores
-        monkeypatch.setattr(ve3668n_stores.os, "replace", mock.Mock(side_effect=PermissionError("denied")))
+        from base import vkinging_stores
+        monkeypatch.setattr(vkinging_stores.os, "replace", mock.Mock(side_effect=PermissionError("denied")))
         accept(widget, session, audio)
         release(widget, session)
     assert setup.calibrations.path.read_bytes() == before
@@ -1249,14 +1290,14 @@ def test_unsupported_conditions_before_start_do_not_redisplay_invalidated_factor
 
 
 def test_reset_atomic_failure_preserves_valid_record_and_display(setup, monkeypatch):
-    from base import ve3668n_stores
+    from base import vkinging_stores
 
     widget = setup.make(channels=(7,), test_full_scale_peak_volts=.1)
     seed_old(setup, widget)
     before = setup.calibrations.path.read_bytes()
     changed = []
     widget.calibration_state_changed.connect(changed.append)
-    monkeypatch.setattr(ve3668n_stores.os, "replace", mock.Mock(side_effect=PermissionError("denied")))
+    monkeypatch.setattr(vkinging_stores.os, "replace", mock.Mock(side_effect=PermissionError("denied")))
     widget.reset_btn_clicked()
     assert setup.calibrations.path.read_bytes() == before
     assert not changed
@@ -1306,7 +1347,7 @@ def test_production_service_bridge_replaces_private_path_then_releases_before_sa
     from unit_test.ui.test_recording_process_integration import pump
 
     service = service_module.RecordingService(
-        backend_factory="unit_test.base.test_ve3668n_calibration:sine_capture_dependencies",
+        backend_factory="unit_test.base.test_vkinging_calibration:sine_capture_dependencies",
         backend_options={"standard": 114, "parent_pid": os.getpid()})
     begin_gate, release_gate = threading.Event(), threading.Event()
     begin, release_owned = service._begin, service._release
@@ -1433,7 +1474,7 @@ def test_default_owned_real_service_destroy_reaps_active_worker(setup, ui_qapp, 
     from base.recording_service import RecordingService
     from unit_test.ui.test_recording_process_integration import pump
     service = RecordingService(
-        backend_factory="unit_test.base.test_ve3668n_calibration:sine_capture_dependencies",
+        backend_factory="unit_test.base.test_vkinging_calibration:sine_capture_dependencies",
         backend_options={"parent_pid": os.getpid()})
     monkeypatch.setattr(calibration, "RecordingService", lambda: service)
     device = device_info(input_config=input_config(48000))

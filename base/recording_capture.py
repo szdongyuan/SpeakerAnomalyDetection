@@ -40,7 +40,7 @@ from consts.recording_preview_consts import (
     MAIN_RECORDING_LIVE_WINDOW_SECONDS,
     PREVIEW_TIME_MODE_RELATIVE_LATEST,
 )
-from consts.ve3668n_consts import VE_BACKEND
+from consts.vkinging_consts import VE_BACKEND
 from consts.recording_result_consts import RECORDING_SAMPLE_DIGEST_ALGORITHM, RECORDING_FINAL_ENVELOPE_VERSION
 from consts.wav_format_consts import WAV_PCM24_SUBTYPE
 
@@ -429,7 +429,7 @@ class RecordingCapture:
         req = self.request
         self._stage = "device"
         if self._is_ve:
-            from base.ve3668n_capture import Ve3668nInputStream
+            from base.vkinging_capture import VkingingInputStream
 
             self._stage = "open_wav"
             started = time.perf_counter()
@@ -438,7 +438,7 @@ class RecordingCapture:
             self._logger.info("Recording timing request=%s process=child stage=wav_open event=end seconds=%.6f",
                               req.request_id, time.perf_counter() - started)
             self._stage = "device"
-            factory = self._ve_stream_factory or Ve3668nInputStream
+            factory = self._ve_stream_factory or VkingingInputStream
             startup_options = {}
             if self._startup_budget is not None:
                 startup_options["startup_budget"] = self._startup_budget

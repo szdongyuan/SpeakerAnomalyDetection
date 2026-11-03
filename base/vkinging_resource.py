@@ -1,4 +1,4 @@
-"""Persistent, instance-owned VE3668N native resource and request adapters."""
+"""Persistent, instance-owned VK native resource and request adapters."""
 from dataclasses import dataclass, field
 import ctypes
 import math
@@ -9,10 +9,10 @@ import uuid
 
 from base.recording_process_protocol import VeLifecycleCounts, VeResourceRetryProof
 from base.ve_startup_policy import VeStartupBudget
-from base.ve3668n_capture import to_physical_slots
-from base.ve3668n_capture_timing import VeCaptureDeadline, VeCaptureProgress
-from base.ve3668n_discovery import resolve_device
-from base.ve3668n_input import ve_acquisition_signature
+from base.vkinging_capture import to_physical_slots
+from base.vkinging_capture_timing import VeCaptureDeadline, VeCaptureProgress
+from base.vkinging_discovery import resolve_device
+from base.vkinging_input import ve_acquisition_signature
 from base.ve_resource_diagnostics import VeResourceDiagnostics
 from base.vkinging_sdk import VkDaqClient, VkDaqError
 
@@ -322,6 +322,9 @@ class VeResourceController:
                 raise RuntimeError("VE resource controller has permanently failed")
             if self._state == self._RELEASING:
                 raise RuntimeError("VE resource controller is releasing")
+            if self._fresh is not None and self._fresh["model"] != request.device["model"]:
+                raise VeResourceConfigurationError(
+                    "requested device model differs from retained device model")
             if self._signature is not None and self._signature != signature:
                 raise VeResourceConfigurationError(
                     f"retained VE signature {self._signature!r} is incompatible with {signature!r}")
@@ -464,6 +467,10 @@ class VeResourceController:
                 raise RuntimeError("VE resource initialization already in progress")
             if self._state == self._FAILED:
                 raise RuntimeError("VE resource controller has permanently failed")
+            if self._fresh is not None and self._fresh["model"] != adapter.request.device["model"]:
+                adapter._confirm_detached()
+                raise VeResourceConfigurationError(
+                    "requested device model differs from retained device model")
             if self._signature is not None and self._signature != adapter.signature:
                 raise VeResourceConfigurationError("VE resource signature changed before bind")
             if self._owner is None:
@@ -962,12 +969,15 @@ class VeResourceController:
 
     def _resolve_startup_device(self, adapter, attempt):
         try:
-            return resolve_device(
+            fresh = resolve_device(
                 self._sdk, adapter.request.device["machine_id"], adapter.request.channels,
                 observer=self._resource_diagnostics.observe,
                 checkpoint=None if attempt is None else lambda: self._checkpoint(attempt),
                 on_failure=None if attempt is None else lambda exc: self._latch_startup_native_failure(
                     attempt, "device", exc))
+            if fresh["model"] != adapter.request.device["model"]:
+                raise ValueError("device model differs from the frozen request model")
+            return fresh
         except ValueError as exc:
             # Resolution has finished filtering candidates. Its final identity
             # or channel rejection is decisive before the outer span is logged.

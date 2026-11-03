@@ -9,7 +9,7 @@ from base import wav_calibration_metadata as module
 from unit_test.base.test_wav_calibration_metadata import (
     _append_raw_chunk, _channel_with_physical, _chunk, _metadata, _metadata_list_chunk,
 )
-from unit_test.base.ve3668n_fakes import wav_metadata
+from unit_test.base.vkinging_fakes import wav_metadata
 
 
 @pytest.fixture

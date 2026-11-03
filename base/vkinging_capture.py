@@ -1,4 +1,4 @@
-"""Single-thread native VE3668N owner, injected for hardware-free tests."""
+"""Single-thread native VK owner, injected for hardware-free tests."""
 import ctypes
 import math
 import threading
@@ -8,8 +8,8 @@ import uuid
 import numpy as np
 
 from base.log_manager import LogManager
-from base.ve3668n_capture_timing import VeCaptureDeadline, VeCaptureProgress
-from base.ve3668n_discovery import resolve_device
+from base.vkinging_capture_timing import VeCaptureDeadline, VeCaptureProgress
+from base.vkinging_discovery import resolve_device
 from base.vkinging_sdk import VkDaqClient, VkDaqError
 
 
@@ -31,7 +31,7 @@ def to_physical_slots(buffer, returned, channels):
     return physical
 
 
-class Ve3668nInputStream:
+class VkingingInputStream:
     """Thread-control facade; SDK construction/use/cleanup belong only to owner.
 
     In production this lives inside RecordingWorker's child, never in the GUI.
@@ -178,6 +178,8 @@ class Ve3668nInputStream:
             fresh = resolve_device(self._sdk, self.request.device["machine_id"], self.request.channels)
             if self.stop_event.is_set():
                 return
+            if fresh["model"] != self.request.device["model"]:
+                raise ValueError("device model differs from the frozen request model")
             stage = "create_task"
             self._sdk.create_task(self._task)
             created = True

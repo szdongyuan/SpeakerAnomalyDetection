@@ -30,10 +30,11 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import tempfile
 from threading import RLock
 
-from base.ve3668n_input import (
+from base.vkinging_input import (
     calibration_applicability_key,
     calibration_fingerprint,
     create_input_config,
@@ -45,7 +46,7 @@ from base.ve3668n_input import (
     validate_sample_rate,
 )
 from consts import model_consts
-from consts.ve3668n_consts import (
+from consts.vkinging_consts import (
     VE_BACKEND, VE_CALIBRATION_SCHEMA_VERSION, VE_INPUT_SCHEMA_VERSION, VE_RANGE_LIMITS,
 )
 
@@ -243,7 +244,7 @@ class VEInputProfileStore(_JsonStore):
 
     def __init__(self, path=None):
         if path is None:
-            path = (Path(model_consts.DEFAULT_DIR) / "configs/ve3668n_input_profiles.json").resolve()
+            path = (Path(model_consts.DEFAULT_DIR) / "configs/vkinging_input_profiles.json").resolve()
         super().__init__(path)
 
     def _validate_entry(self, machine_id, entry, schema_version):
@@ -293,7 +294,7 @@ class VECalibrationStore(_JsonStore):
 
     def __init__(self, path=None):
         if path is None:
-            path = (Path(model_consts.DEFAULT_DIR) / "configs/ve3668n_input_calibration.json").resolve()
+            path = (Path(model_consts.DEFAULT_DIR) / "configs/vkinging_input_calibration.json").resolve()
         super().__init__(path)
         # An I/O failure must not forget a mismatch already observed by this
         # owner. This is a retry latch, not a published calibration-status cache.
@@ -305,8 +306,8 @@ class VECalibrationStore(_JsonStore):
             raise ValueError("channels must be an object")
         channels = {}
         for key, record in entry["channels"].items():
-            if not isinstance(key, str) or len(key) != 1 or key not in "01234567":
-                raise ValueError("channel keys must be canonical physical indices 0 through 7")
+            if not isinstance(key, str) or re.fullmatch(r"0|[1-9][0-9]*", key) is None:
+                raise ValueError("channel keys must be canonical nonnegative physical indices")
             channels[key] = _validated_record(record, machine_id, int(key), schema_version)
         return {"channels": channels}
 

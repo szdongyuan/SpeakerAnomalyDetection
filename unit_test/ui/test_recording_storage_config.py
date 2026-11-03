@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import QLabel
 
 from consts import model_consts
 from ui.acquisition_config_window import RecordConfigWindow
-from unit_test.base.ve3668n_fakes import device_info
+from unit_test.base.vkinging_fakes import device_info
 
 
 @pytest.fixture(params=[False, True], ids=["soundcard", "vk"])
