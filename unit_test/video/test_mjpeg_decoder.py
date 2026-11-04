@@ -162,7 +162,7 @@ def test_incomplete_final_image_is_not_flushed_as_a_frame(jpeg):
 
 
 def test_split_input_keeps_same_camera_connection_and_stop_closes_it(jpeg, tmp_path):
-    config = VideoConfig(width=160, height=90, recording_root=str(tmp_path))
+    config = VideoConfig(width=160, height=90)
     opens, connections, frames = [], [], []
 
     class Source:

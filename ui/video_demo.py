@@ -1,4 +1,4 @@
-"""Standalone --usb preview/recording tool, or explicit --simulate UI demo."""
+"""Standalone --usb preview tool, or explicit --simulate UI demo."""
 
 import argparse
 import multiprocessing
@@ -22,9 +22,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--simulate", action="store_true", help="fake backend, no video files")
-    mode.add_argument("--usb", action="store_true", help="real USB camera and video files")
+    mode.add_argument("--usb", action="store_true", help="real USB camera preview")
     parser.add_argument("--config", help="USB settings JSON path (default: project/exe ui/ui_config directory)")
-    parser.add_argument("--disconnect-after", type=float, help="simulate one disconnect after recording N seconds")
+    parser.add_argument("--disconnect-after", type=float, help="simulate one disconnect after N seconds of preview")
     args = parser.parse_args(argv)
 
     # Keep spawn imports lightweight; only the GUI process imports Qt.
@@ -43,7 +43,6 @@ def main(argv=None):
             else:
                 event.ignore()
                 self.closing_requested = True
-                self.record_button.setEnabled(False)
                 self.bridge.shutdown()
 
         def service_closed(self):
@@ -63,14 +62,14 @@ def main(argv=None):
         )
         bridge = VideoServiceBridge(service)
     window = DemoWindow(bridge, simulation=args.simulate)
-    window.setWindowTitle("USB 摄像头预览与录像" if args.usb else "USB 视频交互演示（模拟模式，不保存视频）")
+    window.setWindowTitle("USB 摄像头预览" if args.usb else "USB 视频交互演示（模拟模式）")
     window.resize(560, 350)
     if args.usb:
         bridge.attach_widget(window)
     else:
         window.settings_requested.connect(lambda: QMessageBox.information(
-            window, "模拟模式", "本窗口用于验证人工启停与状态显示。\n"
-            "不读取实际摄像头、不生成录像文件。\n真实模式请使用 --usb 启动。",
+            window, "模拟模式", "本窗口用于验证摄像头预览与连接状态。\n"
+            "使用模拟摄像头。\n真实模式请使用 --usb 启动。",
         ))
     bridge.closed.connect(window.service_closed)
     app.aboutToQuit.connect(bridge.shutdown)

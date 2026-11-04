@@ -1,19 +1,11 @@
 """Bounded local evidence for capture failures; never changes recovery decisions."""
 
 from collections import deque
-from datetime import datetime, timezone
 import hashlib
-import json
-from pathlib import Path
 import time
 from uuid import uuid4
 
 from base.log_manager import LogManager
-
-
-PACKET_BYTE_LIMIT = 4 * 1024**2
-PACKET_COUNT_LIMIT = 16
-FAILURE_SAMPLE_LIMIT = 3
 
 
 class CaptureDiagnostics:
@@ -24,8 +16,6 @@ class CaptureDiagnostics:
         self.attempt = 0
         self.stage = "open"
         self.outage_since = None
-        self.history = deque()
-        self.history_bytes = 0
         self.packet = None
         self.packet_number = 0
         self.actual = {}
@@ -34,8 +24,6 @@ class CaptureDiagnostics:
     def begin_attempt(self):
         self.attempt += 1
         self.stage = "open"
-        self.history.clear()
-        self.history_bytes = 0
         self.packet = None
         self.packet_number = 0
         self.actual = {}
@@ -69,13 +57,6 @@ class CaptureDiagnostics:
             "pts": packet.pts, "dts": packet.dts, "time_base": str(packet.time_base),
             "keyframe": packet.is_keyframe, "corrupt": packet.is_corrupt,
         }
-        while self.history and (self.history_bytes + packet.size > PACKET_BYTE_LIMIT
-                                or len(self.history) >= PACKET_COUNT_LIMIT):
-            self.history_bytes -= len(self.history.popleft()[1])
-        if packet.size <= PACKET_BYTE_LIMIT:
-            data = bytes(packet)
-            self.history.append((self.packet, data))
-            self.history_bytes += len(data)
 
     def first_frame(self):
         elapsed = None if self.outage_since is None else time.monotonic() - self.outage_since
@@ -94,48 +75,3 @@ class CaptureDiagnostics:
             str(getattr(exc, "strerror", None) or exc)[:1000], self.packet, list(self.logs),
             retry_delay_seconds,
         )
-        if self.stage == "decode" and self.config.recording_root:
-            try:
-                self._save_sample(exc)
-            except OSError:
-                self._logger.exception("Video capture evidence write failed: run=%s attempt=%s; retry continues",
-                                 self.run, self.attempt)
-
-    def _save_sample(self, exc):
-        root = Path(self.config.recording_root) / "video_diagnostics"
-        root.mkdir(parents=True, exist_ok=True)
-        destination = None
-        for number in range(1, FAILURE_SAMPLE_LIMIT + 1):
-            candidate = root / f"capture-failure-{number}"
-            try:
-                candidate.mkdir()
-            except FileExistsError:
-                continue
-            destination = candidate
-            break
-        if destination is None:
-            self._logger.warning("Video capture evidence limit reached: directory=%s limit=%s; logs continue",
-                           root, FAILURE_SAMPLE_LIMIT)
-            return
-        report = {
-            "run": self.run, "attempt": self.attempt, "stage": self.stage,
-            "captured_at": datetime.now(timezone.utc).isoformat(), "actual": self.actual,
-            "error_type": type(exc).__name__, "errno": getattr(exc, "errno", None),
-            "message": str(getattr(exc, "strerror", None) or exc)[:1000],
-            "failed_packet": self.packet, "local_ffmpeg_logs": list(self.logs),
-            "log_scope": "capture thread only; excludes native decoder threads",
-            "saved_packets": [], "byte_limit": PACKET_BYTE_LIMIT,
-            "requested": {"width": self.config.width, "height": self.config.height,
-                          "fps_num": self.config.fps_num, "fps_den": self.config.fps_den,
-                          "input_format": self.config.input_format},
-        }
-        for metadata, data in self.history:
-            filename = f"packet-{metadata['number']:08d}.bin"
-            (destination / filename).write_bytes(data)
-            report["saved_packets"].append({**metadata, "file": filename,
-                                             "sha256": hashlib.sha256(data).hexdigest()})
-        (destination / "result.json").write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8",
-        )
-        self._logger.warning("Video capture evidence saved: run=%s attempt=%s directory=%s bytes=%s packets=%s",
-                       self.run, self.attempt, destination, self.history_bytes, len(self.history))

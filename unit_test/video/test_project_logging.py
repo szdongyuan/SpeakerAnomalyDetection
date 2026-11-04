@@ -12,7 +12,6 @@ from base.video.capture_diagnostics import CaptureDiagnostics
 from base.video.config import VideoConfig
 from base.video.mjpeg_decoder import MjpegDecoder
 from base.video.models import EventKind
-from base.video.recording import RecordingSession
 from base.video.runtime import VideoRuntime
 from base.video.service import VideoService
 from unit_test.base.business_logging_process_fakes import video_logging_worker
@@ -35,10 +34,10 @@ def assert_record(state, caplog, marker, source, level, error=None):
 
 
 @pytest.mark.parametrize("core_registered", [False, True])
-@pytest.mark.parametrize("component", ["service", "runtime", "decoder", "diagnostics", "recording"])
+@pytest.mark.parametrize("component", ["service", "runtime", "decoder", "diagnostics"])
 def test_video_routes_once_with_or_without_core(tmp_path, monkeypatch, caplog, core_registered, component):
     caplog.set_level(logging.INFO)
-    config = VideoConfig(recording_root=str(tmp_path), min_free_bytes=1)
+    config = VideoConfig()
     with isolated_project_logger(tmp_path, monkeypatch) as state:
         if core_registered:
             LogManager.set_log_handler("core")
@@ -49,7 +48,7 @@ def test_video_routes_once_with_or_without_core(tmp_path, monkeypatch, caplog, c
             assert first.wait_closed(1)
             try:
                 second._fail("service-route-probe")
-                assert second.status.detail == "service-route-probe"
+                assert second.status.connection_detail == "service-route-probe"
                 assert_record(state, caplog, "Video supervisor failure: service-route-probe",
                               "service.py", logging.ERROR)
             finally:
@@ -71,23 +70,9 @@ def test_video_routes_once_with_or_without_core(tmp_path, monkeypatch, caplog, c
         elif component == "diagnostics":
             diagnostics = CaptureDiagnostics(config)
             diagnostics.begin_attempt()
-            error = PermissionError("capture-evidence-probe")
-
-            def fail_sample(exc):
-                raise error
-
-            monkeypatch.setattr(diagnostics, "_save_sample", fail_sample)
-            diagnostics.stage = "decode"
             diagnostics.failed(ValueError("decode-probe"))
             assert diagnostics.outage_since is not None
-            assert_record(state, caplog, "Video capture evidence write failed:",
-                          "capture_diagnostics.py", logging.ERROR, error)
-        else:
-            session = RecordingSession(config, "recording-route-probe")
-            session.finish()
-            assert session.closed and session.summary["state"] == "completed"
-            assert_record(state, caplog, "Video session ended: session=recording-route-probe",
-                          "recording.py", logging.INFO)
+            assert_record(state, caplog, "Video capture failure:", "capture_diagnostics.py", logging.WARNING)
 
 
 def test_controller_save_warning_keeps_video_name_and_error(tmp_path, monkeypatch, caplog, qt_app):
@@ -135,7 +120,7 @@ def test_spawn_video_failure_without_parent_logger(tmp_path):
         assert process.exitcode == 0
         path = tmp_path / "logs" / "main.log"
         text = path.read_text(encoding="utf-8") if path.exists() else ""
-        assert text.count("Video process failed") == 1
+        assert text.count("Video capture failed") == 1
         assert "core.video ERROR" in text and "[runtime.py:" in text
         assert "Traceback" in text and "ValueError:" in text
     finally:
@@ -153,7 +138,7 @@ import threading
 from base.log_manager import LogManager
 before = [(thread.ident, thread.name) for thread in threading.enumerate()]
 assert LogManager._runtime is None
-for name in ('base.video.service', 'base.video.runtime', 'base.video.recording',
+for name in ('base.video.service', 'base.video.runtime',
              'base.video.capture_diagnostics', 'base.video.mjpeg_decoder', 'ui.video_controller'):
     importlib.import_module(name)
 assert LogManager._runtime is None

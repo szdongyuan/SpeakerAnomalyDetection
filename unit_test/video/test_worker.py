@@ -18,35 +18,28 @@ def receive_until(channel, kind, timeout=4):
     raise AssertionError(f"worker did not send {kind}")
 
 
-def test_worker_acceptance_precedes_start_and_commands_have_identity():
+def test_worker_delivers_frames_and_confirms_preview_commands():
     context = multiprocessing.get_context("spawn")
     channel, child = context.Pipe()
     mailbox = PreviewMailbox(context)
     process = context.Process(
         target=simulated_video_worker,
-        args=(child, mailbox, 7, SimulationOptions(start_delay=0.15)),
+        args=(child, mailbox, 7, SimulationOptions()),
     )
     process.start()
     child.close()
     try:
         receive_until(channel, EventKind.READY)
-        channel.send(Command(CommandKind.START, 7, "start-1", "session-1"))
-        events = receive_until(channel, EventKind.STARTED)
-        accepted = next(event for event in events if event.kind == EventKind.ACCEPTED)
-        started = events[-1]
-        assert accepted.command_id == started.command_id == "start-1"
-        assert accepted.sequence < started.sequence
-        assert started.monotonic_time - accepted.monotonic_time >= 0.1
-        assert started.session_id == "session-1"
-        assert started.generation == 7
         # Preview reads are nonblocking and can coincide with the worker's publish lock.
         preview_deadline = time.monotonic() + 2
         while mailbox.latest() is None:
             assert time.monotonic() < preview_deadline, "worker did not publish a preview"
             time.sleep(.01)
+        channel.send(Command(CommandKind.SET_PREVIEW, 7, "hide", preview_enabled=False, preview_revision=1))
+        ack = receive_until(channel, EventKind.PREVIEW_CHANGED)[-1]
+        assert ack.command_id == "hide" and not ack.preview_enabled
         channel.send(Command(CommandKind.SHUTDOWN, 7, "exit-1"))
-        events = receive_until(channel, EventKind.CLOSED)
-        assert any(event.kind == EventKind.COMPLETED for event in events)
+        receive_until(channel, EventKind.CLOSED)
         process.join(3)
         assert process.exitcode == 0
     finally:

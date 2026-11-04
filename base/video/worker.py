@@ -9,9 +9,6 @@ from base.video.models import CommandKind, Event, EventKind
 
 @dataclass(frozen=True)
 class SimulationOptions:
-    start_delay: float = 0.1
-    stop_delay: float = 0.15
-    fail_start: bool = False
     disconnect_after: float | None = None
     reconnect_after: float = 0.5
     crash_after: float | None = None
@@ -23,11 +20,6 @@ class SimulationOptions:
 def simulated_video_worker(channel, mailbox, generation, options):
     """Spawn target, importable without Qt. Fault options are NOT saved settings."""
     sequence = 0
-    session_id = ""
-    start_command = ""
-    started_at = None
-    start_due = None
-    stop_due = None
     recovery_due = None
     disconnected_once = False
     frame_number = 0
@@ -37,10 +29,10 @@ def simulated_video_worker(channel, mailbox, generation, options):
     ready_due = time.monotonic() + options.ready_delay
     ready = False
 
-    def emit(kind, session="", command_id="", detail="", **fields):
+    def emit(kind, **fields):
         nonlocal sequence
         sequence += 1
-        channel.send(Event(kind, generation, sequence, time.monotonic(), session, command_id, detail, **fields))
+        channel.send(Event(kind, generation, sequence, time.monotonic(), **fields))
 
     try:
         while True:
@@ -48,23 +40,12 @@ def simulated_video_worker(channel, mailbox, generation, options):
                 command = channel.recv()
                 if command.generation != generation:
                     continue
-                emit(EventKind.ACCEPTED, command_id=command.command_id)
                 if command.kind == CommandKind.SET_PREVIEW:
                     if command.preview_revision > preview_revision:
                         preview_enabled, preview_revision = command.preview_enabled, command.preview_revision
                         emit(EventKind.PREVIEW_CHANGED, command_id=command.command_id,
                              preview_enabled=preview_enabled, preview_revision=preview_revision)
-                elif command.kind == CommandKind.START and not session_id and ready:
-                    session_id = command.session_id
-                    start_command = command.command_id
-                    start_due = time.monotonic() + options.start_delay
-                    disconnected_once = False
-                elif command.kind == CommandKind.STOP and command.session_id == session_id:
-                    start_due = None
-                    stop_due = time.monotonic() + options.stop_delay
                 elif command.kind == CommandKind.SHUTDOWN:
-                    if session_id:
-                        emit(EventKind.COMPLETED, session_id, detail="模拟会话结束，未生成视频文件")
                     emit(EventKind.CLOSED)
                     return
 
@@ -72,20 +53,8 @@ def simulated_video_worker(channel, mailbox, generation, options):
             if not ready and recovery_due is None and now >= ready_due:
                 ready = True
                 emit(EventKind.READY)
-            if start_due is not None and now >= start_due:
-                start_due = None
-                if options.fail_start:
-                    emit(EventKind.FAILED, session_id, start_command, "模拟录像启动失败")
-                    session_id = ""
-                else:
-                    started_at = now
-                    emit(EventKind.STARTED, session_id, start_command)
-            if stop_due is not None and now >= stop_due:
-                emit(EventKind.COMPLETED, session_id, detail="模拟会话结束，未生成视频文件")
-                session_id = ""
-                started_at = stop_due = None
-            if started_at is not None and stop_due is None:
-                elapsed = now - started_at
+            if now >= ready_due:
+                elapsed = now - ready_due
                 if options.crash_after is not None and elapsed >= options.crash_after:
                     os._exit(23)  # Fault injection: intentionally bypass normal cleanup.
                 if options.stall_after is not None and elapsed >= options.stall_after:
@@ -98,13 +67,11 @@ def simulated_video_worker(channel, mailbox, generation, options):
                     disconnected_once = True
                     ready = False
                     recovery_due = now + options.reconnect_after
-                    emit(EventKind.RECOVERING, session_id, detail="模拟摄像头断开，等待恢复录像")
+                    emit(EventKind.OFFLINE, detail="模拟摄像头断开")
             if recovery_due is not None and now >= recovery_due:
                 recovery_due = None
                 ready = True
                 emit(EventKind.READY)
-                if session_id and stop_due is None:
-                    emit(EventKind.STARTED, session_id)
             if ready and preview_enabled and now >= next_frame and recovery_due is None:
                 frame_number += 1
                 # Small RGB test pattern with a moving bar; constant memory footprint.

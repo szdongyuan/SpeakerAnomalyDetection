@@ -12,15 +12,13 @@ def test_missing_config_is_disabled_and_does_not_write(tmp_path):
     assert not path.parent.exists()
 
 
-def test_roundtrip_unicode_and_fixed_segment_duration(tmp_path):
+def test_roundtrip_unicode_without_output_directory(tmp_path):
     path = tmp_path / "设置" / "video_settings.json"
     config = VideoConfig(
         enabled=True, device_id="usb:stable-id", device_name="测试摄像头",
-        recording_root=str(tmp_path / "录像"),
     )
     save_config(path, config)
     assert load_config(path) == config
-    assert config.segment_duration_seconds == 7200
     assert not (tmp_path / "录像").exists()
     assert "device_id" in json.loads(path.read_text(encoding="utf-8"))
 
@@ -28,13 +26,7 @@ def test_roundtrip_unicode_and_fixed_segment_duration(tmp_path):
 @pytest.mark.parametrize("changes", [
     {"schema_version": 2}, {"enabled": 1}, {"enabled": True},
     {"width": 0}, {"height": 9000}, {"fps_num": True}, {"fps_den": 0},
-    {"fps_num": 1000}, {"target_bitrate_bps": -1}, {"min_free_bytes": 0},
-    {"recording_root": "relative/path"}, {"segment_duration_seconds": 600},
-    {"segment_duration_seconds": 18000},
-    {"codec": "unknown"}, {"input_format": "unknown"}, {"device_id": 5},
-    {"preview_width": True}, {"preview_height": 0},
-    {"preview_width": 1920, "preview_height": 1200},
-    {"preview_width": 2560, "preview_height": 360},
+    {"fps_num": 1000}, {"input_format": "unknown"}, {"device_id": 5},
 ])
 def test_invalid_configuration_rejected(changes):
     with pytest.raises(ValueError):
@@ -46,31 +38,16 @@ def test_legacy_config_defaults_preview_without_rewriting_file(tmp_path):
     path.write_text('{"width": 2560, "height": 1440}', encoding="utf-8")
     original = path.read_bytes()
     config = load_config(path)
-    assert (config.preview_width, config.preview_height) == (640, 360)
     assert config.preview_size == (640, 360)
     assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("size", [(640, 360), (1280, 720), (1920, 1080), (2560, 1440)])
-def test_preview_resolution_roundtrip_preserves_recording_parameters(tmp_path, size):
-    path = tmp_path / "video.json"
-    config = VideoConfig(
-        width=2560, height=1440, fps_num=25, target_bitrate_bps=8_000_000,
-        preview_width=size[0], preview_height=size[1],
-    )
-    save_config(path, config)
-    loaded = load_config(path)
-    assert loaded == config
-    assert loaded.preview_size == size
-    assert (loaded.width, loaded.height, loaded.fps_num, loaded.target_bitrate_bps) == (2560, 1440, 25, 8_000_000)
-
-
 @pytest.mark.parametrize("capture_size,expected", [
-    ((1280, 720), (1280, 720)), ((640, 480), (640, 480)), ((160, 90), (160, 90)),
+    ((1280, 720), (640, 360)), ((640, 480), (640, 360)), ((160, 90), (160, 90)),
 ])
 def test_preview_does_not_exceed_capture_size(capture_size, expected):
     config = VideoConfig(
-        width=capture_size[0], height=capture_size[1], preview_width=2560, preview_height=1440,
+        width=capture_size[0], height=capture_size[1],
     )
     assert config.preview_size == expected
 
@@ -92,8 +69,6 @@ def test_replace_failure_preserves_previous_settings(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("content", [
     "[]", '{"unexpected": 1}', '{"schema_version": 9}', "bad-json",
-    '{"segment_duration_seconds": 18000.0}', '{"segment_duration_seconds": "18000"}',
-    '{"segment_duration_seconds": 600}',
 ])
 def test_bad_settings_do_not_silently_fall_back(tmp_path, content):
     path = tmp_path / "video_settings.json"
@@ -102,44 +77,22 @@ def test_bad_settings_do_not_silently_fall_back(tmp_path, content):
         load_config(path)
 
 
-@pytest.mark.parametrize("duration", [None, 18000, 7200])
-def test_load_segment_duration_preserves_other_settings_and_saves_two_hours(tmp_path, duration):
-    path = tmp_path / "video_settings.json"
-    expected = VideoConfig(
-        enabled=True, device_id="stable-usb-id", fps_num=30, codec="h265",
-        target_bitrate_bps=6_000_000, recording_root=str(tmp_path / "videos"),
-    )
-    data = dict(vars(expected))
-    if duration is None:
-        data.pop("segment_duration_seconds")
-    else:
-        data["segment_duration_seconds"] = duration
-    path.write_text(json.dumps(data), encoding="utf-8")
-    original = path.read_bytes()
-    loaded = load_config(path)
-    assert loaded == expected
-    assert loaded.segment_duration_seconds == 7200
-    assert path.read_bytes() == original  # Loading does not rewrite local configuration.
-    save_config(path, loaded)
-    assert json.loads(path.read_text(encoding="utf-8"))["segment_duration_seconds"] == 7200
-
-
 def test_migrate_preserves_all_settings_and_old_backup(tmp_path):
     source = tmp_path / "configs" / "video_settings.json"
     target = tmp_path / "ui" / "ui_config" / "video_settings.json"
     config = VideoConfig(
         enabled=True, device_id="stable-usb-id", device_name="测试摄像头", fps_num=30,
-        input_format="mjpeg", codec="h265", target_bitrate_bps=6_000_000,
-        recording_root=str(tmp_path / "录像"),
+        input_format="mjpeg",
     )
     save_config(source, config)
     legacy = json.loads(source.read_text(encoding="utf-8"))
-    legacy["segment_duration_seconds"] = 18000
+    legacy.update(segment_duration_seconds=18000, recording_root="offline-path", preview_width=1920,
+                  preview_height=1080, target_bitrate_bps=0, codec="h265", min_free_bytes=1)
     source.write_text(json.dumps(legacy), encoding="utf-8")
     original = source.read_bytes()
     assert migrate_config(source, target)
     assert load_config(target) == config
-    assert json.loads(target.read_text(encoding="utf-8"))["segment_duration_seconds"] == 7200
+    assert json.loads(target.read_text(encoding="utf-8")) == vars(config)
     assert source.read_bytes() == original
     assert not migrate_config(source, target)
 

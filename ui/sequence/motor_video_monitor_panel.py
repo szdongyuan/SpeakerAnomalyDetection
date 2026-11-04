@@ -66,7 +66,7 @@ class MotorVideoMonitorPanel(QWidget):
         header_layout.setContentsMargins(10, 0, 10, 0)
         header_layout.setSpacing(8)
         title = QLabel("视频监控")
-        preview = QLabel("2K预览")
+        preview = QLabel("实时预览")
         for label in (title, preview):
             label.setStyleSheet(self._header_label_style())
             label.setAlignment(Qt.AlignVCenter)

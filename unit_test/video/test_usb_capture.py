@@ -1,10 +1,7 @@
 from contextlib import contextmanager
 from types import SimpleNamespace
-import hashlib
-import json
 
 import av
-from base.video.capture_diagnostics import CaptureDiagnostics
 from base.video.config import VideoConfig
 from base.video.usb_capture import CapturePump, enumerate_cameras, open_camera, parse_devices
 import pytest
@@ -154,7 +151,7 @@ def test_burst_capture_uses_precise_clock_but_watchdog_keeps_monotonic(monkeypat
 
 @pytest.mark.parametrize("stage", ["open", "demux", "decode", "frame_dispatch"])
 def test_failure_stage_is_logged_and_same_capture_can_recover(stage, tmp_path, caplog):
-    config = VideoConfig(recording_root=str(tmp_path))
+    config = VideoConfig()
     frame = SimpleNamespace(width=config.width, height=config.height)
     error = av.error.InvalidDataError(1094995529, "injected input failure")
     calls, connections, sources = [], [], []
@@ -186,59 +183,8 @@ def test_failure_stage_is_logged_and_same_capture_can_recover(stage, tmp_path, c
     assert all(delay == 2 for delay in pump.stop_event.waits)
     assert f"stage={stage}" in caplog.text
     assert "attempt=2" in caplog.text and "outage_seconds=" in caplog.text
-    reports = list(tmp_path.rglob("result.json"))
-    assert len(reports) == (1 if stage == "decode" else 0)
-    if reports:
-        report = json.loads(reports[0].read_text(encoding="utf-8"))
-        item = report["saved_packets"][0]
-        assert (reports[0].parent / item["file"]).read_bytes() == b"original-failed-packet"
-        assert item["sha256"] == hashlib.sha256(b"original-failed-packet").hexdigest()
-
-
-@pytest.mark.parametrize("byte_limit, packet_limit, expected", [(10, 16, 2), (100, 2, 2)])
-def test_raw_evidence_has_byte_and_packet_caps(monkeypatch, byte_limit, packet_limit, expected):
-    monkeypatch.setattr("base.video.capture_diagnostics.PACKET_BYTE_LIMIT", byte_limit)
-    monkeypatch.setattr("base.video.capture_diagnostics.PACKET_COUNT_LIMIT", packet_limit)
-    evidence = CaptureDiagnostics(VideoConfig())
-    for index in range(10):
-        evidence.remember(InputPacket(data=bytes([index]) * 4))
-    assert len(evidence.history) == expected
-    assert evidence.history_bytes <= byte_limit
-    assert evidence.history[-1][1] == b"\x09" * 4
-    evidence.remember(InputPacket(data=b"x" * (byte_limit + 1)))
-    assert evidence.history_bytes == 0
-    assert evidence.packet["size"] == byte_limit + 1
-
-
-def test_sample_disk_limit_survives_new_capture_instances(tmp_path, caplog):
-    for _ in range(4):
-        evidence = CaptureDiagnostics(VideoConfig(recording_root=str(tmp_path)))
-        evidence.begin_attempt()
-        evidence.remember(InputPacket())
-        evidence.stage = "decode"
-        evidence.failed(ValueError("injected"))
-    assert len(list(tmp_path.rglob("result.json"))) == 3
-    assert "evidence limit reached" in caplog.text
-
-
-def test_evidence_write_failure_does_not_prevent_reconnect(tmp_path, monkeypatch, caplog):
-    config = VideoConfig(recording_root=str(tmp_path))
-    frame = SimpleNamespace(width=config.width, height=config.height)
-    sources = [InputSource([InputPacket(error=av.error.InvalidDataError(1094995529, "bad"))]),
-               InputSource([InputPacket(frames=[frame])])]
-    pending = iter(sources)
-
-    def cannot_write(self, exc):
-        assert sources[0].closed
-        raise PermissionError("injected disk permission error")
-
-    monkeypatch.setattr(CaptureDiagnostics, "_save_sample", cannot_write)
-    pump = CapturePump(config, lambda *args: pump.stop(), lambda *args: None,
-                       opener=lambda config: next(pending))
-    pump.stop_event = RetryEvent()
-    pump._run()
-    assert pump.frames == 1 and sources[1].closed
-    assert "evidence write failed" in caplog.text
+    assert not list(tmp_path.rglob("*.bin"))
+    assert not list(tmp_path.rglob("result.json"))
 
 
 def test_packet_iteration_matches_pyav_decode_for_real_jpeg():
@@ -275,15 +221,13 @@ def test_failure_evidence_does_not_attribute_other_thread_logs_to_decoder(tmp_pa
 
     previous_level = av.logging.get_level()
     av.logging.set_level(av.logging.INFO)
-    pump = CapturePump(VideoConfig(recording_root=str(tmp_path)), lambda *args: None, lambda *args: None)
+    pump = CapturePump(VideoConfig(), lambda *args: None, lambda *args: None)
     try:
         with pytest.raises(av.error.InvalidDataError) as failure:
             list(pump._decode(InputSource([NoisyPacket()])))
         pump.diagnostics.failed(failure.value)
     finally:
         av.logging.set_level(previous_level)
-    report = json.loads(next(tmp_path.rglob("result.json")).read_text(encoding="utf-8"))
-    assert report["message"] == "bad input"
-    assert "local input decoder failure" in str(report["local_ffmpeg_logs"])
-    assert "unrelated writer operation" not in str(report)
-    assert "stale writer suffix" not in str(report)
+    assert "bad input" in caplog.text
+    assert "local input decoder failure" in caplog.text
+    assert "stale writer suffix" not in caplog.text
