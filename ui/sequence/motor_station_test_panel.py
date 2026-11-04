@@ -16,13 +16,14 @@ class _ThreeColumns:
     """Shared geometry for the general header and each station toggle."""
 
     def _place_columns(self):
-        first = int(self.width() * .46)
-        second = int(self.width() * .27)
-        for label, left, width in zip(
+        width = self.contentsRect().width()
+        first = int(width * .46)
+        second = int(width * .27)
+        for label, left, label_width in zip(
             self._labels, (0, first, first + second),
-            (first, second, self.width() - first - second),
+            (first, second, width - first - second),
         ):
-            label.setGeometry(left, 0, width, self.height())
+            label.setGeometry(self.contentsRect().x() + left, 0, label_width, self.height())
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -158,10 +159,11 @@ class MotorStationTestPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("motorStationTestPanel")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(MOTOR_STATION_PANEL_STYLE)
         self._stations = []
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(1, 1, 1, 1)
         layout.setSpacing(0)
         title = QLabel("工位测试", self)
         title.setObjectName("stationTitle")
@@ -185,10 +187,12 @@ class MotorStationTestPanel(QWidget):
 
     def eventFilter(self, watched, event):
         if watched is self._scroll.viewport() and event.type() == QEvent.Resize:
-            # Keep the persistent header aligned when the content scrollbar appears.
-            # A maximum allows the layout to shrink without retaining the old width
-            # as a minimum size for this panel and its containing splitter.
-            self._general_header.setMaximumWidth(self._scroll.viewport().width())
+            # Paint the full header; align only its labels with the viewport.
+            viewport = self._scroll.viewport().geometry()
+            self._general_header.setContentsMargins(
+                viewport.x(), 0, self._scroll.width() - viewport.right() - 1, 0,
+            )
+            self._general_header._place_columns()
         return super().eventFilter(watched, event)
 
     @staticmethod

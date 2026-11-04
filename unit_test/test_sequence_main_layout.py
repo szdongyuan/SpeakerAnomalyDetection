@@ -1379,26 +1379,88 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertGreater(dashboard.station_panel.height(), 0)
         self.assertLess(dashboard.station_panel.geometry().bottom(), dashboard.summary_panel.y())
 
-    def test_default_main_splitter_ratio_balances_left_sidebar(self):
+    def test_initial_station_height_transfers_actual_video_space_once(self):
+        for height in (1100, 700, 480):
+            with self.subTest(height=height):
+                widget = _RealisticSequenceWidget()
+                self.addCleanup(widget.close)
+                with patch.object(widget, "_resolve_workspace_screen_size", return_value=(1920, 1080)):
+                    widget.setLayout(widget.create_waveform_layout())
+                widget.resize(1600, height)
+                widget.show()
+                splitter = widget.layout().itemAt(0).widget().widget(0)
+                dashboard = widget.left_panel.dashboard_panel
+                video = widget.left_panel.video_monitor_panel
+                initial_sizes = splitter.sizes()
+                station_height = dashboard.station_panel.height()
+                summary_height = dashboard.summary_panel.height()
+                video_minimum = max(video.minimumHeight(), video.minimumSizeHint().height())
+                transfer = min(100, max(0, initial_sizes[1] - video_minimum))
+
+                self.app.processEvents()
+
+                self.assertEqual(splitter.sizes(), [initial_sizes[0] + transfer, initial_sizes[1] - transfer])
+                self.assertEqual(dashboard.station_panel.height(), station_height + transfer)
+                self.assertEqual(dashboard.summary_panel.height(), summary_height)
+                self.assertGreaterEqual(video.height(), video_minimum)
+                # Move the real splitter handle as a user would, then hide/show.
+                splitter.moveSplitter(initial_sizes[0], 1)
+                manually_adjusted = splitter.sizes()
+                self.app.processEvents()
+                widget.hide()
+                widget.show()
+                self.app.processEvents()
+                self.assertEqual(splitter.sizes(), manually_adjusted)
+                widget.resize(1600, widget.height() + 80)
+                resized = splitter.sizes()
+                self.app.processEvents()
+                self.assertEqual(splitter.sizes(), resized)
+
+    def test_initial_station_height_waits_for_first_visible_layout(self):
         widget = _RealisticSequenceWidget()
-        with patch.object(
-            widget,
-            "_resolve_workspace_screen_size",
-            return_value=(1920, 1080),
-        ):
-            layout = widget.create_waveform_layout()
-        widget.setLayout(layout)
-        widget.resize(1920, 1080)
+        self.addCleanup(widget.close)
+        widget.setLayout(widget.create_waveform_layout())
+        # Startup can process events while the sequence is still hidden.
+        self.app.processEvents()
+        widget.resize(1600, 1100)
         widget.show()
+        splitter = widget.layout().itemAt(0).widget().widget(0)
+        initial_sizes = splitter.sizes()
+
         self.app.processEvents()
 
-        main_splitter = layout.itemAt(0).widget()
-        left_width, right_width = main_splitter.sizes()
-        total_width = left_width + right_width
+        self.assertEqual(splitter.sizes(), [initial_sizes[0] + 100, initial_sizes[1] - 100])
 
-        self.assertGreater(total_width, 0)
-        self.assertAlmostEqual(left_width / total_width, 0.30, delta=0.03)
-        self.assertAlmostEqual(right_width / total_width, 0.70, delta=0.03)
+    def test_initial_sidebar_width_transfers_actual_pixels_once(self):
+        for width in (2400, 1920, 1600, 1100):
+            with self.subTest(width=width):
+                widget = _RealisticSequenceWidget()
+                self.addCleanup(widget.close)
+                with patch.object(widget, "_resolve_workspace_screen_size", return_value=(1920, 1080)):
+                    widget.setLayout(widget.create_waveform_layout())
+                # Processing events while hidden must not consume the allocation.
+                self.app.processEvents()
+                widget.resize(width, 1100)
+                widget.show()
+                main = widget.layout().itemAt(0).widget()
+                sidebar = main.widget(0)
+                initial = main.sizes()
+                minimum = max(sidebar.minimumWidth(), sidebar.minimumSizeHint().width())
+                transfer = min(200, max(0, initial[0] - minimum))
+                self.app.processEvents()
+                self.assertEqual(main.sizes(), [initial[0] - transfer, initial[1] + transfer])
+                self.assertEqual(widget.left_panel.dashboard_panel.width(), sidebar.width())
+                self.assertEqual(widget.left_panel.video_monitor_panel.width(), sidebar.width())
+                main.moveSplitter(minimum + 60, 1)
+                manual = main.sizes()
+                widget.hide()
+                widget.show()
+                self.app.processEvents()
+                self.assertEqual(main.sizes(), manual)
+                widget.resize(width + 100, 1180)
+                resized = main.sizes()
+                self.app.processEvents()
+                self.assertEqual(main.sizes(), resized)
 
     def test_mode_switch_remains_available_without_summary_widgets(self):
         board = SequenceCountBoard({})

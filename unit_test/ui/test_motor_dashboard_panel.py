@@ -162,7 +162,7 @@ def test_dashboard_can_shrink_after_widening_without_header_minimum_width(dashbo
     assert station.minimumSizeHint().width() <= 340
     scroll = station.findChild(QScrollArea)
     general_header = station.findChild(QWidget, "stationGeneralHeader")
-    assert general_header.width() == scroll.viewport().width()
+    assert general_header.contentsRect().width() == scroll.viewport().width()
     assert scroll.horizontalScrollBar().maximum() == 0
     assert dashboard.rect().contains(dashboard.summary_panel.geometry())
     if station_count:

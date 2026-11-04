@@ -148,7 +148,9 @@ class SequenceToolsBar(QWidget):
         self.data_btn = AnalysisStatusButton()
         self.using_file_combobox = RefreshBeforePopupComboBox()
         self.sample_number_lineedit = ElidingLineEdit()
-        self.current_round_spinbox = ElidingSpinBox()
+        # 元数据、进度恢复和重置仍使用轮次值；不再作为可见输入项。
+        self.current_round_spinbox = ElidingSpinBox(self)
+        self.current_round_spinbox.hide()
         # 历史模式同步仍依赖该对象；仅从操作界面隐藏。
         self.condition_mode_combobox = QComboBox(self)
         self.condition_mode_combobox.addItems(["测试", "标记"])
@@ -198,7 +200,6 @@ class SequenceToolsBar(QWidget):
             ("型号：", "型号：", self.lineedit_type, 160),
             ("使用配置：", "配置：", self.using_file_combobox, 200),
             ("样本编号：", "样本：", self.sample_number_lineedit, 100),
-            ("当前测试轮次：", "轮次：", self.current_round_spinbox, 60),
         ):
             label = ToolbarFieldLabel(text, short_text)
             label.setFixedHeight(40)
@@ -206,9 +207,9 @@ class SequenceToolsBar(QWidget):
             label.setBuddy(widget)
             layout.add_control(label, "label")
             layout.add_control(widget, "input", 55, preferred)
-            if widget is self.current_round_spinbox:
-                layout.add_control(self.reset_round_button, "fixed", 52, 52)
             layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
+        layout.add_control(self.reset_round_button, "fixed", 52, 52)
+        layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
         layout.add_control(self.barcode_scanner_box, "switch")
         layout.add_control(self.lineedit_s_or_n, "sn", 125, 320)
         layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)

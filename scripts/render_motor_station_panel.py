@@ -96,7 +96,9 @@ def main():
         general = panel.findChild(QWidget, "stationGeneralHeader")
         entry = {"file": target.name, "requested_width": requested_width,
                  "actual_size": [widget.width(), widget.height()],
-                 "header_width": general.width(), "viewport_width": scroll.viewport().width(),
+                 "header_width": general.width(),
+                 "label_contents_width": general.contentsRect().width(),
+                 "viewport_width": scroll.viewport().width(),
                  "scroll_value": scroll.verticalScrollBar().value(),
                  "scroll_maximum": scroll.verticalScrollBar().maximum(),
                  "summary_visible": widget.summary_panel.visibleRegion().isEmpty() is False,
@@ -115,7 +117,8 @@ def main():
         }
         evidence["renders"].append(entry)
         assert entry["summary_visible"], entry
-        assert abs(entry["header_width"] - entry["viewport_width"]) <= 2, entry
+        assert entry["label_contents_width"] == entry["viewport_width"], entry
+        assert entry["header_width"] == panel.width() - 2, entry
         print(f"{target}: {widget.width()}x{widget.height()}, expanded={entry['expanded']}, scroll={entry['scroll_value']}/{entry['scroll_maximum']}")
 
     for width in (340, 600):

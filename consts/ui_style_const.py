@@ -1473,6 +1473,10 @@ qtreeview_style = _style("""
 # Station presentation is independent from the legacy task/result palette.
 MOTOR_STATION_STATUS_COLORS = MappingProxyType({"--": "#617183", "OK": "#00824e", "NG": "#ca3245"})
 MOTOR_STATION_PANEL_STYLE = """
+QWidget#motorStationTestPanel {
+    border: 1px solid #cddaea;
+    border-radius: 3px;
+}
 QWidget#motorStationTestPanel, QWidget#stationContent {
     background: #ffffff;
     color: #293b4d;
@@ -1480,6 +1484,8 @@ QWidget#motorStationTestPanel, QWidget#stationContent {
     font-size: 9.75pt;
 }
 QLabel#stationTitle {
+    border-top-left-radius: 2px;
+    border-top-right-radius: 2px;
     font-family: 'Microsoft YaHei UI', 'Segoe UI';
     background: #3e75ac;
     color: #ffffff;
@@ -1501,8 +1507,10 @@ QWidget#stationGeneralHeader QLabel {
 }
 QScrollArea#stationScroll {
     background: #ffffff;
-    border: 1px solid #e0e7ef;
+    border: 1px solid transparent;
     border-top: none;
+    border-bottom-left-radius: 2px;
+    border-bottom-right-radius: 2px;
 }
 QPushButton[stationHeader="true"] {
     background: #ffffff;
