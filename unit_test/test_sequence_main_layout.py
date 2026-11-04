@@ -378,7 +378,7 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.app.processEvents()
         video = widget.left_panel.video_monitor_panel
         self.assertEqual(video.findChildren(QPushButton), [])
-        self.assertIn("2K预览", [label.text() for label in video.findChildren(QLabel)])
+        self.assertIn("实时预览", [label.text() for label in video.findChildren(QLabel)])
         self.assertFalse(widget.count_board.isVisible())
         self.assertFalse(any(type(child).__name__ == "RecentSessionPanel" for child in widget.findChildren(QWidget)))
 

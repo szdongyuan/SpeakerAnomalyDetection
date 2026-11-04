@@ -6,8 +6,6 @@ import math
 
 
 class CommandKind(str, Enum):
-    START = "start_recording"
-    STOP = "stop_recording"
     SHUTDOWN = "shutdown"
     SET_PREVIEW = "set_preview"
 
@@ -15,12 +13,6 @@ class CommandKind(str, Enum):
 class EventKind(str, Enum):
     READY = "ready"
     OFFLINE = "offline"
-    RECORDING_FAILED = "recording_failed"
-    STOPPING = "recording_stopping"
-    ACCEPTED = "accepted"
-    STARTED = "recording_started"
-    RECOVERING = "recording_recovering"
-    COMPLETED = "recording_completed"
     FAILED = "failed"
     CLOSED = "closed"
     HEARTBEAT = "heartbeat"
@@ -32,7 +24,6 @@ class Command:
     kind: CommandKind
     generation: int
     command_id: str
-    session_id: str = ""
     schema_version: int = 1
     preview_enabled: bool | None = None
     preview_revision: int = 0
@@ -42,10 +33,8 @@ class Command:
             raise ValueError("invalid command kind/version")
         if type(self.generation) is not int or self.generation < 1 or not self.command_id:
             raise ValueError("command identity is required")
-        if self.kind in {CommandKind.START, CommandKind.STOP} and not self.session_id:
-            raise ValueError("recording commands require session_id")
         if self.kind == CommandKind.SET_PREVIEW:
-            if (self.session_id or type(self.preview_enabled) is not bool
+            if (type(self.preview_enabled) is not bool
                     or type(self.preview_revision) is not int or self.preview_revision < 1):
                 raise ValueError("invalid preview command")
 
@@ -56,11 +45,9 @@ class Event:
     generation: int
     sequence: int
     monotonic_time: float
-    session_id: str = ""
     command_id: str = ""
     detail: str = ""
     schema_version: int = 1
-    progress: int = 0
     preview_enabled: bool | None = None
     preview_revision: int = 0
 
@@ -71,15 +58,10 @@ class Event:
             raise ValueError("invalid generation")
         if type(self.sequence) is not int or self.sequence < 1:
             raise ValueError("invalid sequence")
-        if type(self.progress) is not int or self.progress < 0:
-            raise ValueError("invalid media progress counter")
         if not math.isfinite(self.monotonic_time) or self.monotonic_time < 0:
             raise ValueError("invalid monotonic timestamp")
-        if self.kind in {EventKind.STARTED, EventKind.RECOVERING, EventKind.COMPLETED}:
-            if not self.session_id:
-                raise ValueError("recording events require session_id")
         if self.kind == EventKind.PREVIEW_CHANGED:
-            if (self.session_id or not self.command_id or type(self.preview_enabled) is not bool
+            if (not self.command_id or type(self.preview_enabled) is not bool
                     or type(self.preview_revision) is not int or self.preview_revision < 1):
                 raise ValueError("invalid preview acknowledgement")
 
@@ -87,31 +69,9 @@ class Event:
 @dataclass(frozen=True)
 class VideoStatus:
     connection: str = "connecting"
-    recording: str = "idle"
-    session_id: str = ""
-    record_intent: bool = False
-    had_gap: bool = False
-    started_at: float | None = None
-    ended_at: float | None = None
-    recovery_seconds: float = 0.0
     connection_detail: str = ""
-    recording_detail: str = ""
-    directory: str = ""
     preview_enabled: bool = True
     preview_revision: int = 0
-
-    @property
-    def detail(self):
-        """Read-only summary for existing consumers; each source owns its own detail."""
-        if self.recording == "failed":
-            return self.recording_detail
-        return self.connection_detail if self.connection != "ready" else self.recording_detail
-
-    def elapsed(self, now):
-        if self.started_at is None:
-            return 0
-        end = self.ended_at if self.ended_at is not None else now
-        return max(0, int(end - self.started_at - self.recovery_seconds))
 
 
 class VideoState:
@@ -120,31 +80,8 @@ class VideoState:
         self.sequence = 0
         self.status = VideoStatus()
 
-    def request_start(self, session_id):
-        status = self.status
-        if status.connection != "ready" or status.record_intent or status.recording == "stopping":
-            return False
-        self.status = VideoStatus(
-            connection="ready", recording="starting", session_id=session_id, record_intent=True,
-            preview_enabled=status.preview_enabled, preview_revision=status.preview_revision,
-        )
-        return True
-
-    def request_stop(self):
-        if not self.status.record_intent:
-            return False
-        # Reject late STARTED events before sending stop to the child process.
-        self.status = replace(self.status, record_intent=False, recording="stopping")
-        return True
-
-    def fail(self, detail, now):
-        active = self.status.recording in {"starting", "recording", "recovering", "stopping"}
-        self.status = replace(
-            self.status, connection="unavailable", record_intent=False, connection_detail=detail,
-            recording_detail=detail if active else self.status.recording_detail,
-            recording="failed" if active else self.status.recording,
-            ended_at=now if active and self.status.ended_at is None else self.status.ended_at,
-        )
+    def fail(self, detail):
+        self.status = replace(self.status, connection="unavailable", connection_detail=detail)
 
     def apply(self, event):
         if event.generation != self.generation or event.sequence <= self.sequence:
@@ -152,9 +89,6 @@ class VideoState:
         self.sequence = event.sequence
         status = self.status
         kind = event.kind
-        ended_at = status.ended_at if status.ended_at is not None else event.monotonic_time
-        if event.session_id and event.session_id != status.session_id:
-            return False
         if kind == EventKind.PREVIEW_CHANGED:
             if event.preview_revision <= status.preview_revision:
                 return False
@@ -164,53 +98,8 @@ class VideoState:
             self.status = replace(status, connection="ready", connection_detail="")
         elif kind == EventKind.OFFLINE:
             self.status = replace(status, connection="reconnecting", connection_detail=event.detail)
-        elif kind == EventKind.STOPPING:
-            if status.recording not in {"starting", "recording", "recovering", "stopping"}:
-                return False
-            self.status = replace(status, recording="stopping", record_intent=False, recording_detail=event.detail)
-        elif kind == EventKind.STARTED:
-            if not status.record_intent or status.recording not in {"starting", "recovering"}:
-                return False
-            recovery_seconds = status.recovery_seconds
-            if status.started_at is not None and status.ended_at is not None:
-                recovery_seconds += event.monotonic_time - status.ended_at
-            self.status = replace(
-                status, connection="ready", recording="recording", connection_detail="",
-                recording_detail="已恢复录像，存在中断" if status.had_gap else "",
-                started_at=status.started_at if status.started_at is not None else event.monotonic_time,
-                ended_at=None, recovery_seconds=recovery_seconds,
-                directory=event.detail or status.directory,
-            )
-        elif kind == EventKind.RECOVERING:
-            if not status.record_intent or status.recording not in {"starting", "recording", "recovering"}:
-                return False
-            # Keep user intent, but freeze the timer until a new frame is written.
-            self.status = replace(
-                status, connection="reconnecting", recording="recovering",
-                had_gap=True, connection_detail=event.detail,
-                ended_at=ended_at,
-            )
-        elif kind == EventKind.COMPLETED:
-            if status.recording not in {"starting", "recording", "recovering", "stopping"}:
-                return False
-            self.status = replace(
-                status, recording="interrupted" if status.had_gap else "completed", record_intent=False,
-                ended_at=ended_at, recording_detail=event.detail,
-            )
         elif kind == EventKind.FAILED:
-            self.fail(event.detail, event.monotonic_time)
-        elif kind == EventKind.RECORDING_FAILED:
-            if status.recording not in {"starting", "recording", "recovering", "stopping"}:
-                return False
-            self.status = replace(
-                status, recording="failed", record_intent=False,
-                recording_detail=event.detail, ended_at=ended_at,
-            )
-        elif kind == EventKind.CLOSED:
-            active = status.recording in {"starting", "recording", "recovering", "stopping"}
-            self.status = replace(
-                status, connection="closed", record_intent=False,
-                recording="interrupted" if active else status.recording,
-                ended_at=ended_at if active else status.ended_at,
-            )
+            self.fail(event.detail)
+        elif kind == EventKind.CLOSED and status.connection != "unavailable":
+            self.status = replace(status, connection="closed")
         return True

@@ -16,8 +16,7 @@ from base.video.models import Command, CommandKind, Event, EventKind, VideoState
 class VideoService:
     def __init__(
         self, *, worker_target, worker_options, generation=1,
-        heartbeat_timeout=3.0, command_timeout=5.0, shutdown_timeout=3.0,
-        drain_timeout=None,
+        heartbeat_timeout=3.0, shutdown_timeout=3.0,
         initial_connection="connecting",
         initial_preview_enabled=True,
         preview_size=(640, 360),
@@ -41,9 +40,7 @@ class VideoService:
         self._thread = None
         self._unreaped = None
         self._heartbeat_timeout = heartbeat_timeout
-        self._command_timeout = command_timeout
         self._shutdown_timeout = shutdown_timeout
-        self._drain_timeout = command_timeout if drain_timeout is None else drain_timeout
         self.process_id = None
         self.forced_termination = False
 
@@ -79,7 +76,7 @@ class VideoService:
             try:
                 self._commands.put_nowait(command)
             except queue.Full:
-                return False  # A display request must not fail an active recording.
+                return False
             self._preview_revision = command.preview_revision
             self._preview_command_id = command.command_id
             return True
@@ -93,30 +90,15 @@ class VideoService:
             self._thread.start()
         return True
 
-    def start_recording(self):
-        with self._lock:
-            if self._closing or not self._state.request_start(uuid4().hex):
-                return False
-            return self._enqueue_locked(CommandKind.START)
-
-    def stop_recording(self):
-        with self._lock:
-            if self._closing or not self._state.request_stop():
-                return False
-            return self._enqueue_locked(CommandKind.STOP)
-
     def shutdown(self):
         """Request asynchronous shutdown. Qt callers must NOT wait/join here."""
         with self._lock:
             if self._closing:
                 return
             self._closing = True
-            self._state.request_stop()
             if not self._started:
                 self._state.status = replace(self._state.status, connection="closed")
                 self._closed.set()
-                return
-            self._enqueue_locked(CommandKind.SHUTDOWN)
 
     def wait_closed(self, timeout=8):
         """For tests/non-GUI teardown only."""
@@ -138,19 +120,10 @@ class VideoService:
             return None
         return mailbox.latest(after_sequence)
 
-    def _enqueue_locked(self, kind):
-        command = Command(kind, self._state.generation, uuid4().hex, self._state.status.session_id)
-        try:
-            self._commands.put_nowait(command)
-        except queue.Full:
-            self._state.fail("视频控制队列已满", time.monotonic())
-            return False
-        return True
-
     def _fail(self, detail):
         self._logger.error("Video supervisor failure: %s", detail)
         with self._lock:
-            self._state.fail(detail, time.monotonic())
+            self._state.fail(detail)
 
     def _run(self):
         process = channel = child_channel = log_drain = None
@@ -170,13 +143,8 @@ class VideoService:
             self.process_id = process.pid
             child_channel.close()
             last_event = time.monotonic()
-            progress_token = 0
-            last_progress = last_event
             shutdown_deadline = None
-            shutdown_since = None
             closed_at = None
-            pending_since = last_event
-            last_phase = ""
             while True:
                 now = time.monotonic()
                 # Bounded batches prevent either IPC direction starving the other.
@@ -200,8 +168,6 @@ class VideoService:
                             accepted = self._state.apply(event)
                     if accepted:
                         last_event = now
-                        if event.progress > progress_token:
-                            progress_token, last_progress = event.progress, now
                         received_closed |= event.kind == EventKind.CLOSED
                 if not process.is_alive():
                     if not received_closed:
@@ -215,33 +181,19 @@ class VideoService:
                         break
                     process.join(timeout=0.1)
                     continue
-                try:
-                    command = self._commands.get_nowait()
-                except queue.Empty:
-                    command = None
-                if command is not None:
-                    channel.send(command)
-                    if command.kind == CommandKind.SHUTDOWN:
-                        shutdown_since = now
+                if self.is_closing:
+                    if shutdown_deadline is None:
+                        channel.send(Command(CommandKind.SHUTDOWN, self._state.generation, uuid4().hex))
                         shutdown_deadline = now + self._shutdown_timeout
-                phase = self.status.recording
-                if phase != last_phase:
-                    last_phase, pending_since = phase, now
+                else:
+                    try:
+                        command = self._commands.get_nowait()
+                    except queue.Empty:
+                        pass
+                    else:
+                        channel.send(command)
                 if now - last_event > self._heartbeat_timeout:
                     self._fail("视频进程响应超时")
-                    break
-                if phase == "starting" and now - pending_since > self._command_timeout:
-                    self._fail("视频启停响应超时")
-                    break
-                if phase == "stopping":
-                    if now - max(pending_since, last_progress) > self._drain_timeout:
-                        self._fail("视频启停响应超时：录像收尾未取得进展")
-                        break
-                    if now - pending_since > self._shutdown_timeout:
-                        self._fail("录像收尾超过总时限，部分数据未保存")
-                        break
-                if shutdown_since is not None and now - max(shutdown_since, last_progress) > self._drain_timeout:
-                    self._fail("视频进程退出时长时间无进展")
                     break
                 if shutdown_deadline is not None and now >= shutdown_deadline:
                     self._fail("视频进程退出超时")

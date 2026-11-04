@@ -7,13 +7,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
-PREVIEW_RESOLUTIONS = ((640, 360), (1280, 720), (1920, 1080), (2560, 1440))
-
-
 @dataclass(frozen=True)
 class VideoConfig:
     schema_version: int = 1
-    enabled: bool = False  # Saved preview preference; recording may acquire the camera independently.
+    enabled: bool = False
     device_id: str = ""
     device_name: str = ""
     width: int = 1280
@@ -21,61 +18,40 @@ class VideoConfig:
     fps_num: int = 25
     fps_den: int = 1
     input_format: str = "auto"
-    codec: str = "h264"
-    target_bitrate_bps: int = 4_000_000
-    recording_root: str = ""
-    segment_duration_seconds: int = 7_200
-    min_free_bytes: int = 5 * 1024**3
-    preview_width: int = 640
-    preview_height: int = 360
 
     def __post_init__(self):
         integer_fields = (
             "schema_version", "width", "height", "fps_num", "fps_den",
-            "target_bitrate_bps", "segment_duration_seconds", "min_free_bytes",
-            "preview_width", "preview_height",
         )
         for name in integer_fields:
             value = getattr(self, name)
             if type(value) is not int or value <= 0:
                 raise ValueError(f"视频配置项“{name}”必须为正整数。")
-        for name in ("device_id", "device_name", "input_format", "codec", "recording_root"):
+        for name in ("device_id", "device_name", "input_format"):
             if not isinstance(getattr(self, name), str):
                 raise ValueError(f"视频配置项“{name}”必须为文本。")
         if type(self.enabled) is not bool:
             raise ValueError("摄像头启用状态必须为开启或关闭。")
         if self.schema_version != 1:
             raise ValueError("视频配置版本不受支持，请检查配置文件。")
-        if self.segment_duration_seconds != 7_200:
-            raise ValueError("录像分段时长固定为2小时。")
         if self.width > 7680 or self.height > 4320:
             raise ValueError("分辨率不能超过7680×4320。")
-        if self.width % 2 or self.height % 2:
-            raise ValueError("当前录像编码要求分辨率的宽度和高度均为偶数。")
-        if (self.preview_width, self.preview_height) not in PREVIEW_RESOLUTIONS:
-            raise ValueError("预览分辨率仅支持640×360、1280×720、1920×1080或2560×1440。")
         if self.fps_num > 240 * self.fps_den:
             raise ValueError("帧率不能超过240帧/秒。")
-        if self.codec not in {"h264", "h265"}:
-            raise ValueError("录像编码方式不受支持，请使用H.264或H.265。")
         if self.input_format not in {"auto", "mjpeg", "yuy2", "nv12"}:
             raise ValueError("摄像头输入格式不受支持。")
-        if self.recording_root and not Path(self.recording_root).is_absolute():
-            raise ValueError("录像保存位置必须为完整路径，请点击“浏览…”选择文件夹。")
         if self.enabled:
             self.validate_capture()
 
     @property
     def preview_size(self):
         """Bound the preview buffer by capture size so it never enlarges pixels."""
-        return min(self.preview_width, self.width), min(self.preview_height, self.height)
+        return min(640, self.width), min(360, self.height)
 
     def validate_capture(self):
-        """Validate an actual acquisition request, including recording without preview."""
+        """Validate the device selected for live preview."""
         if not self.device_id.strip():
             raise ValueError("请选择摄像头；如果列表为空，请连接USB摄像头后点击“刷新”。")
-        if not self.recording_root.strip():
-            raise ValueError("请选择录像保存文件夹。")
 
 
 def load_config(path):
@@ -86,9 +62,10 @@ def load_config(path):
         data = json.load(stream)
     if not isinstance(data, dict):
         raise ValueError("视频配置文件格式无效，内容必须为JSON对象。")
-    # Accept the previous fixed duration on disk; future saves use two hours.
-    if type(data.get("segment_duration_seconds")) is int and data["segment_duration_seconds"] == 18_000:
-        data["segment_duration_seconds"] = 7_200
+    # Legacy files contain both camera preferences and video output settings.
+    for field in ("codec", "target_bitrate_bps", "recording_root", "segment_duration_seconds",
+                  "min_free_bytes", "preview_width", "preview_height"):
+        data.pop(field, None)
     try:
         return VideoConfig(**data)
     except TypeError as exc:

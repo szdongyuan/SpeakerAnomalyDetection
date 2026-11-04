@@ -3,7 +3,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
-from PyQt5.QtWidgets import QComboBox, QDialogButtonBox, QLabel, QMessageBox, QSpinBox
+from PyQt5.QtWidgets import QDialogButtonBox, QLabel, QMessageBox
 
 from base.video.config import VideoConfig, load_config, save_config
 import ui.video_controller as video_controller_module
@@ -71,7 +71,7 @@ def test_default_controller_migrates_then_saves_and_reloads_only_new_location(ui
         assert controller.config_path == path
         assert controller.config == config
         assert controller.service.process_id is None
-        updated = replace(config, target_bitrate_bps=6_000_000)
+        updated = replace(config, fps_num=15)
         controller.apply_config(updated)
         spin(ui_qapp, lambda: not controller._saving)
         assert load_config(path) == updated
@@ -111,7 +111,7 @@ def test_migration_error_is_visible_and_does_not_start_camera(ui_qapp, tmp_path,
     monkeypatch.setattr(video_controller_module, "migrate_config", denied)
     controller = VideoController(start_automatically=False)
     try:
-        assert "迁移失败" in controller.service.status.detail
+        assert "迁移失败" in controller.service.status.connection_detail
         assert controller.service.status.connection == "unavailable"
         assert not controller.config.enabled
         assert controller.service.process_id is None
@@ -128,7 +128,7 @@ def test_disabled_defaults_no_process_or_settings_file_and_binds_main_card(ui_qa
         controller.poll()
         assert controller.service.process_id is None
         assert not (tmp_path / "video.json").exists()
-        assert not panel.live_panel.record_button.isEnabled()
+        assert panel.live_panel.canvas.message == "预览已关闭"
         assert panel.live_panel.more_button.isEnabled()
         assert panel.card.isHidden()
     finally:
@@ -141,14 +141,13 @@ def test_disabled_defaults_no_process_or_settings_file_and_binds_main_card(ui_qa
 def test_save_settings_and_reload_without_automatic_recording(ui_qapp, tmp_path):
     path = tmp_path / "video.json"
     controller = VideoController(config_path=path)
-    config = VideoConfig(recording_root=str(tmp_path / "独立录像"), width=640, height=480)
+    config = VideoConfig(width=640, height=480)
     try:
         controller.apply_config(config)
         spin(ui_qapp, lambda: not controller._saving)
         assert load_config(path) == config
         assert controller.config == config
         assert controller.service.process_id is None
-        assert not controller.service.status.record_intent
     finally:
         controller.shutdown()
         spin(ui_qapp, lambda: controller.is_shutdown_complete)
@@ -156,13 +155,12 @@ def test_save_settings_and_reload_without_automatic_recording(ui_qapp, tmp_path)
 
 
 @pytest.mark.parametrize("capture_size", [(1280, 720), (2560, 1440)])
-def test_saved_preview_resolution_rebuilds_service_and_reaches_qt(ui_qapp, tmp_path, monkeypatch, capture_size):
+def test_camera_resolution_change_rebuilds_service_and_reaches_qt(ui_qapp, tmp_path, monkeypatch, capture_size):
     monkeypatch.setattr(video_controller_module, "usb_video_worker", configurable_preview_worker)
     path = tmp_path / "video.json"
     config = VideoConfig(
         enabled=True, device_id="test-camera", device_name="Synthetic camera",
-        width=capture_size[0], height=capture_size[1], target_bitrate_bps=8_000_000,
-        recording_root=str(tmp_path),
+        width=capture_size[0], height=capture_size[1],
     )
     save_config(path, config)
     controller = VideoController(config_path=path, start_automatically=False)
@@ -173,54 +171,15 @@ def test_saved_preview_resolution_rebuilds_service_and_reaches_qt(ui_qapp, tmp_p
         spin(ui_qapp, lambda: bool(sizes))
         assert sizes[-1] == (640, 360)
         old_service = controller.service
-        updated = replace(config, preview_width=2560, preview_height=1440)
+        updated = replace(config, width=320, height=240)
         controller.apply_config(updated)
-        spin(ui_qapp, lambda: bool(sizes) and sizes[-1] == capture_size)
+        spin(ui_qapp, lambda: bool(sizes) and sizes[-1] == (320, 240))
         assert old_service.is_closed and controller.service is not old_service
         assert load_config(path) == updated
         assert controller.config == updated
-        assert not controller.service.status.record_intent
     finally:
         controller.shutdown()
         spin(ui_qapp, lambda: controller.is_shutdown_complete)
-        controller._timer.stop()
-
-
-@pytest.mark.parametrize("recent", ["", "existing", "missing"])
-def test_open_directory_uses_recent_session_or_video_child(ui_qapp, tmp_path, monkeypatch, recent):
-    video = tmp_path / "video"
-    video.mkdir()
-    session = video / "2026-09-09_10-23-30"
-    session.mkdir()
-    opened = []
-    monkeypatch.setattr(video_controller_module.QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()))
-    controller = VideoController(config_path=tmp_path / "settings.json", start_automatically=False)
-    try:
-        controller.config = VideoConfig(recording_root=str(tmp_path))
-        controller.recent_directory = str(session) if recent == "existing" else str(video / "missing") if recent else ""
-        controller.open_directory()
-        target = session if recent == "existing" else video
-        assert opened == [target.resolve().as_posix()]
-    finally:
-        controller.shutdown()
-        controller._timer.stop()
-
-
-def test_changed_root_clears_recent_session_and_missing_video_only_notifies(ui_qapp, tmp_path, monkeypatch):
-    opened, messages = [], []
-    monkeypatch.setattr(video_controller_module.QDesktopServices, "openUrl", lambda url: opened.append(url))
-    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args))
-    controller = VideoController(config_path=tmp_path / "settings.json", start_automatically=False)
-    try:
-        controller.config = VideoConfig(recording_root=str(tmp_path / "old"))
-        controller.recent_directory = str(tmp_path / "old/video/recent")
-        controller._configuration_saved(VideoConfig(recording_root=str(tmp_path / "new")), "")
-        assert not controller.recent_directory
-        controller.open_directory()
-        assert len(messages) == 1 and not opened
-        assert not (tmp_path / "new").exists()
-    finally:
-        controller.shutdown()
         controller._timer.stop()
 
 
@@ -249,36 +208,8 @@ def test_settings_keep_same_named_device_identities_and_readonly_guard(ui_qapp):
         dialog.close()
 
 
-def test_simplified_settings_preserve_hidden_encoding_and_storage_policy(ui_qapp, tmp_path):
-    config = VideoConfig(
-        device_id="usb1", device_name="USB Camera", input_format="nv12", codec="h265",
-        min_free_bytes=7 * 1024**3 + 123, recording_root=str(tmp_path),
-    )
-    dialog = VideoSettingsDialog(config)
-    requested = []
-    dialog.configuration_requested.connect(requested.append)
-    try:
-        assert len(dialog.findChildren(QComboBox)) == 4
-        assert len(dialog.findChildren(QSpinBox)) == 1
-        labels = {label.text() for label in dialog.findChildren(QLabel)}
-        assert not labels & {"输入格式", "录像编码", "最低保留空间", "文件分段"}
-        dialog.enabled.setChecked(True)
-        dialog.bitrate.setValue(6000)
-        dialog.submit()
-        assert len(requested) == 1
-        saved = requested[0]
-        assert saved.enabled
-        assert saved.target_bitrate_bps == 6_000_000
-        assert saved.input_format == config.input_format
-        assert saved.codec == config.codec
-        assert saved.min_free_bytes == config.min_free_bytes
-        assert saved.segment_duration_seconds == config.segment_duration_seconds
-    finally:
-        dialog.close()
-
-
 @pytest.mark.parametrize("size", [(1280, 720), (2560, 1440), (2944, 1656)])
-def test_recording_selector_omits_removed_size_and_keeps_saved_size(ui_qapp, size):
+def test_camera_selector_omits_removed_size_and_keeps_saved_size(ui_qapp, size):
     config = VideoConfig(width=size[0], height=size[1])
     dialog = VideoSettingsDialog(config)
     try:
@@ -288,7 +219,7 @@ def test_recording_selector_omits_removed_size_and_keeps_saved_size(ui_qapp, siz
         dialog.close()
 
 
-def test_removed_recording_size_requires_explicit_reselection(ui_qapp, tmp_path, monkeypatch):
+def test_removed_camera_size_requires_explicit_reselection(ui_qapp, tmp_path, monkeypatch):
     config = VideoConfig(width=2048, height=1536)
     config_path = tmp_path / "video_settings.json"
     save_config(config_path, config)
@@ -302,7 +233,7 @@ def test_removed_recording_size_requires_explicit_reselection(ui_qapp, tmp_path,
         assert "重新选择" in dialog.resolution.currentText()
         assert not dialog.resolution.model().item(dialog.resolution.currentIndex()).isEnabled()
         dialog.submit()
-        assert messages == ["请选择录像分辨率后再保存。"]
+        assert messages == ["请选择摄像头分辨率后再保存。"]
         assert not requested
         assert load_config(config_path) == config
 
@@ -320,57 +251,8 @@ def test_removed_recording_size_requires_explicit_reselection(ui_qapp, tmp_path,
         dialog.close()
 
 
-@pytest.mark.parametrize("size", [(640, 360), (1280, 720), (1920, 1080), (2560, 1440)])
-def test_preview_selector_preserves_recording_settings(ui_qapp, tmp_path, size):
-    config = VideoConfig(
-        device_id="usb1", device_name="USB Camera", recording_root=str(tmp_path),
-        width=2560, height=1440, fps_num=25, target_bitrate_bps=8_000_000,
-    )
-    dialog = VideoSettingsDialog(config)
-    requested = []
-    dialog.configuration_requested.connect(requested.append)
-    try:
-        assert [dialog.preview_resolution.itemData(i) for i in range(dialog.preview_resolution.count())] == [
-            (640, 360), (1280, 720), (1920, 1080), (2560, 1440),
-        ]
-        dialog.preview_resolution.setCurrentIndex(dialog.preview_resolution.findText(f"{size[0]} × {size[1]}"))
-        dialog.submit()
-        assert requested == [replace(config, preview_width=size[0], preview_height=size[1])]
-        labels = {label.text() for label in dialog.findChildren(QLabel)}
-        assert {"预览分辨率", "录像分辨率", "录像帧率"} <= labels
-        reopened = VideoSettingsDialog(requested[0])
-        try:
-            assert reopened.preview_resolution.currentData() == size
-        finally:
-            reopened.close()
-    finally:
-        dialog.close()
-
-
-@pytest.mark.parametrize("device_id,folder,expected", [
-    ("usb1", "", "请选择录像保存文件夹。"),
-    ("", "", "请选择摄像头"),
-    ("usb1", "relative-folder", "录像保存位置必须为完整路径"),
-])
-def test_video_validation_dialog_uses_actionable_chinese(ui_qapp, monkeypatch, device_id, folder, expected):
-    dialog = VideoSettingsDialog(VideoConfig(device_id=device_id, device_name="USB Cam"))
-    messages, requested = [], []
-    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: messages.append((title, text)))
-    dialog.configuration_requested.connect(requested.append)
-    try:
-        dialog.enabled.setChecked(True)
-        dialog.folder.setText(folder)
-        dialog.submit()
-        assert len(messages) == 1
-        assert messages[0][0] == "配置无效"
-        assert expected in messages[0][1]
-        assert not requested
-    finally:
-        dialog.close()
-
-
 @pytest.mark.parametrize("read_only", [False, True])
-@pytest.mark.parametrize("width", [560, 680])
+@pytest.mark.parametrize("width", [440, 680])
 def test_simplified_settings_layout_and_persistent_readonly_notice(ui_qapp, tmp_path, read_only, width):
     configure_demo_font(ui_qapp)
     dialog = VideoSettingsDialog(VideoConfig(), read_only=read_only)
@@ -385,19 +267,17 @@ def test_simplified_settings_layout_and_persistent_readonly_notice(ui_qapp, tmp_
                 < dialog.buttons.button(QDialogButtonBox.Save).geometry().left())
         assert dialog.devices.font().pixelSize() == 13
         assert dialog.devices.height() >= 28
-        assert dialog.folder.width() >= 250
-        inputs = (dialog.devices, dialog.preview_resolution, dialog.resolution,
-                  dialog.rate, dialog.bitrate, dialog.folder)
-        assert dialog.preview_resolution.isEnabled() != read_only
+        inputs = (dialog.devices, dialog.resolution, dialog.rate)
+        assert dialog.resolution.isEnabled() != read_only
+        labels = [label.text() for label in dialog.findChildren(QLabel)]
+        assert [text for text in labels if "分辨率" in text] == ["摄像头分辨率"]
+        assert all("录像" not in text for text in labels)
         assert dialog.enabled.geometry().bottom() < dialog.devices.geometry().top()
-        ordered_fields = (dialog.devices, dialog.resolution, dialog.rate, dialog.bitrate,
-                          dialog.preview_resolution, dialog.folder)
         assert all(before.geometry().bottom() < after.geometry().top()
-                   for before, after in zip(ordered_fields, ordered_fields[1:]))
+                   for before, after in zip(inputs, inputs[1:]))
         assert len({field.width() for field in inputs}) == 1
         assert len({field.geometry().left() for field in inputs}) == 1
         assert len({field.geometry().right() for field in inputs}) == 1
-        assert dialog.refresh_button.geometry().left() == dialog.browse_button.geometry().left()
         assert dialog.message.geometry().bottom() < dialog.buttons.geometry().top()
         assert dialog.buttons.geometry().bottom() < dialog.height()
         screenshot = tmp_path / f"video-settings-simple-{'readonly' if read_only else 'editable'}.png"
@@ -408,9 +288,6 @@ def test_simplified_settings_layout_and_persistent_readonly_notice(ui_qapp, tmp_
         assert not dialog.message.text()
         assert dialog.read_only_label.isVisible() == read_only
         assert "不会自动开始" not in {label.text() for label in dialog.findChildren(QLabel)}
-        assert "2小时" in dialog.folder.toolTip()
-        assert "video" in dialog.folder.placeholderText()
-        assert "上一级目录" in dialog.folder.toolTip()
     finally:
         dialog.close()
 
@@ -422,8 +299,8 @@ def test_settings_geometry_stays_fixed_across_device_refresh(ui_qapp, tmp_path, 
     dialog.show()
     ui_qapp.processEvents()
     widgets = (
-        dialog.enabled, dialog.devices, dialog.preview_resolution, dialog.resolution, dialog.rate,
-        dialog.bitrate, dialog.folder, dialog.refresh_button, dialog.browse_button,
+        dialog.enabled, dialog.devices, dialog.resolution, dialog.rate,
+        dialog.refresh_button,
         dialog.message, dialog.buttons,
     )
     original = [widget.geometry() for widget in widgets]
@@ -443,10 +320,29 @@ def test_settings_geometry_stays_fixed_across_device_refresh(ui_qapp, tmp_path, 
             assert dialog.geometry() == original_window
             assert [widget.geometry() for widget in widgets] == original
             if error:
-                assert dialog.message.toolTip() == error
+                assert "读取失败" in dialog.devices.toolTip()
+                assert error not in dialog.message.toolTip()
         screenshot = tmp_path / "video-settings-stable.png"
         assert dialog.grab().save(str(screenshot))
         print(f"\nStable settings screenshot: {screenshot}")
+    finally:
+        dialog.close()
+
+
+def test_failed_probe_reports_at_selector_and_keeps_apply_status(ui_qapp):
+    dialog = VideoSettingsDialog(VideoConfig())
+    try:
+        dialog.show_apply_status("预览未生效，请重试。")
+        dialog.set_devices((), "No module named 'av'")
+        assert dialog.devices.currentText() == "摄像头列表读取失败"
+        assert dialog.devices.currentData() is None
+        assert dialog.message.toolTip() == "预览未生效，请重试。"
+        assert "av" not in dialog.devices.toolTip()
+        dialog.set_devices(())
+        assert dialog.devices.currentText() == "未发现摄像头"
+        dialog.set_devices((CameraDevice("usb1", "USB Camera"),))
+        assert dialog.devices.currentText() == "USB Camera"
+        assert not dialog.devices.toolTip()
     finally:
         dialog.close()
 
@@ -484,53 +380,6 @@ def test_main_close_waits_for_video_without_starting_audio_shutdown(ui_qapp):
     host.setEnabled.assert_called_once_with(False)
     video.closed.emit()
     host.close.assert_called_once()
-
-
-def test_live_card_real_files_and_settings_screenshot(ui_qapp, tmp_path, monkeypatch):
-    from base.video.config import save_config
-    from base.video.service import VideoService
-    from ui.video_demo import configure_demo_font
-    from unit_test.video.test_recording import config_for, decoded
-    from unit_test.video.test_runtime import synthetic_video_worker
-
-    configure_demo_font(ui_qapp)
-    path = tmp_path / "settings.json"
-    config = config_for(tmp_path / "videos")
-    save_config(path, config)
-    monkeypatch.setattr(VideoController, "_make_service", lambda self: VideoService(
-        worker_target=synthetic_video_worker, worker_options=config, heartbeat_timeout=8, command_timeout=10,
-    ))
-    controller = VideoController(config_path=path)
-    placeholder = MotorVideoMonitorPanel()
-    controller.attach_panel(placeholder)
-    placeholder.resize(560, 350)
-    placeholder.show()
-    try:
-        spin(ui_qapp, lambda: controller.panel._status.connection == "ready")
-        controller.panel.record_button.click()
-        spin(ui_qapp, lambda: controller.panel._status.recording == "recording")
-        ui_qapp.processEvents()
-        screenshot = tmp_path / "live-video-test-frames.png"
-        assert placeholder.grab().save(str(screenshot))
-        print(f"\nLive card (test input, real recording): {screenshot}")
-        controller.show_settings()
-        assert controller.dialog.preview_only
-        assert controller.dialog.enabled.isEnabled()
-        assert not controller.dialog.devices.isEnabled()
-        ui_qapp.processEvents()
-        settings_screenshot = tmp_path / "video-settings.png"
-        assert controller.dialog.grab().save(str(settings_screenshot))
-        print(f"Video settings: {settings_screenshot}")
-        controller.dialog.close()
-        controller.panel.record_button.click()
-        spin(ui_qapp, lambda: controller.panel._status.recording == "completed")
-        assert decoded(next((tmp_path / "videos").glob("*/*/*.mp4")))
-        assert controller.recent_directory
-    finally:
-        controller.shutdown()
-        spin(ui_qapp, lambda: controller.is_shutdown_complete)
-        controller._timer.stop()
-        placeholder.close()
 
 
 @pytest.mark.parametrize("status", ["no-runtime", "timeout", "drained-with-errors", "already-dead", "exit-after-ack"])

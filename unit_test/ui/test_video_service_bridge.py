@@ -58,24 +58,13 @@ def test_real_spawn_to_qt_preview_start_stop_and_async_exit(ui_qapp, tmp_path):
     widget.show()
     try:
         service.start()
-        spin(ui_qapp, lambda: widget.record_button.isEnabled() and not widget.canvas.image.isNull())
-        widget.record_button.click()
-        spin(ui_qapp, lambda: widget._status.recording == "recording")
-        screenshot = tmp_path / "video_demo_recording.png"
-        ui_qapp.processEvents()
-        assert widget.grab().save(str(screenshot))
-        print(f"\nVideo demo screenshot: {screenshot}")
-        session = service.status.session_id
-        assert session
-        widget.record_button.click()
-        assert widget.record_button.text() == "正在保存…"
-        spin(ui_qapp, lambda: widget._status.recording == "completed")
-        assert widget.record_button.text() == "开始录像"
-        assert not widget.canvas.image.isNull()
+        spin(ui_qapp, lambda: not widget.canvas.image.isNull())
+        assert [a.text() for a in widget.more_button.menu().actions()] == ["摄像头设置"]
+        assert widget.grab().save(str(tmp_path / "video_demo_preview.png"))
         bridge.shutdown()
         spin(ui_qapp, lambda: bool(closed))
         assert service.is_closed
-        assert widget._status.connection == "closed"
+        assert service.status.connection == "closed"
     finally:
         service.shutdown()
         assert service.wait_closed()

@@ -39,21 +39,13 @@ def service_factory():
         assert not any(child.pid == service.process_id for child in multiprocessing.active_children())
 
 
-def test_separate_process_manual_sessions_and_preview_continues(service_factory, tmp_path, monkeypatch):
+def test_separate_process_publishes_latest_preview(service_factory, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     service = service_factory()
     assert service.process_id != os.getpid()
     wait_until(lambda: service.latest_preview() is not None)
-    for _ in range(3):
-        assert service.start_recording()
-        assert not service.start_recording()
-        wait_until(lambda: service.status.recording == "recording")
-        assert service.stop_recording()
-        assert not service.stop_recording()
-        wait_until(lambda: service.status.recording == "completed")
     frame = service.latest_preview()
     wait_until(lambda: service.latest_preview(frame.sequence) is not None)
-    assert "未生成视频文件" in service.status.detail
     assert list(tmp_path.iterdir()) == []
 
 
@@ -64,92 +56,25 @@ def test_selected_preview_size_crosses_process_boundary(service_factory, size):
     frame = service.latest_preview()
     assert (frame.width, frame.height) == size
     assert len(frame.rgb) == size[0] * size[1] * 3
-    assert not service.status.record_intent
-
-
-def test_stop_while_starting_is_not_late_restarted(service_factory):
-    service = service_factory(SimulationOptions(start_delay=0.5))
-    service.start_recording()
-    service.stop_recording()
-    wait_until(lambda: service.status.recording == "completed")
-    time.sleep(0.6)
-    assert service.status.recording == "completed"
-    assert service.status.started_at is None
-
-
-def test_reconnect_resumes_same_recording_session(service_factory):
-    service = service_factory(SimulationOptions(disconnect_after=0.1, reconnect_after=0.5))
-    service.start_recording()
-    wait_until(lambda: service.status.recording == "recovering")
-    session, started = service.status.session_id, service.status.started_at
-    assert service.status.record_intent
-    assert service.latest_preview() is None
-    wait_until(lambda: service.status.recording == "recording")
-    wait_until(lambda: service.latest_preview() is not None)
-    assert service.status.record_intent and service.status.had_gap
-    assert service.status.session_id == session
-    assert service.status.started_at == started
-    assert service.stop_recording()
-    wait_until(lambda: service.status.recording == "interrupted")
-
-
-def test_reconnect_during_manual_finalization_does_not_resume(service_factory):
-    service = service_factory(SimulationOptions(disconnect_after=0.1, reconnect_after=0.3, stop_delay=0.6))
-    service.start_recording()
-    wait_until(lambda: service.status.recording == "recovering")
-    assert service.stop_recording()
-    assert not service.status.record_intent
-    wait_until(lambda: service.status.connection == "ready")
-    assert service.status.recording == "stopping"
-    assert not service.start_recording()
-    wait_until(lambda: service.status.recording == "interrupted")
-    wait_until(lambda: service.latest_preview() is not None)
-    assert not service.status.record_intent
-
-
-def test_long_disconnect_keeps_intent_and_shutdown_cancels_it(service_factory):
-    service = service_factory(
-        SimulationOptions(disconnect_after=0.1, reconnect_after=60), command_timeout=0.5,
-    )
-    service.start_recording()
-    wait_until(lambda: service.status.recording == "recovering")
-    time.sleep(0.8)  # Exceeds startup timeout; waiting for hardware is a separate phase.
-    assert service.status.record_intent and not service.is_closed
-    service.shutdown()
-    assert service.wait_closed()
-    assert not service.status.record_intent and not service.forced_termination
-
-
-def test_start_failure_does_not_report_recording(service_factory):
-    service = service_factory(SimulationOptions(fail_start=True))
-    service.start_recording()
-    wait_until(lambda: service.status.recording == "failed")
-    assert service.status.started_at is None
-    assert not service.status.record_intent
 
 
 @pytest.mark.parametrize("options", [SimulationOptions(crash_after=0.1), SimulationOptions(stall_after=0.1)])
 def test_child_crash_and_stall_are_bounded_failures(service_factory, options):
     service = service_factory(options, heartbeat_timeout=1)
-    service.start_recording()
     assert service.wait_closed(timeout=5)
-    assert service.status.recording == "failed"
     assert service.status.connection == "unavailable"
-    assert not service.start_recording()
     if options.stall_after is not None:
         assert service.forced_termination
 
 
 def test_shutdown_finishes_active_simulation_asynchronously(service_factory):
     service = service_factory()
-    service.start_recording()
-    wait_until(lambda: service.status.recording == "recording")
+    wait_until(lambda: service.latest_preview() is not None)
     started = time.monotonic()
     service.shutdown()
     assert time.monotonic() - started < 0.2
     assert service.wait_closed()
     assert service.status.connection == "closed"
-    assert service.status.recording == "completed"
     assert not service.forced_termination
 
 
@@ -180,87 +105,10 @@ def test_closed_message_is_not_proof_of_process_exit():
         assert service.wait_closed(4)
         assert service.forced_termination
         assert service.status.connection == "unavailable"
-        assert "未退出" in service.status.detail
+        assert "未退出" in service.status.connection_detail
     finally:
         service.shutdown()
         assert service.wait_closed()
-
-
-def test_stop_timeout_is_failed_not_completed(service_factory):
-    service = service_factory(SimulationOptions(stop_delay=2), command_timeout=0.25)
-    service.start_recording()
-    wait_until(lambda: service.status.recording == "recording")
-    service.stop_recording()
-    assert service.wait_closed(4)
-    assert service.status.recording == "failed"
-    assert "启停响应超时" in service.status.detail
-
-
-def progressing_drain_worker(channel, mailbox, generation, options):
-    progress_enabled, delay = options
-    sequence = progress = 0
-    identity = ""
-    drain_at = None
-    closing = False
-
-    def emit(kind, session_id=""):
-        nonlocal sequence
-        sequence += 1
-        channel.send(Event(kind, generation, sequence, time.monotonic(), session_id,
-                           progress=progress))
-
-    emit(EventKind.READY)
-    while True:
-        if channel.poll(.04):
-            command = channel.recv()
-            if command.kind == CommandKind.START:
-                identity = command.session_id
-                emit(EventKind.STARTED, identity)
-            else:
-                closing |= command.kind == CommandKind.SHUTDOWN
-                drain_at = time.monotonic() + delay
-        if drain_at is not None:
-            if progress_enabled:
-                progress += 1
-            if time.monotonic() >= drain_at:
-                emit(EventKind.COMPLETED, identity)
-                identity, drain_at = "", None
-                if closing:
-                    emit(EventKind.CLOSED)
-                    channel.close()
-                    return
-        emit(EventKind.HEARTBEAT)
-
-
-@pytest.mark.parametrize("shutdown", [False, True])
-@pytest.mark.parametrize("mode", ["progress", "heartbeat-only", "total-timeout"])
-def test_drain_deadlines_use_media_progress_not_heartbeats(shutdown, mode):
-    service = VideoService(
-        worker_target=progressing_drain_worker,
-        worker_options=(mode != "heartbeat-only", .6 if mode != "total-timeout" else 10),
-        heartbeat_timeout=4, command_timeout=.2, drain_timeout=.3,
-        shutdown_timeout=.5 if mode == "total-timeout" else 2,
-    )
-    service.start()
-    try:
-        wait_until(lambda: service.status.connection == "ready")
-        assert service.start_recording()
-        wait_until(lambda: service.status.recording == "recording")
-        if shutdown:
-            service.shutdown()
-        else:
-            assert service.stop_recording()
-        if mode == "progress":
-            wait_until(lambda: service.status.recording == "completed")
-            assert not service.forced_termination
-        else:
-            assert service.wait_closed(5)
-            assert service.forced_termination
-            assert service.status.recording == "failed"
-            assert "超时" in service.status.detail or "时限" in service.status.detail
-    finally:
-        service.shutdown()
-        assert service.wait_closed(5)
 
 
 @pytest.mark.parametrize("status", ["no-runtime", "timeout", "drained-with-errors", "unconfirmed-death", "already-dead", "exit-after-ack"])
@@ -451,7 +299,7 @@ def test_video_log_drain_cleans_start_failure_and_reports_self_exit(monkeypatch,
     assert drain.child_endpoint is None
     assert service.status.connection == "unavailable"
     if start_failure:
-        assert "video start denied" in service.status.detail and not closed
+        assert "video start denied" in service.status.connection_detail and not closed
     else:
         assert closed
         assert "reason=self-exit" in caplog.text and "status=timeout" in caplog.text

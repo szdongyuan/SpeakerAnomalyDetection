@@ -2331,3 +2331,54 @@ def test_relabel_rejects_uncreated_leased_destination_then_succeeds_after_releas
     assert target.read_bytes() == b"saved original recording"
     assert not source.exists()
     update.assert_called_once()
+
+def test_camera_disconnect_during_audio_capture_preserves_wav_and_analysis(ui_qapp, service, tmp_path, monkeypatch):
+    from queue import Queue
+    from base.analysis_worker import analysis_worker_main
+    from base.video.config import VideoConfig
+    from base.video.service import VideoService
+    from ui.sequence import sequence_widget_streaming_ops as stream
+    from ui.sequence.analysis_task_builder import build_analysis_task_request
+    from unit_test.video.test_runtime import synthetic_video_worker
+
+    service._backend_options["pause_first_write"] = True
+    host = main_host(service, tmp_path)
+    monkeypatch.setattr(stream, "RecordingManager", lambda: SimpleNamespace(save_signal_info_to_db=lambda *_: (0, "")))
+    config = VideoConfig(enabled=True, device_id="test", device_name="disconnect", width=160, height=90)
+    video = VideoService(worker_target=synthetic_video_worker, worker_options=config, preview_size=config.preview_size)
+    release = tmp_path / "release-writer"
+    trace = tmp_path / "trace.json"
+    host.judge_play_and_record()
+    session = host._recording_process_session
+    try:
+        pump(ui_qapp, lambda: trace.exists() and json.loads(trace.read_text()).get("writer_entered"))
+        video.start()
+        pump(ui_qapp, lambda: video.latest_preview() is not None)
+        pump(ui_qapp, lambda: video.status.connection == "reconnecting")
+        video.shutdown()
+        pump(ui_qapp, lambda: video.is_closed)
+        assert host._record_workflow_busy
+    finally:
+        release.touch()
+        video.shutdown()
+        assert video.wait_closed()
+    pump(ui_qapp, lambda: session.released.is_set() and not host._record_workflow_busy)
+    expected = known_audio()[2:9, (0, 2)]
+    assert_saved_main_envelope(host, session, expected)
+    samples, rate = sf.read(host.recorded_path, dtype="float32", always_2d=True)
+    np.testing.assert_array_equal(samples, expected)
+    assert rate == session.request.sample_rate
+
+    request = build_analysis_task_request(
+        condition_key="test", wav_path=host.recorded_path, source="手动查看",
+        sequence_config=host.sequence_config, saved_active_input_channels=(0, 2),
+        analysis_config={"display_sequence": ["声压级"], "声压级": {
+            "type": "SPL", "analysis_channels": [0], "weighting": "Z",
+            "show_overall_spl": True, "limit_checked": False}},
+    )
+    events = Queue()
+    analysis_worker_main(request, events)
+    kind, result = list(events.queue)[-1]
+    assert kind == "result" and result.execution_status == "分析完成"
+    assert np.isfinite(result.instance_results[0].metrics["overall_spl"])
+    assert not list(tmp_path.rglob("*.mp4"))
