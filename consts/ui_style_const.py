@@ -1585,9 +1585,13 @@ QWidget#motorInformationSummaryPanel QLabel#summaryTitle {
 QWidget#motorInformationSummaryPanel QLabel#summaryDate {
     font-size: 8.25pt;
 }
-QWidget#motorInformationSummaryPanel QPushButton#summaryDetails:disabled {
+QWidget#motorInformationSummaryPanel QPushButton#summaryDetails {
     color: #246bed;
     min-height: 24px;
+}
+QWidget#motorInformationSummaryPanel QPushButton#summaryDetails:hover,
+QWidget#motorInformationSummaryPanel QPushButton#summaryDetails:focus {
+    text-decoration: underline;
 }
 QWidget#motorInformationSummaryPanel QLabel#summaryTotal,
 QWidget#motorInformationSummaryPanel QLabel#summaryRate {

@@ -9,7 +9,7 @@ from ui.sequence.motor_station_test_panel import MotorStationTestPanel
 
 
 class MotorDashboardPanel(QWidget):
-    """Own independent station and template-summary components for each instance."""
+    """Own independent station and daily-summary components for each instance."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
