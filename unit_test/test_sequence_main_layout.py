@@ -419,7 +419,7 @@ class TestSequenceMainLayout(unittest.TestCase):
         widget._refresh_waveform_condition_metadata()
         panel = widget.channel_workspace
         panel.all_subwindows()[0].set_data([0, 1], [0.5, -0.5])
-        widget.left_panel.result_panel.select_condition("second")
+        widget.left_panel.condition_state.select_condition("second")
         self.assertIn("第二档", panel.current_condition_label.text())
         self.assertIn("600秒", panel.duration_label.text())
         self.assertIn("FFT", panel.test_items_label.text())
@@ -472,7 +472,7 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertIsInstance(left_sidebar_splitter, QSplitter)
         self.assertEqual(left_sidebar_splitter.orientation(), Qt.Vertical)
         self.assertEqual(left_sidebar_splitter.count(), 2)
-        self.assertIs(left_sidebar_splitter.widget(0), widget.left_panel.result_panel)
+        self.assertIs(left_sidebar_splitter.widget(0), widget.left_panel.dashboard_panel)
         self.assertIs(left_sidebar_splitter.widget(1), widget.left_panel.video_monitor_panel)
         self.assertIs(main_splitter.widget(1), widget.channel_workspace)
         self.assertIsInstance(widget.channel_workspace, AnalysisWaveformPanel)
@@ -487,7 +487,7 @@ class TestSequenceMainLayout(unittest.TestCase):
 
         self.assertGreaterEqual(widget.channel_workspace.width(), 900)
         self.assertGreaterEqual(widget.channel_workspace.height(), 700)
-        self.assertGreater(widget.channel_workspace.width(), widget.left_panel.result_panel.width())
+        self.assertGreater(widget.channel_workspace.width(), widget.left_panel.dashboard_panel.width())
         self.assertFalse(any(type(child).__name__ == "RecentSessionPanel" for child in widget.findChildren(QWidget)))
 
     def test_threshold_analyses_can_output_ok_ng(self):
@@ -1370,17 +1370,14 @@ class TestSequenceMainLayout(unittest.TestCase):
         widget.show()
         self.app.processEvents()
 
-        result_card = widget.left_panel.result_panel.findChild(MotorSectionCard)
+        dashboard = widget.left_panel.dashboard_panel
         video_card = widget.left_panel.video_monitor_panel.findChild(MotorSectionCard)
-
-        self.assertIsNotNone(result_card)
         self.assertIsNotNone(video_card)
-        self.assertEqual(result_card.height(), widget.left_panel.result_panel.height())
         self.assertEqual(video_card.height(), widget.left_panel.video_monitor_panel.height())
-
-        task_header = widget.left_panel.result_panel.findChild(QWidget, "testTaskHeader")
-        self.assertIsNotNone(task_header)
-        self.assertEqual(task_header.height(), widget.left_panel.video_monitor_panel.header.height())
+        self.assertTrue(dashboard.summary_panel.isVisible())
+        self.assertEqual(widget.left_panel.get_station_count(), 0)
+        self.assertGreater(dashboard.station_panel.height(), 0)
+        self.assertLess(dashboard.station_panel.geometry().bottom(), dashboard.summary_panel.y())
 
     def test_default_main_splitter_ratio_balances_left_sidebar(self):
         widget = _RealisticSequenceWidget()
@@ -1449,6 +1446,10 @@ class TestSequenceMainLayout(unittest.TestCase):
                     {"file": "4条波形.json", "project_name": "4条波形"},
                 ],
             })
+            # Registry entries are visible only when their product files exist.
+            for name in ("2条波形.json", "4条波形.json"):
+                with open(os.path.join(folder, name), "w", encoding="utf-8") as stream:
+                    stream.write("{}")
             widget = _DummyProductProgramWidget(manager)
             widget.add_file_to_using_file_combobox()
             combo = widget.using_file_combobox
@@ -1466,6 +1467,12 @@ class TestSequenceMainLayout(unittest.TestCase):
                 ],
             }
         )
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        manager.program_dir = directory.name
+        for name in ("a.json", "b.json"):
+            with open(os.path.join(directory.name, name), "w", encoding="utf-8") as stream:
+                stream.write("{}")
         widget = _DummyProductProgramWidget(manager)
         emitted_texts = []
         widget.using_file_combobox.currentTextChanged.connect(
@@ -1777,6 +1784,10 @@ class TestSequenceMainLayout(unittest.TestCase):
 
         class _InvalidRecordingHost:
             _serial_product_condition_executing = True
+
+            def _recover_current_product_recording(self, reason):
+                # This scenario exercises the serial whole-round fallback.
+                return False
 
             def _on_serial_product_runtime_error(self, reason):
                 calls.append(reason)

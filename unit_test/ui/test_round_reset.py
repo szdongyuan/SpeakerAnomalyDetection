@@ -681,7 +681,15 @@ def test_reset_task_panel_returns_to_first_port_and_clears_details(
     host.product_test_condition_configs = conditions
     left_panel = MotorDetectionLeftPanel(None, condition_configs=conditions)
     host.left_panel = left_panel
-    panel = left_panel.result_panel
+    panel = left_panel.condition_state
+    left_panel.set_station_count(1)
+    left_panel.set_station_row_count(1, 1)
+    left_panel.set_station_row(1, 0, ["external", 99, 88])
+    left_panel.set_station_results(1, "NG", "OK")
+    from PyQt5.QtWidgets import QPushButton
+    station_header = left_panel.station_panel.findChild(QPushButton, "stationHeader1")
+    station_header.click()
+    station_before = left_panel.get_station_data(1)
     left_panel.set_channels(list(range(5)))
     left_panel.set_current_round(7)
     try:
@@ -692,21 +700,17 @@ def test_reset_task_panel_returns_to_first_port_and_clears_details(
         ])
         panel.set_condition_result(f"{port}-2", "OK")
         panel.rows[f"{port}-2"]["runtime_details"] = {"SPL": "old result"}
-        panel.select_condition(f"{port}-2", show_detail=True)
-        assert panel.current_port == port
-        assert not panel.detail_frame.isHidden()
+        panel.select_condition(f"{port}-2")
+        assert panel.selected_key == f"{port}-2"
         host._confirm_round_reset = Mock(return_value=delete_data)
         host.toolsbar.reset_round_button.click()
 
-        assert panel.current_port_combo.currentText() == "A口"
-        assert panel.port_index_label.text() == "第1/3个"
         assert panel.selected_key == "A口-1"
         assert panel.viewed_key == ""
-        assert panel.detail_frame.isHidden()
-        assert panel.progress_label.text() == "档位进度：0/2"
-        assert panel.port_result_value.text() == "待判定"
-        assert panel.round_result_value.text() == "待判定"
-        assert panel.stage_label.text() == "等待开始"
+        assert panel.final_result == "待判定"
+        assert panel.stage_text == "等待开始"
+        assert left_panel.get_station_data(1) == station_before
+        assert station_header.isChecked()
         for row in panel.rows.values():
             assert row["result"] == "待检测"
             assert row["completed_channels"] == 0
@@ -714,12 +718,12 @@ def test_reset_task_panel_returns_to_first_port_and_clears_details(
             assert row["runtime_details"] == {}
         assert host.toolsbar.current_round_spinbox.value() == 7
         assert Path(info["file_path"]).exists() is (not delete_data)
-        panel.setFont(QFont("Microsoft YaHei", 9))
+        left_panel.setFont(QFont("Microsoft YaHei", 9))
         left_panel.resize(570, 950)
         left_panel.show()
         QApplication.processEvents()
         screenshot = tmp_path / "task-panel-after-reset.png"
-        assert panel.grab().save(str(screenshot))
+        assert left_panel.dashboard_panel.grab().save(str(screenshot))
         print(f"Reset panel screenshot: {screenshot}")
     finally:
         left_panel.close()
@@ -761,7 +765,7 @@ def test_successful_analysis_artifacts_are_tracked_even_if_task_later_fails(host
 
 
 def poll_analysis(host, condition_key):
-    host.left_panel.selected_condition_key = condition_key
+    host._get_active_product_condition_key = lambda: condition_key
     host._analysis_process_service = SimpleNamespace(active=False, poll=lambda: ([], []))
     host._analysis_active_request = None
     host._poll_analysis_process_runtime()

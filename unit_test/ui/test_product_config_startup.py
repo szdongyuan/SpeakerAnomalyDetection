@@ -56,6 +56,7 @@ def test_startup_prepares_once_before_widgets_and_registers_after_ui(
         expected = {"valid": "ready", "empty": "empty", "invalid": "failed", "missing": "failed"}[configuration]
         assert window._product_config_refresh_state == expected
         assert window._pending_initial_product_snapshot is None
+        assert window.left_panel.get_station_count() == 0
         assert read.call_count == (0 if configuration == "empty" else 1)
         if configuration == "valid":
             assert len(window.product_test_condition_configs) == 4
@@ -64,7 +65,7 @@ def test_startup_prepares_once_before_widgets_and_registers_after_ui(
             window.left_panel.set_condition_result(key, "NG")
             window.on_product_test_program_updated()
             assert window._applied_product_snapshot is snapshot
-            assert window.left_panel.result_panel.rows[key]["result"] == "NG"
+            assert window.left_panel.condition_state.rows[key]["result"] == "NG"
         else:
             assert window.product_test_condition_configs == []
             assert not window.player_btn.isEnabled()
@@ -75,6 +76,8 @@ def test_startup_prepares_once_before_widgets_and_registers_after_ui(
             assert window.using_file_combobox.placeholderText() == "暂无可用配置"
         window.show()
         QApplication.processEvents()
+        assert window.left_panel.dashboard_panel.summary_panel.isVisible()
+        assert window.left_panel.get_station_count() == 0
         if configuration == "valid":
             assert warnings == []
         else:

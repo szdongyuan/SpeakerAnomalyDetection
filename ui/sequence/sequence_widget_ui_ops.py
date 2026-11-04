@@ -262,8 +262,6 @@ class SequenceWidgetUiOpsMixin:
         # 扫码键盘楔入模式：信号交给 BarcodeRouter 处理
         self.lineedit_s_or_n.returnPressed.connect(self._barcode_router.on_barcode_return_pressed)
         self.lineedit_s_or_n.textChanged.connect(self._barcode_router.on_barcode_text_changed)
-        if getattr(self, "left_panel", None) is not None:
-            self.lineedit_s_or_n.textChanged.connect(self.left_panel.set_current_barcode)
 
         self.barcode_scanner_box.clicked.connect(self.clicked_scanner)
         self.serial_trigger_btn.clicked.connect(self.on_serial_trigger_btn_clicked)
@@ -348,8 +346,6 @@ class SequenceWidgetUiOpsMixin:
         self.lineedit_count.setText("")
         self.lineedit_count.setReadOnly(True)
 
-        if getattr(self, "left_panel", None) is not None:
-            self.left_panel.set_current_barcode(self.lineedit_s_or_n.text())
 
     @property
     def player_btn(self):

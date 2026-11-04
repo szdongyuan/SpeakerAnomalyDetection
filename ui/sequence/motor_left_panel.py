@@ -2,7 +2,8 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QFrame, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from consts import ui_style_const
-from ui.sequence.motor_result_panel import MotorResultPanel
+from ui.sequence.motor_dashboard_panel import MotorDashboardPanel
+from ui.sequence.product_condition_state import ProductConditionState
 from ui.sequence.motor_video_monitor_panel import MotorVideoMonitorPanel
 
 
@@ -12,7 +13,7 @@ class MotorDetectionLeftPanel(QWidget):
     """
     Composite left sidebar for motor detection mode.
 
-    It delegates the top test-result area and the bottom video-monitor area to two
+    It delegates the top station dashboard and the bottom video-monitor area to two
     dedicated sub-widgets so later business wiring can evolve independently.
     """
 
@@ -25,16 +26,14 @@ class MotorDetectionLeftPanel(QWidget):
         self.count_board = summary_widget
         if self.count_board is not None:
             self.count_board.hide()
-        self.result_panel = MotorResultPanel(
+        self.condition_state = ProductConditionState(
             self, condition_configs=condition_configs, queue_catalog=queue_catalog
         )
-        self.result_panel.condition_selected.connect(self.condition_selected.emit)
+        self.condition_state.condition_selected.connect(self.condition_selected.emit)
+        self.dashboard_panel = MotorDashboardPanel(self)
+        self.station_panel = self.dashboard_panel.station_panel
         self.video_monitor_panel = MotorVideoMonitorPanel(self)
         self._init_ui()
-
-    @property
-    def selected_condition_key(self):
-        return self.result_panel.viewed_key
 
     def _init_ui(self):
         # The two inner sections are normally moved into outer QSplitters
@@ -46,7 +45,7 @@ class MotorDetectionLeftPanel(QWidget):
 
         self.content_widget = QWidget(self)
         self.content_layout = QVBoxLayout()
-        self.content_layout.addWidget(self.result_panel)
+        self.content_layout.addWidget(self.dashboard_panel)
         self.content_layout.addWidget(self.video_monitor_panel)
         self.content_layout.addStretch(1)
         self.content_layout.setContentsMargins(0, 0, 6, 0)
@@ -69,7 +68,7 @@ class MotorDetectionLeftPanel(QWidget):
 
     def take_split_sections(self):
         return (
-            self._detach_section_widget(self.result_panel),
+            self._detach_section_widget(self.dashboard_panel),
             self._detach_section_widget(self.video_monitor_panel),
         )
 
@@ -87,64 +86,76 @@ class MotorDetectionLeftPanel(QWidget):
         return widget
 
     def reset_result_panel(self):
-        self.result_panel.reset()
-
-    def set_current_barcode(self, barcode: str):
-        # Kept for compatibility with the existing workflow, but barcode is no
-        # longer displayed in the left industrial panel.
-        return None
-
-    def set_current_timestamp(self, timestamp_text: str):
-        # Kept for compatibility with the existing workflow, but timestamp is no
-        # longer displayed in the left industrial panel.
-        return None
+        """Reset existing test-round business state independently of the dashboard."""
+        self.condition_state.reset()
 
     def set_current_stage(self, stage_text: str, tone: str = "pending"):
-        self.result_panel.set_current_stage(stage_text, tone=tone)
+        self.condition_state.set_current_stage(stage_text, tone=tone)
 
     def clear_current_stage(self):
-        self.result_panel.clear_current_stage()
+        self.condition_state.clear_current_stage()
 
     def set_forward_result(self, result_text: str, tone: str = None):
-        self.result_panel.set_forward_result(result_text, tone=tone)
+        self.condition_state.set_forward_result(result_text, tone=tone)
 
     def set_reverse_result(self, result_text: str, tone: str = None):
-        self.result_panel.set_reverse_result(result_text, tone=tone)
+        self.condition_state.set_reverse_result(result_text, tone=tone)
 
     def set_final_result(self, result_text: str, tone: str = None):
-        self.result_panel.set_final_result(result_text, tone=tone)
+        self.condition_state.set_final_result(result_text, tone=tone)
 
     def get_automatic_round_result(self):
-        return self.result_panel.get_automatic_round_result()
-
-
+        return self.condition_state.get_automatic_round_result()
 
     def set_condition_result(self, condition, result_text: str, tone: str = None):
-        return self.result_panel.set_condition_result(condition, result_text, tone=tone)
-
+        return self.condition_state.set_condition_result(condition, result_text, tone=tone)
 
     def set_condition_analysis_details(self, condition, detail_values):
-        return self.result_panel.set_condition_analysis_details(condition, detail_values)
+        return self.condition_state.set_condition_analysis_details(condition, detail_values)
 
     def set_condition_channel_results(
         self, condition, channel_results, *, restore_channels=False,
         restored_analysis_channels=None, restored_analysis_column_channels=None,
     ):
-        return self.result_panel.set_condition_channel_results(
+        return self.condition_state.set_condition_channel_results(
             condition, channel_results, restore_channels=restore_channels,
             restored_analysis_channels=restored_analysis_channels,
             restored_analysis_column_channels=restored_analysis_column_channels,
         )
 
     def set_channels(self, channels):
-        self.result_panel.set_channels(channels)
+        self.condition_state.set_channels(channels)
 
     def set_current_round(self, round_number):
-        self.result_panel.set_current_round(round_number)
+        self.condition_state.set_current_round(round_number)
 
     def set_condition_configs(self, condition_configs, *, queue_catalog=None):
-        self.result_panel.set_condition_configs(condition_configs, queue_catalog=queue_catalog)
+        self.condition_state.set_condition_configs(condition_configs, queue_catalog=queue_catalog)
 
     def refresh_condition_configs(self, condition_configs, *, queue_catalog=None, preserve_results=False):
-        return self.result_panel.refresh_condition_configs(
+        return self.condition_state.refresh_condition_configs(
             condition_configs, queue_catalog=queue_catalog, preserve_results=preserve_results)
+
+    def set_station_count(self, count):
+        return self.station_panel.set_station_count(count)
+
+    def set_station_row_count(self, station_id, count):
+        return self.station_panel.set_station_row_count(station_id, count)
+
+    def set_station_row(self, station_id, row, values):
+        return self.station_panel.set_station_row(station_id, row, values)
+
+    def set_station_column(self, station_id, column, values):
+        return self.station_panel.set_station_column(station_id, column, values)
+
+    def set_station_cell(self, station_id, row, column, value):
+        return self.station_panel.set_station_cell(station_id, row, column, value)
+
+    def set_station_results(self, station_id, forward, reverse):
+        return self.station_panel.set_station_results(station_id, forward, reverse)
+
+    def get_station_count(self):
+        return self.station_panel.get_station_count()
+
+    def get_station_data(self, station_id):
+        return self.station_panel.get_station_data(station_id)

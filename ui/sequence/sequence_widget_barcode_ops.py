@@ -346,7 +346,6 @@ class SequenceWidgetBarcodeOpsMixin:
         if callable(clear_all_direction_waveforms):
             clear_all_direction_waveforms()
         if getattr(self, "left_panel", None) is not None:
-            self.left_panel.set_current_timestamp(self._direction_cycle_started_at)
             self.left_panel.set_forward_result("待检测", tone="pending")
             self.left_panel.set_reverse_result("待检测", tone="pending")
             self.left_panel.set_final_result("待判定", tone="pending")
