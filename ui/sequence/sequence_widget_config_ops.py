@@ -210,7 +210,7 @@ class SequenceWidgetConfigOpsMixin:
             )
             self._refresh_waveform_condition_metadata()
             self._apply_condition_mode_to_waveforms()
-            self._sync_waveform_condition_from_left(self.left_panel.selected_condition_key)
+            self._sync_waveform_condition_from_left(self.left_panel.condition_state.selected_key)
             if snapshot.active_file:
                 serial_result = self.refresh_serial_product_trigger_runtime()
                 if not serial_result["ok"]:

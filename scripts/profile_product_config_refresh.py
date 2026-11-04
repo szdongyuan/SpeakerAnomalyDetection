@@ -2,6 +2,7 @@
 
 Run with the project Python: scripts/profile_product_config_refresh.py --output tmp/refresh-profile
 Requires the test environment because the integration host isolates hardware via mocks.
+Panel reset timing measures the retained condition business state.
 """
 
 import argparse
@@ -71,7 +72,7 @@ def run_size(app, output, size, repeats, baseline_path):
     flush_events(app)
     result = {"conditions": size, "runs": {}}
     result["runs"]["panel_reset"] = [
-        measure(app, host.left_panel.result_panel.reset) for _ in range(repeats + 1)
+        measure(app, host.left_panel.reset_result_panel) for _ in range(repeats + 1)
     ]
     if baseline_path:
         spec = importlib.util.spec_from_file_location("baseline_panel", baseline_path)

@@ -155,8 +155,8 @@ def test_hardware_channels_refresh_saved_queue_and_live_product_without_opening_
     LoadUiConfig.save_sequence_config_to_json(saved, str(path))
     host.on_sequence_config_updated()
     assert host.analysis_config["SPL"]["analysis_channels"] == [0, 2]
-    for row in host.left_panel.result_panel.rows.values():
-        assert row["labels"]["progress"].text() == "通道判定：0/2"
+    for row in host.left_panel.condition_state.rows.values():
+        assert (row["completed_channels"], row["channel_count"]) == (0, 2)
     assert host.channel_workspace._channel_indices == [0, 1, 2, 3, 4]
 
 
@@ -191,7 +191,7 @@ def test_hardware_sync_preserves_active_round_results_and_pending_task(refresh_h
     host._analysis_active_request = request
     host._analysis_has_pending_tasks = lambda: True
     host._product_progress_config_signature = Mock(return_value="new-channel-signature")
-    rows = host.left_panel.result_panel.rows
+    rows = host.left_panel.condition_state.rows
     host.left_panel.set_condition_channel_results(first, [{"raw_channel": 0, "SPL": "NG", "result": "NG"}])
     wave = host.data_struct.store_wave_data
     cache = host._condition_record_cache
@@ -209,8 +209,8 @@ def test_hardware_sync_preserves_active_round_results_and_pending_task(refresh_h
     assert host._condition_record_cache is cache
     assert host.data_struct.store_wave_data is wave
     assert host.recent_test_sessions == ["old-session"]
-    assert host.left_panel.result_panel.rows is rows
-    assert rows[first]["labels"]["progress"].text() == "通道判定：1/1"
+    assert host.left_panel.condition_state.rows is rows
+    assert (rows[first]["completed_channels"], rows[first]["channel_count"]) == (1, 1)
     assert rows[host.product_test_condition_configs[1]["key"]]["channel_count"] == 3
     assert host._product_progress_round_signature == "new-channel-signature"
 
@@ -242,7 +242,7 @@ def test_hardware_sync_does_not_claim_success_when_panel_refresh_fails(refresh_h
 
 def assert_old_result(host, old_snapshot, old_rows, old_wave):
     assert host._applied_product_snapshot is old_snapshot
-    assert host.left_panel.result_panel.rows is old_rows
+    assert host.left_panel.condition_state.rows is old_rows
     assert next(iter(old_rows.values()))["result"] == "NG"
     assert host.data_struct.store_wave_data is old_wave
     assert host.recent_test_sessions == ["old-session"]
@@ -253,7 +253,7 @@ def assert_old_result(host, old_snapshot, old_rows, old_wave):
 def test_save_unchanged_a_or_b_keeps_a_results_and_waveform(refresh_host, save_other):
     host, project, _, warnings = refresh_host
     old = host._applied_product_snapshot
-    rows = host.left_panel.result_panel.rows
+    rows = host.left_panel.condition_state.rows
     wave = host.data_struct.store_wave_data
     if save_other:
         save_b(host, project)
@@ -279,7 +279,7 @@ def test_save_as_refreshes_choices_without_changing_runtime(refresh_host, monkey
         assert manager.save_registry(registry)
         host.on_product_test_program_updated()
     snapshot = host._applied_product_snapshot
-    rows = host.left_panel.result_panel.rows
+    rows = host.left_panel.condition_state.rows
     wave = host.data_struct.store_wave_data
     original_bytes = (Path(manager.program_dir) / "A.json").read_bytes()
     dialog = ProductTestProjectConfigDialog(manager)
@@ -304,7 +304,7 @@ def test_save_as_refreshes_choices_without_changing_runtime(refresh_host, monkey
         assert host.using_file_combobox.count() == 2
         assert host.using_file_combobox.findData("555.json") >= 0
         assert host._applied_product_snapshot is snapshot
-        assert host.left_panel.result_panel.rows is rows
+        assert host.left_panel.condition_state.rows is rows
         assert host.data_struct.store_wave_data is wave
         if active:
             assert_old_result(host, snapshot, rows, wave)
@@ -333,7 +333,7 @@ def test_changed_a_resets_once_and_keeps_saved_files(refresh_host, tmp_path):
     assert host.product_program_manager.save_project("A.json", project)[0]
     host.on_product_test_program_updated()
     assert host._product_config_refresh_state == "ready"
-    assert all(row["result"] == "待检测" for row in host.left_panel.result_panel.rows.values())
+    assert all(row["result"] == "待检测" for row in host.left_panel.condition_state.rows.values())
     assert host.data_struct.store_wave_data is None
     assert host.channel_workspace._audio_paths == {}
     assert host.channel_workspace.status_label.text() == "同步待机"
@@ -398,7 +398,7 @@ def test_many_configuration_errors_show_only_first_problem(refresh_host, action)
     assert len(manager.validate_project(target, target_file)["use_errors"]) == 200
     registry_before = Path(manager.registry_path).read_bytes()
     snapshot = host._applied_product_snapshot
-    rows = host.left_panel.result_panel.rows
+    rows = host.left_panel.condition_state.rows
     wave = host.data_struct.store_wave_data
 
     if action == "switch":
@@ -440,7 +440,7 @@ def test_queue_callback_compares_before_mutating_runtime(refresh_host):
     old_sequence = host.sequence_config
     old_analysis = host.analysis_config
     old = host._applied_product_snapshot
-    rows = host.left_panel.result_panel.rows
+    rows = host.left_panel.condition_state.rows
     wave = host.data_struct.store_wave_data
     host.on_sequence_config_updated()
     assert host.sequence_config is old_sequence
@@ -522,7 +522,7 @@ def test_startup_baseline_does_not_reset_restored_results(refresh_host):
     host, _, _, _ = refresh_host
     old = host._applied_product_snapshot
     host.on_product_test_program_updated()
-    assert_old_result(host, old, host.left_panel.result_panel.rows, host.data_struct.store_wave_data)
+    assert_old_result(host, old, host.left_panel.condition_state.rows, host.data_struct.store_wave_data)
 
 
 def test_combobox_refresh_preserves_signal_block_state(refresh_host):
@@ -537,7 +537,7 @@ def test_real_dialog_unchanged_save_keeps_legacy_defaults_and_results(refresh_ho
 
     host, _, _, warnings = refresh_host
     snapshot = host._applied_product_snapshot
-    rows, wave = host.left_panel.result_panel.rows, host.data_struct.store_wave_data
+    rows, wave = host.left_panel.condition_state.rows, host.data_struct.store_wave_data
     monkeypatch.setattr(config_ops_module.QMessageBox, "information", Mock())
     dialog = ProductTestProjectConfigDialog(manager=host.product_program_manager)
     dialog.programs_changed.connect(host.on_product_test_program_updated)
@@ -576,7 +576,7 @@ def test_busy_switch_preserves_a_until_user_retries_when_idle(
     old_registry_bytes = registry_path.read_bytes()
     old_registry = deepcopy(host.product_program_registry)
     snapshot = host._applied_product_snapshot
-    rows = host.left_panel.result_panel.rows
+    rows = host.left_panel.condition_state.rows
     wave = host.data_struct.store_wave_data
     old_sequence = host.sequence_config
     save_registry = Mock(wraps=manager.save_registry)
@@ -634,8 +634,8 @@ def test_deleting_active_a_does_not_silently_select_remaining_b(refresh_host):
     assert host.using_file_combobox.placeholderText() == "请选择配置"
     assert host.using_file_combobox.count() == 1
     assert host.using_file_combobox.itemData(0) == "B.json"
-    assert host.left_panel.result_panel.rows == {}
-    assert host.left_panel.result_panel.selected_key == ""
+    assert host.left_panel.condition_state.rows == {}
+    assert host.left_panel.condition_state.selected_key == ""
     assert host.data_struct.store_wave_data is None
     assert not host.player_btn.isEnabled()
     host.hw_manager.stop_serial_discrete_input_listener.assert_called_once()
@@ -794,7 +794,7 @@ def test_empty_startup_first_saved_configuration_becomes_usable(refresh_host):
 def test_late_change_notification_cannot_reset_a_busy_round(refresh_host, busy_flag):
     host, project, _, warnings = refresh_host
     old = host._applied_product_snapshot
-    rows, wave = host.left_panel.result_panel.rows, host.data_struct.store_wave_data
+    rows, wave = host.left_panel.condition_state.rows, host.data_struct.store_wave_data
     project["export_raw_audio_csv"] = True
     assert host.product_program_manager.save_project("A.json", project)[0]
     setattr(host, busy_flag, True)
@@ -845,7 +845,7 @@ def test_read_failure_keeps_test_mode_and_results_with_real_count_board(refresh_
     host._last_recent_session_mode = "test"
     board.register_mode_change_callback(host._on_recent_session_mode_changed)
     old = host._applied_product_snapshot
-    rows, wave = host.left_panel.result_panel.rows, host.data_struct.store_wave_data
+    rows, wave = host.left_panel.condition_state.rows, host.data_struct.store_wave_data
     (Path(host.product_program_manager.program_dir) / "A.json").write_text("{", encoding="utf-8")
     host.on_product_test_program_updated()
     assert host._product_config_refresh_state == "failed"
@@ -1335,3 +1335,34 @@ def test_missing_current_product_recovery_flow(refresh_host, monkeypatch, action
         dialog._dirty = False
         dialog.close()
         dialog.deleteLater()
+
+
+@pytest.mark.parametrize("mutation", ["configuration", "hardware"])
+@pytest.mark.parametrize("configured", [False, True])
+def test_product_refresh_keeps_caller_station_state_isolated(refresh_host, mutation, configured):
+    host, project, _, warnings = refresh_host
+    left = host.left_panel
+    if configured:
+        from PyQt5.QtWidgets import QPushButton
+        left.set_station_count(1)
+        left.set_station_row_count(1, 1)
+        left.set_station_row(1, 0, ["caller", 10.5, 20.5])
+        left.set_station_results(1, "NG", "OK")
+        header = left.station_panel.findChild(QPushButton, "stationHeader1")
+        header.click()
+        before = left.get_station_data(1)
+    if mutation == "configuration":
+        project["test_groups"][0]["test_conditions"][0]["input_voltage"] = "12"
+        assert host.product_program_manager.save_project("A.json", project)[0]
+        host.on_product_test_program_updated()
+        assert host._product_config_refresh_state == "ready"
+        assert all(row["result"] == "待检测" for row in left.condition_state.rows.values())
+    else:
+        host.mic_channels = [0, 2, 4]
+        assert host.synchronize_hardware_analysis_channels()
+        assert host.analysis_config["SPL"]["analysis_channels"] == [0, 2, 4]
+    assert warnings == []
+    assert left.get_station_count() == int(configured)
+    if configured:
+        assert left.get_station_data(1) == before
+        assert header.isChecked()

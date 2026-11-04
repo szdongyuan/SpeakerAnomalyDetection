@@ -842,12 +842,6 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         ]
 
     def _selected_analysis_condition_key(self):
-        left_panel = getattr(self, "left_panel", None)
-        selected = str(
-            getattr(left_panel, "selected_condition_key", "") or ""
-        ).strip()
-        if selected:
-            return selected
         active = self._get_active_product_condition_key()
         if active:
             return active

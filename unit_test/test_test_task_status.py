@@ -9,7 +9,7 @@ from base.analysis_process_protocol import (
     AnalysisTaskResult,
     build_runtime_key,
 )
-from ui.sequence.motor_result_panel import MotorResultPanel
+from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
 from ui.sequence.sequence_widget_analysis_process_ops import (
     SequenceWidgetAnalysisProcessOpsMixin,
 )
@@ -23,30 +23,40 @@ def host():
     for index, condition in enumerate(widget.product_test_condition_configs):
         condition["group_name"] = "A口" if index < 2 else "B口"
         condition["display_name"] = f"{condition['group_name']} / {condition['condition_name']}"
-    widget.left_panel = MotorResultPanel(
-        condition_configs=widget.product_test_condition_configs
+    widget.left_panel = MotorDetectionLeftPanel(
+        None, condition_configs=widget.product_test_condition_configs
     )
-    widget.left_panel.reset_result_panel = widget.left_panel.reset
     widget.left_panel.set_channels(list(range(5)))
     widget.recorded_signal_info = {"labels": "not_labeled"}
     widget._capture_analysis_report_failure = Mock()
+    widget.left_panel.set_station_count(1)
+    widget.left_panel.set_station_row_count(1, 1)
+    widget.left_panel.set_station_row(1, 0, ["external", 123, 456])
+    widget.left_panel.set_station_results(1, "NG", "OK")
+    from PyQt5.QtWidgets import QPushButton
+    header = widget.left_panel.station_panel.findChild(QPushButton, "stationHeader1")
+    header.click()
+    station_before = widget.left_panel.get_station_data(1)
     yield widget
+    assert widget.left_panel.get_station_count() == 1
+    assert widget.left_panel.get_station_data(1) == station_before
+    assert header.isChecked()
     widget.left_panel.close()
     app.processEvents()
 
 
 def row_text(host, key="q6000"):
-    return host.left_panel.rows[key]["labels"]["result"].text()
+    return host.left_panel.condition_state.rows[key]["result"]
 
 
 def test_recording_title_claims_started_only_after_process_callback(host):
     host.on_clicked_player_btn()
     assert row_text(host) == "待检测"
-    assert host.left_panel.stage_label.text() == "等待开始"
+    assert host.left_panel.condition_state.stage_text == "等待开始"
 
     host._append_recent_session_from_current_run = Mock()
     host._begin_recent_session_for_current_run()
-    assert host.left_panel.stage_label.text() == "等待开始"
+    assert host.left_panel.condition_state.stage_text == "等待开始"
     assert row_text(host) == "待检测"
 
     host.default_logger = Mock()
@@ -57,11 +67,11 @@ def test_recording_title_claims_started_only_after_process_callback(host):
     )
     host._on_process_recording_started(session)
 
-    assert host.left_panel.stage_label.text() == ""
+    assert host.left_panel.condition_state.stage_text == ""
     assert row_text(host) == "采集中"
     assert row_text(host, "q7000") == "待检测"
-    assert host.left_panel.port_result_value.text() == "待判定"
-    assert host.left_panel.round_result_value.text() == "待判定"
+    assert host.left_panel.condition_state.get_automatic_round_result()[0] == "待判定"
+    assert host.left_panel.condition_state.final_result == "待判定"
 
 
 def test_next_recording_keeps_previous_automatic_analysis_in_task_title(host):
@@ -78,7 +88,7 @@ def test_next_recording_keeps_previous_automatic_analysis_in_task_title(host):
 
     host._on_process_recording_started(session)
 
-    assert host.left_panel.stage_label.text() == "分析中"
+    assert host.left_panel.condition_state.stage_text == "分析中"
     assert row_text(host, "q7000") == "采集中"
 
 
@@ -90,10 +100,10 @@ def test_recorded_condition_waits_for_judgement_without_claiming_five_channels(h
     host._advance_manual_product_condition_cycle_after_recording()
 
     assert row_text(host) == "待判定"
-    assert host.left_panel.stage_label.text() == "等待下一档位"
-    assert host.left_panel.rows["q6000"]["labels"]["progress"].text() == "通道判定：0/5"
-    assert host.left_panel.port_result_value.text() == "待判定"
-    assert host.left_panel.round_result_value.text() == "待判定"
+    assert host.left_panel.condition_state.stage_text == "等待下一档位"
+    assert (host.left_panel.condition_state.rows["q6000"]["completed_channels"], host.left_panel.condition_state.rows["q6000"]["channel_count"]) == (0, 5)
+    assert host.left_panel.condition_state.get_automatic_round_result()[0] == "待判定"
+    assert host.left_panel.condition_state.final_result == "待判定"
 
 
 def test_active_automatic_analysis_is_not_replaced_by_waiting_stage(host):
@@ -105,7 +115,7 @@ def test_active_automatic_analysis_is_not_replaced_by_waiting_stage(host):
 
     host._advance_manual_product_condition_cycle_after_recording()
 
-    assert host.left_panel.stage_label.text() == "分析中"
+    assert host.left_panel.condition_state.stage_text == "分析中"
 
 
 def test_saved_placeholder_does_not_overwrite_active_recording(host):
@@ -126,7 +136,7 @@ def test_analysis_phase_survives_session_refresh_then_returns_to_result(host, mo
     host._manual_product_group_raw_results = Mock(return_value={"q6000": "not_labeled"})
 
     def analyze(**_kwargs):
-        assert host.left_panel.stage_label.text() == "分析中"
+        assert host.left_panel.condition_state.stage_text == "分析中"
         assert row_text(host) == "分析中"
         host._refresh_manual_product_condition_results_from_group(host._manual_product_condition_group_id)
         assert row_text(host) == "分析中"
@@ -135,7 +145,7 @@ def test_analysis_phase_survives_session_refresh_then_returns_to_result(host, mo
     host._run_analysis_impl = analyze
     assert host.run(show_windows=False) == "analysis-return-value"
     assert row_text(host) == "未判定"
-    assert host.left_panel.stage_label.text() == "等待下一档位"
+    assert host.left_panel.condition_state.stage_text == "等待下一档位"
     assert not host._manual_product_analysis_key
 
 
@@ -146,9 +156,9 @@ def test_analysis_failure_is_not_an_ng_judgement_and_can_be_retried(host):
     with pytest.raises(ValueError, match="test failure"):
         host.run(show_windows=False)
     assert row_text(host) == "分析失败"
-    assert host.left_panel.stage_label.text() == "测试异常"
-    assert host.left_panel.port_result_value.text() == "待判定"
-    assert host.left_panel.progress_label.text() == "档位进度：0/2"
+    assert host.left_panel.condition_state.stage_text == "测试异常"
+    assert host.left_panel.condition_state.get_automatic_round_result()[0] == "待判定"
+    assert sum(row["analysis_completed"] for row in host.left_panel.condition_state.rows.values()) == 0
     assert not host._manual_product_analysis_key
     assert host._active_product_condition_key == "q6000"
     host._run_analysis_impl = Mock(return_value=None)
@@ -158,11 +168,11 @@ def test_analysis_failure_is_not_an_ng_judgement_and_can_be_retried(host):
 
 def test_history_analysis_does_not_change_live_task_status(host):
     host.on_clicked_player_btn()
-    before = (host.left_panel.stage_label.text(), row_text(host))
+    before = (host.left_panel.condition_state.stage_text, row_text(host))
     host.count_board.mode = "view"
     host._run_analysis_impl = Mock()
     host.run(show_windows=True)
-    assert (host.left_panel.stage_label.text(), row_text(host)) == before
+    assert (host.left_panel.condition_state.stage_text, row_text(host)) == before
 
 
 @pytest.mark.parametrize("result", ["OK", "NG", "not_labeled"])
@@ -174,15 +184,15 @@ def test_round_completion_keeps_flow_and_verdict_separate(host, result):
         if result in ("OK", "NG"):
             host._update_manual_product_condition_result_after_analysis(result)
         host._advance_manual_product_condition_cycle_after_recording()
-    assert host.left_panel.round_result_value.text() == expected
-    assert host.left_panel.stage_label.text() == "本轮完成"
+    assert host.left_panel.condition_state.final_result == expected
+    assert host.left_panel.condition_state.stage_text == "本轮完成"
     assert host._manual_product_condition_group_id == ""
 
 
 @pytest.mark.parametrize("text", ["检测中", "未标记", "完成"])
 def test_summary_only_displays_judgement_for_nonfinal_states(host, text):
     host.left_panel.set_final_result(text)
-    assert host.left_panel.round_result_value.text() == "待判定"
+    assert host.left_panel.condition_state.final_result == "待判定"
 
 
 def test_channel_progress_counts_only_real_judgements(host):
@@ -191,27 +201,26 @@ def test_channel_progress_counts_only_real_judgements(host):
         {"result": "OK"}, {"result": "待检测"}, {"result": "NG"},
         {"SPL": "OK"}, {"result": "未标记"}, {"result": "OK"},
     ])
-    assert panel.rows["q6000"]["completed_channels"] == 2
-    assert panel.rows["q6000"]["labels"]["progress"].text() == "通道判定：2/5"
+    assert panel.condition_state.rows["q6000"]["completed_channels"] == 2
+    assert (panel.condition_state.rows["q6000"]["completed_channels"], panel.condition_state.rows["q6000"]["channel_count"]) == (2, 5)
     panel.set_condition_result("q6000", "OK")
-    assert panel.rows["q6000"]["completed_channels"] == 2
+    assert panel.condition_state.rows["q6000"]["completed_channels"] == 2
     panel.set_condition_result("q6000", "采集中", tone="running")
-    assert panel.rows["q6000"]["completed_channels"] == 0
-    assert panel.rows["q6000"]["channel_results"] == []
+    assert panel.condition_state.rows["q6000"]["completed_channels"] == 0
+    assert panel.condition_state.rows["q6000"]["channel_results"] == []
 
 
 def test_port_summary_uses_verdict_not_status_color(host):
     panel = host.left_panel
     panel.set_condition_result("q6000", "完成", tone="ok")
     panel.set_condition_result("q7000", "OK", tone="ok")
-    assert panel.progress_label.text() == "档位进度：1/2"
+    assert sum(row["analysis_completed"] for row in panel.condition_state.rows.values()) == 1
     panel.set_condition_result("q7000", "分析失败", tone="ng")
-    assert panel.port_result_value.text() == "待判定"
-    assert panel.progress_label.text() == "档位进度：0/2"
+    assert panel.condition_state.get_automatic_round_result()[0] == "待判定"
+    assert sum(row["analysis_completed"] for row in panel.condition_state.rows.values()) == 0
     panel.set_condition_result("q6000", "NG", tone="ng")
-    assert panel.port_result_value.text() == "NG"
-    panel.current_port_combo.setCurrentIndex(1)
-    assert panel.port_result_value.text() == "待判定"
+    assert panel.condition_state.get_automatic_round_result()[0] == "NG"
+    assert panel.condition_state.rows["q8000"]["result"] == "待检测"
 
 
 def test_channel_results_keep_physical_identity_and_spl_details(host):
@@ -234,13 +243,13 @@ def test_channel_results_keep_physical_identity_and_spl_details(host):
 
     host._sync_left_panel_analysis_details()
 
-    row = host.left_panel.rows["q6000"]
+    row = host.left_panel.condition_state.rows["q6000"]
     results = {item["raw_channel"]: item for item in row["channel_results"]}
     assert results[0]["SPL"] == results[0]["result"] == "OK"
     assert results[7]["SPL"] == results[7]["result"] == "NG"
     assert "42.00" in results[0]["details"]["SPL"]
     assert "82.00" in results[7]["details"]["SPL"]
-    assert row["labels"]["progress"].text() == "通道判定：2/2"
+    assert (row["completed_channels"], row["channel_count"]) == (2, 2)
 @pytest.mark.parametrize("second_result, expected", [(None, "待判定"), (True, "OK"), (False, "NG")])
 def test_repeated_analysis_items_do_not_hide_pending_or_failed_judgements(host, second_result, expected):
     host.analysis_config = {
@@ -266,10 +275,10 @@ def test_channel_progress_ignores_unselected_and_duplicate_channels(host):
         {"raw_channel": 0, "result": "OK"},
         {"raw_channel": 2, "result": "待判定"},
     ])
-    assert panel.rows["q6000"]["labels"]["progress"].text() == "通道判定：1/2"
-    assert panel.channel_labels == ["CH3", "CH8"]
+    assert (panel.condition_state.rows["q6000"]["completed_channels"], panel.condition_state.rows["q6000"]["channel_count"]) == (1, 2)
+    assert panel.condition_state.channel_indices == [2, 7]
     panel.set_channels([2])
-    assert panel.rows["q6000"]["labels"]["progress"].text() == "通道判定：0/1"
+    assert (panel.condition_state.rows["q6000"]["completed_channels"], panel.condition_state.rows["q6000"]["channel_count"]) == (0, 1)
 
 
 def test_unjudged_automatic_result_survives_next_gear_and_refresh(host, tmp_path):
@@ -320,7 +329,7 @@ def test_unjudged_automatic_result_survives_next_gear_and_refresh(host, tmp_path
         )
         process._apply_automatic_analysis_result(result, {})
         assert row_text(host, key) == "未判定"
-        assert host.left_panel.rows[key]["analysis_completed"] is True
+        assert host.left_panel.condition_state.rows[key]["analysis_completed"] is True
         assert result.judgement_status == "未产生判定"
         process._update_analysis_record_label.assert_called_with(
             key, result.wav_path, {}, "not_labeled"

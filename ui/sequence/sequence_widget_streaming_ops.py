@@ -1093,12 +1093,12 @@ class SequenceWidgetStreamingOpsMixin:
             self.count_board.register_mode_change_callback(self._on_recent_session_mode_changed)
         self._configure_direction_waveform_workspace()
         self._sync_waveform_condition_from_left(
-            self.left_panel.selected_condition_key
+            self.left_panel.condition_state.selected_key
         )
 
-        result_panel, video_monitor_panel = self.left_panel.take_split_sections()
-        if result_panel is not None:
-            result_panel.setMinimumWidth(340)
+        dashboard_panel, video_monitor_panel = self.left_panel.take_split_sections()
+        if dashboard_panel is not None:
+            dashboard_panel.setMinimumWidth(340)
         if video_monitor_panel is not None:
             video_monitor_panel.setMinimumWidth(340)
 
@@ -1114,7 +1114,7 @@ class SequenceWidgetStreamingOpsMixin:
         v_video = max(260, screen_height - v_task)
 
         left_sidebar_splitter = QSplitter(Qt.Vertical)
-        left_sidebar_splitter.addWidget(result_panel)
+        left_sidebar_splitter.addWidget(dashboard_panel)
         left_sidebar_splitter.addWidget(video_monitor_panel)
         left_sidebar_splitter.setChildrenCollapsible(False)
         left_sidebar_splitter.setStretchFactor(0, 3)

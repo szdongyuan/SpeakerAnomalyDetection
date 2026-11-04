@@ -88,7 +88,7 @@ class SequenceWidgetProgressOpsMixin:
         preferred = keys[index] if 0 <= index < len(keys) else ""
         next_key = preferred if preferred in incomplete else (incomplete[0] if incomplete else "")
         group = self._collect_product_condition_records(group_id) or {}
-        panel = self.left_panel.result_panel
+        panel = self.left_panel.condition_state
         completed_conditions = {}
         for key in keys:
             if key not in completed:
@@ -389,7 +389,7 @@ class SequenceWidgetProgressOpsMixin:
             decision = "restart" if empty_round else self._ask_product_test_resume(state, error)
             if decision is None:
                 self.left_panel.set_current_stage("等待开始", tone="pending")
-                self.left_panel.result_panel.stage_label.setToolTip(
+                self.left_panel.condition_state.stage_tooltip = (
                     "续测选择未完成，点击开始可重新选择"
                 )
                 return False
@@ -473,9 +473,9 @@ class SequenceWidgetProgressOpsMixin:
         next_key = state["next_key"]
         self._manual_product_condition_index = keys.index(next_key) if next_key else 0
         selected = state["selected_key"] if state["waiting_port_idle"] else next_key
-        self.left_panel.result_panel.select_condition(selected, user_view=False)
+        self.left_panel.condition_state.select_condition(selected, user_view=False)
         stage = "已恢复上次进度，等待继续测试" if next_key else "已恢复上次进度，等待本轮结束信号"
         if state["waiting_port_idle"]:
             stage = "已恢复上次进度，等待端口切换空闲码"
         self.left_panel.set_current_stage("等待下一档位" if next_key else "本轮完成", tone="pending")
-        self.left_panel.result_panel.stage_label.setToolTip(stage)
+        self.left_panel.condition_state.stage_tooltip = stage

@@ -1,4 +1,5 @@
 from string import Template
+from types import MappingProxyType
 
 from PyQt5.QtWidgets import QApplication
 
@@ -616,75 +617,8 @@ motor_left_panel_style = """
             }
 """
 
-motor_port_combo_style = _style("""
-            QComboBox {
-                background: #FFFFFF;
-                color: $COLOR_TEXT;
-                border: 1px solid #B7C8DC;
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-family: $UI_FONT_FAMILY;
-                font-size: 13px;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 24px;
-            }
-            QComboBox::down-arrow {
-                image: url($COMBO_DOWN_ARROW_ICON);
-                width: 12px;
-                height: 12px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #FFFFFF;
-                color: $COLOR_TEXT;
-                selection-background-color: $COLOR_PRIMARY;
-                selection-color: #FFFFFF;
-            }
-            QComboBox QAbstractItemView::item {
-                background-color: #FFFFFF;
-                color: $COLOR_TEXT;
-            }
-            QComboBox QAbstractItemView::item:selected {
-                background-color: $COLOR_PRIMARY;
-                color: #FFFFFF;
-            }
-""")
 
-motor_condition_button_style = """
-QPushButton#testTaskConditionButton {
-    color:#1F2937; border:1px solid #B8C8DA; border-radius:5px; padding:0;
-}
-QPushButton#testTaskConditionButton[visualState="normal"] {
-    background:#F4F8FC; border-color:#B8C8DA;
-}
-QPushButton#testTaskConditionButton[visualState="normal"]:hover {
-    background:#EDF4FC; border-color:#6FA8DC;
-}
-QPushButton#testTaskConditionButton[visualState="viewed"] {
-    background:#E1EFFF; border-color:#1877C9;
-}
-QPushButton#testTaskConditionButton[visualState="viewed"]:hover {
-    background:#D7E9FC; border-color:#1269B2;
-}
-QPushButton#testTaskConditionButton[visualState="recording"] {
-    background:#EAF2FB; border-color:#2F80C9;
-}
-QPushButton#testTaskConditionButton[visualState="recording"]:hover {
-    background:#E3EEF9; border-color:#286EAE;
-}
-"""
 
-motor_condition_result_style = _style("""
-QLabel#testTaskConditionResult {
-    background:transparent; border:none;
-    font-family:$MAIN_UI_SMALL_FONT_FAMILY; font-size:13px; font-weight:bold;
-}
-QLabel#testTaskConditionResult[resultTone="ok"] { color:#16864B; }
-QLabel#testTaskConditionResult[resultTone="ng"] { color:#D94343; }
-QLabel#testTaskConditionResult[resultTone="running"] { color:#2F6FB4; }
-QLabel#testTaskConditionResult[resultTone="pending"] { color:#64748B; }
-""")
 
 motor_left_panel_scroll_area_style = """
             QScrollArea {
@@ -711,21 +645,7 @@ motor_section_content_style = _style("""
             }
 """)
 
-motor_section_scroll_area_style = _style("""
-            QScrollArea#motorSectionScrollArea {
-                background-color: $COLOR_PANEL_BG;
-                border: none;
-            }
-            QScrollArea#motorSectionScrollArea QWidget#motorSectionContent {
-                background-color: $COLOR_PANEL_BG;
-                border: none;
-            }
-""")
 
-motor_section_viewport_style = _style("""
-            background-color: $COLOR_PANEL_BG;
-            border: none;
-""")
 
 motor_section_title_style = _style("""
             QLabel {
@@ -799,29 +719,8 @@ motor_status_badge_pending_style = _style("""
             }
 """)
 
-motor_status_badge_running_style = """
-            QLabel {
-                background-color: #fff3d8;
-                color: #8a6720;
-                border: 1px solid #d8b66b;
-            }
-"""
 
-motor_status_badge_ok_style = _style("""
-            QLabel {
-                background-color: #E8F7EE;
-                color: #166534;
-                border: 1px solid $COLOR_OK;
-            }
-""")
 
-motor_status_badge_ng_style = _style("""
-            QLabel {
-                background-color: #FCE8E8;
-                color: #991B1B;
-                border: 1px solid $COLOR_NG;
-            }
-""")
 
 motor_summary_hint_style = _style("""
             QLabel {
@@ -833,16 +732,6 @@ motor_summary_hint_style = _style("""
             }
 """)
 
-motor_result_caption_style = _style("""
-            QLabel {
-                font-family: $UI_FONT_FAMILY;
-                font-size: 16px;
-                font-weight: bold;
-                color: $COLOR_PRIMARY_HOVER;
-                background: transparent;
-                padding: 2px 0px;
-            }
-""")
 
 motor_inline_title_label_style = _style("""
             QLabel {
@@ -930,13 +819,6 @@ motor_final_result_title_style = _style("""
             }
 """)
 
-motor_result_divider_style = _style("""
-            QFrame {
-                color: $COLOR_BORDER;
-                background-color: $COLOR_BORDER;
-                border: none;
-            }
-""")
 
 motor_stage_frame_style = _style("""
             QFrame {
@@ -1586,3 +1468,145 @@ qtreeview_style = _style("""
             #     image: url(branch-open.png);
             # }
 """)
+
+
+# Station presentation is independent from the legacy task/result palette.
+MOTOR_STATION_STATUS_COLORS = MappingProxyType({"--": "#617183", "OK": "#00824e", "NG": "#ca3245"})
+MOTOR_STATION_PANEL_STYLE = """
+QWidget#motorStationTestPanel, QWidget#stationContent {
+    background: #ffffff;
+    color: #293b4d;
+    font-family: 'Microsoft YaHei UI', 'Segoe UI';
+    font-size: 9.75pt;
+}
+QLabel#stationTitle {
+    font-family: 'Microsoft YaHei UI', 'Segoe UI';
+    background: #3e75ac;
+    color: #ffffff;
+    border: none;
+    padding: 7px 12px;
+    font-size: 10.5pt;
+    font-weight: 600;
+}
+QWidget#stationGeneralHeader {
+    background: #f1f5f9;
+    border-bottom: 1px solid #e0e7ef;
+}
+QWidget#stationGeneralHeader QLabel {
+    font-family: 'Microsoft YaHei UI', 'Segoe UI';
+    background: transparent;
+    color: #617183;
+    border: none;
+    font-size: 9pt;
+}
+QScrollArea#stationScroll {
+    background: #ffffff;
+    border: 1px solid #e0e7ef;
+    border-top: none;
+}
+QPushButton[stationHeader="true"] {
+    background: #ffffff;
+    color: #293b4d;
+    border: none;
+    border-bottom: 1px solid #e0e7ef;
+    border-radius: 0;
+    padding: 0;
+    text-align: left;
+}
+QPushButton[stationHeader="true"]:checked {
+    background: #eaf2fc;
+}
+QPushButton[stationHeader="true"] QLabel {
+    background: transparent;
+    border: none;
+    font-family: 'Microsoft YaHei UI', 'Segoe UI';
+    font-size: 9.75pt;
+}
+QTableWidget {
+    background: #ffffff;
+    alternate-background-color: #fafbfd;
+    color: #293b4d;
+    border: none;
+    gridline-color: #e0e7ef;
+    font-family: 'Microsoft YaHei UI', 'Segoe UI';
+    font-size: 9.75pt;
+}
+QTableWidget::item {
+    padding: 0 12px;
+    border: none;
+    border-bottom: 1px solid #e0e7ef;
+}
+QTableWidget QHeaderView::section {
+    background: #f1f5f9;
+    color: #617183;
+    border: none;
+    border-bottom: 1px solid #e0e7ef;
+    padding: 0 12px;
+    font-family: 'Microsoft YaHei UI', 'Segoe UI';
+    font-size: 9pt;
+    font-weight: normal;
+}
+"""
+
+
+MOTOR_INFORMATION_SUMMARY_STYLE = """
+QWidget#motorInformationSummaryPanel {
+    background: #ffffff;
+    border: 1px solid #cddaea;
+    border-radius: 3px;
+}
+QWidget#motorInformationSummaryPanel QWidget {
+    background: transparent;
+    border: none;
+}
+QWidget#motorInformationSummaryPanel QLabel,
+QWidget#motorInformationSummaryPanel QPushButton {
+    font-family: 'Microsoft YaHei UI', 'Segoe UI';
+    font-size: 9pt;
+    font-weight: normal;
+    background: transparent;
+    color: #617183;
+    border: none;
+    padding: 0;
+}
+QWidget#motorInformationSummaryPanel QLabel#summaryTitle {
+    color: #293b4d;
+    font-size: 10.5pt;
+    font-weight: 500;
+}
+QWidget#motorInformationSummaryPanel QLabel#summaryDate {
+    font-size: 8.25pt;
+}
+QWidget#motorInformationSummaryPanel QPushButton#summaryDetails:disabled {
+    color: #246bed;
+    min-height: 24px;
+}
+QWidget#motorInformationSummaryPanel QLabel#summaryTotal,
+QWidget#motorInformationSummaryPanel QLabel#summaryRate {
+    color: #293b4d;
+    font-size: 11.25pt;
+    font-weight: 500;
+}
+QWidget#motorInformationSummaryPanel QWidget#summaryCounts {
+    border-top: 1px solid #e0e7ef;
+}
+QWidget#motorInformationSummaryPanel QWidget[summarySeparated="true"] {
+    border-left: 1px solid #e0e7ef;
+}
+QWidget#motorInformationSummaryPanel QLabel#summaryOk,
+QWidget#motorInformationSummaryPanel QLabel#summaryNg,
+QWidget#motorInformationSummaryPanel QLabel#summaryUnmarked {
+    font-size: 17.25pt;
+    font-weight: 500;
+    color: #617183;
+}
+QWidget#motorInformationSummaryPanel QLabel#summaryOk { color: #00824e; }
+QWidget#motorInformationSummaryPanel QLabel#summaryNg { color: #ca3245; }
+"""
+
+MOTOR_DASHBOARD_PANEL_STYLE = """
+QWidget#motorDashboardPanel {
+    background: #edf3fa;
+    border: none;
+}
+"""

@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from ui.sequence.motor_result_panel import MotorResultPanel
+from ui.sequence.product_condition_state import ProductConditionState
 from ui.sequence.sequence_widget_analysis_process_ops import SequenceWidgetAnalysisProcessOpsMixin
 
 
@@ -19,14 +19,13 @@ def panel_factory(ui_qapp):
     panels = []
 
     def create(*conditions):
-        panel = MotorResultPanel(condition_configs=list(conditions), queue_catalog={})
+        panel = ProductConditionState(condition_configs=list(conditions), queue_catalog={})
         panel.set_channels([0, 1, 2, 3, 4])
         panels.append(panel)
         return panel
 
     yield create
     for panel in panels:
-        panel.close()
         panel.deleteLater()
     ui_qapp.processEvents()
 
@@ -40,8 +39,8 @@ def panel_factory(ui_qapp):
 def test_each_condition_counts_union_of_selected_analysis_channels(panel_factory, first, second, expected):
     panel = panel_factory(condition("gear", {"a": ("SPL", first), "b": ("FBA", second)}))
     row = panel.rows["gear"]
-    assert row["labels"]["progress"].text() == f"通道判定：0/{len(expected)}"
-    assert len(panel.channel_detail_labels) == len(expected)
+    assert (row["completed_channels"], row["channel_count"]) == (0, len(expected))
+    assert panel._condition_channels(row) == expected
     # Hardware inputs remain available to waveform and progress persistence.
     assert panel.channel_indices == [0, 1, 2, 3, 4]
 
@@ -63,16 +62,14 @@ def test_unselected_cells_are_dashes_and_do_not_block_channel_judgements(panel_f
     panel = panel_factory(condition("gear", {
         "a": ("SPL", [0, 1]), "b": ("FBA", [0, 1, 2, 3, 4]),
     }))
-    assert [labels["SPL"].text() for labels in panel.channel_detail_labels] == [
-        "待检测", "待检测", "—", "—", "—",
-    ]
+    assert panel.rows["gear"]["analysis_column_channels"] == {"SPL": [0, 1], "FBA": [0, 1, 2, 3, 4]}
     results = [{"raw_channel": ch, "FBA": "OK", "result": "OK"} for ch in range(5)]
     for result in results[:2]:
         result["SPL"] = "OK"
     panel.set_condition_channel_results("gear", results)
-    assert panel.rows["gear"]["labels"]["progress"].text() == "通道判定：5/5"
-    assert panel.channel_detail_labels[2]["SPL"].text() == "—"
-    assert panel.channel_detail_labels[2]["FBA"].text() == "OK"
+    assert (panel.rows["gear"]["completed_channels"], panel.rows["gear"]["channel_count"]) == (5, 5)
+    assert "SPL" not in panel.rows["gear"]["channel_results"][2]
+    assert panel.rows["gear"]["channel_results"][2]["FBA"] == "OK"
 
 
 def test_same_type_items_merge_channel_membership_without_double_counting(panel_factory):
@@ -80,8 +77,8 @@ def test_same_type_items_merge_channel_membership_without_double_counting(panel_
         "pressure1": ("SPL", [0, 2]), "pressure2": ("SPL", [2, 4]),
     }))
     assert panel.rows["gear"]["channel_count"] == 3
-    assert panel.channel_analysis_columns == [{"key": "SPL", "header": "SPL判定"}]
-    assert [labels["SPL"].text() for labels in panel.channel_detail_labels] == ["待检测"] * 3
+    assert list(panel.rows[panel.selected_key]["analysis_column_channels"]) == ['SPL']
+    assert panel.rows["gear"]["analysis_column_channels"]["SPL"] == [0, 2, 4]
 
 
 def test_condition_switches_and_out_of_order_results_keep_independent_channel_counts(panel_factory):
@@ -89,25 +86,25 @@ def test_condition_switches_and_out_of_order_results_keep_independent_channel_co
         condition("two", {"a": ("SPL", [0, 4])}),
         condition("five", {"b": ("FBA", [0, 1, 2, 3, 4])}),
     )
-    panel.select_condition("five", show_detail=True)
+    panel.select_condition("five")
     panel.set_condition_channel_results("two", [
         {"raw_channel": 0, "SPL": "OK", "result": "OK"},
         {"raw_channel": 4, "SPL": "NG", "result": "NG"},
         {"raw_channel": 1, "SPL": "OK", "result": "OK"},
     ])
-    assert len(panel.channel_detail_labels) == 5
-    assert panel.rows["five"]["labels"]["progress"].text() == "通道判定：0/5"
-    assert panel.rows["two"]["labels"]["progress"].text() == "通道判定：2/2"
-    panel.select_condition("two", show_detail=True)
-    assert [labels["result"].text() for labels in panel.channel_detail_labels] == ["OK", "NG"]
+    assert panel.rows["five"]["channel_count"] == 5
+    assert (panel.rows["five"]["completed_channels"], panel.rows["five"]["channel_count"]) == (0, 5)
+    assert (panel.rows["two"]["completed_channels"], panel.rows["two"]["channel_count"]) == (2, 2)
+    panel.select_condition("two")
+    assert [item["result"] for item in panel.rows["two"]["channel_results"]] == ["OK", "NG"]
 
 
 def test_configuration_refresh_changes_condition_channels_before_next_recording(panel_factory, monkeypatch):
     panel = panel_factory(condition("gear", {"a": ("SPL", [0, 1, 2, 3, 4])}))
     monkeypatch.setattr(panel, "_load_queue_catalog_safely", lambda: {})
     assert panel.refresh_condition_configs([condition("gear", {"a": ("SPL", [1, 3])})])
-    assert panel.rows["gear"]["labels"]["progress"].text() == "通道判定：0/2"
-    assert len(panel.channel_detail_labels) == 2
+    assert (panel.rows["gear"]["completed_channels"], panel.rows["gear"]["channel_count"]) == (0, 2)
+    assert panel.rows["gear"]["analysis_channels"] == [1, 3]
     panel.set_channels([0, 1, 2, 3, 4, 5])
     assert panel.rows["gear"]["channel_count"] == 2
 
@@ -131,13 +128,13 @@ def test_same_table_shape_still_updates_cell_membership_when_switching_condition
         condition("first", {"a": ("SPL", [0]), "b": ("FBA", [0, 1])}),
         condition("second", {"a": ("SPL", [0, 1]), "b": ("FBA", [1])}),
     )
-    assert panel.channel_detail_labels[1]["SPL"].text() == "—"
-    panel.select_condition("second", show_detail=True)
-    assert panel.channel_detail_labels[1]["SPL"].text() == "待检测"
-    assert panel.channel_detail_labels[0]["FBA"].text() == "—"
-    panel.select_condition("first", show_detail=True)
-    assert panel.channel_detail_labels[1]["SPL"].text() == "—"
-    assert panel.channel_detail_labels[0]["FBA"].text() == "待检测"
+    assert panel.rows[panel.selected_key]["analysis_column_channels"]["SPL"] == [0]
+    panel.select_condition("second")
+    assert panel.rows[panel.selected_key]["analysis_column_channels"]["SPL"] == [0, 1]
+    assert panel.rows[panel.selected_key]["analysis_column_channels"]["FBA"] == [1]
+    panel.select_condition("first")
+    assert panel.rows[panel.selected_key]["analysis_column_channels"]["SPL"] == [0]
+    assert panel.rows[panel.selected_key]["analysis_column_channels"]["FBA"] == [0, 1]
 
 
 def test_legacy_single_channel_config_uses_physical_channel_number(panel_factory):
@@ -146,14 +143,14 @@ def test_legacy_single_channel_config_uses_physical_channel_number(panel_factory
     panel = panel_factory(config)
     assert panel.rows["gear"]["channel_count"] == 1
     panel.set_condition_channel_results("gear", [{"raw_channel": 3, "SPL": "OK", "result": "OK"}])
-    assert panel.channel_grid.itemAtPosition(1, 0).widget().text() == "CH4"
-    assert panel.channel_detail_labels[0]["SPL"].text() == "OK"
+    assert panel._condition_channels(panel.rows["gear"]) == [3]
+    assert panel.rows["gear"]["channel_results"][0]["SPL"] == "OK"
 
 
 def test_empty_analysis_queue_does_not_claim_five_pending_channels(panel_factory):
     panel = panel_factory(condition("gear", {}))
-    assert panel.rows["gear"]["labels"]["progress"].text() == "通道判定：0/0"
-    assert panel.channel_detail_labels == []
+    assert (panel.rows["gear"]["completed_channels"], panel.rows["gear"]["channel_count"]) == (0, 0)
+    assert panel.rows["gear"]["analysis_channels"] == []
 
 
 def test_channel_sync_preserves_late_results_and_uses_new_channels_after_reset(panel_factory):
@@ -165,10 +162,10 @@ def test_channel_sync_preserves_late_results_and_uses_new_channels_after_reset(p
     panel.set_condition_channel_results("gear", [
         {"raw_channel": ch, "SPL": "OK", "result": "OK"} for ch in [0, 4]])
     panel.set_condition_result("gear", "OK")
-    assert panel.rows["gear"]["labels"]["progress"].text() == "通道判定：2/2"
+    assert (panel.rows["gear"]["completed_channels"], panel.rows["gear"]["channel_count"]) == (2, 2)
     assert panel.rows["gear"]["analysis_channels"] == [0, 4]
     panel.reset()
-    assert panel.rows["gear"]["labels"]["progress"].text() == "通道判定：0/1"
+    assert (panel.rows["gear"]["completed_channels"], panel.rows["gear"]["channel_count"]) == (0, 1)
     assert panel.rows["gear"]["analysis_channels"] == [1]
 
 

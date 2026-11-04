@@ -211,19 +211,19 @@ def test_incomplete_analysis_progress_preserves_failure_and_can_continue(factory
     assert saved["analysis_status"] == "结果不完整"
     assert saved["analysis_channels"] == [0, 1, 2, 3, 4]
     assert saved["channel_results"][-1] == {"raw_channel": 4, "result": "结果不完整"}
-    assert original.left_panel.result_panel.rows["a"]["result"] == "结果不完整"
-    assert original.left_panel.result_panel.rows["a"]["channel_results"][-1]["result"] == "结果不完整"
+    assert original.left_panel.condition_state.rows["a"]["result"] == "结果不完整"
+    assert original.left_panel.condition_state.rows["a"]["channel_results"][-1]["result"] == "结果不完整"
     assert (original.directory / "a.wav").read_bytes() == b"test file reference"
 
     reopened = factory()
     reopened.left_panel.set_condition_configs(configured, queue_catalog={})
     assert reopened._offer_product_test_resume()
-    row = reopened.left_panel.result_panel.rows["a"]
+    row = reopened.left_panel.condition_state.rows["a"]
     assert row["result"] == "结果不完整"
-    assert row["labels"]["progress"].text() == "通道判定：4/5"
+    assert (row["completed_channels"], row["channel_count"]) == (4, 5)
     assert row["channel_results"] == saved["channel_results"]
-    reopened.left_panel.result_panel.select_condition("a", show_detail=True)
-    assert reopened.left_panel.result_panel.channel_detail_labels[-1]["result"].text() == "结果不完整"
+    reopened.left_panel.condition_state.select_condition("a")
+    assert reopened.left_panel.condition_state.rows["a"]["channel_results"][-1]["result"] == "结果不完整"
     group_id = reopened._manual_product_condition_group_id
     assert reopened._manual_product_condition_results["a"] == "not_labeled"
     assert reopened._refresh_manual_product_condition_results_from_group(group_id)
@@ -232,7 +232,7 @@ def test_incomplete_analysis_progress_preserves_failure_and_can_continue(factory
     assert reopened._get_active_product_condition_key() == "b"
     reopened._save_product_test_progress_before_exit()
     assert reopened._product_progress_store.load()["completed_conditions"]["a"] == saved
-    reopened.left_panel.result_panel.reset()
+    reopened.left_panel.condition_state.reset()
     assert row["channel_results"] == []
     assert row["result"] == "待检测"
 
@@ -255,7 +255,7 @@ def test_task_failure_survives_recording_completion_and_resume(factory, status, 
     original.left_panel.set_condition_result("a", status, tone="ng")
     original._mark_manual_product_condition_recording_completed()
     original._advance_manual_product_condition_cycle_after_recording()
-    assert original.left_panel.result_panel.rows["a"]["result"] == status
+    assert original.left_panel.condition_state.rows["a"]["result"] == status
     original._save_product_test_progress_before_exit()
     saved = original._product_progress_store.load()["completed_conditions"]["a"]
     assert saved["analysis_status"] == status
@@ -272,15 +272,15 @@ def test_task_failure_survives_recording_completion_and_resume(factory, status, 
         reopened._refresh_manual_product_condition_results_from_group(
             reopened._manual_product_condition_group_id,
         )
-        assert reopened.left_panel.result_panel.rows["a"]["result"] == status
+        assert reopened.left_panel.condition_state.rows["a"]["result"] == status
         reopened._save_product_test_progress_before_exit()
         assert reopened._product_progress_store.load()["completed_conditions"]["a"] == saved
 
     assert reopened._prepare_next_manual_product_condition_recording()
     assert reopened._get_active_product_condition_key() == "b"
-    reopened.left_panel.result_panel.reset()
-    assert reopened.left_panel.result_panel.rows["a"]["result"] == "待检测"
-    assert reopened.left_panel.result_panel.rows["a"]["channel_results"] == []
+    reopened.left_panel.condition_state.reset()
+    assert reopened.left_panel.condition_state.rows["a"]["result"] == "待检测"
+    assert reopened.left_panel.condition_state.rows["a"]["channel_results"] == []
 
 
 @pytest.mark.parametrize("status", [None, "OK", "分析中", {}])
@@ -334,7 +334,7 @@ def test_saved_progress_uses_descriptive_channel_field_names(factory, legacy_nam
     reopened = factory()
     reopened.left_panel.set_condition_configs(configured, queue_catalog={})
     assert reopened._offer_product_test_resume()
-    row = reopened.left_panel.result_panel.rows["a"]
+    row = reopened.left_panel.condition_state.rows["a"]
     assert row["analysis_column_channels"] == {"SPL": [0]}
     assert row["channel_results"] == [{"raw_channel": 0, "result": "OK"}]
     reopened._save_product_test_progress_before_exit()
@@ -351,7 +351,7 @@ def test_resume_keeps_old_channel_results_after_hardware_channel_reduction(facto
         for c in original.product_test_condition_configs]
     original.left_panel.set_condition_configs(configured, queue_catalog={})
     begin_partial_round(original)
-    panel = original.left_panel.result_panel
+    panel = original.left_panel.condition_state
     panel.set_channels([0, 4])
     panel.set_condition_channel_results("a", [
         {"raw_channel": 0, "result": "OK"}, {"raw_channel": 4, "result": "NG"}])
@@ -372,9 +372,9 @@ def test_resume_keeps_old_channel_results_after_hardware_channel_reduction(facto
     reopened = factory()
     reopened.left_panel.set_condition_configs(updated, queue_catalog={})
     assert reopened._offer_product_test_resume()
-    restored = reopened.left_panel.result_panel.rows["a"]
+    restored = reopened.left_panel.condition_state.rows["a"]
     assert restored["analysis_channels"] == [0, 4]
-    assert restored["labels"]["progress"].text() == "通道判定：2/2"
+    assert (restored["completed_channels"], restored["channel_count"]) == (2, 2)
     assert restored["channel_results"] == state["completed_conditions"]["a"]["channel_results"]
 
 
@@ -395,7 +395,7 @@ def test_saved_analysis_channels_restore_independently_of_verdicts(
     configured = [dict(c, analysis_list=analysis) for c in original.product_test_condition_configs]
     original.left_panel.set_condition_configs(configured, queue_catalog={})
     begin_partial_round(original)
-    panel = original.left_panel.result_panel
+    panel = original.left_panel.condition_state
     panel.set_channels([0, 1, 2, 3, 4])
     panel.set_condition_channel_results("a", [
         {"raw_channel": ch, "result": "OK"} for ch in verdict_channels
@@ -407,8 +407,8 @@ def test_saved_analysis_channels_restore_independently_of_verdicts(
     }) for c in original.product_test_condition_configs]
     assert panel.refresh_condition_configs(latest, queue_catalog={}, preserve_results=True)
     panel.set_channels([1])
-    expected = f"通道判定：{len(verdict_channels)}/{len(old_channels)}"
-    assert panel.rows["a"]["labels"]["progress"].text() == expected
+    expected = (len(verdict_channels), len(old_channels))
+    assert (panel.rows["a"]["completed_channels"], panel.rows["a"]["channel_count"]) == expected
     original._save_product_test_progress_before_exit()
 
     # Continue, save, and continue again without reverting to the current hardware.
@@ -416,17 +416,17 @@ def test_saved_analysis_channels_restore_independently_of_verdicts(
         reopened = factory()
         reopened.left_panel.set_condition_configs(latest, queue_catalog={})
         assert reopened._offer_product_test_resume()
-        restored = reopened.left_panel.result_panel
-        restored.select_condition("a", show_detail=True)
-        assert restored.rows["a"]["labels"]["progress"].text() == expected
+        restored = reopened.left_panel.condition_state
+        restored.select_condition("a")
+        assert (restored.rows["a"]["completed_channels"], restored.rows["a"]["channel_count"]) == expected
         assert restored.rows["a"]["analysis_channels"] == old_channels
-        assert len(restored.channel_detail_labels) == len(old_channels)
+        assert restored.rows["a"]["channel_count"] == len(old_channels)
         reopened._save_product_test_progress_before_exit()
         state = reopened._product_progress_store.load()
         assert state["completed_conditions"]["a"]["analysis_channels"] == old_channels
 
     restored.set_condition_result("a", "准备采集", tone="running")
-    assert restored.rows["a"]["labels"]["progress"].text() == "通道判定：0/1"
+    assert (restored.rows["a"]["completed_channels"], restored.rows["a"]["channel_count"]) == (0, 1)
     restored.reset()
     assert restored.rows["a"]["analysis_channels"] == [1]
 
@@ -464,7 +464,7 @@ def test_legacy_progress_without_full_analysis_channels_can_be_resaved(factory, 
         reopened = factory()
         reopened.left_panel.set_condition_configs(current, queue_catalog={})
         assert reopened._offer_product_test_resume()
-        assert reopened.left_panel.result_panel.rows["a"]["channel_results"] == results
+        assert reopened.left_panel.condition_state.rows["a"]["channel_results"] == results
         reopened._save_product_test_progress_before_exit()
 
 
@@ -479,7 +479,7 @@ def test_resume_preserves_analysis_column_channels_and_retest_uses_current_confi
     configured = [dict(c, analysis_list=analysis) for c in original.product_test_condition_configs]
     original.left_panel.set_condition_configs(configured, queue_catalog={})
     begin_partial_round(original)
-    panel = original.left_panel.result_panel
+    panel = original.left_panel.condition_state
     panel.set_channels([0, 1, 2, 3, 4])
     panel.set_condition_channel_results("a", [
         {"raw_channel": ch, "result": "OK", "FBA": "OK",
@@ -498,11 +498,11 @@ def test_resume_preserves_analysis_column_channels_and_retest_uses_current_confi
     reopened = factory()
     reopened.left_panel.set_condition_configs(configured, queue_catalog={})
     assert reopened._offer_product_test_resume()
-    restored = reopened.left_panel.result_panel
-    restored.select_condition("a", show_detail=True)
-    assert restored.rows["a"]["labels"]["progress"].text() == "通道判定：5/5"
-    assert [labels["SPL"].text() for labels in restored.channel_detail_labels][2:] == ["—"] * 3
-    assert [labels["result"].text() for labels in restored.channel_detail_labels] == ["OK"] * 5
+    restored = reopened.left_panel.condition_state
+    restored.select_condition("a")
+    assert (restored.rows["a"]["completed_channels"], restored.rows["a"]["channel_count"]) == (5, 5)
+    assert restored.rows["a"]["analysis_column_channels"]["SPL"] == [0, 1]
+    assert [item["result"] for item in restored.rows["a"]["channel_results"]] == ["OK"] * 5
     reopened._save_product_test_progress_before_exit()
     assert reopened._product_progress_store.load()["completed_conditions"]["a"]["analysis_column_channels"] == {
         "SPL": [0, 1], "FBA": [0, 1, 2, 3, 4],
@@ -541,9 +541,9 @@ def test_legacy_progress_without_column_channels_keeps_verdicts_without_inventin
         "display_sequence": ["SPL"], "SPL": {"type": "SPL", "analysis_channels": [0]},
     }) for c in reopened.product_test_condition_configs]
     reopened.left_panel.set_condition_configs(configured, queue_catalog={})
-    assert reopened.left_panel.result_panel.rows["a"]["analysis_column_channels"] == {"SPL": [0]}
+    assert reopened.left_panel.condition_state.rows["a"]["analysis_column_channels"] == {"SPL": [0]}
     assert reopened._offer_product_test_resume()
-    row = reopened.left_panel.result_panel.rows["a"]
+    row = reopened.left_panel.condition_state.rows["a"]
     assert row["result"] == "OK"
     assert row["channel_results"] == [{"raw_channel": 0, "result": "OK"}]
     assert row["analysis_column_channels"] == {}
@@ -566,10 +566,11 @@ def test_continue_restores_next_port_results_identity_and_owned_files(factory):
     assert reopened.lineedit_type.isReadOnly()
     assert reopened.toolsbar.current_round_spinbox.isReadOnly()
     assert reopened._analysis_round_config_locked
-    assert reopened.left_panel.result_panel.current_port == "USB-C"
-    assert reopened.left_panel.result_panel.rows["a"]["result"] == "OK"
-    assert reopened.left_panel.result_panel.stage_text == "等待下一档位"
-    assert "已恢复上次进度" in reopened.left_panel.result_panel.stage_label.toolTip()
+    assert reopened.left_panel.condition_state.selected_key == "b"
+    assert reopened.left_panel.get_station_count() == 0
+    assert reopened.left_panel.condition_state.rows["a"]["result"] == "OK"
+    assert reopened.left_panel.condition_state.stage_text == "等待下一档位"
+    assert "已恢复上次进度" in reopened.left_panel.condition_state.stage_tooltip
     group_id = reopened._manual_product_condition_group_id
     assert reopened._round_data_records[group_id]["a"].files == {str(original.directory / "a.wav")}
     assert reopened._prepare_next_manual_product_condition_recording() is True
@@ -626,7 +627,7 @@ def test_condition_and_channel_verdicts_are_independent(factory, label, text):
     reopened = factory()
     assert reopened._offer_product_test_resume()
     assert reopened._manual_product_condition_completed_keys == {"a"}
-    row = reopened.left_panel.result_panel.rows["a"]
+    row = reopened.left_panel.condition_state.rows["a"]
     assert row["result"] == text
     assert row["channel_results"] == channel_results
     reopened._save_product_test_progress_before_exit()
@@ -748,7 +749,7 @@ def test_v1_resume_does_not_rewrite_until_exit_and_then_writes_readable_format(f
     assert path.read_bytes() == original_bytes
     assert reopened._product_progress_store.loaded_version == 1
     assert reopened._manual_product_condition_index == 1
-    assert reopened.left_panel.result_panel.rows["a"]["result"] == "OK"
+    assert reopened.left_panel.condition_state.rows["a"]["result"] == "OK"
     reopened._save_product_test_progress_before_exit()
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert "version" not in payload
@@ -776,7 +777,7 @@ def test_v1_failed_channel_restores_failure_without_rewriting_on_read(factory):
     reopened = factory()
     assert reopened._offer_product_test_resume()
     assert path.read_bytes() == original_bytes
-    row = reopened.left_panel.result_panel.rows["a"]
+    row = reopened.left_panel.condition_state.rows["a"]
     assert row["result"] == "结果不完整"
     assert row["channel_results"] == [{"raw_channel": 0, "result": "结果不完整"}]
     assert reopened._manual_product_condition_results["a"] == "not_labeled"
@@ -798,7 +799,7 @@ def test_v1_task_failure_status_migrates_without_channel_results(factory, status
     reopened = factory()
     assert reopened._offer_product_test_resume()
     assert path.read_bytes() == before
-    assert reopened.left_panel.result_panel.rows["a"]["result"] == status
+    assert reopened.left_panel.condition_state.rows["a"]["result"] == status
     reopened._save_product_test_progress_before_exit()
     assert reopened._product_progress_store.load()["completed_conditions"]["a"]["analysis_status"] == status
 
@@ -833,7 +834,7 @@ def test_missing_historical_audio_does_not_erase_saved_verdict(factory):
     reopened = factory()
     assert reopened._offer_product_test_resume()
     assert reopened._manual_product_condition_index == 1
-    assert reopened.left_panel.result_panel.rows["a"]["result"] == "OK"
+    assert reopened.left_panel.condition_state.rows["a"]["result"] == "OK"
 
 
 def test_resume_before_new_recording_resets_despite_missing_file(factory):
@@ -890,7 +891,7 @@ def test_complete_round_preserves_count_without_restoring_obsolete_close_wait(fa
     assert reopened._offer_product_test_resume()
     assert not reopened._serial_product_waiting_for_close
     assert reopened._manual_product_condition_completed_keys == {"a", "b", "c"}
-    assert reopened.left_panel.result_panel.stage_text == "本轮完成"
+    assert reopened.left_panel.condition_state.stage_text == "本轮完成"
     reopened._save_product_test_progress_before_exit()
     state = reopened._product_progress_store.load()
     assert state["counted_result"] == "NG"
@@ -1386,7 +1387,7 @@ def test_zero_completed_starts_idle_without_prompt_and_keeps_identity(factory, r
     assert not reopened._analysis_round_config_locked
     assert reopened._manual_product_condition_group_id == ""
     assert reopened._manual_product_condition_index == 0
-    assert reopened.left_panel.result_panel.stage_text == "等待开始"
+    assert reopened.left_panel.condition_state.stage_text == "等待开始"
     SequenceWidgetUiOpsMixin.update_player_btn_is_paused(reopened)
     assert reopened.player_btn.isEnabled()
     reopened.start_this_play.assert_not_called()
@@ -1439,7 +1440,7 @@ def test_interrupted_recording_is_retested_after_continue(factory):
     assert reopened._manual_product_condition_index == 1
     assert not reopened.player_status_flag
     assert not reopened._serial_product_condition_executing
-    assert reopened.left_panel.result_panel.rows["b"]["result"] == "待检测"
+    assert reopened.left_panel.condition_state.rows["b"]["result"] == "待检测"
     assert reopened._round_data_records[group_id]["unfinished-record"].files == {str(unfinished)}
 
 
@@ -1791,17 +1792,19 @@ def test_restored_panel_render(factory, tmp_path):
     reopened.left_panel.setFont(QFont("SimSun", 10))
     reopened.left_panel.show()
     QApplication.processEvents()
-    panel = reopened.left_panel.result_panel
-    assert panel.current_port_combo.currentText() == "USB-C"
-    assert panel.rows["a"]["labels"]["result"].text() == "OK"
+    panel = reopened.left_panel.condition_state
+    assert panel.selected_key == "b"
+    assert reopened.left_panel.get_station_count() == 0
+    assert panel.rows["a"]["result"] == "OK"
     screenshot = tmp_path / "restored-progress.png"
     assert reopened.left_panel.grab().save(str(screenshot))
     print(f"Progress UI screenshot: {screenshot}")
     panel.select_condition("a", user_view=True)
     QApplication.processEvents()
-    assert panel.current_port_combo.currentText() == "USB-A"
-    assert panel.rows["a"]["labels"]["result"].text() == "OK"
-    assert panel.grab().save(str(tmp_path / "restored-verdict.png"))
+    assert panel.selected_key == "a"
+    assert reopened.left_panel.get_station_count() == 0
+    assert panel.rows["a"]["result"] == "OK"
+    assert reopened.left_panel.dashboard_panel.grab().save(str(tmp_path / "restored-verdict.png"))
     if font_id >= 0:
         QFontDatabase.removeApplicationFont(font_id)
 
@@ -1833,3 +1836,25 @@ def test_progress_after_current_recording_failure_keeps_completed_and_next_condi
     assert set(state["owned_files"]) == {"a"}
     assert (host.directory / "a.wav").read_bytes() == b"test file reference"
     assert host._analysis_round_config_locked
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_resume_leaves_caller_station_data_and_expansion_untouched(factory, configured):
+    save_partial(factory)
+    reopened = factory()
+    left = reopened.left_panel
+    if configured:
+        left.set_station_count(1)
+        left.set_station_row_count(1, 1)
+        left.set_station_row(1, 0, ["external", 71.2, 68.4])
+        left.set_station_results(1, "NG", "OK")
+        from PyQt5.QtWidgets import QPushButton
+        header = left.station_panel.findChild(QPushButton, "stationHeader1")
+        header.click()
+        before = left.get_station_data(1)
+    assert reopened._offer_product_test_resume()
+    assert left.condition_state.rows["a"]["result"] == "OK"
+    assert left.get_station_count() == int(configured)
+    if configured:
+        assert left.get_station_data(1) == before
+        assert header.isChecked()

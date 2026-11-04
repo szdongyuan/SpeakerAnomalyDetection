@@ -114,10 +114,10 @@ def test_calibration_skips_display_preparation(tmp_path):
 
 @pytest.mark.parametrize("stage", ["数据保存中", "正转 数据保存中"])
 def test_actual_panel_recognizes_processing(ui_qapp, stage):
-    from ui.sequence.motor_result_panel import MotorResultPanel
-    panel = MotorResultPanel()
+    from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
+    panel = MotorDetectionLeftPanel(None, )
     panel.set_current_stage(stage)
-    assert panel.stage_label.text() == "数据保存中"
+    assert panel.condition_state.stage_text == "数据保存中"
     panel.close()
 
 
@@ -126,7 +126,7 @@ def test_actual_panel_recognizes_processing(ui_qapp, stage):
 def test_background_preparation_keeps_qt_responsive_and_publishes_without_scans(ui_qapp, service, tmp_path, monkeypatch, caplog, drop_finalizing, actual_workspace):
     caplog.set_level(logging.INFO)
     import base.recording_final_result as reader_module
-    from ui.sequence.motor_result_panel import MotorResultPanel
+    from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
     from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
     from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
     entered, release, ticked = threading.Event(), threading.Event(), threading.Event()
@@ -143,7 +143,7 @@ def test_background_preparation_keeps_qt_responsive_and_publishes_without_scans(
         return original(descriptor, request)
     monkeypatch.setattr(reader_module, "prepare_main_recording_result", block_reader)
     host = main_host(service, tmp_path, streaming=False)
-    panel = MotorResultPanel()
+    panel = MotorDetectionLeftPanel(None, )
     panel.set_condition_configs([{"key":"forward", "name":"正转"}])
     panel.resize(640, 500)
     panel.show()
@@ -162,13 +162,12 @@ def test_background_preparation_keeps_qt_responsive_and_publishes_without_scans(
         pump(ui_qapp, entered.is_set)
         QTimer.singleShot(0, ticked.set)
         pump(ui_qapp, ticked.is_set)
-        assert panel.stage_label.text() == "数据保存中"
+        assert panel.condition_state.stage_text == "数据保存中"
         if workspace is not None:
             assert workspace.status_label.text() == "数据保存中"
-        assert panel.rows["forward"]["labels"]["result"].text() == "数据保存中"
-        label = panel.rows["forward"]["labels"]["result"]
-        assert label.isVisible()
-        assert label.width() >= label.fontMetrics().horizontalAdvance(label.text())
+        assert panel.condition_state.rows["forward"]["result"] == "数据保存中"
+        assert panel.dashboard_panel.summary_panel.isVisible()
+        assert panel.get_station_count() == 0
         assert session.state == "delivering" and service.busy
         assert host.data_struct.store_wave_data is None
         def forbidden(*args, **kwargs):
@@ -200,12 +199,12 @@ def test_background_preparation_keeps_qt_responsive_and_publishes_without_scans(
         messages = [record.getMessage() for record in caplog.records]
         assert any("stage=gui_publication" in message and session.request.request_id in message for message in messages)
         assert any("stage=completion" in message and "child_descriptor_to_parent_observation_gap=unmeasured" in message for message in messages)
-        assert panel.stage_label.text() != "数据保存中"
+        assert panel.condition_state.stage_text != "数据保存中"
         if workspace is not None:
             assert workspace.status_label.text() == "待判定"
             assert workspace._condition_contexts["forward"]["status"] == "待判定"
             host._handle_invalid_recording.assert_not_called()
-        assert panel.rows["forward"]["labels"]["result"].text() != "数据保存中"
+        assert panel.condition_state.rows["forward"]["result"] != "数据保存中"
     finally:
         sys.setprofile(None)
         release.set()
@@ -284,11 +283,11 @@ def test_cancelled_and_replaced_session_cannot_restore_processing(ui_qapp, tmp_p
     from types import SimpleNamespace
     from base.recording_service import RecordingSession, RecordingCallbacks
     from ui.sequence.recording_process_context import RecordingProcessContext
-    from ui.sequence.motor_result_panel import MotorResultPanel
+    from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
     from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
     service = SimpleNamespace(cancel=mock.Mock())
     host = main_host(service, tmp_path)
-    panel = MotorResultPanel(condition_configs=[{"key":"forward", "name":"正转"}])
+    panel = MotorDetectionLeftPanel(None, condition_configs=[{"key":"forward", "name":"正转"}])
     host.left_panel = panel
     workspace = AnalysisWaveformPanel(condition_configs=[
         {"key":"forward", "name":"正转"}, {"key":"reverse", "name":"反转"}])
@@ -301,7 +300,7 @@ def test_cancelled_and_replaced_session_cannot_restore_processing(ui_qapp, tmp_p
     host._recording_process_session = old
     host._active_recording_process_id = req.request_id
     host._on_process_recording_finalizing(old)
-    assert panel.stage_label.text() == "数据保存中"
+    assert panel.condition_state.stage_text == "数据保存中"
     assert workspace.status_label.text() == "数据保存中"
     if terminal == "cancel":
         host._cancel_process_recording()
@@ -313,12 +312,12 @@ def test_cancelled_and_replaced_session_cannot_restore_processing(ui_qapp, tmp_p
         from base.recording_process_protocol import RecordingFailure
         host._on_process_recording_failed(old, RecordingFailure(req.request_id, "read", req.path, "broken"))
         expected = "测试异常"
-    assert panel.stage_label.text() == expected
+    assert panel.condition_state.stage_text == expected
     expected_condition = "测试异常" if terminal == "failed" else "待检测"
     assert workspace.status_label.text() == expected_condition
     assert workspace._condition_contexts["forward"]["status"] == expected_condition
     host._on_process_recording_finalizing(old)
-    assert panel.stage_label.text() == expected
+    assert panel.condition_state.stage_text == expected
     fresh_req = replace(req, request_id="fresh")
     fresh = RecordingSession(service, fresh_req, RecordingCallbacks())
     fresh_context = RecordingProcessContext(fresh_req, "forward", False, session=fresh)
@@ -326,9 +325,9 @@ def test_cancelled_and_replaced_session_cannot_restore_processing(ui_qapp, tmp_p
     host._active_recording_process_id = fresh_req.request_id
     panel.set_current_stage("分析中")
     host._on_process_recording_finalizing(old)
-    assert panel.stage_label.text() == "分析中"
+    assert panel.condition_state.stage_text == "分析中"
     host._on_process_recording_finalizing(fresh)
-    assert panel.stage_label.text() == "数据保存中"
+    assert panel.condition_state.stage_text == "数据保存中"
     host._finish_process_recording_status(context, "待检测", "等待开始", "pending")
     assert workspace.status_label.text() == "数据保存中"  # stale terminal
     panel.set_current_stage("分析中")
@@ -336,7 +335,7 @@ def test_cancelled_and_replaced_session_cannot_restore_processing(ui_qapp, tmp_p
     host._finish_process_recording_status(fresh_context, "待检测", "等待开始", "pending")
     assert workspace.status_label.text() == "分析中"  # newer state
     host._on_process_recording_finalizing(fresh)
-    assert panel.stage_label.text() == "分析中"  # once per session
+    assert panel.condition_state.stage_text == "分析中"  # once per session
     workspace.set_condition_context("forward", status="数据保存中")
     workspace.set_condition_context("reverse", status="分析完成")
     workspace.set_active_condition("reverse")
@@ -518,12 +517,12 @@ def test_ve_release_grace_keeps_data_saving_without_failure_dialog(ui_qapp, tmp_
     from base.recording_process_protocol import RecordingEvent, RecordingProgress
     from unit_test.base.test_recording_service_pipeline import ve_probe
     from ui.sequence.recording_process_context import RecordingProcessContext
-    from ui.sequence.motor_result_panel import MotorResultPanel
+    from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
     from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
 
     probe = ve_probe(monkeypatch, tmp_path)
     host = main_host(probe.service, tmp_path)
-    panel = MotorResultPanel(condition_configs=[{"key": "forward", "name": "正转"}])
+    panel = MotorDetectionLeftPanel(None, condition_configs=[{"key": "forward", "name": "正转"}])
     workspace = AnalysisWaveformPanel(condition_configs=[{"key": "forward", "name": "正转"}])
     host.left_panel, host.channel_workspace = panel, workspace
     host._get_active_product_condition_key = lambda: "forward"
@@ -541,11 +540,11 @@ def test_ve_release_grace_keeps_data_saving_without_failure_dialog(ui_qapp, tmp_
         probe.service._event(probe.worker, RecordingEvent(1, req.request_id, "progress",
             RecordingProgress(req.request_id, 1, req.target_samples, 100.1)))
         probe.service._event(probe.worker, RecordingEvent(1, req.request_id, "finalizing"))
-        assert panel.stage_label.text() == workspace.status_label.text() == "数据保存中"
+        assert panel.condition_state.stage_text == workspace.status_label.text() == "数据保存中"
         for delay in (1.0, 18.99):
             probe.clock.advance(delay)
             probe.service._tick()
-            assert panel.stage_label.text() == workspace.status_label.text() == "数据保存中"
+            assert panel.condition_state.stage_text == workspace.status_label.text() == "数据保存中"
             failed.assert_not_called()
             dialog.assert_not_called()
         assert session._slot_release_warning_sent
@@ -554,7 +553,7 @@ def test_ve_release_grace_keeps_data_saving_without_failure_dialog(ui_qapp, tmp_
         probe.service._tick()
         failed.assert_called_once()
         assert session.failure.stage == "capture_release_timeout"
-        assert panel.stage_label.text() == workspace.status_label.text() == "测试异常"
+        assert panel.condition_state.stage_text == workspace.status_label.text() == "测试异常"
     finally:
         panel.close()
         workspace.close()
