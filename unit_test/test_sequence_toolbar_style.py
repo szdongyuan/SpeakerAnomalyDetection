@@ -291,10 +291,10 @@ class TestSequenceToolbarStyle(unittest.TestCase):
         )
         self.assertLess(
             toolbar.sample_number_lineedit.geometry().right(),
-            toolbar.current_round_spinbox.geometry().left(),
+            toolbar.reset_round_button.geometry().left(),
         )
         self.assertLess(
-            toolbar.current_round_spinbox.geometry().right(),
+            toolbar.reset_round_button.geometry().right(),
             toolbar.lineedit_s_or_n.geometry().left(),
         )
         self.assertEqual(toolbar.lineedit_s_or_n.width(), 320)

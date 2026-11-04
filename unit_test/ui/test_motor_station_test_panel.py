@@ -255,3 +255,37 @@ def test_scrolling_alignment_and_native_status_colors(panel, qt_app, styled_host
     assert abs(table(panel).columnWidth(0) / table(panel).viewport().width() - .46) < .02
     scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
     assert general.isVisible()
+
+
+@pytest.mark.parametrize("count", [0, 2, 18])
+def test_header_background_fills_inner_width_through_resize(panel, qt_app, styled_host, count):
+    panel.set_station_count(count)
+    if count:
+        panel.set_station_row_count(1, 2)
+        header(panel).click()
+    for width in (600, 340, 600, 340):
+        styled_host.resize(width, 400)
+        qt_app.processEvents()
+        QTest.qWait(10)
+        qt_app.processEvents()
+        title = panel.findChild(QLabel, "stationTitle")
+        general = panel.findChild(QWidget, "stationGeneralHeader")
+        scroll = panel.findChild(QScrollArea)
+        image = panel.grab().toImage()
+        assert title.geometry().right() == panel.width() - 2
+        assert general.geometry().right() == panel.width() - 2
+        assert image.pixelColor(panel.width() - 2, title.geometry().center().y()) == QColor("#3e75ac")
+        assert image.pixelColor(panel.width() - 2, general.y() + 4) == QColor("#f1f5f9")
+        assert image.pixelColor(panel.width() - 1, panel.height() // 2) == QColor("#cddaea")
+        assert scroll.horizontalScrollBar().maximum() == 0
+        if count:
+            for name in ("Forward", "Reverse"):
+                label = panel.findChild(QLabel, "stationGeneral" + name)
+                station_label = panel.findChild(QLabel, "station" + name + "1")
+                assert abs(label.mapTo(panel, label.rect().center()).x() -
+                           station_label.mapTo(panel, station_label.rect().center()).x()) <= 1
+    # Removing the scrollbar must restore the full column width too.
+    panel.set_station_count(0)
+    qt_app.processEvents()
+    QTest.qWait(10)
+    assert panel._general_header.contentsRect().width() == panel._scroll.viewport().width()

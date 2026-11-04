@@ -55,7 +55,7 @@ def field_labels(toolbar):
     return [next(label for label in toolbar.findChildren(QLabel)
                  if label.buddy() is editor)
             for editor in (toolbar.lineedit_type, toolbar.using_file_combobox,
-                           toolbar.sample_number_lineedit, toolbar.current_round_spinbox)]
+                           toolbar.sample_number_lineedit)]
 
 
 def ordered_controls(toolbar):
@@ -64,7 +64,7 @@ def ordered_controls(toolbar):
               [labels[0], toolbar.lineedit_type],
               [labels[1], toolbar.using_file_combobox],
               [labels[2], toolbar.sample_number_lineedit],
-              [labels[3], toolbar.current_round_spinbox, toolbar.reset_round_button],
+              [toolbar.reset_round_button],
               [toolbar.barcode_scanner_box, toolbar.lineedit_s_or_n]]
     dividers = sorted((w for w in toolbar.findChildren(QFrame)
                        if w.frameShape() == QFrame.VLine), key=lambda w: w.x())
@@ -78,7 +78,7 @@ def assert_row(window, toolbar, width):
     assert toolbar.height() == 42
     assert 617 <= toolbar.minimumSizeHint().width() <= 1028
     controls = ordered_controls(toolbar)
-    assert len(controls) == 20
+    assert len(controls) == 18
     assert all(widget.isVisible() for widget in controls)
     rects = [QRect(widget.mapTo(toolbar, QPoint()), widget.size())
              for widget in controls]
@@ -89,7 +89,7 @@ def assert_row(window, toolbar, width):
         rect.center().y() for rect in rects) <= 1
     assert 125 <= toolbar.lineedit_s_or_n.width() <= 320
     for widget in (toolbar.lineedit_type, toolbar.using_file_combobox,
-                   toolbar.sample_number_lineedit, toolbar.current_round_spinbox):
+                   toolbar.sample_number_lineedit):
         assert widget.width() >= 55
         assert widget.height() == 35
     expected_action_width = 48 if toolbar.serial_trigger_btn.compact else 120
@@ -107,6 +107,44 @@ def assert_row(window, toolbar, width):
     assert toolbar.condition_mode_combobox.isHidden()
 
 
+@pytest.mark.parametrize("width", [1030, 1920])
+def test_round_field_removed_without_leaving_a_layout_slot(width, toolbar_host, ui_qapp):
+    window, toolbar, _ = toolbar_host
+    window.resize(width, 760)
+    ui_qapp.processEvents()
+    round_value = toolbar.current_round_spinbox
+    assert round_value.isHidden()
+    assert round_value.parentWidget() is toolbar
+    assert not round_value.isWindow()
+    assert not any(label.isVisible() and (
+        label.buddy() is round_value or "轮次" in label.text()
+    ) for label in toolbar.findChildren(QLabel))
+    row = toolbar.layout().itemAt(1).layout()
+    controls = [row.itemAt(index).widget() for index in range(row.count())]
+    assert round_value not in controls
+    assert all(control.isVisible() for control in controls)
+    sample_index = controls.index(toolbar.sample_number_lineedit)
+    reset_index = controls.index(toolbar.reset_round_button)
+    sn_index = controls.index(toolbar.barcode_scanner_box)
+    assert reset_index == sample_index + 2
+    assert sn_index == reset_index + 2
+    assert isinstance(controls[reset_index - 1], QFrame)
+    assert isinstance(controls[reset_index + 1], QFrame)
+    spacing = 1 if toolbar.serial_trigger_btn.compact else row.spacing()
+    for left, right in zip(controls[sample_index:sn_index], controls[sample_index + 1:sn_index + 1]):
+        assert right.x() - (left.x() + left.width()) == spacing
+    toolbar.player_btn.setFocus()
+    for _ in range(len(toolbar.findChildren(QWidget)) + 1):
+        QTest.keyClick(window.focusWidget(), Qt.Key_Tab)
+        assert not round_value.hasFocus()
+        assert not round_value.lineEdit().hasFocus()
+    round_value.setValue(7)
+    assert round_value.value() == 7
+    toolbar.reset_round_button.clicked.connect(lambda: round_value.setValue(1))
+    QTest.mouseClick(toolbar.reset_round_button, Qt.LeftButton)
+    assert round_value.value() == 1
+
+
 @pytest.mark.parametrize("width", [1030, 1280, 1440, 1920])
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5])
 def test_single_row_at_real_parent_width(width, scale, toolbar_host, ui_qapp, monkeypatch):
@@ -119,8 +157,8 @@ def test_single_row_at_real_parent_width(width, scale, toolbar_host, ui_qapp, mo
     assert_row(window, toolbar, width)
     assert toolbar.lineedit_type.font().pixelSize() == round(18 * scale)
     assert workspace.height() > 650
-    expected = (["型号：", "配置：", "样本：", "轮次："] if toolbar.serial_trigger_btn.compact
-                else ["型号：", "使用配置：", "样本编号：", "当前测试轮次："])
+    expected = (["型号：", "配置：", "样本："] if toolbar.serial_trigger_btn.compact
+                else ["型号：", "使用配置：", "样本编号："])
     for label, text in zip(field_labels(toolbar), expected):
         assert label._display_text() == text
         assert "…" not in text
@@ -146,7 +184,6 @@ def test_single_row_at_real_parent_width(width, scale, toolbar_host, ui_qapp, mo
         assert toolbar.lineedit_type.width() == 160
         assert toolbar.using_file_combobox.width() == 200
         assert toolbar.sample_number_lineedit.width() == 100
-        assert toolbar.current_round_spinbox.width() == 60
         assert toolbar.lineedit_s_or_n.width() == 320
         assert toolbar.width() - ordered_controls(toolbar)[-1].geometry().right() > 30
 
@@ -173,16 +210,12 @@ def test_minimum_fields_show_ellipsis_with_real_fonts(scale, toolbar_host, ui_qa
     for widget in (toolbar.lineedit_type, toolbar.sample_number_lineedit,
                    toolbar.using_file_combobox, toolbar.lineedit_s_or_n):
         assert "…" in widget._display_text()
-    editor = toolbar.current_round_spinbox.lineEdit()
-    assert editor._display_text()
-    if editor.fontMetrics().horizontalAdvance("9999") > editor._text_rect().width():
-        assert "…" in editor._display_text()
     assert toolbar.barcode_scanner_box._display_text()
     if scale == 1:
         assert toolbar.barcode_scanner_box._display_text() == "S/N："
 
 
-def test_wide_row_restores_labels_and_four_digit_round(toolbar_host, ui_qapp):
+def test_wide_row_restores_labels_and_preserves_hidden_round(toolbar_host, ui_qapp):
     from ui.sequence.toolbar_eliding_widgets import ElidingLabel
 
     window, toolbar, _ = toolbar_host
@@ -194,7 +227,8 @@ def test_wide_row_restores_labels_and_four_digit_round(toolbar_host, ui_qapp):
     for widget in ordered_controls(toolbar):
         if isinstance(widget, ElidingLabel):
             assert widget._display_text() == widget.text()
-    assert toolbar.current_round_spinbox.lineEdit()._display_text() == "9999"
+    assert toolbar.current_round_spinbox.value() == 9999
+    assert toolbar.current_round_spinbox.isHidden()
 
 
 def test_resize_preserves_values_focus_selection_and_signals(toolbar_host, ui_qapp):
