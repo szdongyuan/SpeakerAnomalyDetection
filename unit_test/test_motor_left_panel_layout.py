@@ -590,6 +590,7 @@ def test_dashboard_integration_business_updates_leave_station_untouched(qt_app):
     assert notifications == ["b"]
     assert panel.condition_state.rows["a"]["result"] == "NG"
     assert panel.condition_state.current_round == 7
+    assert panel.dashboard_panel.summary_panel.findChild(QLabel, "summaryTotal").text() == "0"
     assert panel.refresh_condition_configs(config, queue_catalog={}, preserve_results=True)
     assert panel.get_station_data(1) == before
     assert header.isChecked()
@@ -620,3 +621,73 @@ def test_left_panel_preserves_video_and_hides_business_count_board(qt_app):
     assert panel.get_station_count() == 0
     panel.close()
     panel.deleteLater()
+
+
+def test_daily_records_forwarding_preserves_stations_conditions_and_video(qt_app):
+    from datetime import date
+    from PyQt5.QtCore import QCoreApplication, QEvent
+    from unit_test.daily_record_cases import make_daily_records
+
+    board = QWidget()
+    panel = MotorDetectionLeftPanel(board, condition_configs=[{"key": "a"}], queue_catalog={})
+    try:
+        panel.set_station_count(1)
+        panel.set_station_row_count(1, 1)
+        panel.set_station_row(1, 0, ["existing", 12, 34])
+        panel.set_station_results(1, "OK", "NG")
+        panel.set_final_result("NG")
+        station = panel.get_station_data(1)
+        condition_state = panel.condition_state
+        result = condition_state.final_result
+        video = panel.video_monitor_panel
+        day = date(2026, 11, 4)
+        records = make_daily_records(3, day)
+        records[0]["station_id"] = 99
+        assert panel.set_daily_records(records, day) is None
+        assert panel.dashboard_panel.summary_panel.findChild(QLabel, "summaryTotal").text() == "3"
+        assert panel.get_station_count() == 1
+        assert panel.get_station_data(1) == station
+        assert panel.condition_state is condition_state
+        assert condition_state.final_result == result
+        assert panel.video_monitor_panel is video
+        assert board.isHidden()
+        panel.reset_result_panel()
+        assert panel.dashboard_panel.summary_panel.findChild(QLabel, "summaryTotal").text() == "3"
+    finally:
+        panel.close()
+        panel.deleteLater()
+        board.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+
+def test_daily_details_uses_detached_dashboard_host_and_is_released_with_host(qt_app):
+    from PyQt5 import sip
+    from PyQt5.QtCore import QCoreApplication, QEvent
+    from PyQt5.QtWidgets import QPushButton, QVBoxLayout
+
+    panel = MotorDetectionLeftPanel(QWidget(), condition_configs=[], queue_catalog={})
+    host = QWidget()
+    dashboard, video = panel.take_split_sections()
+    QVBoxLayout(host).addWidget(dashboard)
+    host.show()
+    qt_app.processEvents()
+    try:
+        summary = dashboard.summary_panel
+        summary.findChild(QPushButton, "summaryDetails").click()
+        qt_app.processEvents()
+        dialog = summary._details_dialog
+        assert dialog.parentWidget() is host
+        assert qt_app.activeModalWidget() is dialog
+        host.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        qt_app.processEvents()
+        assert sip.isdeleted(dialog)
+        assert sip.isdeleted(summary)
+        assert qt_app.activeModalWidget() is None
+    finally:
+        if not sip.isdeleted(host):
+            host.close()
+            host.deleteLater()
+        video.deleteLater()
+        panel.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)

@@ -139,6 +139,9 @@ class MotorDetectionLeftPanel(QWidget):
     def set_station_count(self, count):
         return self.station_panel.set_station_count(count)
 
+    def set_daily_records(self, records, record_date=None):
+        return self.dashboard_panel.summary_panel.set_daily_records(records, record_date)
+
     def set_station_row_count(self, station_id, count):
         return self.station_panel.set_station_row_count(station_id, count)
 
