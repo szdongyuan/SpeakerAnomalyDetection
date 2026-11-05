@@ -24,7 +24,6 @@ from consts.recording_preview_consts import (
 )
 from ui.sequence import sequence_widget_analysis_ops as analysis
 from ui.sequence import sequence_widget_streaming_ops as streaming
-from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
 from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
 from unit_test.base.vkinging_fakes import CaptureSDK, device_info, input_config
 from unit_test.ui.test_streaming_event_dispatch import _WorkflowHost
@@ -74,7 +73,6 @@ def host_factory(ui_qapp, tmp_path, monkeypatch):
         host.mic_channels = [7, 1]
         host._recording_input_channels = None
         host._active_input_channels = []
-        host.channel_workspace = ChannelPlotWorkspace()
         host.ve_profile_store = VEInputProfileStore(tmp_path / "profiles.json")
         host.ve_calibration_store = VECalibrationStore(tmp_path / "calibrations.json")
         host.ve_profile_store.set_sample_rate(host.mic, rate, host.ve_calibration_store)
@@ -113,7 +111,8 @@ def host_factory(ui_qapp, tmp_path, monkeypatch):
     for host in hosts:
         # Invalidate queued release-check timers before destroying Qt widgets.
         host._recording_process_id = None
-        host.channel_workspace.close()
+        host._active_recording_process_id = None
+        host._recording_process_contexts = {}
         host.data_btn.close()
         host.replayer_btn.close()
 
@@ -207,7 +206,6 @@ def test_start_does_not_coerce_invalid_ve_rate(host_factory, raw_rate):
 def test_ve_channel_order_survives_refresh_request_metadata_and_wav(host_factory):
     host = host_factory()
     assert host._configured_input_channels == (7, 1)
-    assert [window.channel_index for window in host.channel_workspace.all_subwindows()] == [7, 1]
     recorded, rate = host.reset_work_pram("not_labeled")
     assert recorded["input_channels"] == [7, 1]
     host._recording_wav_calibration_metadata = build_recording_wav_calibration_metadata(
@@ -257,10 +255,6 @@ def test_direct_factor_recording_keeps_voltage_and_frozen_calibrated_tooltip(hos
         host.mic, 7, v2pa_factor=99.0, calibrated_at="2026-10-07T16:00:00+08:00",
     )
     preview = capture.snapshot(generation=session.generation, sequence=1)
-    host._on_process_recording_preview(session, preview)
-    windows = host.channel_workspace.all_subwindows()
-    assert windows[0].toolTip() == "校准有效；原始电压 V"
-    assert windows[1].toolTip() == "未校准，仅电压数据"
     result = inspect_wav_calibration_metadata(path)
     assert result.metadata["schema_version"] == 2
     assert result.metadata["recorded_channels"][0]["calibration"]["standard_spl"] is None
@@ -270,7 +264,6 @@ def test_direct_factor_recording_keeps_voltage_and_frozen_calibrated_tooltip(hos
     assert Path(path).read_bytes() == original
     np.testing.assert_array_equal(sf.read(path, dtype="float32")[0],
                                   np.column_stack([values for _, values in audio.waveforms]))
-    np.testing.assert_array_equal(windows[0].plot_item.getData()[1], preview.waveforms[0].amplitude)
 
 
 @pytest.mark.parametrize("measured", [False, True])
@@ -517,10 +510,8 @@ def test_soundcard_admission_after_ve_uses_product_rate(
     ve_device = host.mic
     session, _, audio = started_audio(host)
     finish_ve_capture(host, session, audio, outcome)
-    window = host.channel_workspace.all_subwindows()[0]
     host.mic = soundcard()
     host.refresh_channel_windows()
-    assert host.channel_workspace.all_subwindows()[0] is window
     # Hardware selection must not reinterpret the previous VE audio/timebase.
     assert host.data_struct.sample_rate == ve_rate
     assert sf.info(session.request.path).samplerate == ve_rate
@@ -529,7 +520,6 @@ def test_soundcard_admission_after_ve_uses_product_rate(
         assert host.data_struct.store_wave_data is None
         assert host.data_struct.recording_source.request is session.request
         assert host.data_struct.audio_lenth == audio.descriptor.final_frames
-        assert window.plot_item.getData()[0][-1] == pytest.approx((audio.descriptor.final_frames - 1) / ve_rate)
     recorded, actual_rate = host.reset_work_pram("not_labeled")
     assert actual_rate == recorded["sample_rate"] == recorded["sr"] == 32000
     assert host.data_struct.sample_rate == 32000
@@ -700,12 +690,6 @@ def test_publish_keeps_frozen_rate_metadata_and_raw_voltage(host_factory, monkey
     host.run.assert_not_called()
     host.saved.assert_called_once()
     forbidden.assert_not_called()
-    for column, window in enumerate(host.channel_workspace.all_subwindows()):
-        x, y = window.plot_item.getData()
-        assert x[-1] == pytest.approx((audio.descriptor.final_frames - 1) / rate)
-        np.testing.assert_array_equal(y, audio.waveforms[column][1])
-        assert "Amplitude(V)" in window.plot_widget.getAxis("left").labelText
-        assert "未校准，仅电压数据" in window.toolTip()
     host._on_process_recording_released(session)
     host.run.assert_not_called()
 
@@ -718,74 +702,11 @@ def test_preview_is_raw_voltage_and_uses_frozen_calibration_hint(host_factory, m
     session, capture, audio = started_audio(host)
     preview = capture.snapshot(generation=session.generation, sequence=1)
     save_calibration(host, physical=1, factor=42)
-    host._on_process_recording_preview(session, preview)
-    for column, window in enumerate(host.channel_workspace.all_subwindows()):
-        x, y = window.plot_item.getData()
-        np.testing.assert_array_equal(y, preview.waveforms[column].amplitude)
-        np.testing.assert_array_equal(x, preview.waveforms[column].time)
-        assert x[-1] == 0.0
-        assert window.is_live_preview is True
-        assert "Amplitude(V)" in window.plot_widget.getAxis("left").labelText
-        assert ("校准有效；原始电压 V" if measured and column == 0 else "未校准，仅电压数据") in window.toolTip()
-
-
-@pytest.mark.parametrize("measured", [False, True])
-@pytest.mark.parametrize("replacement", ["preview", "final"])
-@pytest.mark.parametrize("other_hint", ["empty", "prior", "changed"])
-def test_legacy_waveform_replacement_resets_only_ve_owned_tooltip(
-        host_factory, measured, replacement, other_hint):
-    from base.recording_process_protocol import RecordingPreview
-    from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
-    from unit_test.base.recording_process_fakes import device_info as soundcard
-    host = host_factory(live=True)
-    host.mic_channels = [1]
-    host.refresh_channel_windows()
-    window = host.channel_workspace.all_subwindows()[0]
-    expected_hint = "channel note" if other_hint == "prior" else ""
-    window.setToolTip(expected_hint)
-    if measured:
-        save_calibration(host, physical=1)
-    session, capture, audio = started_audio(host)
-    # Repeated previews and final publication must retain the original hint.
-    for sequence in (1, 2):
-        host._on_process_recording_preview(session, capture.snapshot(generation=1, sequence=sequence))
-    finish_ve_capture(host, session, audio)
-    assert ("校准有效；原始电压 V" if measured else "未校准，仅电压数据") in window.toolTip()
-    if other_hint == "changed":
-        expected_hint = "updated channel note"
-        window.setToolTip(expected_hint)
-    displayed_hint = window.toolTip()
-    previous_x, previous_y = window.plot_item.getData()
-    host.mic = soundcard()
-    host.refresh_channel_windows()
-    assert host.channel_workspace.all_subwindows()[0] is window
-    assert window.toolTip() == displayed_hint
-    np.testing.assert_array_equal(window.plot_item.getData()[0], previous_x)
-    np.testing.assert_array_equal(window.plot_item.getData()[1], previous_y)
-    recorded, rate = host.reset_work_pram("not_labeled")
-    host._recording_wav_calibration_metadata = None
-    host._start_process_recording(recorded, rate)
-    assert window.toolTip() == displayed_hint  # Admission is not waveform replacement.
-    samples = np.full((int(.04 * rate), 1), .05, dtype=np.float32)
-    if replacement == "preview":
-        session = host._recording_process_session
-        waveform = StreamingWaveformSnapshot(
-            (np.arange(len(samples), dtype=np.float64) - len(samples) + 1) / rate,
-            samples[:, 0], len(samples))
-        preview = RecordingPreview(session.request.request_id, session.generation, 1,
-                                   len(samples), (1,), (waveform,),
-                                   PREVIEW_TIME_MODE_RELATIVE_LATEST)
-        host._on_process_recording_preview(session, preview)
-        assert host._recording_process_preview_enabled
-    else:
-        assert host._on_streaming_complete(
-            recorded_mono=samples[:, 0], recorded_multi=samples, sample_rate=rate,
-            prefinalized=True, final_waveform_windows=(window,)) is True
-    np.testing.assert_array_equal(window.plot_item.getData()[1], samples[:, 0])
-    expected_endpoint = 0.0 if replacement == "preview" else (len(samples) - 1) / rate
-    assert window.plot_item.getData()[0][-1] == pytest.approx(expected_endpoint)
-    assert window.is_live_preview is (replacement == "preview")
-    assert window.toolTip() == expected_hint
+    assert preview.channels == session.request.channels
+    for column, waveform in enumerate(preview.waveforms):
+        assert waveform.time[-1] == 0.0
+        assert np.isfinite(waveform.amplitude).all()
+    assert session.request.calibration_metadata['recorded_channels'][1]['calibrated'] is False
 
 
 @pytest.mark.parametrize("outcome", ["ordinary", "streaming", "cancel", "close", "metadata_false", "release_error"])
@@ -812,17 +733,15 @@ def test_real_service_bridge_ve_lifecycle(host_factory, ui_qapp, tmp_path, monke
     if outcome in ("cancel", "close", "streaming"):
         host.sequence_config[0]["seq1"]["acq"]["detail"]["total_time"] = .5
     previews = []
-    on_preview = host._on_process_recording_preview
-
-    def preview(session, value):
-        previews.append(value)
-        on_preview(session, value)
-
-    host._on_process_recording_preview = preview
     session = None
     try:
         host.judge_play_and_record()
         session = host._recording_process_session
+        on_preview = session.callbacks.preview
+        def preview(current, value):
+            previews.append(value)
+            on_preview(current, value)
+        session.callbacks = replace(session.callbacks, preview=preview)
         assert host.player_status_flag and not host.data_btn.isEnabled()
         if outcome == "release_error":
             def deny_cleanup(path):

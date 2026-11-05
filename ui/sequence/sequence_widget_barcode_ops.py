@@ -342,9 +342,6 @@ class SequenceWidgetBarcodeOpsMixin:
     def _reset_direction_cycle_panel_state(self):
         self._direction_cycle_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._current_cycle_first_direction = ""
-        clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
-        if callable(clear_all_direction_waveforms):
-            clear_all_direction_waveforms()
         if getattr(self, "left_panel", None) is not None:
             self.left_panel.set_forward_result("待检测", tone="pending")
             self.left_panel.set_reverse_result("待检测", tone="pending")

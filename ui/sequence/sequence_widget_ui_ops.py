@@ -35,11 +35,6 @@ class SequenceWidgetUiOpsMixin:
         mode = self._normalize_saved_sequence_mode(getattr(getattr(self, "count_board", None), "mode", ""))
         return mode or "test"
 
-    def _apply_condition_mode_to_waveforms(self, mode=None):
-        channel_workspace = getattr(self, "channel_workspace", None)
-        if channel_workspace is None or not hasattr(channel_workspace, "set_mode"):
-            return
-        channel_workspace.set_mode(self._normalize_saved_sequence_mode(mode) or self._current_condition_mode())
 
     def _sync_condition_mode_combobox_from_count_board(self):
         combo = getattr(getattr(self, "toolsbar", None), "condition_mode_combobox", None)
@@ -51,7 +46,6 @@ class SequenceWidgetUiOpsMixin:
             combo.setCurrentText(text)
         finally:
             combo.blockSignals(was_blocked)
-        self._apply_condition_mode_to_waveforms()
 
     def _persist_sequence_page_state(self, sequence_mode=None):
         """
@@ -109,7 +103,7 @@ class SequenceWidgetUiOpsMixin:
 
     def refresh_channel_windows(self):
         """
-        Refresh the fixed directional waveform windows.
+        Validate input channels and synchronize the station panel.
 
         MainWindow assigns mic_channels after SequenceWindow construction, so this should be
         called at least once after the window is shown, and again after hardware selection changes.
@@ -147,25 +141,21 @@ class SequenceWidgetUiOpsMixin:
             return
 
         self._pending_configured_input_channels = None
-        self._apply_input_channel_workspace_mapping(channels)
+        self._apply_input_channels(channels)
         self.default_logger.info(
-            f"Channel waveform workspace ready, input channels: {list(channels)}"
+            f"Recording input channels ready: {list(channels)}"
         )
 
-    def _apply_input_channel_workspace_mapping(self, channels) -> bool:
+    def _apply_input_channels(self, channels) -> bool:
         channels = tuple(channels)
         active_channels = tuple(getattr(self, "_active_input_channels", []) or [])
         if channels == active_channels:
             return False
 
-        end_live_display = getattr(self, "_end_streaming_waveform_session", None)
-        if callable(end_live_display):
-            end_live_display()
         self._active_input_channels = list(channels)
-        workspace = getattr(self, "channel_workspace", None)
-        if workspace is not None:
-            workspace.set_channels(channels)
-            workspace.clear_plots()
+        left_panel = getattr(self, "left_panel", None)
+        if left_panel is not None:
+            left_panel.set_channels(channels)
         return True
 
 
@@ -187,9 +177,8 @@ class SequenceWidgetUiOpsMixin:
         self._active_input_channels = list(run_channels)
         recorded_dict["input_channels"] = list(run_channels)
         recorded_dict["channels"] = len(run_channels)
-        workspace = getattr(self, "channel_workspace", None)
-        if workspace is not None and active_channels != run_channels:
-            workspace.set_channels(run_channels)
+        if active_channels != run_channels and getattr(self, "left_panel", None) is not None:
+            self.left_panel.set_channels(run_channels)
         return run_channels
 
     def _finalize_recording_channel_selection(self) -> None:
@@ -199,7 +188,7 @@ class SequenceWidgetUiOpsMixin:
         self._pending_configured_input_channels = None
         if pending_channels is None or tuple(pending_channels) == tuple(run_channels or ()):
             return
-        self._apply_input_channel_workspace_mapping(pending_channels)
+        self._apply_input_channels(pending_channels)
 
     def _abort_recording_channel_selection(self) -> None:
         self._finalize_recording_channel_selection()
@@ -228,7 +217,7 @@ class SequenceWidgetUiOpsMixin:
 
         # When test-queue config is confirmed, refresh combobox + reload config first.
         # (No global signal dependency; MainWindow calls on_sequence_config_updated after dialog closes.)
-        # Streaming audio chunk signal for real-time waveform updates
+        # Streaming audio chunks retain queue and WAV delivery.
         sign.stream_audio_chunk_signal.connect(self.on_audio_chunk_received, Qt.AutoConnection)
         sign.stream_audio_queue_ready_signal.connect(
             self._on_streaming_queue_ready,
@@ -275,7 +264,6 @@ class SequenceWidgetUiOpsMixin:
     def on_condition_mode_combobox_changed(self, text):
         target_mode = "mark" if str(text or "").strip() == "标记" else "test"
         if self.count_board is None:
-            self._apply_condition_mode_to_waveforms(target_mode)
             return
 
         current_mode = self._current_condition_mode()
@@ -315,11 +303,6 @@ class SequenceWidgetUiOpsMixin:
             clear_wav_calibration_state()
         else:
             DataDealStruct.clear_wav_calibration_context(self.data_struct)
-        clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
-        if callable(clear_all_direction_waveforms):
-            clear_all_direction_waveforms()
-        else:
-            self._clear_plot_area()
         self._close_analysis_windows()
         try:
             self._reset_barcode_commit_dedup()

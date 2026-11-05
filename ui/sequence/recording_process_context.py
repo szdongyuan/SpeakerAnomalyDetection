@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 class RecordingProcessContext:
     request: object
     direction: str
-    preview_enabled: bool
     session: object = None
     session_binding_pending: bool = False
     processor: object = None
@@ -17,10 +16,7 @@ class RecordingProcessContext:
     cancelled: bool = False
     validated_audio: object = None
     accepted_audio: object = None
-    final_windows: object = None
-    display_source: object = None
     release_warned: bool = False
-    sequence: int = 0
     cleanup_owned: bool = False
     release_deadline: float = 0.0
     recent_session_id: str = ""

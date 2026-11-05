@@ -48,7 +48,6 @@ class ProgressHost(progress_ops.SequenceWidgetProgressOpsMixin, _MetadataHost):
             {"key": "c", "group_name": "USB-C", "condition_name": "高档", "test_queue": "q2"},
         ]
         self.left_panel = MotorDetectionLeftPanel(None, condition_configs=self.product_test_condition_configs)
-        self.channel_workspace = Mock()
         self.recent_test_session_by_id = {}
         self.recent_test_sessions = []
         self._condition_record_cache = {}
@@ -161,7 +160,7 @@ def test_legacy_model_continues_only_the_saved_round(factory, model):
     assert reopened._validate_test_round_metadata()
     assert reopened._prepare_next_manual_product_condition_recording()
     assert reopened._build_product_test_progress()["identity"]["product_model"] == model
-    reopened._reset_manual_product_condition_cycle(clear_waveforms=False)
+    reopened._reset_manual_product_condition_cycle()
     assert reopened._test_round_product_model is None
     assert not reopened._validate_test_round_metadata()
     assert reopened.lineedit_type.text() == model
@@ -608,7 +607,6 @@ def test_compact_snapshot_excludes_analysis_blobs_and_fake_history(factory):
     assert reopened._offer_product_test_resume()
     assert not reopened.recent_test_sessions
     assert not reopened.recent_test_session_by_id
-    reopened.channel_workspace.set_condition_audio_path.assert_not_called()
     assert reopened._condition_record_cache["a"]["result_label"] == "OK"
 
 
@@ -1481,7 +1479,6 @@ def test_serial_port_boundary_and_completed_frames_survive_restart(factory, wait
     reopened._start_serial_product_condition.assert_called_once_with(frames[1])
 
 
-
 def test_unsupported_serial_idle_wait_does_not_partially_restore(factory):
     original = factory()
     serial_conditions(original)
@@ -1821,7 +1818,6 @@ def test_progress_after_current_recording_failure_keeps_completed_and_next_condi
     host.recorded_path = ""
     host._recording_workflow_token = object()
     host._recording_input_channels = None
-    host._streaming_waveform_live_enabled = False
     host._record_workflow_busy = host.player_status_flag = True
     host.update_player_btn_is_paused = Mock()
     monkeypatch.setattr("PyQt5.QtWidgets.QMessageBox.warning", lambda *args: None)

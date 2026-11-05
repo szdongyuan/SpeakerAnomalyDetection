@@ -156,22 +156,6 @@ def test_csv_bridge_consumer_fault_preserves_delivery(ui_qapp, tmp_path, monkeyp
             bridge.close_delivery()
 
 
-def test_waveform_fallback_logger_writes_summary(tmp_path, monkeypatch, caplog):
-    from ui.sequence import sequence_widget_streaming_ops as ops
-    from unit_test.base.test_business_project_logging import assert_project_record
-
-    host = SimpleNamespace(_streaming_waveform_generation=12)
-    with isolated_project_logger(tmp_path, monkeypatch) as state:
-        diagnostic = ops._waveform_diagnostics(host)
-        assert ops._waveform_diagnostics(host) is diagnostic
-        diagnostic.observe("gui_projection", 100)
-        ops._finish_waveform_diagnostics(host)
-        ops._finish_waveform_diagnostics(host)
-        assert_project_record(state, caplog, "gui_waveform_summary",
-                              "recording_diagnostics.py", logging.INFO)
-        assert "waveform_generation=12" in state.path.read_text(encoding="utf-8")
-
-
 def test_tracked_production_modules_use_project_logging_imports():
     from unit_test.base.test_project_logging_entrypoints import production_logging_violations
     violations = production_logging_violations(Path(__file__).resolve().parents[2])

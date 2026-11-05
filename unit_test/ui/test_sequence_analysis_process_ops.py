@@ -44,14 +44,6 @@ class _LeftPanel:
         self.final_updates.append((text, tone))
 
 
-class _Workspace:
-    def __init__(self):
-        self.context_updates = []
-
-    def set_condition_context(self, condition_key, **context):
-        self.context_updates.append((condition_key, context))
-
-
 def test_automatic_request_snapshots_current_channel_labels(monkeypatch):
     captured = {}
 
@@ -61,11 +53,11 @@ def test_automatic_request_snapshots_current_channel_labels(monkeypatch):
 
     monkeypatch.setattr(analysis_process_ops, "build_analysis_task_request", _build)
 
+    monkeypatch.setattr(analysis_process_ops, "load_channel_layout",
+                        lambda: {"CH1": "前", "CH2": "后"})
+
     class Host(SequenceWidgetAnalysisProcessOpsMixin):
         def __init__(self):
-            self.channel_workspace = SimpleNamespace(
-                channel_layout={"CH1": "前", "CH2": "后"}
-            )
             self.sequence_config = []
             self.analysis_config = {}
             self._live_mic_channel_v2pa_factors = {}
@@ -175,7 +167,6 @@ def test_progress_keeps_short_analysis_status_in_header_and_row(stage):
     class Host(SequenceWidgetAnalysisProcessOpsMixin):
         def __init__(self):
             self.left_panel = _LeftPanel()
-            self.channel_workspace = _Workspace()
             self._analysis_process_service = _Service()
             self._analysis_active_request = SimpleNamespace(
                 source="自动分析",
@@ -199,28 +190,6 @@ def test_progress_keeps_short_analysis_status_in_header_and_row(stage):
     ]
     assert host.left_panel.stage_updates == [
         ("分析中", "running")
-    ]
-    assert host.channel_workspace.context_updates == [
-        ("group_1:condition_2", {"status": "分析中"})
-    ]
-
-
-def test_analysis_stage_is_synchronized_to_waveform_header():
-    class Host(SequenceWidgetAnalysisProcessOpsMixin):
-        def __init__(self):
-            self.left_panel = _LeftPanel()
-            self.channel_workspace = _Workspace()
-
-    host = Host()
-
-    host._set_condition_analysis_stage(
-        "group_1:condition_1",
-        "分析排队",
-        "running",
-    )
-
-    assert host.channel_workspace.context_updates == [
-        ("group_1:condition_1", {"status": "分析排队"})
     ]
 
 
@@ -309,6 +278,7 @@ def test_terminal_result_does_not_leave_background_analysis_stage():
     )
 
     host._sync_process_result_to_condition_panel(result, "OK", "ok")
+    assert host.left_panel.condition_updates == [("group_1:condition_1", "OK", "ok")]
 
     assert host.left_panel.condition_updates == [
         ("group_1:condition_1", "OK", "ok")
@@ -320,7 +290,6 @@ def test_completed_analysis_replaces_collecting_waveform_status():
     class Host(SequenceWidgetAnalysisProcessOpsMixin):
         def __init__(self):
             self.left_panel = _LeftPanel()
-            self.channel_workspace = _Workspace()
             self._analysis_process_service = None
             self._analysis_active_request = None
             self._analysis_task_queue = ()
@@ -336,10 +305,7 @@ def test_completed_analysis_replaces_collecting_waveform_status():
     )
 
     host._sync_process_result_to_condition_panel(result, "OK", "ok")
-
-    assert host.channel_workspace.context_updates == [
-        ("group_1:condition_1", {"status": "分析完成"})
-    ]
+    assert host.left_panel.condition_updates == [("group_1:condition_1", "OK", "ok")]
 
 
 def test_idle_automatic_analysis_restores_waiting_next_condition_stage():
@@ -671,12 +637,12 @@ def test_manual_result_windows_receive_current_channel_position_labels(monkeypat
         _Window,
     )
 
+    monkeypatch.setattr(analysis_process_ops, "load_channel_layout",
+                        lambda: {"CH1": "前", "CH2": "后"})
+
     class Host(SequenceWidgetAnalysisProcessOpsMixin):
         def __init__(self):
             self.analysis_window = []
-            self.channel_workspace = SimpleNamespace(
-                channel_layout={"CH1": "前", "CH2": "后"}
-            )
             self._analysis_active_request = SimpleNamespace(
                 analysis_config_snapshot=SimpleNamespace(
                     to_dict=lambda: {"声压级": {"type": "SPL"}}

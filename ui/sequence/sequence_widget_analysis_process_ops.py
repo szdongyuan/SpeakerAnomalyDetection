@@ -10,6 +10,7 @@ import time
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QMessageBox
 
+from base.channel_layout import load_channel_layout
 from base.analysis_result_summary import failed_analysis_task_result
 from base.analysis_service import AnalysisProcessService, log_analysis_startup_stage
 from base.log_manager import LogManager
@@ -276,10 +277,7 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             else {}
         )
         if source == "自动分析":
-            workspace = getattr(self, "channel_workspace", None)
-            storage_snapshot["channel_labels"] = dict(
-                getattr(workspace, "channel_layout", {}) or {}
-            )
+            storage_snapshot["channel_labels"] = load_channel_layout()
         fallback_factors = dict(
             getattr(self, "_live_mic_channel_v2pa_factors", {}) or {}
         )
@@ -670,24 +668,6 @@ class SequenceWidgetAnalysisProcessOpsMixin:
                 display_text,
                 tone=tone,
             )
-        workspace = getattr(self, "channel_workspace", None)
-        set_context = getattr(workspace, "set_condition_context", None)
-        if callable(set_context):
-            workspace_status = (
-                "分析完成"
-                if result.execution_status == "分析完成"
-                else display_text
-            )
-            set_context(result.condition_key, status=workspace_status)
-        if (
-            workspace is not None
-            and result.final_judgement in {"OK", "NG"}
-            and hasattr(workspace, "set_condition_result")
-        ):
-            workspace.set_condition_result(
-                result.condition_key,
-                result.final_judgement,
-            )
 
     @staticmethod
     def _build_process_channel_results(task_result):
@@ -804,14 +784,7 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             if request is not None
             else getattr(self, "analysis_config", {}) or {}
         )
-        channel_labels = dict(
-            getattr(
-                getattr(self, "channel_workspace", None),
-                "channel_layout",
-                {},
-            )
-            or {}
-        )
+        channel_labels = load_channel_layout()
         if result.segments:
             channel_labels = result.channel_labels.to_dict()
         for config_key, instance_results in grouped.items():
@@ -996,10 +969,6 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             retry = getattr(self, "_current_product_recording_retry", lambda: None)()
             if retry is None:
                 left_panel.set_current_stage(detail_text or text, tone=tone)
-        workspace = getattr(self, "channel_workspace", None)
-        set_context = getattr(workspace, "set_condition_context", None)
-        if callable(set_context):
-            set_context(key, status=text)
 
     def _refresh_analysis_action_state(self):
         button = getattr(self, "data_btn", None)

@@ -161,7 +161,6 @@ class _ProductRoundBarcodeHost(SequenceWidgetBarcodeOpsMixin):
         self._active_product_condition_config = dict(
             self.product_test_condition_configs[0]
         )
-        self._waveform_display_override_direction = "q6000"
         self._current_trigger_direction = "q6000"
         self._current_cycle_recorded_count = "round-1"
         self._serial_product_condition_executing = False
@@ -334,7 +333,7 @@ def test_product_round_reset_unlocks_and_clears_barcode():
     host = _ProductRoundBarcodeHost("SN001")
     host._reserve_recorded_count_for_run()
 
-    host._reset_manual_product_condition_cycle(clear_waveforms=False)
+    host._reset_manual_product_condition_cycle()
 
     assert not host.lineedit_s_or_n.isReadOnly()
     assert host.lineedit_s_or_n.text() == ""

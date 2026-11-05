@@ -33,9 +33,6 @@ class _DummyWaveformLabelWidget(SequenceWidgetStreamingOpsMixin):
         self.recorded_signal_info = {}
         self._current_recent_session_id = ""
         self.marked_results = []
-        self.channel_workspace = SimpleNamespace(
-            set_condition_result=lambda key, label: self.marked_results.append((key, label))
-        )
 
     def _resolve_waveform_direction(self, fallback=""):
         return fallback

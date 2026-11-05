@@ -22,29 +22,6 @@ STREAMING_OPS_PATH = (
 )
 
 
-@pytest.mark.parametrize("schema_version", [1, 2])
-def test_ve_tooltip_uses_neutral_calibrated_state_for_both_file_versions(ui_qapp, schema_version):
-    from PyQt5.QtWidgets import QWidget
-    from base.vkinging_wav_metadata import validate_ve_wav_metadata
-    from unit_test.base.vkinging_fakes import wav_metadata, wav_metadata_v2
-
-    payload = wav_metadata() if schema_version == 1 else wav_metadata_v2()
-    if schema_version == 2:
-        payload["recorded_channels"][0]["calibration"].update(
-            standard_spl=None, sample_rate=None, duration_seconds=None,
-        )
-    windows = [QWidget(), QWidget()]
-    try:
-        SequenceWidgetStreamingOpsMixin._set_recording_voltage_tooltips(
-            windows, validate_ve_wav_metadata(payload),
-        )
-        assert windows[0].toolTip() == "校准有效；原始电压 V"
-        assert windows[1].toolTip() == "未校准，仅电压数据"
-    finally:
-        for window in windows:
-            window.close()
-
-
 @pytest.mark.parametrize("mode", ["streaming", "blocking", "play_record"])
 @pytest.mark.parametrize("trim", [0, 1, 100])
 def test_legacy_completion_publishes_saved_pcm24(tmp_path, monkeypatch, mode, trim):
@@ -86,7 +63,6 @@ def test_legacy_completion_publishes_saved_pcm24(tmp_path, monkeypatch, mode, tr
     np.testing.assert_array_equal(host.data_struct.store_wave_data_multi, decoded)
     np.testing.assert_array_equal(host.data_struct.store_wave_data, decoded.mean(axis=1))
     np.testing.assert_array_equal(analyzed, [decoded])
-    np.testing.assert_array_equal(host._project_normalized_waveform_to_workspace.call_args.args[0], decoded)
     np.testing.assert_array_equal(source, original)
 
 
@@ -108,7 +84,6 @@ def test_failed_trim_rewrite_does_not_publish_or_analyze(tmp_path, monkeypatch):
     assert host.data_struct.store_wave_data is None
     database.save_signal_info_to_db.assert_not_called()
     host._enqueue_automatic_analysis_current_recording.assert_not_called()
-    host._project_normalized_waveform_to_workspace.assert_not_called()
     assert any("disk full" in call.args[0] for call in host.default_logger.error.call_args_list)
 
 
@@ -240,7 +215,6 @@ def _complete_recording(
     host = StreamingAnalysisHost()
     if data_struct is not None:
         host.data_struct = data_struct
-    host.channel_workspace = _FinalWorkspace((0,))
     snapshot = {
         "recorded_channels": [
             {
@@ -257,7 +231,6 @@ def _complete_recording(
     host._rewrite_recorded_wav = lambda *_args: calls.append(("rewrite",))
     host._should_run_silent_analysis_after_recording = lambda: False
     host._handle_invalid_recording = lambda reason: calls.append(("discard", reason))
-    host._project_normalized_waveform_to_workspace = mock.Mock()
     host.run = mock.Mock()
     host._enqueue_automatic_analysis_current_recording = mock.Mock(return_value=True)
 
@@ -348,7 +321,6 @@ def test_failed_quality_gate_does_not_publish_or_replace_authoritative_audio():
     assert data_struct.store_wave_data_multi is previous_multi
     assert any(call[0] == "discard" for call in calls)
     assert not any(call[0] == "db" for call in calls)
-    host._project_normalized_waveform_to_workspace.assert_not_called()
     host.run.assert_not_called()
 
 
@@ -449,30 +421,15 @@ class _FinalProcessor:
         return self.recorded_multi
 
 
-class _FinalWorkspace:
-    def __init__(self, channels):
-        self._windows = [
-            SimpleNamespace(channel_index=channel) for channel in channels
-        ]
-
-    def all_subwindows(self):
-        return list(self._windows)
-
-    def clear_plots(self):
-        return None
-
-
 def _prepare_final_completion_host(
     recorded_multi,
     retained_channels=(0, 2),
-    workspace_channels=(0, 2),
 ):
     calls = []
     host = StreamingAnalysisHost()
     host._recording_input_channels = (0, 2)
     host._active_input_channels = [0, 2]
     host._pending_configured_input_channels = (0, 2)
-    host.channel_workspace = _FinalWorkspace(workspace_channels)
     host._streaming_completion_processor = None
     host.streaming_processor = _FinalProcessor(recorded_multi, retained_channels)
     host.streaming_wav_writer = _Writer(calls)
@@ -493,7 +450,6 @@ def _prepare_final_completion_host(
     host._advance_manual_product_condition_cycle_after_recording = mock.Mock()
     host._on_serial_product_condition_completed = mock.Mock()
     host._on_directional_recording_completed = mock.Mock()
-    host._project_normalized_waveform_to_workspace = mock.Mock()
 
     def abort_selection():
         calls.append(("abort_run",))
@@ -511,7 +467,7 @@ def _prepare_final_completion_host(
     return host, calls
 
 
-def test_final_projection_failure_is_presentation_only_and_releases_run_state(
+def test_final_completion_never_projects_and_releases_run_state(
     monkeypatch,
 ):
     recorded_multi = np.asarray(
@@ -519,9 +475,6 @@ def test_final_projection_failure_is_presentation_only_and_releases_run_state(
         dtype=np.float32,
     )
     host, calls = _prepare_final_completion_host(recorded_multi)
-    host._project_normalized_waveform_to_workspace = mock.Mock(
-        side_effect=RuntimeError("Qt plot failed")
-    )
     host._resolve_recording_acq_detail = lambda: {"startup_trim_ms": 0, "audio_validation": {"enabled": False}}
     expected = np.full(recorded_multi.shape, 8388607 / 8388608, dtype=np.float32)
     database = mock.Mock()
@@ -559,13 +512,7 @@ def test_final_projection_failure_is_presentation_only_and_releases_run_state(
     host._enqueue_automatic_analysis_current_recording.assert_called_once_with()
     host.run.assert_not_called()
     host._handle_invalid_recording.assert_not_called()
-    host._project_normalized_waveform_to_workspace.assert_called_once()
-    projection_args = host._project_normalized_waveform_to_workspace.call_args.args
-    np.testing.assert_array_equal(projection_args[0], expected)
-    assert projection_args[1] == 48000
-    assert [window.channel_index for window in projection_args[2]] == [0, 2]
-    warning.assert_called_once()
-    assert "波形刷新失败" in warning.call_args.args[2]
+    warning.assert_not_called()
     assert host._condition_record_cache["condition-1"] == {
         "config_snapshot": {},
         "recorded_path": "recorded.wav",
@@ -619,16 +566,12 @@ def test_final_contract_mismatch_rejects_before_db_and_analysis(
 
 
 @pytest.mark.parametrize(
-    ("workspace_channels", "reason_fragment"),
-    [
-        ((0,), "count"),
-        ((2, 0), "order"),
-    ],
+    "plot_columns",
+    [1, 3],
 )
-def test_final_workspace_contract_mismatch_is_presentation_only_after_publication(
-    monkeypatch,
-    workspace_channels,
-    reason_fragment,
+def test_final_completion_does_not_depend_on_grid_column_count(
+    ui_qapp, monkeypatch,
+    plot_columns,
 ):
     recorded_multi = np.asarray(
         [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]],
@@ -640,14 +583,11 @@ def test_final_workspace_contract_mismatch_is_presentation_only_after_publicatio
         previous_mono=previous_mono,
         previous_multi=previous_multi,
     )
-    host, calls = _prepare_final_completion_host(
-        recorded_multi,
-        workspace_channels=workspace_channels,
-    )
+    host, calls = _prepare_final_completion_host(recorded_multi)
+    from ui.sequence.station_plot_grid import StationPlotGrid
+    host.plot_grid = StationPlotGrid()
+    host.plot_grid.set_grid_size(1, plot_columns)
     host.data_struct = data_struct
-    host._project_normalized_waveform_to_workspace = mock.Mock()
-    validate_workspace = mock.Mock(wraps=host._validate_final_waveform_workspace)
-    host._validate_final_waveform_workspace = validate_workspace
     abort_selection = mock.Mock(wraps=host._abort_recording_channel_selection)
     host._abort_recording_channel_selection = abort_selection
     host._resolve_recording_acq_detail = lambda: {"startup_trim_ms": 0, "audio_validation": {"enabled": False}}
@@ -689,17 +629,7 @@ def test_final_workspace_contract_mismatch_is_presentation_only_after_publicatio
     np.testing.assert_array_equal(data_struct.store_wave_data_multi, expected)
     assert [call for call in calls if call == ("finalize",)] == [("finalize",)]
     host._append_recording_wav_calibration_metadata.assert_called_once_with()
-    validate_workspace.assert_called_once_with((0, 2))
-    host._project_normalized_waveform_to_workspace.assert_not_called()
-    warning.assert_called_once()
-    assert "波形刷新失败" in warning.call_args.args[2]
-    presentation_errors = [
-        call.args[0]
-        for call in host.default_logger.error.call_args_list
-        if "Final waveform projection failed" in call.args[0]
-    ]
-    assert len(presentation_errors) == 1
-    assert reason_fragment in presentation_errors[0]
+    warning.assert_not_called()
     database.save_signal_info_to_db.assert_called_once_with(
         host.recorded_signal_info,
         None,

@@ -270,7 +270,7 @@ class SequenceWidgetAnalysisOpsMixin(
         )
 
     def _reset_manual_product_condition_cycle(
-        self, clear_waveforms=False, *, refresh_display=True
+        self, *, refresh_display=True
     ) -> None:
         self._product_recording_retry = None
         reset_serial_ports = getattr(self, "_reset_serial_product_port_state", None)
@@ -292,7 +292,6 @@ class SequenceWidgetAnalysisOpsMixin(
         self._manual_product_condition_counted_group_labels = {}
         self._active_product_condition_key = ""
         self._active_product_condition_config = None
-        self._waveform_display_override_direction = ""
         self._current_cycle_recorded_count = None
         self._serial_product_waiting_for_close = False
         self._analysis_round_completion_pending = False
@@ -303,10 +302,6 @@ class SequenceWidgetAnalysisOpsMixin(
         )
         if callable(unlock_round_config):
             unlock_round_config()
-        if clear_waveforms:
-            clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
-            if callable(clear_all_direction_waveforms):
-                clear_all_direction_waveforms()
         if refresh_display:
             self._reset_product_condition_display_state()
 
@@ -343,10 +338,6 @@ class SequenceWidgetAnalysisOpsMixin(
         if update_task_stage:
             left_panel.set_current_stage(f"{name} {stage_text}", tone=tone)
         left_panel.set_condition_result(key, stage_text, tone=tone)
-        workspace = getattr(self, "channel_workspace", None)
-        set_context = getattr(workspace, "set_condition_context", None)
-        if callable(set_context):
-            set_context(key, status=stage_text)
 
     def _finish_product_condition_analysis_display(self):
         key = self._get_active_product_condition_key()
@@ -366,10 +357,6 @@ class SequenceWidgetAnalysisOpsMixin(
             left_panel.set_current_stage(stage_text, tone=round_tone)
         else:
             left_panel.set_current_stage("本档位分析完成", tone="pending")
-        workspace = getattr(self, "channel_workspace", None)
-        set_context = getattr(workspace, "set_condition_context", None)
-        if callable(set_context):
-            set_context(key, status="分析完成")
 
     def _automatic_round_display_state(self):
         left_panel = getattr(self, "left_panel", None)
@@ -555,9 +542,6 @@ class SequenceWidgetAnalysisOpsMixin(
             tone = "ok" if label == "OK" else "ng" if label == "NG" else "pending"
             left_panel.set_condition_result(key, label, tone=tone)
 
-        channel_workspace = getattr(self, "channel_workspace", None)
-        if channel_workspace is not None and hasattr(channel_workspace, "set_condition_result"):
-            channel_workspace.set_condition_result(key, label)
 
         condition_keys = [
             self._product_condition_runtime_key(item, index)
@@ -1033,9 +1017,6 @@ class SequenceWidgetAnalysisOpsMixin(
                 self._current_cycle_recorded_count = group_id
                 self._manual_product_condition_results = {}
                 self._manual_product_condition_completed_keys = set()
-                clear_all_direction_waveforms = getattr(self, "clear_all_direction_waveforms", None)
-                if callable(clear_all_direction_waveforms):
-                    clear_all_direction_waveforms()
                 self._set_product_condition_round_pending()
                 lock_round_config = getattr(
                     self,
@@ -1050,7 +1031,6 @@ class SequenceWidgetAnalysisOpsMixin(
             key = self._product_condition_runtime_key(condition, index)
             self._active_product_condition_key = key
             self._active_product_condition_config = dict(condition)
-            self._waveform_display_override_direction = key
             self._current_trigger_direction = key
 
             left_panel = getattr(self, "left_panel", None)
@@ -1064,7 +1044,7 @@ class SequenceWidgetAnalysisOpsMixin(
             return
         conditions = self._product_condition_sequence()
         if not conditions:
-            self._reset_manual_product_condition_cycle(clear_waveforms=False)
+            self._reset_manual_product_condition_cycle()
             return
         round_completed = False
         all_conditions_completed = False
@@ -1159,7 +1139,6 @@ class SequenceWidgetAnalysisOpsMixin(
                     unlock_round_config()
         self._active_product_condition_key = ""
         self._active_product_condition_config = None
-        self._waveform_display_override_direction = ""
         self._current_trigger_direction = ""
         if round_completed:
             unlock_product_round_barcode = getattr(
@@ -1882,6 +1861,31 @@ class SequenceWidgetAnalysisOpsMixin(
             machine_id = device.get("machine_id")
             can_start = getattr(self, "_can_start_recording_workflow", None)
             if callable(can_start) and not can_start():
+                bridge = getattr(self, "recording_bridge", None)
+                service_blocked = bridge is not None and not getattr(
+                    bridge.service, "can_start_recording",
+                    not getattr(bridge.service, "busy", False))
+                # Mirror the host ownership guards in _recording_resources_available:
+                # a rejected reentry must never cancel an existing capture's round.
+                host_idle = (
+                    getattr(self, "_product_config_refresh_state", "ready") == "ready"
+                    and not getattr(self, "_recording_process_contexts", None)
+                    and not any(bool(getattr(self, name, False)) for name in (
+                        "_record_workflow_busy", "player_status_flag",
+                        "_recording_publication_in_progress",
+                        "_recording_cleanup_in_progress", "_streaming_cleanup_in_progress",
+                        "_recording_closed", "_closing", "_shutdown_started", "_close_in_progress",
+                        "_product_progress_choice_pending", "_test_metadata_validation_open",
+                        "_product_test_program_config_dialog_open", "_test_queue_config_dialog_open",
+                        "_serial_trigger_config_dialog_open", "_serial_product_error_dialog_open")))
+                if service_blocked and host_idle:
+                    controller = getattr(self, "_condition_playback_controller", None)
+                    lifetime = getattr(self, "ve_prewarm_lifetime", None)
+                    if ((controller is None or not controller.is_audio_playing())
+                            and (lifetime is None or lifetime.admission_for(None) == "allowed")):
+                        cancel_metadata = getattr(self, "_cancel_test_metadata_preflight", None)
+                        if callable(cancel_metadata):
+                            cancel_metadata()
                 config_error = getattr(self, "_ve_recording_config_error", None)
                 if config_error:
                     self.default_logger.error(
@@ -1937,14 +1941,9 @@ class SequenceWidgetAnalysisOpsMixin(
             if callable(lock_sn_for_recording):
                 lock_sn_for_recording()
 
-            self._clear_plot_area()
             self._cleanup_streaming_resources()
 
             self.update_player_btn_is_playing()
-
-            # Clear plot and reset streaming state for NEW recording
-            if self.player_status_flag:
-                self._clear_plot_area()
 
             self._streaming_first_chunk_logged = False
             self._streaming_completion_processor = None

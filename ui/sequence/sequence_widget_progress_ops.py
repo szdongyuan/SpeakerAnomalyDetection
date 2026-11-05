@@ -401,7 +401,7 @@ class SequenceWidgetProgressOpsMixin:
                     return False
                 if empty_round:
                     self._restore_product_test_identity(state["identity"])
-                self._reset_manual_product_condition_cycle(clear_waveforms=False)
+                self._reset_manual_product_condition_cycle()
                 self.left_panel.set_current_stage("等待开始", tone="pending")
             elif not error:
                 self._restore_product_test_progress(state, ownership)

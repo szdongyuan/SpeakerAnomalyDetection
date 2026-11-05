@@ -30,7 +30,6 @@ class DataDealStruct(object):
             self.store_wave_data_multi = None
             self.recording_source = None
             self.recording_sources = {}
-            self.recording_display_sources = {}
             self.clear_wav_calibration_context()
             self.split_repeat_data = None
             self.stimulus_data = None
@@ -49,10 +48,9 @@ class DataDealStruct(object):
             self._initialized = True
 
     def clear_recording_sources(self):
-        """Invalidate saved and displayed identities at explicit audio resets."""
+        """Invalidate saved recording identities at explicit audio resets."""
         self.recording_source = None
         self.recording_sources = {}
-        self.recording_display_sources = {}
 
     def clear_data(self, *, preserve_recording_sources=False):
         self.store_wave_data = None

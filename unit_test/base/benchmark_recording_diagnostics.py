@@ -225,38 +225,6 @@ def consume_benchmark(output, args):
     return results
 
 
-def formal_gui_host(request):
-    """Formal production projection on the main thread, lightweight plot fakes.
-
-    This accounts for normal GUI diagnostics, not real widget rendering cost.
-    No SequenceWidget constructor, config loading or database startup is used.
-    """
-    from base.log_manager import LogManager
-    from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
-
-    class Window:
-        def __init__(self, channel):
-            self.channel_index, self.data = channel, None
-        def set_live_data(self, x, y):
-            self.data = (x, y)
-        def snapshot_plot_state(self):
-            return self.data
-        def restore_plot_state(self, state):
-            self.data = state
-
-    windows = [Window(ch) for ch in request.channels]
-    host = SimpleNamespace(default_logger=LogManager.set_log_handler('core'),
-                           _streaming_waveform_generation=0,
-                           _active_recording_process_id=request.request_id,
-                           channel_workspace=SimpleNamespace(all_subwindows=lambda: windows))
-    host._recording_process_contexts = {request.request_id: SimpleNamespace(request=request, session=None)}
-    def project(session, preview):
-        host._recording_process_contexts[request.request_id].session = session
-        SequenceWidgetStreamingOpsMixin._project_live_waveforms_to_workspace(
-            host, request.channels, preview.waveforms, preview.time_mode)
-    return host, project
-
-
 def service_benchmark(output, args):
     import soundfile as sf
     from base.recording_service import RecordingService, RecordingCallbacks
@@ -271,15 +239,10 @@ def service_benchmark(output, args):
             request = make_request(output / f'recording-{index + 1:03}.wav',
                                    duration=args.duration, hardware=hardware, args=args)
             state = dict(request=request.request_id, preview_count=0)
-            host, project = (None, None) if hardware else formal_gui_host(request)
-            gui_pending = queue.Queue(maxsize=8)
             released_callback = threading.Event()
             def preview(session, value):
                 state['preview_count'] += 1
-                if project is None:
-                    session.release_preview(value.sequence)
-                else:
-                    gui_pending.put_nowait((session, value))
+                session.release_preview(value.sequence)
             def ready(session, audio):
                 # The production ResultReader has validated the descriptor/file.
                 state['result_ready_at'] = time.monotonic()
@@ -292,23 +255,14 @@ def service_benchmark(output, args):
             callbacks = RecordingCallbacks(preview=preview, result_ready=ready, accepted=accepted, released=released)
             session = service.start(request, callbacks)
             deadline = time.monotonic() + args.duration + 90
-            while not session.released.is_set() or not gui_pending.empty():
+            while not session.released.wait(.02):
                 if time.monotonic() > deadline:
                     session.cancel()
                     raise TimeoutError('Recording release watchdog expired')
-                try:
-                    current, value = gui_pending.get(timeout=.02)
-                except queue.Empty:
-                    continue
-                project(current, value)
-                current.release_preview(value.sequence)
             if not released_callback.wait(5):
                 raise TimeoutError('Released notification did not finish')
             lifecycle = session.lifecycle_diagnostics
             target, release = lifecycle['target_reached_at'], lifecycle['capture_slot_released_at']
-            if host is not None:
-                from ui.sequence.sequence_widget_streaming_ops import _finish_waveform_diagnostics
-                _finish_waveform_diagnostics(host._recording_process_contexts[request.request_id])
             state.update(state=session.state, failure=scalar(session.failure), worker_pid=session.worker_pid,
                          lifecycle=scalar(lifecycle), descriptor=scalar(session.descriptor),
                          target_to_slot_release_seconds=None if target is None or release is None else release - target)
@@ -316,7 +270,7 @@ def service_benchmark(output, args):
             state['wav'] = None if info is None else dict(frames=info.frames, channels=info.channels,
                 samplerate=info.samplerate, format=info.format, subtype=info.subtype)
             state['valid_wav'] = bool(info and info.frames == request.target_samples and info.channels == 5
-                                      and info.samplerate == 44100 and info.subtype == 'FLOAT')
+                                      and info.samplerate == 44100 and info.subtype == 'PCM_24')
             rounds.append(state)
             (output / 'recordings.json').write_text(json.dumps(rounds, indent=2), encoding='utf-8')
             if session.state != 'completed' or not state['valid_wav']:
@@ -328,7 +282,7 @@ def service_benchmark(output, args):
         LogManager.flush(10)
     return dict(mode='hardware_audio_only' if hardware else 'fake_VE_real_service', rounds=rounds,
                 gui_scope=('excluded; audio-only hardware mode' if hardware else
-                           'formal production projection on main thread with in-memory plot setters; rendering unmeasured'),
+                           'excluded; independent main grid has no recording preview consumer'),
                 same_ssd_real_audio_video='unverified; no video device accessed')
 
 
@@ -468,7 +422,7 @@ def summarize_logs(output, recording_count, *, hardware):
                 for line in selected),
             gui_summary_events=gui_summaries,
             scope=('child + parent only; GUI unverified' if hardware else
-                   'child + parent + formal GUI projection/summary with in-memory plot setters'))
+                   'child + parent only; independent grid has no recording projection'))
     return dict(recordings=result,
                 other_lifecycle_events=len(diagnostics) - sum(value['events'] for value in result.values()),
                 other_lifecycle_formatted_utf8_bytes=(sum(len(line.encode('utf-8')) for line in diagnostics)

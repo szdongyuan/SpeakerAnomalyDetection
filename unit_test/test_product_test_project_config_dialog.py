@@ -19,7 +19,6 @@ from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.product_test_project_config_dialog import (
     ProductTestProjectConfigDialog,
 )
-from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 
 
@@ -1829,25 +1828,6 @@ def test_main_selector_uses_project_name_from_registry(app, tmp_path):
     assert combobox.count() == 1
     assert combobox.currentText() == "PB-A01充电宝"
     assert combobox.currentData() == "PB-A01充电宝.json"
-
-
-def test_project_condition_display_uses_group_and_composite_key():
-    conditions = [
-        {
-            "key": "group_1:condition_1",
-            "group_name": "USB-C输出口",
-            "condition_name": "档位1",
-            "display_name": "USB-C输出口 / 档位1",
-            "trigger_state": "01 04 02 00 01 78 F0",
-            "test_queue": "低噪声基础测试",
-        }
-    ]
-
-    waveform_conditions = DirectionWaveformPanel._normalize_conditions(conditions)
-
-    assert waveform_conditions == [
-        {"key": "group_1:condition_1", "name": "USB-C输出口 / 档位1", "test_queue": "低噪声基础测试"}
-    ]
 
 
 def test_acquisition_late_manager_failure_routes_full_conflict(app, tmp_path, monkeypatch):

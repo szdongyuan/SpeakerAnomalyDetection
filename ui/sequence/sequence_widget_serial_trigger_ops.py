@@ -620,7 +620,6 @@ class SequenceWidgetSerialTriggerOpsMixin:
         self._serial_product_session_started = False
         self._active_product_condition_key = ""
         self._active_product_condition_config = None
-        self._waveform_display_override_direction = ""
         self._current_trigger_direction = ""
         self._record_workflow_busy = False
         self.player_status_flag = False
@@ -690,7 +689,6 @@ class SequenceWidgetSerialTriggerOpsMixin:
         self._pending_serial_trigger_direction = ""
         self._active_product_condition_key = ""
         self._active_product_condition_config = None
-        self._waveform_display_override_direction = ""
         self._current_trigger_direction = ""
         self._record_workflow_busy = False
         self.player_status_flag = False
@@ -802,7 +800,7 @@ class SequenceWidgetSerialTriggerOpsMixin:
 
         reset_cycle = getattr(self, "_reset_manual_product_condition_cycle", None)
         if callable(reset_cycle):
-            reset_cycle(clear_waveforms=True)
+            reset_cycle()
         self._record_workflow_busy = False
         self.player_status_flag = False
         self.clicked_player_flag = False

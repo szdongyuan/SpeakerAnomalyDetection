@@ -96,8 +96,7 @@ def test_failure_preserves_round_and_only_discards_current_placeholder(ui_qapp, 
     with sqlite3.connect(tmp_path / "records.db") as db:
         assert db.execute("select * from recordings").fetchall() == [("a",)]
     host._delete_serial_product_round_records.assert_not_called()
-    host._on_streaming_complete.assert_not_called()
-    host.clear_all_direction_waveforms.assert_not_called()
+    host._on_recording_envelope_complete.assert_not_called()
     assert not host.player_status_flag and not host._record_workflow_busy
     assert not host._serial_product_condition_executing
     assert "测试异常" in host.left_panel.set_current_stage.call_args.args[0]
@@ -223,7 +222,7 @@ def install_attempt(host, service, previous_session, request_id):
     request = replace(previous_session.request, request_id=request_id)
     session = RecordingSession(service, request, RecordingCallbacks())
     host._recording_workflow_token = object()
-    context = RecordingProcessContext(request, host._active_product_condition_key, False,
+    context = RecordingProcessContext(request, host._active_product_condition_key,
         session=session, workflow_token=host._recording_workflow_token,
         recent_session_id=request_id, recorded_signal_info=host.recorded_signal_info)
     host._recording_contexts()[request_id] = context
@@ -264,13 +263,19 @@ def test_repeated_failure_then_success_advances_once(ui_qapp, tmp_path, monkeypa
     assert host._current_recent_session_id == "retry-2"
     saved = Mock(return_value=(0, "saved"))
     monkeypatch.setattr("ui.sequence.sequence_widget_streaming_ops.RecordingManager.save_signal_info_to_db", saved)
-    host._on_streaming_complete = Streaming._on_streaming_complete.__get__(host)
+    host._on_recording_envelope_complete = Streaming._on_recording_envelope_complete.__get__(host)
     third.state = "completed"
     third.released.set()
-    audio = SimpleNamespace(mono=np.ones(9, dtype=np.float32), multi=np.ones((9, 2), dtype=np.float32),
-                            descriptor=SimpleNamespace(sample_rate=100, warnings=()))
+    from base.recording_final_result import prepare_main_recording_result
+    from base.recording_process_protocol import RecordingFinalEnvelope, RecordingQualityEvidence, RecordingResult
+    request = third.request
+    envelope = RecordingFinalEnvelope(1, 9, request.channels,
+        tuple((np.arange(9, dtype=np.int64), np.ones(9, dtype=np.float32)) for _ in request.channels), None,
+        RecordingQualityEvidence(9, "skipped", None, None, None, None))
+    descriptor = RecordingResult(request.request_id, "main", request.path, 100, request.channels,
+        9, 9, False, final_envelope=envelope)
+    audio = prepare_main_recording_result(descriptor, request)
     third_context.validated_audio = third_context.accepted_audio = audio
-    third_context.final_windows = host.channel_workspace.all_subwindows()
     host._publish_recording_context(third_context)
     host._publish_recording_context(third_context)
     assert saved.call_count == 1
@@ -357,7 +362,7 @@ def test_ve_release_failure_keeps_current_round_and_file_lease(ui_qapp, tmp_path
     assert Path(request.path).read_bytes() == b"unpublished leased audio"
     assert not host._can_prepare_recording_workflow()
     assert len(warning.call_args_list) == 1
-    host._on_streaming_complete.assert_not_called()
+    host._on_recording_envelope_complete.assert_not_called()
 
 
 @pytest.mark.parametrize("serial", [False, True])
@@ -422,7 +427,6 @@ def test_abort_during_retry_dialog_invalidates_recovery_once(ui_qapp, tmp_path, 
     deliver_failure_recovery_terminal(host, session, "released")
     assert warning.call_count == 1
     host._delete_serial_product_round_records.assert_called_once_with("round-7")
-    host.clear_all_direction_waveforms.assert_called_once()
     assert host._manual_product_condition_completed_keys == set()
     assert host._manual_product_condition_index == host._serial_product_port_index == 0
     assert host.update_player_btn_is_paused.call_count == refreshes_after_abort[0]

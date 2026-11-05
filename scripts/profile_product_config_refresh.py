@@ -66,7 +66,7 @@ def run_size(app, output, size, repeats, baseline_path):
     host.setAttribute(Qt.WA_DontShowOnScreen)
     layout = QHBoxLayout(host)
     layout.addWidget(host.left_panel, 1)
-    layout.addWidget(host.channel_workspace, 2)
+    layout.addWidget(host.plot_grid, 2)
     host.resize(1280, 780)
     host.show()
     flush_events(app)

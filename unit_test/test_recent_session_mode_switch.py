@@ -38,9 +38,7 @@ class _DummySequenceWidget(SequenceWidgetStreamingOpsMixin):
         self.product_test_condition_configs = [{"key": "01", "condition_name": "6000"}]
         self.statistics_reset_calls = []
         self.manual_reset_calls = []
-        self.waveform_modes = []
         self.persisted_modes = []
-        self._apply_condition_mode_to_waveforms = self.waveform_modes.append
         self._persist_sequence_page_state = self.persisted_modes.append
 
     def _clear_recent_session_history(self):
@@ -52,8 +50,8 @@ class _DummySequenceWidget(SequenceWidgetStreamingOpsMixin):
     def _reset_statistics_for_mode(self, mode: str):
         self.statistics_reset_calls.append(mode)
 
-    def _reset_manual_product_condition_cycle(self, clear_waveforms=False):
-        self.manual_reset_calls.append(bool(clear_waveforms))
+    def _reset_manual_product_condition_cycle(self):
+        self.manual_reset_calls.append(True)
 
 
 class _DummyConditionModeCombo:
@@ -91,7 +89,6 @@ class _DummyConditionModeWidget(SequenceWidgetUiOpsMixin):
     def __init__(self, incomplete_round=True):
         self.count_board = _DummyConditionModeCountBoard()
         self.toolsbar = types.SimpleNamespace(condition_mode_combobox=_DummyConditionModeCombo())
-        self.channel_workspace = None
         self.incomplete_round = incomplete_round
 
     def _has_incomplete_manual_product_condition_round(self):
@@ -104,7 +101,6 @@ class TestRecentSessionModeSwitch(unittest.TestCase):
 
         widget._on_recent_session_mode_changed({"mode": "test"})
 
-        self.assertEqual(widget.waveform_modes, ["test"])
         self.assertEqual(widget.persisted_modes, ["test"])
         self.assertEqual(widget.recent_test_sessions, [])
         self.assertEqual(widget.recent_test_session_by_id, {})
@@ -119,7 +115,6 @@ class TestRecentSessionModeSwitch(unittest.TestCase):
 
         widget._on_recent_session_mode_changed({"mode": "mark"})
 
-        self.assertEqual(widget.waveform_modes, ["mark"])
         self.assertEqual(widget.persisted_modes, ["mark"])
         self.assertEqual(widget.recent_test_sessions, ["recent_1", "recent_2"])
         self.assertEqual(widget._last_recent_session_mode, "mark")

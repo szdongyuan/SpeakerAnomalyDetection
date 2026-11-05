@@ -34,7 +34,7 @@ class Host(SequenceWidgetRawCsvOpsMixin, SequenceWidgetStreamingOpsMixin):
         admission = self._reserve_raw_audio_csv_recording()
         self.context = RecordingProcessContext(
             request=SimpleNamespace(request_id=admission.recording_id, path=self.recorded_path),
-            direction='', preview_enabled=False,
+            direction='',
             recorded_signal_info=dict(self.recorded_signal_info),
             csv_reservation=admission.csv_reservation,
             csv_enabled_snapshot=admission.csv_enabled_snapshot)
@@ -294,7 +294,7 @@ def test_qt_reentrant_busy_start_preserves_original_csv_through_submission(
     assert host._register_round_file.call_count == 2
     save.assert_called_once()
     timings = list(host._recording_stage_timings)
-    assert {'csv_submission', 'waveform_projection', 'database_save', 'history_update',
+    assert {'csv_submission', 'database_save', 'history_update',
             'automatic_analysis_enqueue', 'gui_complete'} <= {item['stage'] for item in timings}
     assert all(item['request_id'] == original_id and item['seconds'] >= 0 for item in timings)
 
