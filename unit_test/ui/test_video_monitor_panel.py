@@ -2,7 +2,7 @@
 import pytest
 from PyQt5.QtCore import QPoint, Qt
 from PyQt5.QtGui import QColor, QImage
-from PyQt5.QtWidgets import QSplitter, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QLabel, QSplitter, QVBoxLayout, QWidget
 
 from consts import ui_style_const
 from base.video.models import VideoStatus
@@ -97,6 +97,50 @@ def test_live_video_fits_sidebar_after_window_shrinks(ui_qapp, tmp_path, state):
         window.close()
 
 
+def test_video_titles_use_main_font_only_when_embedded(ui_qapp):
+    bridge = VideoServiceBridge(StubService())
+    bridge._timer.stop()
+    wrapper = MotorVideoMonitorPanel()
+    standalone = VideoMonitorWidget(bridge)
+    try:
+        wrapper.show()
+        ui_qapp.processEvents()
+        for label in wrapper.header.findChildren(QLabel):
+            font = label.font()
+            assert (font.family(), font.pixelSize(), font.bold()) == ("Microsoft YaHei UI", 16, True)
+        panel = wrapper.bind_bridge(bridge)
+        standalone.show()
+        ui_qapp.processEvents()
+        for widget, family in ((panel, "Microsoft YaHei UI"), (standalone, "SimSun")):
+            font = widget.title_label.font()
+            assert (font.family(), font.pixelSize(), font.bold()) == (family, 16, True)
+    finally:
+        wrapper.close()
+        standalone.close()
+
+
+def test_video_status_uses_pixel_font_in_paint_path(ui_qapp, monkeypatch):
+    from PyQt5.QtGui import QPainter
+    from ui import video_monitor_widget
+
+    seen = []
+
+    class PainterSpy(QPainter):
+        def drawText(self, rect, flags, text):
+            seen.append((self.font().family(), self.font().pixelSize(), text))
+            return super().drawText(rect, flags, text)
+
+    monkeypatch.setattr(video_monitor_widget, "QPainter", PainterSpy)
+    canvas = VideoCanvas()
+    try:
+        canvas.set_message("Camera offline")
+        canvas.show()
+        assert not canvas.grab().isNull()
+        assert seen and set(seen) == {("Microsoft YaHei UI", 13, "Camera offline")}
+    finally:
+        canvas.close()
+
+
 def test_more_menu_and_simulation_disclosure(ui_qapp):
     bridge = VideoServiceBridge(StubService())
     widget = VideoMonitorWidget(bridge, simulation=True)
@@ -116,15 +160,15 @@ def test_more_menu_and_simulation_disclosure(ui_qapp):
 def test_more_menu_style_geometry_and_actions(ui_qapp, tmp_path):
     configure_demo_font(ui_qapp)
     bridge = VideoServiceBridge(StubService())
-    widget = VideoMonitorWidget(bridge)
+    wrapper = MotorVideoMonitorPanel()
+    widget = wrapper.bind_bridge(bridge)
     menu = widget.more_button.menu()
-    calls = []
     try:
-        widget.resize(568, 350)
-        widget.show()
+        wrapper.resize(568, 350)
+        wrapper.show()
         menu.popup(widget.more_button.mapToGlobal(QPoint(0, widget.more_button.height())))
         ui_qapp.processEvents()
-        assert menu.font().pixelSize() == 13
+        assert (menu.font().family(), menu.font().pixelSize()) == ("Microsoft YaHei UI", 13)
         assert widget.settings_action.text() == "摄像头设置"
         assert widget.more_button.menu().actions() == [widget.settings_action]
         for action in menu.actions():
@@ -138,5 +182,5 @@ def test_more_menu_style_geometry_and_actions(ui_qapp, tmp_path):
         print(f"\nVideo menu screenshot: {screenshot}")
     finally:
         menu.close()
-        widget.close()
+        wrapper.close()
         bridge._timer.stop()

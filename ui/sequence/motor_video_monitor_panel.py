@@ -42,7 +42,10 @@ class MotorVideoMonitorPanel(QWidget):
         if hasattr(self, "live_panel"):
             return self.live_panel
         self.card.hide()
-        self.live_panel = VideoMonitorWidget(bridge, self)
+        self.live_panel = VideoMonitorWidget(
+            bridge, self, title_font_family=ui_style_const.MAIN_UI_SMALL_FONT_FAMILY
+        )
+        self.live_panel.setStyleSheet(ui_style_const.main_window_tooltip_style)
         self.layout().addWidget(self.live_panel, stretch=1)
         return self.live_panel
 
@@ -122,7 +125,7 @@ class MotorVideoMonitorPanel(QWidget):
     def _header_label_style():
         return (
             "QLabel { background:transparent; border:none; color:#FFFFFF; "
-            f"font-family:{ui_style_const.UI_FONT_FAMILY}; font-size:16px; font-weight:bold; }}"
+            f"font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; font-size:16px; font-weight:bold; }}"
         )
 
     @staticmethod

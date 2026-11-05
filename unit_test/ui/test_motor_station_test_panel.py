@@ -52,8 +52,19 @@ def test_initial_zero_and_fixed_general_header(panel):
     labels = [label.text() for label in panel.findChildren(QLabel)]
     assert labels == ["工位测试", "工位", "正转", "反转"]
     assert len(panel.findChildren(QScrollArea)) == 1
-    for name in ("stationTitle", "stationGeneralForward"):
-        assert panel.findChild(QLabel, name).font().family() == "Microsoft YaHei UI"
+    for name, size, bold in (("stationTitle", 14, True), ("stationGeneralForward", 12, False)):
+        label = panel.findChild(QLabel, name)
+        label.ensurePolished()
+        font = label.font()
+        assert (font.family(), font.pixelSize(), font.bold()) == ("Microsoft YaHei UI", size, bold)
+
+
+def test_station_details_use_pixel_fonts(panel):
+    panel.set_station_count(1)
+    for widget in (panel.findChild(QLabel, "stationForward1"), table(panel)):
+        widget.ensurePolished()
+        font = widget.font()
+        assert (font.family(), font.pixelSize(), font.bold()) == ("Microsoft YaHei UI", 13, False)
 
 
 def test_public_updates_and_independent_tables(panel):

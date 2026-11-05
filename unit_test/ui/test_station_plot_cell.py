@@ -1,8 +1,12 @@
+from itertools import pairwise
+from pathlib import Path
+
 import numpy as np
 import pyqtgraph as pg
 import pytest
 from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, Qt
-from PyQt5.QtGui import QHelpEvent, QPainter, QPicture, QPalette, QTextDocument
+from PyQt5.QtGui import QFontDatabase, QHelpEvent, QPainter, QPicture, QPalette, QTextDocument
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QToolTip
 
 from ui.sequence.station_plot_cell import StationPlotCell
@@ -17,6 +21,35 @@ def cell(qt_app):
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
+@pytest.fixture
+def yahei_font(qt_app):
+    if 'Microsoft YaHei UI' in QFontDatabase().families():
+        yield
+        return
+    font_path = Path('C:/Windows/Fonts/msyh.ttc')
+    if not font_path.is_file():
+        pytest.skip('Microsoft YaHei UI is required for the tick layout regression')
+    font_id = QFontDatabase.addApplicationFont(str(font_path))
+    assert font_id >= 0
+    try:
+        yield
+    finally:
+        QFontDatabase.removeApplicationFont(font_id)
+
+
+def test_axes_use_main_font_after_reconfiguring(cell):
+    plot = cell.plot_widget.getPlotItem()
+    for kind in ("curve", "heatmap"):
+        cell.configure_plot(kind=kind, x_label="Time", x_unit="s", y_label="Level", y_unit="dB")
+        for name, text, unit in (("bottom", "Time", "s"), ("left", "Level", "dB")):
+            axis = plot.getAxis(name)
+            assert (axis.labelText, axis.labelUnits) == (text, unit)
+            assert axis.textPen().color().name() == "#64748b"
+            for font in (axis.label.font(), axis.style["tickFont"]):
+                assert font is not None
+                assert (font.family(), font.pixelSize()) == ("Microsoft YaHei UI", 16)
+
+
 def data_items(cell):
     return cell.plot_widget.getPlotItem().listDataItems()
 
@@ -25,33 +58,80 @@ def scene_items(cell, item_type):
     return [item for item in cell.plot_widget.scene().items() if isinstance(item, item_type)]
 
 
-@pytest.mark.parametrize('populated', [False, True])
+def axis_draw_specs(axis, *, base=False):
+    picture = QPicture()
+    painter = QPainter(picture)
+    try:
+        if base:
+            return pg.AxisItem.generateDrawSpecs(axis, painter)
+        return axis.generateDrawSpecs(painter)
+    finally:
+        painter.end()
+
+
+@pytest.mark.parametrize(('populated', 'x_max'), [
+    (False, None), (True, 2), (False, 10), (True, 12), (True, 20), (True, 2000),
+])
 @pytest.mark.parametrize('with_header', [False, True])
-def test_endpoint_tick_text_stays_inside_plot_viewport(cell, qt_app, populated, with_header):
+def test_endpoint_tick_text_stays_inside_plot_viewport(yahei_font, cell, qt_app, populated, x_max, with_header):
     cell.resize(280, 180)
     cell.show()
     if populated:
         cell.set_curve_data([{'x': [0, 1, 2], 'y': [0, 1, 0]}])
-        cell.configure_plot(kind='curve', x_range=(0, 2), y_range=(-1, 1))
+    if x_max is not None:
+        cell.configure_plot(kind='curve', x_range=(0, x_max), y_range=(-1, 1))
     if with_header:
         cell.set_plot_header('SPL 趋势', 'MIC 1')
     for _ in range(3):
         qt_app.processEvents()
     view = cell.plot_widget
     axis = view.getPlotItem().getAxis('bottom')
-    picture = QPicture()
-    painter = QPainter(picture)
-    try:
-        if axis.style['tickFont'] is not None:
-            painter.setFont(axis.style['tickFont'])
-        specs = axis.generateDrawSpecs(painter)
-    finally:
-        painter.end()
+    specs = axis_draw_specs(axis)
     assert specs is not None and specs[2]
+    if x_max is not None:
+        assert str(x_max) in {text for _, _, text in specs[2]}
     for text_rect, flags, text in specs[2]:
         bounds = axis.mapRectToScene(text_rect)
         viewport = view.mapToScene(view.viewport().rect()).boundingRect()
         assert viewport.contains(bounds), (text, bounds, viewport)
+
+
+def test_crowded_endpoint_tick_text_stays_visible_without_overlap(yahei_font, cell, qt_app):
+    cell.resize(280, 180)
+    cell.show()
+    cell.configure_plot(kind='curve', x_label='Frequency', y_label='Level',
+                        x_range=(999.995, 1000), y_range=(-100, 100))
+    for _ in range(3):
+        qt_app.processEvents()
+
+    view = cell.plot_widget
+    axis = view.getAxis('bottom')
+    _, ticks, labels = axis_draw_specs(axis)
+    _, original_ticks, original_labels = axis_draw_specs(axis, base=True)
+    assert ticks == original_ticks
+    assert [text for _, _, text in labels] == [text for _, _, text in original_labels]
+    bounds_by_label = {text: axis.mapRectToScene(rect) for rect, _, text in labels}
+    viewport = view.mapToScene(view.viewport().rect()).boundingRect()
+    assert viewport.contains(bounds_by_label['1000.000'])
+    assert '999.998' in bounds_by_label
+    for left, right in pairwise(sorted(bounds_by_label.values(), key=lambda rect: rect.left())):
+        assert left.right() <= right.left(), (left, right)
+
+
+def test_overlapping_interior_tick_text_keeps_priority_and_tick_marks(yahei_font, cell, qt_app):
+    cell.resize(300, 180)
+    cell.show()
+    cell.configure_plot(kind='curve', x_label='Frequency', x_unit='Hz', y_label='Level',
+                        x_range=(999999.995, 1000000), y_range=(-100, 100))
+    for _ in range(3):
+        qt_app.processEvents()
+
+    axis = cell.plot_widget.getAxis('bottom')
+    _, ticks, labels = axis_draw_specs(axis)
+    _, original_ticks, original_labels = axis_draw_specs(axis, base=True)
+    assert ticks == original_ticks
+    assert [text for _, _, text in original_labels] == ['0.999999996', '0.999999998']
+    assert labels == original_labels[:1]
 
 
 @pytest.mark.parametrize('kind', ['curve', 'heatmap'])
@@ -276,7 +356,9 @@ def test_header_tooltip_renders_markup_as_literal_text(cell, qt_app):
             event = QHelpEvent(QEvent.ToolTip, QPoint(1, 1), label.mapToGlobal(QPoint(1, 1)))
             QCoreApplication.sendEvent(label, event)
             qt_app.processEvents()
-            assert QToolTip.isVisible()
+            QTest.qWait(30)
+            tip = next(w for w in qt_app.allWidgets() if w.objectName() == "qtooltip_label" and w.isVisible())
+            assert (tip.font().family(), tip.font().pixelSize()) == ("Microsoft YaHei UI", 16)
             document = QTextDocument()
             document.setHtml(QToolTip.text())
             assert document.toPlainText() == text
@@ -332,7 +414,8 @@ def test_header_setter_preserves_config_items_data_and_manual_view(cell, qt_app,
         assert cell.header.right.alignment() & Qt.AlignRight
         assert cell.header.left.palette().color(QPalette.WindowText).name() == '#183957'
         assert cell.header.right.palette().color(QPalette.WindowText).name() == '#5d7691'
-        assert cell.header.left.font().pixelSize() == cell.header.right.font().pixelSize() == 13
+        for label in (cell.header.left, cell.header.right):
+            assert (label.font().family(), label.font().pixelSize()) == ("Microsoft YaHei UI", 13)
         assert cell._configuration == dict(old_config, title=left, right_text=right)
         assert list(plot.items) == items
         assert cell._series is series and cell._heatmap is matrix and cell._colorbar is bar
@@ -565,7 +648,7 @@ def test_subheader_long_plain_text_minimum_size_tooltip_and_bounds(cell, qt_app,
         for label in (cell.subheader.left, cell.subheader.first_half, cell.subheader.second_half):
             assert label.toolTip() == text and label.textFormat() == Qt.PlainText
             assert not any((char in label.text() for char in '\n\t'))
-            assert label.font().pixelSize() == 11
+            assert (label.font().family(), label.font().pixelSize()) == ("Microsoft YaHei UI", 11)
             assert label.palette().color(QPalette.WindowText).name() == '#5d7691'
             assert label.text() == label.fontMetrics().elidedText(' '.join(text.splitlines()).replace('\t', ' '), Qt.ElideRight, label.width())
             event = QHelpEvent(QEvent.ToolTip, QPoint(1, 1), label.mapToGlobal(QPoint(1, 1)))

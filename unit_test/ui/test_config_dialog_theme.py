@@ -9,6 +9,8 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QMainWindow,
     QPushButton,
+    QStyle,
+    QStyleOptionComboBox,
     QVBoxLayout,
     QWidget,
 )
@@ -203,6 +205,14 @@ def test_semantic_combobox_uses_complete_shared_frame(qapp):
         in stylesheet
     )
     assert bottom_center == ui_style_const.COLOR_BORDER_STRONG.lower()
+    option = QStyleOptionComboBox()
+    combo_box.initStyleOption(option)
+    arrow = combo_box.style().subControlRect(
+        QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxArrow, combo_box
+    )
+    divider = ui_style_const.COLOR_BORDER.lower()
+    assert all(image.pixelColor(x, arrow.top() + 3).name() != divider
+               for x in (arrow.left() - 1, arrow.left()))
 
     dialog.close()
     qapp.processEvents()

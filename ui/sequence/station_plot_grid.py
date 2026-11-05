@@ -11,7 +11,8 @@ from PyQt5.QtWidgets import (
 
 from consts.running_consts import DEFAULT_DIR
 from consts.ui_style_const import (
-    TOOLBAR_ICON_BUTTON_HEIGHT, TOOLBAR_ICON_BUTTON_WIDTH, toolbar_combobox_style,
+    MAIN_UI_SMALL_FONT_FAMILY, TOOLBAR_ICON_BUTTON_HEIGHT, TOOLBAR_ICON_BUTTON_WIDTH,
+    main_window_tooltip_style, toolbar_combobox_style,
 )
 from ui.sequence.station_plot_cell import StationPlotCell
 
@@ -160,7 +161,15 @@ class StationPlotGrid(QWidget):
         # QSS sizes cover the content box, inside the one-pixel button border.
         button_content_width = TOOLBAR_ICON_BUTTON_WIDTH - 2
         button_content_height = TOOLBAR_ICON_BUTTON_HEIGHT - 2
-        self.setStyleSheet(f'''
+        self.setStyleSheet(main_window_tooltip_style + f'''
+            QWidget#stationPlotGrid QLabel#stationPlotTitle,
+            QWidget#stationPlotGrid QLabel[objectName^="stationName"],
+            QWidget#stationPlotGrid QPushButton#stationPlay,
+            QWidget#stationPlotGrid QPushButton#stationOK,
+            QWidget#stationPlotGrid QPushButton#stationNG {{
+                font-family: {MAIN_UI_SMALL_FONT_FAMILY};
+                font-size: 20px;
+            }}
             QWidget#stationPlotGrid {{
                 background: white; color: #183957; border: 1px solid #cddaea;
             }}

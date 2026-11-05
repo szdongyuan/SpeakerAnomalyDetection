@@ -5,6 +5,10 @@ from html import escape
 from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QToolTip, QWidget
 
+from consts.ui_style_const import (
+    MAIN_UI_SMALL_FONT_FAMILY, MAIN_UI_SMALL_FONT_FAMILY_NAME, main_window_tooltip_style,
+)
+
 
 class _CornerLabel(QLabel):
     def __init__(self, parent, *, alignment, color, pixel_size=13):
@@ -14,10 +18,14 @@ class _CornerLabel(QLabel):
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         font = self.font()
+        font.setFamily(MAIN_UI_SMALL_FONT_FAMILY_NAME)
         font.setPixelSize(pixel_size)
         self.setFont(font)
-        self.setStyleSheet(f'QLabel {{ color: {color}; background: transparent; '
-                           f'border: 0; padding: 0; font-size: {pixel_size}px; }}')
+        self.setStyleSheet(
+            f'QLabel {{ color: {color}; background: transparent; border: 0; padding: 0; '
+            f'font-family: {MAIN_UI_SMALL_FONT_FAMILY}; font-size: {pixel_size}px; }}'
+            + main_window_tooltip_style
+        )
 
     def set_full_text(self, text):
         self.setToolTip(text)

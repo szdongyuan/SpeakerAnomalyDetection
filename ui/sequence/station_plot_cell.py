@@ -2,8 +2,10 @@
 
 import pyqtgraph as pg
 from PyQt5.QtCore import QPoint, QPointF, QRectF
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
+from consts.ui_style_const import MAIN_UI_SMALL_FONT_FAMILY_NAME
 from ui.sequence.station_plot_header import StationPlotHeader, StationPlotSubheader
 from ui.sequence.station_plot_validation import (
     validate_curve_series,
@@ -12,6 +14,62 @@ from ui.sequence.station_plot_validation import (
     validate_plot_header,
     validate_plot_subheader,
 )
+
+
+class _BottomAxis(pg.AxisItem):
+    def generateDrawSpecs(self, painter):
+        specs = super().generateDrawSpecs(painter)
+        if specs is None:
+            return None
+        axis_spec, tick_specs, text_specs = specs
+
+        # Shift only text that would cross the cell edge or AxisItem's paint clip.
+        plot_bounds = self.mapRectFromParent(self.parentItem().rect())
+        bounds = plot_bounds.intersected(self.boundingRect()).adjusted(1, 0, -1, 0)
+        for spec in text_specs[:]:
+            rect = spec[0]
+            at_right = rect.right() > bounds.right()
+            if not at_right and rect.left() >= bounds.left():
+                continue
+
+            clamped = QRectF(rect)
+            if at_right:
+                clamped.moveRight(bounds.right())
+            else:
+                clamped.moveLeft(bounds.left())
+            others = [other for other, _, _ in text_specs if other is not rect]
+            collisions = [other for other in others if clamped.intersects(other)]
+            if bounds.contains(clamped) and (
+                    not collisions or self._make_room(clamped, at_right, bounds, others, collisions)):
+                rect.moveLeft(clamped.left())
+            else:
+                text_specs.remove(spec)
+
+        # Keep the first label in pyqtgraph's priority order when labels overlap.
+        readable_text_specs = []
+        for rect, flags, text in text_specs:
+            if not any(rect.intersects(other) for other, _, _ in readable_text_specs):
+                readable_text_specs.append((rect, flags, text))
+        return axis_spec, tick_specs, readable_text_specs
+
+    @staticmethod
+    def _make_room(clamped, at_right, bounds, others, collisions):
+        # Keep the endpoint and its neighbor when there is spare space on the inside.
+        if len(collisions) != 1:
+            return False
+        neighbor = collisions[0]
+        if not bounds.contains(neighbor):
+            return False
+        shifted = QRectF(neighbor)
+        if at_right:
+            shifted.moveRight(clamped.left() - 1)
+        else:
+            shifted.moveLeft(clamped.right() + 1)
+        if not bounds.contains(shifted) or any(
+                shifted.intersects(other) for other in others if other is not neighbor):
+            return False
+        neighbor.moveLeft(shifted.left())
+        return True
 
 
 class StationPlotCell(QWidget):
@@ -27,17 +85,22 @@ class StationPlotCell(QWidget):
         self._heatmap = None
         self._curve_colors = ('#2478C8', '#E68A2E', '#2C9C74', '#9A63C3', '#D5586B', '#499BAA')
         self.setMinimumSize(280, 180)
-        self.plot_widget = pg.PlotWidget(parent=self, background='white')
+        self.plot_widget = pg.PlotWidget(
+            parent=self, background='white', axisItems={'bottom': _BottomAxis('bottom')})
         plot = self.plot_widget.getPlotItem()
         # Keep endpoint tick text inside the viewport and away from grid borders.
         # This is internal plot padding; adjacent grid cells still touch.
         plot.layout.setContentsMargins(7, 8, 7, 5)
         plot.setTitle(None)
         plot.getViewBox().setDefaultPadding(0)
+        axis_font = QFont(MAIN_UI_SMALL_FONT_FAMILY_NAME)
+        axis_font.setPixelSize(16)
         for name in ('left', 'bottom'):
             axis = plot.getAxis(name)
             axis.setPen('#AFC0D6')
+            axis.label.setFont(axis_font)
             axis.setTextPen('#64748B')
+            axis.setTickFont(axis_font)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
