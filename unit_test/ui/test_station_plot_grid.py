@@ -5,7 +5,7 @@ from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, Qt
 from PyQt5.QtGui import QIcon, QImage, QPalette, QWheelEvent
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtTest import QSignalSpy, QTest
-from PyQt5.QtWidgets import QComboBox, QLabel, QPushButton, QScrollArea, QStyle, QStyleOptionComboBox, QWidget
+from PyQt5.QtWidgets import QComboBox, QLabel, QPushButton, QScrollArea, QStyle, QStyleOptionComboBox, QVBoxLayout, QWidget
 
 from consts.ui_style_const import COMBO_DOWN_ARROW_ICON, toolbar_combobox_style
 
@@ -51,7 +51,11 @@ def test_title_and_station_colors_are_actually_painted(grid):
                for x in range(min(150, title.width())) for y in range(title.height()))
     for column in range(3):
         header = controls(grid, column)
-        assert header.height() == 40
+        assert header.height() == 48
+        for button in (header.play, header.ok, header.ng):
+            assert (button.width(), button.height()) == (48, 40)
+            assert button.y() == 4
+        assert (header.combo.height(), header.combo.y()) == (40, 4)
         assert header.grab().toImage().pixelColor(2, 2).name() == '#f4f7fc'
         assert header.name.palette().color(QPalette.WindowText).name() == '#183957'
 
@@ -146,6 +150,11 @@ def test_combo_reuses_project_arrow_and_renders_its_resource(grid, qt_app):
             widget.initStyleOption(option)
             arrow = widget.style().subControlRect(
                 QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxArrow, widget)
+            if widget is box:
+                edit = widget.style().subControlRect(
+                    QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, widget)
+                assert abs(edit.center().y() - widget.rect().center().y()) <= 1
+                assert abs(arrow.center().y() - widget.rect().center().y()) <= 1
             center = arrow.center()
             patches.append(widget.grab().toImage().copy(
                 center.x() - 4, center.y() - 4, 10, 10).convertToFormat(QImage.Format_ARGB32))
@@ -287,21 +296,33 @@ def test_invalid_current_index_keeps_selection(grid, index, error):
 
 def test_actual_keyboard_and_popup_selection_emit_once(grid, qt_app):
     token = object()
-    grid.set_column_options(2, [('A', None), ('B', token), ('C', None)])
+    grid.resize(842, 650)
+    qt_app.processEvents()
+    options = [('Mode A', None), ('Inspection mode A left', token), ('Inspection mode A right', None)]
+    grid.set_column_options(2, options)
     spy = QSignalSpy(grid.column_selection_changed)
     box = combo(grid, 2)
+    closed_width = box.width()
+    assert closed_width == 48
     box.setFocus()
     QTest.keyClick(box, Qt.Key_Down)
     assert len(spy) == 1 and spy[0] == [2, 1, token]
-    box.showPopup()
-    qt_app.processEvents()
-    item = box.view().model().index(2, 0)
-    QTest.mouseClick(box.view().viewport(), Qt.LeftButton, pos=box.view().visualRect(item).center())
-    assert len(spy) == 2 and spy[1] == [2, 2, None]
-    box.showPopup()
-    qt_app.processEvents()
-    QTest.mouseClick(box.view().viewport(), Qt.LeftButton, pos=box.view().visualRect(item).center())
-    assert len(spy) == 2
+    view = box.view()
+    item = view.model().index(2, 0)
+    for _ in range(2):
+        box.showPopup()
+        qt_app.processEvents()
+        viewport = view.viewport()
+        text_width = max(view.fontMetrics().horizontalAdvance(text) for text, _ in options)
+        assert viewport.width() >= text_width + 2
+        assert box.screen().availableGeometry().contains(view.window().geometry())
+        assert box.width() == closed_width
+        # Qt can report an item rectangle wider than the popup viewport.
+        visible_item = view.visualRect(item).intersected(viewport.rect())
+        assert not visible_item.isEmpty()
+        QTest.mouseClick(viewport, Qt.LeftButton, pos=visible_item.center())
+        assert len(spy) == 2 and spy[1] == [2, 2, None]
+        assert not view.isVisible()
     assert combo(grid, 0).currentIndex() == -1
 
 
@@ -311,11 +332,35 @@ def test_buttons_have_no_action_and_marks_hide_without_space(grid, qt_app):
     grid.set_curve_data(0, 0, [{'x': [0], 'y': [2]}])
     curve = curves(cells(grid)[0, 0])[0]
     box = combo(grid, 0)
-    before = box.width()
     buttons = controls(grid, 0).findChildren(QPushButton)
     for button in buttons:
         QTest.mouseClick(button, Qt.LeftButton)
         assert not button.isChecked()
+    header = controls(grid, 0)
+    for window_width, column_width, shown, hidden in [
+        (640, 280, 97, 138), (1100, 366, 149, 190), (1550, 516, 239, 280),
+    ]:
+        grid.resize(window_width, 650)
+        qt_app.processEvents()
+        assert header.width() == column_width
+        assert abs(box.width() - shown / 2) <= 1
+        assert (box.height(), box.y()) == (header.play.height(), header.play.y()) == (40, 4)
+        assert header.name.geometry().right() < box.x()
+        assert box.geometry().right() < header.play.x()
+        name_width = header.name.width()
+        assert header.width() - header.ng.geometry().right() == 7
+        grid.set_mark_buttons_visible(False)
+        qt_app.processEvents()
+        assert abs(box.width() - hidden / 2) <= 1
+        assert (box.height(), box.y()) == (40, 4)
+        assert header.name.width() > name_width
+        assert header.name.geometry().right() < box.x()
+        assert box.geometry().right() < header.play.x()
+        assert header.width() - header.play.geometry().right() == 7
+        grid.set_mark_buttons_visible(True)
+        qt_app.processEvents()
+        assert abs(box.width() - shown / 2) <= 1
+    before = box.width()
     grid.set_mark_buttons_visible(False)
     grid.set_mark_buttons_visible(False)
     qt_app.processEvents()
@@ -382,6 +427,7 @@ def test_equal_cells_fixed_header_and_synchronized_scroll(grid, qt_app, size):
         cell = cells(grid)[0, c]
         assert head.mapTo(grid, QPoint()).x() == cell.mapTo(grid, QPoint()).x()
         assert head.width() == cell.width()
+        assert head.height() == 48
     last = cells(grid)[2, 3]
     bottom_right = last.mapTo(plots.viewport(), last.rect().bottomRight())
     assert plots.viewport().rect().contains(bottom_right)
@@ -400,7 +446,7 @@ def test_long_text_elides_without_expanding_columns_or_buttons(grid, qt_app):
     header = cells(grid)[0, 0].header
     assert header.left.toolTip() == title and header.left.text() != title
     assert cells(grid)[0, 0].width() <= 320
-    assert all(button.width() >= 26 for button in controls(grid, 0).findChildren(QPushButton))
+    assert all(button.width() == 48 for button in controls(grid, 0).findChildren(QPushButton))
 
 
 def test_horizontal_wheel_over_header_keeps_body_synchronized(grid, qt_app):
@@ -422,13 +468,29 @@ def test_horizontal_wheel_over_header_keeps_body_synchronized(grid, qt_app):
 
 def test_local_style_resists_host_and_global_pg_options_unchanged(qt_app):
     host = QWidget()
-    host.setStyleSheet('QWidget { background: black; color: red; } QPushButton { min-width: 150px; }')
+    host.setStyleSheet('''
+        QWidget { background: black; color: red; }
+        QPushButton { min-width: 150px; max-width: 150px; min-height: 80px; max-height: 80px; }
+    ''')
     before = dict(pg.CONFIG_OPTIONS)
-    widget = StationPlotGrid(host)
+    layout = QVBoxLayout(host)
+    widget = StationPlotGrid()
+    layout.addWidget(widget)
+    host.resize(640, 650)
     try:
-        widget.show()
+        host.show()
         qt_app.processEvents()
-        assert all(b.minimumWidth() < 150 and b.width() < 150 for b in widget.findChildren(QPushButton))
+        header = controls(widget, 0)
+        assert header.width() == 280
+        assert (header.combo.width(), header.combo.height(), header.combo.y()) == (48, 40, 4)
+        host.setStyleSheet(host.styleSheet() + '''
+            QComboBox { min-width: 150px; max-width: 150px; min-height: 20px; max-height: 20px; }
+        ''')
+        qt_app.processEvents()
+        assert (header.combo.width(), header.combo.height(), header.combo.y()) == (48, 40, 4)
+        assert header.combo.geometry().right() < header.play.x()
+        assert all((b.width(), b.height()) == (48, 40) and b.minimumSize() == b.maximumSize() == b.size()
+                   for b in widget.findChildren(QPushButton))
         assert controls(widget, 0).grab().toImage().pixelColor(1, 1).name() != '#000000'
         assert pg.CONFIG_OPTIONS == before
     finally:

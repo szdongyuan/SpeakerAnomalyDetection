@@ -192,7 +192,7 @@ class SequenceToolsBar(QWidget):
     def create_mainly_layout(self):
         layout = ToolbarRowLayout()
         for button in (self.player_btn, self.data_btn):
-            layout.add_control(button, "action", 48, 120)
+            layout.add_control(button, "action", ui_style_const.TOOLBAR_ICON_BUTTON_WIDTH, 120)
         layout.add_control(self.serial_trigger_btn, "serial", 48, 124)
         layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
         self._configure_fields()
@@ -322,7 +322,8 @@ class SequenceToolsBar(QWidget):
 
     @staticmethod
     def _configure_icon_button(button, tooltip, icon_path, icon_size):
-        button.setFixedSize(48, 40)
+        button.setFixedSize(ui_style_const.TOOLBAR_ICON_BUTTON_WIDTH,
+                            ui_style_const.TOOLBAR_ICON_BUTTON_HEIGHT)
         button.setToolTip(tooltip)
         button.setAccessibleName(tooltip)
         button.setAccessibleDescription(tooltip)
