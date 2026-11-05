@@ -33,7 +33,9 @@ def main():
     from PyQt5.QtGui import QFont, QFontDatabase, QImage, QPainter, QPalette, QPicture
     from PyQt5.QtSvg import QSvgRenderer
     from PyQt5.QtTest import QTest
-    from PyQt5.QtWidgets import QApplication, QLabel, QScrollArea, QStyle, QStyleOptionComboBox, QWidget
+    from PyQt5.QtWidgets import (
+        QApplication, QLabel, QScrollArea, QStyle, QStyleOptionButton, QStyleOptionComboBox, QWidget,
+    )
 
     from consts.ui_style_const import COMBO_DOWN_ARROW_ICON, toolbar_combobox_style
     from ui.sequence.station_plot_cell import StationPlotCell
@@ -138,7 +140,8 @@ def main():
         column_controls = headers(grid)
         marks_visible = column_controls[0].ok.isVisible()
         checks = {'column_alignment': True, 'controls_fit': True,
-                  'station_control_dimensions': header_scroll.height() == header_scroll.widget().height() == 48,
+                  'station_control_dimensions': header_scroll.height() == header_scroll.widget().height() == 56,
+                  'station_mark_text': True,
                   'marks_no_placeholder': True, 'state_preserved': preserved,
                   'plot_contents_fit': True, 'corner_header_geometry': True,
                   'corner_text_elision': True, 'corner_text_style': True,
@@ -247,15 +250,25 @@ def main():
                                                and header_rect[2] == cell_rect[2])
             visible = [w for w in (header.name, header.combo, header.play, header.ok, header.ng)
                        if w.isVisible()]
-            buttons = (header.play, header.ok, header.ng) if marks_visible else (header.play,)
+            mark_buttons = (header.ok, header.ng) if marks_visible else ()
+            buttons = (header.play, *mark_buttons)
             old_controls_width = 118 if marks_visible else 50
             old_combo_width = round((header.width() - old_controls_width) * 3 / 5)
             checks['station_control_dimensions'] &= (
-                header.height() == 48
-                and all(b.isVisible() and (b.width(), b.height(), b.y()) == (48, 40, 4)
+                header.height() == 56
+                and all(b.isVisible() and (b.width(), b.height(), b.y()) == (48, 40, 8)
                         for b in buttons)
-                and (header.combo.height(), header.combo.y()) == (40, 4)
+                and (header.combo.height(), header.combo.y()) == (30, 13)
                 and abs(header.combo.width() - old_combo_width / 2) <= 1)
+            for button in mark_buttons:
+                option = QStyleOptionButton()
+                option.initFrom(button)
+                contents = button.style().subElementRect(QStyle.SE_PushButtonContents, option, button)
+                text_size = button.fontMetrics().size(Qt.TextShowMnemonic, button.text())
+                checks['station_mark_text'] &= (
+                    button.font().pixelSize() == 18
+                    and text_size.width() <= contents.width()
+                    and text_size.height() <= contents.height())
             checks['controls_fit'] &= all(header.rect().contains(w.geometry()) for w in visible)
             checks['controls_fit'] &= all(
                 not left.geometry().intersects(right.geometry())
@@ -460,7 +473,7 @@ def main():
     save(grid, 'subheader-variants')
     dispose(grid)
 
-    grid = create(562, 266)
+    grid = create(562, 274)
     populate(grid, 1, 2, long_text=True)
     # Keep this minimum-size case focused on both text rows and axis/colorbar
     # bounds; the existing two-row legend needs a taller ViewBox at 120 DPI.
