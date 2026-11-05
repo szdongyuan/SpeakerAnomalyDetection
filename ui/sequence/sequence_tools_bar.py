@@ -107,7 +107,7 @@ class AnalysisStatusButton(QPushButton):
                 padding: 0 3px;
                 font-family: {ui_style_const.MAIN_UI_SMALL_FONT_FAMILY};
                 font-size: 11px;
-                font-weight: 600;
+                font-weight: 400;
             }}
             """
         )
@@ -171,7 +171,9 @@ class SequenceToolsBar(QWidget):
         tools_layout = self.create_tools_layout()
 
         self.setLayout(tools_layout)
-        self.setStyleSheet(ui_style_const.toolbar_container_style)
+        self.setStyleSheet(
+            ui_style_const.toolbar_container_style + ui_style_const.main_window_tooltip_style
+        )
 
     def create_tools_layout(self):
         line_top = self._create_separator(QFrame.HLine)
@@ -299,7 +301,9 @@ class SequenceToolsBar(QWidget):
         self.reset_round_button.setAutoDefault(False)
         self.reset_round_button.setStyleSheet(
             ui_style_const.qpushbutton_style
-            + "QPushButton#resetCurrentRoundButton { font-size: 14px; padding: 4px 6px; }"
+            + "QPushButton#resetCurrentRoundButton {"
+            + f"font-family: {ui_style_const.MAIN_UI_SMALL_FONT_FAMILY};"
+            + "font-size: 14px; padding: 4px 6px; }"
         )
         self.barcode_scanner_box.setChecked(False)
         self.barcode_scanner_box.setFixedHeight(40)
@@ -327,7 +331,7 @@ class SequenceToolsBar(QWidget):
         button.setToolTip(tooltip)
         button.setAccessibleName(tooltip)
         button.setAccessibleDescription(tooltip)
-        button.setStyleSheet(ui_style_const.toolbar_button_style)
+        button.setStyleSheet(ui_style_const.main_window_toolbar_button_style)
         button.setIcon(QIcon(DEFAULT_DIR + icon_path))
         button.setIconSize(icon_size)
 

@@ -582,7 +582,7 @@ class MainWindow(QMainWindow):
         menu_bar = QMenuBar()
         menu_bar.setObjectName("mainWindowMenuBar")
         menu_bar.setNativeMenuBar(False)
-        menu_bar.setStyleSheet(ui_style_const.main_window_menubar_style)
+        menu_bar.setStyleSheet(ui_style_const.main_window_yahei_menubar_style)
         function_menu = menu_bar.addMenu("功能")
         hardware_menu = menu_bar.addMenu("硬件")
         user_menu = menu_bar.addMenu("用户")
@@ -732,7 +732,9 @@ class MainWindow(QMainWindow):
         self.user_label.setAlignment(Qt.AlignLeft)
         self.user_label.setStyleSheet(ui_style_const.main_window_status_label_style)
         self.device_label = QLabel()
-        self.device_label.setStyleSheet(ui_style_const.main_window_status_label_style)
+        self.device_label.setStyleSheet(
+            ui_style_const.main_window_status_label_style + ui_style_const.main_window_tooltip_style
+        )
         self.update_statusbar()
 
         statusbar = QStatusBar()

@@ -137,7 +137,6 @@ class AnalysisMultichannelResultWindow(QWidget):
             }}
             QComboBox#analysisResultChannelCombo::drop-down {{
                 border: none;
-                border-left: 1px solid {ui_style_const.COLOR_BORDER};
                 border-top-right-radius: 3px;
                 border-bottom-right-radius: 3px;
                 width: 20px;
@@ -150,8 +149,10 @@ class AnalysisMultichannelResultWindow(QWidget):
             }}
             QComboBox#analysisResultChannelCombo::down-arrow {{
                 image: url("{_CHANNEL_SELECTOR_ARROW_ICON}");
-                width: 12px;
-                height: 8px;
+                width: 15px;
+                height: 10px;
+                position: relative;
+                right: 3px;
             }}
             QComboBox#analysisResultChannelCombo QAbstractItemView {{
                 background-color: {ui_style_const.COLOR_CARD_BG};

@@ -77,7 +77,8 @@ class VideoCanvas(QWidget):
 class VideoMonitorWidget(QWidget):
     settings_requested = pyqtSignal()
 
-    def __init__(self, bridge, parent=None, *, simulation=False):
+    def __init__(self, bridge, parent=None, *, simulation=False,
+                 title_font_family=ui_style_const.UI_FONT_FAMILY):
         super().__init__(parent)
         self.bridge = bridge
         root = QVBoxLayout(self)
@@ -101,7 +102,7 @@ class VideoMonitorWidget(QWidget):
         header_layout.setSpacing(8)
         self.title_label = QLabel("视频监控 · 模拟" if simulation else "视频监控")
         self.title_label.setStyleSheet(
-            f"font-family:{ui_style_const.UI_FONT_FAMILY}; font-size:16px; font-weight:bold;"
+            f"font-family:{title_font_family}; font-size:16px; font-weight:bold;"
         )
         self.more_button = QToolButton()
         self.more_button.setText("…")

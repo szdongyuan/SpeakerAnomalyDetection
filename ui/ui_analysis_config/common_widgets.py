@@ -399,15 +399,16 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
             subcontrol-position: top right;
             width: 18px;
             border: none;
-            border-left: 1px solid $BORDER;
             border-top-right-radius: 3px;
             border-bottom-right-radius: 3px;
             background: $CARD_BG;
         }
         QComboBox::down-arrow {
             image: url("$COMBO_DOWN_ARROW");
-            width: 10px;
-            height: 6px;
+            width: 13px;
+            height: 8px;
+            position: relative;
+            right: 3px;
         }
         QComboBox:hover, QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover {
             border-color: $PRIMARY;

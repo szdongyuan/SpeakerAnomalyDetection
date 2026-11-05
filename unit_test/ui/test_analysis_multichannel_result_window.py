@@ -56,7 +56,7 @@ def test_one_item_window_uses_dropdown_to_switch_channels(ui_qapp):
     assert "ui/ui_analysis_config/assets/combobox_down_arrow.svg" in (
         window.styleSheet()
     )
-    assert "border-left: 1px solid" in window.styleSheet()
+    assert "border-left: 1px solid" not in window.styleSheet()
     assert window.objectName() == "analysisResultWindow"
     assert window.layout().getContentsMargins() == (10, 10, 10, 10)
     selector_panel = window.findChild(QFrame, "analysisResultChannelPanel")

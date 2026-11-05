@@ -201,10 +201,16 @@ def test_summary_native_render_matches_html_under_inherited_styles(summary, qt_a
             pixels = label.grab().toImage()
             assert any(pixels.pixelColor(x, y) == expected for x in range(pixels.width()) for y in range(pixels.height()))
             assert label.font().family() == "Microsoft YaHei UI"
-            assert label.font().pointSizeF() == 17.25
+            assert label.font().pixelSize() == 23
+            assert label.font().bold()
         title = summary.findChild(QLabel, "summaryTitle")
-        assert title.font().pointSizeF() == 10.5
+        assert title.font().pixelSize() == 14
+        assert title.font().bold()
+        for name, size in (("summaryDate", 11), ("summaryTotal", 15), ("summaryRate", 15)):
+            font = summary.findChild(QLabel, name).font()
+            assert (font.family(), font.pixelSize()) == ("Microsoft YaHei UI", size)
         button = summary.findChild(QPushButton, "summaryDetails")
+        assert (button.font().family(), button.font().pixelSize()) == ("Microsoft YaHei UI", 12)
         expected = QColor("#246bed")
         assert button.isEnabled()
         assert button.palette().color(QPalette.Active, QPalette.ButtonText) == expected

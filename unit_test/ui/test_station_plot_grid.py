@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QStyleOptionComboBox, QVBoxLayout, QWidget,
 )
 
-from consts.ui_style_const import COMBO_DOWN_ARROW_ICON, toolbar_combobox_style
+from consts.ui_style_const import COLOR_BORDER, COMBO_DOWN_ARROW_ICON, toolbar_combobox_style
 
 from ui.sequence.station_plot_cell import StationPlotCell
 from ui.sequence.station_plot_grid import StationPlotGrid
@@ -49,6 +49,9 @@ def curves(cell):
 def test_title_and_station_colors_are_actually_painted(grid):
     title = grid.findChild(QLabel, 'stationPlotTitle')
     assert title.height() >= 36
+    assert (title.font().family(), title.font().pixelSize(), title.font().bold()) == (
+        "Microsoft YaHei UI", 20, True,
+    )
     title_image = title.grab().toImage()
     assert title_image.pixelColor(title.width() - 3, 3).name() == '#3e75ac'
     assert title.palette().color(QPalette.WindowText).name() == '#ffffff'
@@ -77,6 +80,13 @@ def test_title_and_station_colors_are_actually_painted(grid):
             assert text_size.height() <= contents.height()
         assert header.grab().toImage().pixelColor(2, 2).name() == '#f4f7fc'
         assert header.name.palette().color(QPalette.WindowText).name() == '#183957'
+
+
+def test_station_names_and_mark_buttons_use_main_font(grid):
+    header = controls(grid, 0)
+    assert header.name.font().pixelSize() == 20
+    for widget in (header.name, header.ok, header.ng):
+        assert widget.font().family() == "Microsoft YaHei UI"
 
 
 def test_title_header_and_cells_form_a_continuous_grid(grid, qt_app):
@@ -155,7 +165,7 @@ def test_combo_reuses_project_arrow_and_renders_its_resource(grid, qt_app):
     assert COMBO_DOWN_ARROW_ICON in box.styleSheet()
     assert QSvgRenderer(COMBO_DOWN_ARROW_ICON).isValid()
     assert not QIcon(COMBO_DOWN_ARROW_ICON).pixmap(10, 10).isNull()
-    # Compare the actual arrow pixels with a real combo using the shared style.
+    # Compare the arrow pixels with a real combo using the shared style.
     reference = QComboBox()
     try:
         reference.setStyleSheet(toolbar_combobox_style)
@@ -164,22 +174,35 @@ def test_combo_reuses_project_arrow_and_renders_its_resource(grid, qt_app):
         reference.show()
         qt_app.processEvents()
         patches = []
+        divider = COLOR_BORDER.lower()
         for widget in (box, reference):
             option = QStyleOptionComboBox()
             widget.initStyleOption(option)
             arrow = widget.style().subControlRect(
                 QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxArrow, widget)
+            image = widget.grab().toImage()
+            y = arrow.top() + 3
+            assert all(image.pixelColor(x, y).name() != divider
+                       for x in (arrow.left() - 1, arrow.left()))
             if widget is box:
                 edit = widget.style().subControlRect(
                     QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, widget)
                 assert abs(edit.center().y() - widget.rect().center().y()) <= 1
                 assert abs(arrow.center().y() - widget.rect().center().y()) <= 1
             center = arrow.center()
-            patches.append(widget.grab().toImage().copy(
-                center.x() - 4, center.y() - 4, 10, 10).convertToFormat(QImage.Format_ARGB32))
+            sample_left = center.x() - 8
+            patch = image.copy(sample_left, center.y() - 5, 14, 11)
+            patch = patch.convertToFormat(QImage.Format_ARGB32)
+            ink_columns = [
+                x for x in range(patch.width())
+                if any(patch.pixelColor(x, y).lightness() < 128 for y in range(patch.height()))
+            ]
+            assert ink_columns
+            assert ink_columns[-1] - ink_columns[0] + 1 >= 9
+            ink_midpoint = sample_left + (ink_columns[0] + ink_columns[-1]) / 2
+            assert 2 <= center.x() - ink_midpoint <= 4
+            patches.append(patch)
         assert patches[0] == patches[1]
-        assert any(patches[0].pixelColor(x, y).lightness() < 128
-                   for x in range(10) for y in range(10))
     finally:
         reference.close()
         reference.deleteLater()
@@ -322,6 +345,7 @@ def test_actual_keyboard_and_popup_selection_emit_once(grid, qt_app):
     spy = QSignalSpy(grid.column_selection_changed)
     box = combo(grid, 2)
     closed_width = box.width()
+    assert (box.font().family(), box.font().pixelSize()) == ("Microsoft YaHei UI", 12)
     assert closed_width == 48
     box.setFocus()
     QTest.keyClick(box, Qt.Key_Down)
@@ -331,6 +355,7 @@ def test_actual_keyboard_and_popup_selection_emit_once(grid, qt_app):
     for _ in range(2):
         box.showPopup()
         qt_app.processEvents()
+        assert (view.font().family(), view.font().pixelSize()) == ("Microsoft YaHei UI", 12)
         viewport = view.viewport()
         text_width = max(view.fontMetrics().horizontalAdvance(text) for text, _ in options)
         assert viewport.width() >= text_width + 2

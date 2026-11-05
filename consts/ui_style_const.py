@@ -498,9 +498,9 @@ main_window_title_label_style = _style("""
             QLabel {
                 color: $COLOR_TEXT;
                 background-color: transparent;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_SMALL_FONT_FAMILY;
                 font-size: 20px;
-                font-weight: 600;
+                font-weight: 400;
             }
 """)
 
@@ -575,6 +575,20 @@ main_window_menubar_style = _style("""
             QMenu::item:selected {
                 background-color: #E1EAF6;
                 color: $COLOR_PRIMARY_HOVER;
+            }
+""")
+
+main_window_yahei_menubar_style = (
+    main_window_menubar_style.replace(
+        f"font-family: {UI_FONT_FAMILY};", f"font-family: {MAIN_UI_SMALL_FONT_FAMILY};"
+    ).replace("font-weight: 600;", "font-weight: 400;")
+    + "QMenu, QMenu::item { font-weight: 400; }"
+)
+
+main_window_tooltip_style = _style("""
+            QToolTip {
+                font-family: $MAIN_UI_SMALL_FONT_FAMILY;
+                font-size: 16px;
             }
 """)
 
@@ -918,13 +932,17 @@ toolbar_button_style = _style("""
             }
 """)
 
+main_window_toolbar_button_style = toolbar_button_style.replace(
+    f"font-family: {UI_FONT_FAMILY};", f"font-family: {MAIN_UI_SMALL_FONT_FAMILY};"
+)
+
 toolbar_field_label_style = _style("""
             QLabel {
                 color: $COLOR_TEXT;
                 background-color: transparent;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_SMALL_FONT_FAMILY;
                 font-size: 18px;
-                font-weight: 600;
+                font-weight: 400;
             }
 """)
 
@@ -934,7 +952,7 @@ toolbar_input_style = _style("""
                 color: $COLOR_TEXT;
                 border: 1px solid $COLOR_BORDER_STRONG;
                 border-radius: 4px;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_SMALL_FONT_FAMILY;
                 font-size: 18px;
                 padding: 3px 8px;
                 selection-background-color: $COLOR_PRIMARY;
@@ -952,12 +970,12 @@ toolbar_combobox_style = _style("""
                 color: $COLOR_TEXT;
                 border: 1px solid $COLOR_BORDER_STRONG;
                 border-radius: 4px;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_SMALL_FONT_FAMILY;
                 font-size: 18px;
                 padding: 3px;
             }
             QComboBox::drop-down {
-                border-left: 1px solid $COLOR_BORDER;
+                border-left: none;
                 width: 14px;
                 subcontrol-origin: padding;
                 subcontrol-position: top right;
@@ -965,14 +983,16 @@ toolbar_combobox_style = _style("""
             }
             QComboBox::down-arrow {
                 image: url($COMBO_DOWN_ARROW_ICON);
-                width: 10px;
-                height: 10px;
+                width: 14px;
+                height: 14px;
+                position: relative;
+                right: 3px;
             }
             QComboBox QAbstractItemView {
                 background-color: #FFFFFF;
                 color: $COLOR_TEXT;
                 selection-background-color: #E1EAF6;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_SMALL_FONT_FAMILY;
                 font-size: 18px;
             }
 """)
@@ -983,7 +1003,7 @@ toolbar_spinbox_style = _style("""
                 color: $COLOR_TEXT;
                 border: 1px solid $COLOR_BORDER_STRONG;
                 border-radius: 4px;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_SMALL_FONT_FAMILY;
                 font-size: 18px;
                 padding: 3px;
                 selection-background-color: $COLOR_PRIMARY;
@@ -1000,9 +1020,9 @@ toolbar_checkbox_style = _style("""
             QCheckBox {
                 color: $COLOR_TEXT;
                 background-color: transparent;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_SMALL_FONT_FAMILY;
                 font-size: 18px;
-                font-weight: 600;
+                font-weight: 400;
                 spacing: 4px;
             }
             QCheckBox:focus { outline: none; }
@@ -1014,9 +1034,9 @@ serial_trigger_button_base_style = _style("""
                 border: 1px solid $COLOR_BORDER_STRONG;
                 border-radius: 4px;
                 padding: 2px 10px;
-                font-family: $UI_FONT_FAMILY;
+                font-family: $MAIN_UI_SMALL_FONT_FAMILY;
                 font-size: 14px;
-                font-weight: 600;
+                font-weight: 400;
             }
             QPushButton:focus {
                 outline: none;
@@ -1322,7 +1342,7 @@ qtreeview_style = _style("""
 
 # Station presentation is independent from the legacy task/result palette.
 MOTOR_STATION_STATUS_COLORS = MappingProxyType({"--": "#617183", "OK": "#00824e", "NG": "#ca3245"})
-MOTOR_STATION_PANEL_STYLE = """
+MOTOR_STATION_PANEL_STYLE = _style("""
 QWidget#motorStationTestPanel {
     border: 1px solid #cddaea;
     border-radius: 3px;
@@ -1330,18 +1350,18 @@ QWidget#motorStationTestPanel {
 QWidget#motorStationTestPanel, QWidget#stationContent {
     background: #ffffff;
     color: #293b4d;
-    font-family: 'Microsoft YaHei UI', 'Segoe UI';
-    font-size: 9.75pt;
+    font-family: $MAIN_UI_SMALL_FONT_FAMILY;
+    font-size: 13px;
 }
 QLabel#stationTitle {
     border-top-left-radius: 2px;
     border-top-right-radius: 2px;
-    font-family: 'Microsoft YaHei UI', 'Segoe UI';
+    font-family: $MAIN_UI_SMALL_FONT_FAMILY;
     background: #3e75ac;
     color: #ffffff;
     border: none;
     padding: 7px 12px;
-    font-size: 10.5pt;
+    font-size: 14px;
     font-weight: 600;
 }
 QWidget#stationGeneralHeader {
@@ -1349,11 +1369,11 @@ QWidget#stationGeneralHeader {
     border-bottom: 1px solid #e0e7ef;
 }
 QWidget#stationGeneralHeader QLabel {
-    font-family: 'Microsoft YaHei UI', 'Segoe UI';
+    font-family: $MAIN_UI_SMALL_FONT_FAMILY;
     background: transparent;
     color: #617183;
     border: none;
-    font-size: 9pt;
+    font-size: 12px;
 }
 QScrollArea#stationScroll {
     background: #ffffff;
@@ -1377,8 +1397,8 @@ QPushButton[stationHeader="true"]:checked {
 QPushButton[stationHeader="true"] QLabel {
     background: transparent;
     border: none;
-    font-family: 'Microsoft YaHei UI', 'Segoe UI';
-    font-size: 9.75pt;
+    font-family: $MAIN_UI_SMALL_FONT_FAMILY;
+    font-size: 13px;
 }
 QTableWidget {
     background: #ffffff;
@@ -1386,8 +1406,8 @@ QTableWidget {
     color: #293b4d;
     border: none;
     gridline-color: #e0e7ef;
-    font-family: 'Microsoft YaHei UI', 'Segoe UI';
-    font-size: 9.75pt;
+    font-family: $MAIN_UI_SMALL_FONT_FAMILY;
+    font-size: 13px;
 }
 QTableWidget::item {
     padding: 0 12px;
@@ -1400,14 +1420,14 @@ QTableWidget QHeaderView::section {
     border: none;
     border-bottom: 1px solid #e0e7ef;
     padding: 0 12px;
-    font-family: 'Microsoft YaHei UI', 'Segoe UI';
-    font-size: 9pt;
+    font-family: $MAIN_UI_SMALL_FONT_FAMILY;
+    font-size: 12px;
     font-weight: normal;
 }
-"""
+""")
 
 
-MOTOR_INFORMATION_SUMMARY_STYLE = """
+MOTOR_INFORMATION_SUMMARY_STYLE = _style("""
 QWidget#motorInformationSummaryPanel {
     background: #ffffff;
     border: 1px solid #cddaea;
@@ -1419,8 +1439,8 @@ QWidget#motorInformationSummaryPanel QWidget {
 }
 QWidget#motorInformationSummaryPanel QLabel,
 QWidget#motorInformationSummaryPanel QPushButton {
-    font-family: 'Microsoft YaHei UI', 'Segoe UI';
-    font-size: 9pt;
+    font-family: $MAIN_UI_SMALL_FONT_FAMILY;
+    font-size: 12px;
     font-weight: normal;
     background: transparent;
     color: #617183;
@@ -1429,11 +1449,11 @@ QWidget#motorInformationSummaryPanel QPushButton {
 }
 QWidget#motorInformationSummaryPanel QLabel#summaryTitle {
     color: #293b4d;
-    font-size: 10.5pt;
+    font-size: 14px;
     font-weight: 500;
 }
 QWidget#motorInformationSummaryPanel QLabel#summaryDate {
-    font-size: 8.25pt;
+    font-size: 11px;
 }
 QWidget#motorInformationSummaryPanel QPushButton#summaryDetails {
     color: #246bed;
@@ -1446,7 +1466,7 @@ QWidget#motorInformationSummaryPanel QPushButton#summaryDetails:focus {
 QWidget#motorInformationSummaryPanel QLabel#summaryTotal,
 QWidget#motorInformationSummaryPanel QLabel#summaryRate {
     color: #293b4d;
-    font-size: 11.25pt;
+    font-size: 15px;
     font-weight: 500;
 }
 QWidget#motorInformationSummaryPanel QWidget#summaryCounts {
@@ -1458,13 +1478,13 @@ QWidget#motorInformationSummaryPanel QWidget[summarySeparated="true"] {
 QWidget#motorInformationSummaryPanel QLabel#summaryOk,
 QWidget#motorInformationSummaryPanel QLabel#summaryNg,
 QWidget#motorInformationSummaryPanel QLabel#summaryUnmarked {
-    font-size: 17.25pt;
+    font-size: 23px;
     font-weight: 500;
     color: #617183;
 }
 QWidget#motorInformationSummaryPanel QLabel#summaryOk { color: #00824e; }
 QWidget#motorInformationSummaryPanel QLabel#summaryNg { color: #ca3245; }
-"""
+""")
 
 MOTOR_DASHBOARD_PANEL_STYLE = """
 QWidget#motorDashboardPanel {
