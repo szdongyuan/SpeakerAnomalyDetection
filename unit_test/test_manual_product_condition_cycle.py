@@ -83,14 +83,11 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
         ]
         self.loaded_queues = []
         self.started = []
-        self.cleared_waveforms = 0
         self.clicked_player_flag = False
         self.sequence_config = []
         self.analysis_config = {}
         self.count_board = _SpyCountBoard()
         self.left_panel = _SpyLeftPanel(self.product_test_condition_configs)
-        self.channel_workspace = SimpleNamespace(results=[])
-        self.channel_workspace.set_condition_result = lambda key, label: self.channel_workspace.results.append((key, label))
         self.recent_test_sessions = []
         self.recent_test_session_by_id = {}
         self._manual_product_condition_index = 0
@@ -100,7 +97,6 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
         self._manual_product_condition_counted_group_labels = {}
         self._active_product_condition_key = ""
         self._active_product_condition_config = None
-        self._waveform_display_override_direction = ""
         self._current_trigger_direction = ""
         self._current_cycle_recorded_count = None
         self._current_run_recording_token = ""
@@ -129,13 +125,9 @@ class _DummyManualCycleWidget(SequenceWidgetAnalysisOpsMixin):
 
     _generate_product_condition_group_id = _generate_recording_token
 
-    def clear_all_direction_waveforms(self):
-        self.cleared_waveforms += 1
 
     def start_this_play(self, label="not_labeled"):
         self.started.append((label, self._active_product_condition_key, self._resolve_recording_name_suffix()))
-
-
 
 
 class TestManualProductConditionCycle(unittest.TestCase):
@@ -173,7 +165,6 @@ class TestManualProductConditionCycle(unittest.TestCase):
         first_group_id = widget._manual_product_condition_group_id
         self.assertTrue(first_group_id)
         self.assertEqual(widget._current_cycle_recorded_count, first_group_id)
-        self.assertEqual(widget.cleared_waveforms, 1)
 
         widget._advance_manual_product_condition_cycle_after_recording()
         widget.on_clicked_player_btn()
@@ -192,7 +183,6 @@ class TestManualProductConditionCycle(unittest.TestCase):
         self.assertEqual(widget.loaded_queues[-1], "queue_6000")
         self.assertEqual(widget.started[-1], ("not_labeled", "q6000", "_6000"))
         self.assertNotEqual(widget._manual_product_condition_group_id, first_group_id)
-        self.assertEqual(widget.cleared_waveforms, 2)
 
     def test_manual_product_condition_runtime_key_prefers_explicit_key(self):
         widget = _DummyManualCycleWidget()
@@ -261,7 +251,6 @@ class TestManualProductConditionCycle(unittest.TestCase):
 
         widget.on_clicked_player_btn()
         self.assertIsNone(widget._update_manual_product_condition_result_after_analysis("OK"))
-        self.assertEqual(widget.channel_workspace.results[-1], ("q6000", "OK"))
 
         widget._advance_manual_product_condition_cycle_after_recording()
         widget.on_clicked_player_btn()
@@ -699,7 +688,7 @@ class TestManualProductConditionCycle(unittest.TestCase):
         widget.on_clicked_player_btn()
         widget._mark_manual_product_condition_recording_completed()
 
-        widget._reset_manual_product_condition_cycle(clear_waveforms=True)
+        widget._reset_manual_product_condition_cycle()
 
         self.assertEqual(widget._manual_product_condition_index, 0)
         self.assertEqual(widget._manual_product_condition_group_id, "")
@@ -713,7 +702,6 @@ class TestManualProductConditionCycle(unittest.TestCase):
             ],
         )
         self.assertEqual(widget.left_panel.final_results[-1], ("待判定", "pending"))
-        self.assertEqual(widget.cleared_waveforms, 2)
 
     def test_manual_product_mark_summary_survives_statistics_retirement(self):
         widget = _DummyManualCycleWidget()

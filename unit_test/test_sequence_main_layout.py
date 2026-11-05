@@ -2,16 +2,12 @@ import logging
 import os
 import sys
 import tempfile
-import traceback
 import types
 import unittest
-from dataclasses import replace
 from unittest.mock import patch
 
 import numpy as np
-import pyqtgraph as pg
-from PyQt5.QtCore import QCoreApplication, QElapsedTimer, QEvent, Qt
-from PyQt5.QtTest import QTest
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QComboBox, QLabel, QPushButton, QSplitter, QVBoxLayout, QWidget
 
 if "concurrent_log_handler" not in sys.modules:
@@ -26,19 +22,11 @@ if "concurrent_log_handler" not in sys.modules:
 
 from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
 from ui.sequence.motor_panel_common import MotorSectionCard
-from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
-from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
-from ui.sequence.direction_waveform_panel import DirectionWaveformPanel
-from ui.sequence.multichannel_waveform_session import MultichannelWaveformSession
+from ui.sequence.station_plot_grid import StationPlotGrid
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
-from consts import error_code, ui_style_const
-from consts.recording_preview_consts import (
-    PLOT_PRESENTATION_COMPLETE,
-    PREVIEW_TIME_MODE_CUMULATIVE,
-    PREVIEW_TIME_MODE_RELATIVE_LATEST,
-)
+from consts import error_code
 from base.product_test_project_config import ProductTestProjectConfigManager
 
 
@@ -50,76 +38,6 @@ class _DummyCountBoard(QWidget):
 
     def register_mode_change_callback(self, callback):
         self.mode_change_callbacks.append(callback)
-
-
-class _DummyChannelWorkspace:
-    def __init__(self, keys):
-        self._keys = list(keys)
-        self.results = []
-        self.audio_paths = []
-        self.cleared_directions = []
-        self.clear_all_count = 0
-        self.direction_data = []
-        self.set_condition_calls = []
-
-    def condition_keys(self):
-        return list(self._keys)
-
-    def set_conditions(self, condition_configs):
-        self.set_condition_calls.append(list(condition_configs or []))
-        self._keys = [
-            str(item.get("key") or "")
-            for item in DirectionWaveformPanel._normalize_conditions(condition_configs)
-        ]
-
-    def set_condition_result(self, key, label):
-        self.results.append((key, label))
-
-    def set_condition_audio_path(self, key, path):
-        self.audio_paths.append((key, path))
-
-    def clear_direction(self, key):
-        self.cleared_directions.append(key)
-
-    def clear_plots(self):
-        self.clear_all_count += 1
-
-    def set_direction_data(self, key, x, y):
-        self.direction_data.append((key, list(x), list(y)))
-
-    def set_live_channels(self, channels):
-        workspace = self
-
-        class _LiveWindow:
-            def __init__(self, channel):
-                self.channel_index = channel
-                self.data = None
-                self.is_live_preview = False
-
-            def set_data(self, x, y):
-                self.data = (list(x), list(y))
-                self.is_live_preview = False
-                workspace.direction_data.append(
-                    (self.channel_index, list(x), list(y))
-                )
-
-            def set_live_data(self, x, y):
-                self.data = (list(x), list(y))
-                self.is_live_preview = True
-                workspace.direction_data.append(
-                    (self.channel_index, list(x), list(y))
-                )
-
-            def snapshot_plot_state(self):
-                return self.data, self.is_live_preview
-
-            def restore_plot_state(self, state):
-                self.data, self.is_live_preview = state
-
-        self._live_windows = [_LiveWindow(channel) for channel in channels]
-
-    def all_subwindows(self):
-        return list(self._live_windows)
 
 
 class _SpyLeftPanel:
@@ -146,16 +64,12 @@ class _DummySequenceWidget(QWidget, SequenceWidgetStreamingOpsMixin):
         super().__init__()
         self.count_board = _DummyCountBoard()
         self.left_panel = MotorDetectionLeftPanel(self.count_board)
-        self.channel_workspace = None
         self.recent_test_session_by_id = {}
         self._last_recent_session_mode = ""
 
     def _resolve_recent_session(self, session_id: str):
         return None
 
-
-    def _configure_direction_waveform_workspace(self):
-        return None
 
     def _on_recent_session_mode_changed(self, mode: str):
         self._last_recent_session_mode = mode
@@ -174,201 +88,11 @@ class _RealisticSequenceWidget(_DummySequenceWidget):
         QWidget.__init__(self)
         self.count_board = SequenceCountBoard({})
         self.left_panel = MotorDetectionLeftPanel(self.count_board)
-        self.channel_workspace = None
         self._last_recent_session_mode = ""
 
 
-class _WaveformRefreshWidget(SequenceWidgetStreamingOpsMixin):
-    def __init__(self):
-        self.product_test_condition_configs = [
-            {"condition_name": "6000", "trigger_state": "01"},
-            {"condition_name": "7000", "trigger_state": "02"},
-            {"condition_name": "8000", "trigger_state": "03"},
-        ]
-        self.channel_workspace = _DummyChannelWorkspace(["01", "02", "03"])
-        self._direction_waveform_condition_signature = self._product_condition_signature(
-            self.product_test_condition_configs
-        )
-        self._direction_waveform_cache = {}
-        self._condition_record_cache = {}
-        self._waveform_display_override_direction = ""
-        self._current_trigger_direction = ""
-        self._active_product_condition_key = ""
-        self._active_input_channels = [0]
-        self.recorded_path = None
-        self.recorded_signal_info = {}
-        self._current_recent_session_id = ""
-        self.channel_workspace.set_live_channels(self._active_input_channels)
-
-    def _apply_condition_mode_to_waveforms(self):
-        return None
-
-    def _get_active_product_condition_key(self):
-        return self._active_product_condition_key
-
-
-def _begin_deferred_streaming_waveform_session(
-    widget, *, sample_rate, startup_trim_samples, direction
-):
-    widget._recording_input_channels = (0, 1)
-    widget.channel_workspace.set_live_channels(widget._recording_input_channels)
-    widget._streaming_waveform_session = MultichannelWaveformSession(
-        max_points=widget._WAVEFORM_DISPLAY_MAX_POINTS
-    )
-    widget._streaming_waveform_generation = 0
-    widget._streaming_waveform_refresh_scheduled = False
-    widget._streaming_waveform_pending = False
-    widget._streaming_waveform_live_enabled = False
-    widget._streaming_waveform_failure_logged = False
-    widget._streaming_chunk_contract_failed = False
-    scheduled_callbacks = []
-    widget._schedule_streaming_waveform_callback = scheduled_callbacks.append
-    widget._begin_streaming_waveform_session(
-        sample_rate, startup_trim_samples, direction
-    )
-    return scheduled_callbacks
-
-
 class TestSequenceMainLayout(unittest.TestCase):
-    def _wait_for_plot_ranges_stable(self, row):
-        elapsed = QElapsedTimer()
-        elapsed.start()
-        previous = None
-        stable_since = 0
-        while elapsed.elapsed() < 1500:
-            QTest.qWait(10)
-            self.app.processEvents()
-            current = np.asarray(row.plot_widget.viewRange(), dtype=float)
-            now = elapsed.elapsed()
-            if previous is None or not np.allclose(current, previous, rtol=1e-9, atol=1e-9):
-                stable_since = now
-            if now >= 150 and now - stable_since >= 40:
-                return current
-            previous = current.copy()
-        self.fail("Plot ranges did not stabilize within 1500 ms")
 
-    def _make_visible_plot_row(self, workspace_type):
-        workspace = workspace_type()
-        self.addCleanup(workspace.close)
-        workspace.resize(800, 400)
-        workspace.set_channels([0])
-        workspace.show()
-        self.app.processEvents()
-        return workspace, workspace.all_subwindows()[0]
-
-    def test_public_plot_updates_auto_scale_y(self):
-        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            for setter_name in (
-                "set_data", "set_relative_preview_data",
-                "set_cumulative_preview_data", "set_live_data",
-            ):
-                with self.subTest(workspace=workspace_type.__name__, setter=setter_name):
-                    workspace, row = self._make_visible_plot_row(workspace_type)
-                    x = np.linspace(-1.0, 0.0, 1001)
-                    spans = []
-                    for amplitude in (5.0, 20.0, 0.2):
-                        y = amplitude * np.sin(2.0 * np.pi * x)
-                        getattr(row, setter_name)(x, y)
-                        low, high = self._wait_for_plot_ranges_stable(row)[1]
-                        self.assertLessEqual(low, float(y.min()))
-                        self.assertGreaterEqual(high, float(y.max()))
-                        self.assertTrue(row.plot_widget.getViewBox().state["autoRange"][1])
-                        self.assertIsNone(row._deferred_view_guard)
-                        spans.append(high - low)
-                    self.assertGreater(spans[1], spans[0])
-                    self.assertLess(spans[2], spans[0])
-                    workspace.close()
-
-    def test_waveform_restores_display_only_channel_rows_and_grid(self):
-        panel = AnalysisWaveformPanel(
-            condition_configs=[{"key": "recording", "condition_name": "录音工况"}],
-        )
-        self.addCleanup(panel.close)
-        panel.set_channels([0, 2])
-        panel.set_mode("mark")
-        panel.set_condition_audio_path("recording", "fixture.wav")
-        self.assertEqual(panel.findChildren(QPushButton), [])
-        first, second = panel.all_subwindows()
-        self.assertEqual(first.channel_caption.text(), "CH1")
-        self.assertEqual(second.channel_caption.text(), "CH3")
-        for waveform_row in (first, second):
-            left_axis = waveform_row.plot_widget.getAxis("left")
-            bottom_axis = waveform_row.plot_widget.getAxis("bottom")
-            self.assertTrue(left_axis.isVisible())
-            self.assertTrue(bottom_axis.isVisible())
-            self.assertEqual(left_axis.labelText, "Amplitude")
-            self.assertEqual(bottom_axis.labelText, "Time")
-            self.assertEqual(bottom_axis.labelUnits, "s")
-            self.assertEqual(
-                waveform_row.plot_widget.getViewBox().state["mouseEnabled"],
-                [True, True],
-            )
-            self.assertIn(
-                "Grid",
-                [
-                    action.text()
-                    for action in waveform_row.plot_widget.getPlotItem().getMenu().actions()
-                ],
-            )
-            self.assertNotIn(
-                "同步辅助网格",
-                [
-                    action.text()
-                    for action in waveform_row.plot_widget.getPlotItem().getMenu().actions()
-                ],
-            )
-            plot_item = waveform_row.plot_widget.getPlotItem()
-            self.assertTrue(plot_item.ctrl.xGridCheck.isChecked())
-            self.assertTrue(plot_item.ctrl.yGridCheck.isChecked())
-        first.set_data([0, 1], [0.5, -0.5])
-        self.assertEqual(
-            first.plot_item.opts["pen"].color().name().upper(),
-            ui_style_const.COLOR_WAVEFORM,
-        )
-        saved = first.snapshot_plot_state()
-        panel.clear_plots()
-        self.assertIsNone(first.plot_item)
-        self.assertTrue(first.plot_widget.getPlotItem().ctrl.xGridCheck.isChecked())
-        self.assertTrue(first.plot_widget.getPlotItem().ctrl.yGridCheck.isChecked())
-        first.restore_plot_state(saved)
-        np.testing.assert_array_equal(first.plot_item.getData()[1], [0.5, -0.5])
-
-    def test_real_main_waveform_row_round_trips_live_and_final_x_view_mode(self):
-        panel = AnalysisWaveformPanel()
-        self.addCleanup(panel.close)
-        panel.set_channels([0])
-        window = panel.all_subwindows()[0]
-        view_box = window.plot_widget.getViewBox()
-        view_box.disableAutoRange(axis=pg.ViewBox.YAxis)
-        window.plot_widget.setYRange(-2.0, 2.0, padding=0)
-        live_time = np.asarray([-1.0, 0.0])
-        live_amplitude = np.asarray([0.25, -0.5], dtype=np.float32)
-
-        window.set_live_data(live_time, live_amplitude)
-
-        self.assertIs(window.is_live_preview, True)
-        np.testing.assert_allclose(window.plot_widget.viewRange()[0], [-10.0, 0.0])
-        self.assertIs(view_box.state["autoRange"][0], False)
-        saved = window.snapshot_plot_state()
-
-        window.set_data(
-            np.asarray([0.0, 30.0]),
-            np.asarray([1.0, 2.0], dtype=np.float32),
-        )
-
-        self.assertIs(window.is_live_preview, False)
-        self.assertTrue(view_box.state["autoRange"][0])
-        self.assertIs(view_box.state["autoRange"][1], False)
-        np.testing.assert_allclose(window.plot_widget.viewRange()[1], [-2.0, 2.0])
-
-        window.restore_plot_state(saved)
-
-        restored_time, restored_amplitude = window.plot_item.getData()
-        np.testing.assert_array_equal(restored_time, live_time)
-        np.testing.assert_array_equal(restored_amplitude, live_amplitude)
-        self.assertIs(window.is_live_preview, True)
-        np.testing.assert_allclose(window.plot_widget.viewRange()[0], [-10.0, 0.0])
-        self.assertIs(view_box.state["autoRange"][0], False)
 
     def test_video_and_hidden_history_match_stashed_layout(self):
         widget = _RealisticSequenceWidget()
@@ -382,69 +106,6 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertFalse(widget.count_board.isVisible())
         self.assertFalse(any(type(child).__name__ == "RecentSessionPanel" for child in widget.findChildren(QWidget)))
 
-    def test_waveform_rows_support_dynamic_and_noncontiguous_channels(self):
-        panel = AnalysisWaveformPanel()
-        panel.resize(1000, 780)
-        panel.show()
-        self.addCleanup(panel.close)
-        for channels in ([0], [2, 7], list(range(5)), list(range(8))):
-            with self.subTest(channels=channels):
-                panel.set_channels(channels)
-                for _ in range(3):
-                    self.app.processEvents()
-                windows = panel.all_subwindows()
-                self.assertEqual([window.channel_index for window in windows], channels)
-                self.assertTrue(panel._layout_is_valid())
-                for index, window in enumerate(windows):
-                    values = np.array([index, index + 1.0, -index - 1.0])
-                    window.set_data([0.0, 0.1, 0.2], values)
-                    saved = window.snapshot_plot_state()
-                    window.clear_plot()
-                    window.restore_plot_state(saved)
-                    np.testing.assert_array_equal(window.plot_item.getData()[1], values)
-
-    def test_waveform_selection_follows_view_while_recording_runtime_stays_active(self):
-        widget = _DummySequenceWidget()
-        widget.product_test_condition_configs = [
-            {"key": "first", "condition_name": "第一档", "test_queue": "queue1"},
-            {"key": "second", "condition_name": "第二档", "test_queue": "queue2"},
-        ]
-        widget._get_product_program_manager = lambda: types.SimpleNamespace(load_queue_catalog=lambda: {
-            "queue1": {"duration": 10, "analysis_items": ["SPL"]},
-            "queue2": {"duration": 600, "analysis_items": ["FFT"]},
-        })
-        widget.left_panel.set_condition_configs(widget.product_test_condition_configs)
-        widget.setLayout(widget.create_waveform_layout())
-        self.addCleanup(widget.close)
-        widget._refresh_waveform_condition_metadata()
-        panel = widget.channel_workspace
-        panel.all_subwindows()[0].set_data([0, 1], [0.5, -0.5])
-        widget.left_panel.condition_state.select_condition("second")
-        self.assertIn("第二档", panel.current_condition_label.text())
-        self.assertIn("600秒", panel.duration_label.text())
-        self.assertIn("FFT", panel.test_items_label.text())
-        self.assertIsNone(panel.all_subwindows()[0].plot_item)
-        widget._get_active_product_condition_key = lambda: "first"
-        widget._sync_waveform_condition_from_left("second")
-        self.assertIn("第二档", panel.current_condition_label.text())
-        self.assertIn("600秒", panel.duration_label.text())
-
-    def test_channel_alias_does_not_change_physical_plot_identity(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = os.path.join(folder, "channel_layout.json")
-            panel = AnalysisWaveformPanel(channel_layout_path=path)
-            panel.set_channels([7])
-            window = panel.all_subwindows()[0]
-            window.direction_editor.setText("后排")
-            window.direction_editor.editingFinished.emit()
-            self.assertEqual(window.channel_index, 7)
-            self.assertEqual(window.channel_caption.text(), "CH8")
-            self.assertEqual(panel.channel_layout["CH8"], "后排")
-            restored = AnalysisWaveformPanel(channel_layout_path=path)
-            restored.set_channels([7])
-            self.assertEqual(restored.all_subwindows()[0].direction_editor.text(), "后排")
-            panel.close()
-            restored.close()
 
     @classmethod
     def setUpClass(cls):
@@ -474,8 +135,8 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(left_sidebar_splitter.count(), 2)
         self.assertIs(left_sidebar_splitter.widget(0), widget.left_panel.dashboard_panel)
         self.assertIs(left_sidebar_splitter.widget(1), widget.left_panel.video_monitor_panel)
-        self.assertIs(main_splitter.widget(1), widget.channel_workspace)
-        self.assertIsInstance(widget.channel_workspace, AnalysisWaveformPanel)
+        self.assertIs(main_splitter.widget(1), widget.plot_grid)
+        self.assertIsInstance(widget.plot_grid, StationPlotGrid)
         self.assertFalse(any(type(child).__name__ == "RecentSessionPanel" for child in widget.findChildren(QWidget)))
 
     def test_common_window_size_keeps_waveform_and_history_readable(self):
@@ -485,9 +146,9 @@ class TestSequenceMainLayout(unittest.TestCase):
         widget.show()
         self.app.processEvents()
 
-        self.assertGreaterEqual(widget.channel_workspace.width(), 900)
-        self.assertGreaterEqual(widget.channel_workspace.height(), 700)
-        self.assertGreater(widget.channel_workspace.width(), widget.left_panel.dashboard_panel.width())
+        self.assertGreaterEqual(widget.plot_grid.width(), 900)
+        self.assertGreaterEqual(widget.plot_grid.height(), 700)
+        self.assertGreater(widget.plot_grid.width(), widget.left_panel.dashboard_panel.width())
         self.assertFalse(any(type(child).__name__ == "RecentSessionPanel" for child in widget.findChildren(QWidget)))
 
     def test_threshold_analyses_can_output_ok_ng(self):
@@ -501,858 +162,6 @@ class TestSequenceMainLayout(unittest.TestCase):
 
             self.assertEqual(widget._can_output_ok_ng(), (True, ""))
 
-    def test_channel_workspace_hides_old_subwindows_before_rebuilding(self):
-        workspace = ChannelPlotWorkspace()
-        workspace.resize(800, 400)
-        workspace.show()
-        workspace.set_channels([0, 1])
-        self.app.processEvents()
-        old_windows = workspace.subwindows()
-        self.assertTrue(old_windows)
-
-        workspace.set_channels([0])
-
-        self.assertTrue(all(not window.isVisible() for window in old_windows))
-        workspace.close()
-
-    def test_channel_plot_live_and_final_data_transition_x_view_mode(self):
-        workspace = ChannelPlotWorkspace()
-        self.addCleanup(workspace.close)
-        workspace.set_channels([0])
-        window = workspace.all_subwindows()[0]
-        amplitude = np.asarray([0.25, -0.5], dtype=np.float32)
-        view_box = window.plot_widget.getViewBox()
-        view_box.disableAutoRange(axis=pg.ViewBox.YAxis)
-        window.plot_widget.setYRange(-2.0, 2.0, padding=0)
-
-        window.set_live_data(np.asarray([-1.0, 0.0]), amplitude)
-
-        self.assertIs(window.is_live_preview, True)
-        np.testing.assert_allclose(
-            window.plot_widget.viewRange()[0],
-            [-10.0, 0.0],
-        )
-        self.assertIs(
-            window.plot_widget.getViewBox().state["autoRange"][0],
-            False,
-        )
-        self.assertIs(view_box.state["autoRange"][1], False)
-        np.testing.assert_allclose(window.plot_widget.viewRange()[1], [-2.0, 2.0])
-
-        window.set_data(np.asarray([0.0, 30.0]), amplitude)
-
-        self.assertIs(window.is_live_preview, False)
-        self.assertTrue(
-            window.plot_widget.getViewBox().state["autoRange"][0],
-        )
-        self.assertIs(view_box.state["autoRange"][1], False)
-        np.testing.assert_allclose(window.plot_widget.viewRange()[1], [-2.0, 2.0])
-
-    def test_real_plot_rows_expose_three_presentations_without_changing_y_view(self):
-        workspaces = []
-        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            workspace = workspace_type()
-            workspace.set_channels([0])
-            window = workspace.all_subwindows()[0]
-            self.assertEqual(
-                window.presentation_mode, PLOT_PRESENTATION_COMPLETE
-            )
-            self.assertIs(window.is_live_preview, False)
-            workspaces.append(workspace)
-            self.addCleanup(workspace.close)
-
-        cases = (
-            ("set_data", PLOT_PRESENTATION_COMPLETE, False, True),
-            (
-                "set_cumulative_preview_data",
-                PREVIEW_TIME_MODE_CUMULATIVE,
-                True,
-                True,
-            ),
-            (
-                "set_relative_preview_data",
-                PREVIEW_TIME_MODE_RELATIVE_LATEST,
-                True,
-                False,
-            ),
-            (
-                "set_live_data",
-                PREVIEW_TIME_MODE_RELATIVE_LATEST,
-                True,
-                False,
-            ),
-        )
-        for workspace in workspaces:
-            window = workspace.all_subwindows()[0]
-            view_box = window.plot_widget.getViewBox()
-            for setter_name, expected_mode, expected_live, expected_x_auto in cases:
-                with self.subTest(
-                    row_type=type(window).__name__, setter=setter_name
-                ):
-                    view_box.disableAutoRange(axis=pg.ViewBox.YAxis)
-                    window.plot_widget.setYRange(-2.25, 3.75, padding=0)
-                    expected_y_range = tuple(window.plot_widget.viewRange()[1])
-                    expected_y_auto = view_box.state["autoRange"][1]
-
-                    getattr(window, setter_name)(
-                        np.asarray([0.0, 2.0]),
-                        np.asarray([0.25, -0.5], dtype=np.float32),
-                    )
-
-                    self.assertEqual(window.presentation_mode, expected_mode)
-                    self.assertIs(window.is_live_preview, expected_live)
-                    self.assertEqual(
-                        bool(view_box.state["autoRange"][0]), expected_x_auto
-                    )
-                    self.assertEqual(
-                        view_box.state["autoRange"][1], expected_y_auto
-                    )
-                    np.testing.assert_allclose(
-                        window.plot_widget.viewRange()[1], expected_y_range
-                    )
-                    if expected_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST:
-                        np.testing.assert_allclose(
-                            window.plot_widget.viewRange()[0], [-10.0, 0.0]
-                        )
-
-    def test_plot_y_manual_range_survives_updates_and_clear(self):
-        x = np.linspace(-1.0, 0.0, 1001)
-        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            with self.subTest(workspace=workspace_type.__name__):
-                workspace, row = self._make_visible_plot_row(workspace_type)
-                view_box = row.plot_widget.getViewBox()
-                row.plot_widget.setYRange(-2.0, 2.0, padding=0)
-                for setter_name in (
-                    "set_data", "set_relative_preview_data",
-                    "set_cumulative_preview_data", "set_live_data", "clear_plot",
-                    "set_data",
-                ):
-                    if setter_name == "clear_plot":
-                        row.clear_plot()
-                    else:
-                        getattr(row, setter_name)(x, 20.0 * np.sin(2 * np.pi * x))
-                    np.testing.assert_allclose(
-                        self._wait_for_plot_ranges_stable(row)[1], [-2.0, 2.0]
-                    )
-                    self.assertIs(view_box.state["autoRange"][1], False)
-                    self.assertIsNone(row._deferred_view_guard)
-
-                view_box.menu.ctrl[1].autoPercentSpin.setValue(100)
-                view_box.menu.yAutoClicked()
-                auto_range = self._wait_for_plot_ranges_stable(row)[1]
-                self.assertLessEqual(auto_range[0], -20.0)
-                self.assertGreaterEqual(auto_range[1], 20.0)
-                row.set_live_data(x, 0.2 * np.sin(2 * np.pi * x))
-                next_range = self._wait_for_plot_ranges_stable(row)[1]
-                self.assertLess(np.ptp(next_range), np.ptp(auto_range))
-                self.assertLessEqual(next_range[0], -0.2)
-                self.assertGreaterEqual(next_range[1], 0.2)
-                self.assertTrue(view_box.state["autoRange"][1])
-                workspace.close()
-
-    def test_plot_y_partial_auto_range_matches_plain_view(self):
-        x = np.linspace(-1.0, 0.0, 1001)
-        distribution = np.linspace(-1.0, 1.0, x.size)
-        distribution[0], distribution[-1] = -100.0, 100.0
-        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            with self.subTest(workspace=workspace_type.__name__):
-                workspace, row = self._make_visible_plot_row(workspace_type)
-                plain = pg.PlotWidget()
-                self.addCleanup(plain.close)
-                plain.resize(row.plot_widget.size())
-                plain.show()
-                row.plot_widget.getViewBox().enableAutoRange(axis=pg.ViewBox.YAxis, enable=0.35)
-                plain.getViewBox().enableAutoRange(axis=pg.ViewBox.YAxis, enable=0.35)
-                curve = plain.plot()
-                spans = []
-                for setter_name, amplitude in (
-                    ("set_data", 5.0), ("set_relative_preview_data", 20.0),
-                    ("set_cumulative_preview_data", 0.2), ("set_live_data", 10.0),
-                ):
-                    y = amplitude * distribution
-                    curve.setData(x, y)
-                    getattr(row, setter_name)(x, y)
-                    actual = self._wait_for_plot_ranges_stable(row)[1]
-                    expected = plain.viewRange()[1]
-                    np.testing.assert_allclose(actual, expected, rtol=0.15, atol=0.01)
-                    self.assertEqual(row.plot_widget.getViewBox().state["autoRange"][1], 0.35)
-                    spans.append(np.ptp(actual))
-                self.assertGreater(spans[1], spans[0])
-                self.assertLess(spans[2], spans[0])
-                self.assertGreater(spans[3], spans[2])
-                saved = row.snapshot_plot_state()
-                row.set_data(x, distribution)
-                self._wait_for_plot_ranges_stable(row)
-                row.restore_plot_state(saved)
-                restored = self._wait_for_plot_ranges_stable(row)[1]
-                np.testing.assert_allclose(restored, plain.viewRange()[1], rtol=0.15, atol=0.01)
-                self.assertEqual(row.plot_widget.getViewBox().state["autoRange"][1], 0.35)
-                row.clear_plot()
-                self._wait_for_plot_ranges_stable(row)
-                self.assertEqual(row.plot_widget.getViewBox().state["autoRange"][1], 0.35)
-                row.set_data(x, distribution * 0.2)
-                curve.setData(x, distribution * 0.2)
-                after_clear = self._wait_for_plot_ranges_stable(row)[1]
-                np.testing.assert_allclose(after_clear, plain.viewRange()[1], rtol=0.15, atol=0.01)
-                self.assertEqual(row.plot_widget.getViewBox().state["autoRange"][1], 0.35)
-                plain.hide()
-                workspace.close()
-
-    def test_plot_restore_keeps_exact_x_and_autoscales_y(self):
-        x = np.linspace(-1.0, 0.0, 1001)
-        y = 5.0 * np.sin(2 * np.pi * x)
-        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            for setter_name, mode, x_auto in (
-                ("set_data", PLOT_PRESENTATION_COMPLETE, 0.35),
-                ("set_cumulative_preview_data", PREVIEW_TIME_MODE_CUMULATIVE, True),
-                ("set_relative_preview_data", PREVIEW_TIME_MODE_RELATIVE_LATEST, False),
-            ):
-                for immediate_update in (False, True):
-                    with self.subTest(workspace=workspace_type.__name__, mode=mode,
-                                      immediate_update=immediate_update):
-                        workspace, row = self._make_visible_plot_row(workspace_type)
-                        view_box = row.plot_widget.getViewBox()
-                        getattr(row, setter_name)(x, y)
-                        self._wait_for_plot_ranges_stable(row)
-                        # The snapshot is opaque and must preserve even bool True exactly.
-                        view_box.state["autoRange"][0] = x_auto
-                        saved = row.snapshot_plot_state()
-                        row.set_live_data(x, y * 4.0)
-                        self._wait_for_plot_ranges_stable(row)
-                        # Start rollback from a genuinely different Y range even on
-                        # the broken baseline, where the preview itself is frozen.
-                        view_box.updateAutoRange()
-                        preview_range = self._wait_for_plot_ranges_stable(row)[1]
-                        self.assertLessEqual(preview_range[0], -20.0)
-                        self.assertGreaterEqual(preview_range[1], 20.0)
-                        row.restore_plot_state(saved)
-                        if immediate_update:
-                            row.set_live_data(x, y * 0.04)
-                            ranges = self._wait_for_plot_ranges_stable(row)
-                            np.testing.assert_allclose(ranges[0], [-10.0, 0.0])
-                            self.assertIs(view_box.state["autoRange"][0], False)
-                            self.assertEqual(row.presentation_mode, PREVIEW_TIME_MODE_RELATIVE_LATEST)
-                            expected_y = y * 0.04
-                        else:
-                            ranges = self._wait_for_plot_ranges_stable(row)
-                            np.testing.assert_array_equal(ranges[0], saved.x_range)
-                            actual_auto = view_box.state["autoRange"][0]
-                            self.assertEqual(actual_auto, saved.x_auto_range)
-                            self.assertIs(type(actual_auto), type(saved.x_auto_range))
-                            self.assertEqual(row.presentation_mode, mode)
-                            expected_y = y
-                        restored_x, restored_y = row.plot_item.getData()
-                        np.testing.assert_array_equal(restored_x, x)
-                        np.testing.assert_array_equal(restored_y, expected_y)
-                        self.assertLessEqual(ranges[1, 0], float(expected_y.min()))
-                        self.assertGreaterEqual(ranges[1, 1], float(expected_y.max()))
-                        self.assertLess(np.ptp(ranges[1]), 3.0 * np.ptp(expected_y))
-                        self.assertTrue(view_box.state["autoRange"][1])
-                        # A subsequent item change must request another Y calculation.
-                        row.set_cumulative_preview_data(x, y * 8.0)
-                        later_range = self._wait_for_plot_ranges_stable(row)[1]
-                        self.assertLessEqual(later_range[0], -40.0)
-                        self.assertGreaterEqual(later_range[1], 40.0)
-                        workspace.close()
-
-    def test_plot_restore_preserves_current_manual_y_range(self):
-        x = np.linspace(-1.0, 0.0, 1001)
-        y = 5.0 * np.sin(2 * np.pi * x)
-        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            with self.subTest(workspace=workspace_type.__name__):
-                workspace, row = self._make_visible_plot_row(workspace_type)
-                row.set_data(x, y)
-                row.plot_widget.setYRange(-2.0, 2.0, padding=0)
-                saved = row.snapshot_plot_state()
-                row.set_live_data(x, y * 4.0)
-                row.plot_widget.setYRange(-3.0, 7.0, padding=0)
-                row.restore_plot_state(saved)
-                np.testing.assert_allclose(self._wait_for_plot_ranges_stable(row)[1], [-3.0, 7.0])
-                self.assertIs(row.plot_widget.getViewBox().state["autoRange"][1], False)
-                workspace.close()
-
-    def test_plot_restore_empty_and_legacy_states_allow_later_auto_y(self):
-        x = np.linspace(-1.0, 0.0, 1001)
-        y = 5.0 * np.sin(2 * np.pi * x)
-        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            for state_kind in ("none", "no_data", "empty_data", "legacy", "clear"):
-                with self.subTest(workspace=workspace_type.__name__, state=state_kind):
-                    workspace, row = self._make_visible_plot_row(workspace_type)
-                    empty_state = row.snapshot_plot_state()
-                    if state_kind == "empty_data":
-                        empty_state = replace(empty_state, data=(np.asarray([]), np.asarray([])))
-                    row.set_data(x, y * 4.0)
-                    self._wait_for_plot_ranges_stable(row)
-                    if state_kind == "clear":
-                        row.clear_plot()
-                    else:
-                        state = {"none": None, "no_data": empty_state,
-                                 "empty_data": empty_state, "legacy": (x, y)}[state_kind]
-                        row.restore_plot_state(state)
-                    ranges = self._wait_for_plot_ranges_stable(row)
-                    self.assertTrue(row.plot_widget.getViewBox().state["autoRange"][1])
-                    if state_kind == "legacy":
-                        np.testing.assert_array_equal(row.plot_item.getData()[1], y)
-                        self.assertLess(np.ptp(ranges[1]), 30.0)
-                        self.assertLessEqual(ranges[1, 0], -5.0)
-                        self.assertGreaterEqual(ranges[1, 1], 5.0)
-                    elif row.plot_item is not None:
-                        self.assertTrue(all(values is None or len(values) == 0
-                                            for values in row.plot_item.getData()))
-                    row.set_live_data(x, y * 0.04)
-                    next_range = self._wait_for_plot_ranges_stable(row)[1]
-                    self.assertLessEqual(next_range[0], -0.2)
-                    self.assertGreaterEqual(next_range[1], 0.2)
-                    self.assertLess(np.ptp(next_range), 1.0)
-                    workspace.close()
-
-    def test_real_plot_rows_restore_exact_x_auto_range_value_and_type(self):
-        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            for x_auto_range in (True, 0.35):
-                with self.subTest(
-                    row_type=workspace_type.__name__,
-                    x_auto_range=x_auto_range,
-                ):
-                    workspace = workspace_type()
-                    self.addCleanup(workspace.close)
-                    workspace.set_channels([0])
-                    workspace.show()
-                    self.app.processEvents()
-                    window = workspace.all_subwindows()[0]
-                    view_box = window.plot_widget.getViewBox()
-                    window.set_data(
-                        np.asarray([0.0, 2.0]),
-                        np.asarray([-1.0, 1.0], dtype=np.float32),
-                    )
-                    view_box.enableAutoRange(
-                        axis=pg.ViewBox.XAxis,
-                        enable=x_auto_range,
-                    )
-                    view_box.updateAutoRange()
-                    expected_x_range = tuple(window.plot_widget.viewRange()[0])
-                    expected_x_auto = view_box.state["autoRange"][0]
-                    saved = window.snapshot_plot_state()
-
-                    window.set_relative_preview_data(
-                        np.asarray([-1.0, 0.0]),
-                        np.asarray([-100.0, 100.0], dtype=np.float32),
-                    )
-                    window.restore_plot_state(saved)
-                    self._wait_for_plot_ranges_stable(window)
-
-                    restored_x_auto = view_box.state["autoRange"][0]
-                    self.assertEqual(restored_x_auto, expected_x_auto)
-                    self.assertIs(type(restored_x_auto), type(expected_x_auto))
-                    if expected_x_auto is True:
-                        self.assertIs(restored_x_auto, True)
-                    np.testing.assert_allclose(
-                        window.plot_widget.viewRange()[0], expected_x_range
-                    )
-
-                    manual_x_range = (-4.0, 6.0)
-                    manual_y_range = (-3.0, 7.0)
-                    view_box.setRange(
-                        xRange=manual_x_range,
-                        yRange=manual_y_range,
-                        padding=0,
-                    )
-                    self.assertIsNone(
-                        getattr(window, "_deferred_view_guard", None)
-                    )
-                    self._wait_for_plot_ranges_stable(window)
-                    np.testing.assert_allclose(
-                        window.plot_widget.viewRange()[0], manual_x_range
-                    )
-                    np.testing.assert_allclose(
-                        window.plot_widget.viewRange()[1], manual_y_range
-                    )
-
-    def test_real_plot_rows_release_view_guard_for_explicit_auto_range_changes(self):
-        source_x = np.asarray([0.0, 2.0])
-        source_y = np.asarray([-100.0, 100.0], dtype=np.float32)
-        presentation_paths = (
-            "relative",
-            "cumulative",
-            "complete",
-            "restore",
-        )
-
-        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            for presentation_path in presentation_paths:
-                for axis, range_name, user_range in (
-                    (pg.ViewBox.XAxis, "xRange", (-4.0, 6.0)),
-                    (pg.ViewBox.YAxis, "yRange", (-7.5, 8.5)),
-                ):
-                    for requested_auto_range in (True, False, 0.35):
-                        with self.subTest(
-                            row_type=workspace_type.__name__,
-                            presentation_path=presentation_path,
-                            axis=axis,
-                            requested_auto_range=requested_auto_range,
-                        ):
-                            workspace = workspace_type()
-                            self.addCleanup(workspace.close)
-                            workspace.set_channels([0])
-                            workspace.show()
-                            self.app.processEvents()
-                            window = workspace.all_subwindows()[0]
-                            view_box = window.plot_widget.getViewBox()
-
-                            if presentation_path == "relative":
-                                window.set_relative_preview_data(source_x, source_y)
-                            elif presentation_path == "cumulative":
-                                window.set_cumulative_preview_data(source_x, source_y)
-                            elif presentation_path == "complete":
-                                window.set_data(source_x, source_y)
-                            else:
-                                window.set_data(source_x, source_y)
-                                saved = window.snapshot_plot_state()
-                                window.set_relative_preview_data(source_x, source_y)
-                                window.restore_plot_state(saved)
-
-                            guard = window._deferred_view_guard
-                            if presentation_path == "restore":
-                                self.assertIsNotNone(guard)
-                                original_set_range = guard[3]
-                                original_enable_auto_range = guard[4]
-                            else:
-                                self.assertIsNone(guard)
-                                original_set_range = view_box.setRange
-                                original_enable_auto_range = view_box.enableAutoRange
-                            view_box.enableAutoRange(
-                                axis=axis,
-                                enable=requested_auto_range,
-                            )
-
-                            self.assertIsNone(window._deferred_view_guard)
-                            self.assertEqual(view_box.setRange, original_set_range)
-                            self.assertEqual(
-                                view_box.enableAutoRange,
-                                original_enable_auto_range,
-                            )
-                            view_box.updateAutoRange()
-                            self.app.processEvents()
-                            workspace.hide()
-                            self.app.processEvents()
-                            view_box.setRange(
-                                **{
-                                    range_name: user_range,
-                                    "padding": 0,
-                                    "disableAutoRange": False,
-                                }
-                            )
-                            state_index = 0 if axis == pg.ViewBox.XAxis else 1
-                            expected_auto_range = view_box.state["autoRange"][
-                                state_index
-                            ]
-                            if requested_auto_range is False:
-                                self.assertIs(expected_auto_range, False)
-                            elif requested_auto_range == 0.35:
-                                self.assertEqual(expected_auto_range, 0.35)
-                                self.assertIs(type(expected_auto_range), float)
-                            else:
-                                self.assertTrue(expected_auto_range)
-
-                            self._wait_for_plot_ranges_stable(window)
-
-                            actual_auto_range = view_box.state["autoRange"][
-                                state_index
-                            ]
-                            self.assertEqual(
-                                actual_auto_range,
-                                expected_auto_range,
-                            )
-                            self.assertIs(
-                                type(actual_auto_range),
-                                type(expected_auto_range),
-                            )
-                            actual_range = window.plot_widget.viewRange()[
-                                state_index
-                            ]
-                            np.testing.assert_allclose(
-                                actual_range,
-                                user_range,
-                            )
-
-    def test_real_plot_guard_internal_restore_does_not_release_auto_range_wrapper(self):
-        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            with self.subTest(row_type=workspace_type.__name__):
-                workspace = workspace_type()
-                self.addCleanup(workspace.close)
-                workspace.set_channels([0])
-                workspace.show()
-                self.app.processEvents()
-                window = workspace.all_subwindows()[0]
-                view_box = window.plot_widget.getViewBox()
-                view_box.enableAutoRange(axis=pg.ViewBox.YAxis, enable=0.35)
-                view_box.updateAutoRange()
-
-                window.set_data(
-                    np.asarray([0.0, 2.0]),
-                    np.asarray([-100.0, 100.0], dtype=np.float32),
-                )
-
-                saved = window.snapshot_plot_state()
-                window.set_live_data(np.asarray([-1.0, 0.0]), np.asarray([-1.0, 1.0]))
-                window.restore_plot_state(saved)
-                guard = window._deferred_view_guard
-                self.assertIsNotNone(guard)
-                original_set_range = guard[3]
-                original_enable_auto_range = guard[4]
-                original_set_range(
-                    xRange=(-500.0, 500.0),
-                    padding=0,
-                    disableAutoRange=False,
-                )
-
-                self.assertIs(window._deferred_view_guard, guard)
-                self.assertIsNot(
-                    view_box.enableAutoRange,
-                    original_enable_auto_range,
-                )
-                self.assertEqual(view_box.state["autoRange"][1], 0.35)
-                self.assertIs(type(view_box.state["autoRange"][1]), float)
-
-                ranges = self._wait_for_plot_ranges_stable(window)
-                np.testing.assert_array_equal(ranges[0], saved.x_range)
-
-                self.assertIsNone(window._deferred_view_guard)
-                self.assertIs(view_box.setRange, original_set_range)
-                self.assertIs(
-                    view_box.enableAutoRange,
-                    original_enable_auto_range,
-                )
-                self.assertEqual(view_box.state["autoRange"][1], 0.35)
-                self.assertIs(type(view_box.state["autoRange"][1]), float)
-
-    def test_real_plot_guard_cleanup_survives_close_delete_and_rebuild(self):
-        operations = (
-            "clear_plot",
-            "set_data",
-            "set_cumulative_preview_data",
-            "set_relative_preview_data",
-            "restore_plot_state",
-        )
-        lifecycle_actions = (
-            "close",
-            "deleteLater",
-            "rebuild",
-            "close_workspace",
-            "delete_workspace",
-        )
-        source_x = np.asarray([0.0, 2.0])
-        source_y = np.asarray([-100.0, 100.0], dtype=np.float32)
-
-        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            for operation in operations:
-                for lifecycle_action in lifecycle_actions:
-                    with self.subTest(
-                        row_type=workspace_type.__name__,
-                        operation=operation,
-                        lifecycle_action=lifecycle_action,
-                    ):
-                        workspace = workspace_type()
-                        workspace.set_channels([0])
-                        workspace.show()
-                        self.app.processEvents()
-                        window = workspace.all_subwindows()[0]
-
-                        if operation == "clear_plot":
-                            window.clear_plot()
-                        elif operation == "restore_plot_state":
-                            window.set_data(source_x, source_y)
-                            saved = window.snapshot_plot_state()
-                            window.set_relative_preview_data(
-                                np.asarray([-1.0, 0.0]), source_y
-                            )
-                            window.restore_plot_state(saved)
-                        else:
-                            getattr(window, operation)(source_x, source_y)
-
-                        if operation != "restore_plot_state":
-                            self.assertIsNone(window._deferred_view_guard)
-                            saved = window.snapshot_plot_state()
-                            window.restore_plot_state(saved)
-                        guard = getattr(window, "_deferred_view_guard", None)
-                        self.assertIsNotNone(guard)
-                        view_box = window.plot_widget.getViewBox()
-                        original_set_range = guard[3]
-                        original_enable_auto_range = guard[4]
-                        self.assertIs(
-                            window._deferred_view_guard_timer.parent(),
-                            window,
-                        )
-                        captured_exceptions = []
-                        original_excepthook = sys.excepthook
-
-                        def capture_exception(*args):
-                            captured_exceptions.append(args)
-
-                        sys.excepthook = capture_exception
-                        try:
-                            if lifecycle_action == "close":
-                                window.close()
-                            elif lifecycle_action == "deleteLater":
-                                workspace._subwins = []
-                                workspace.canvas.set_windows([])
-                                window.deleteLater()
-                                QCoreApplication.sendPostedEvents(
-                                    None, QEvent.DeferredDelete
-                                )
-                            else:
-                                if lifecycle_action == "rebuild":
-                                    workspace.set_channels([1])
-                                elif lifecycle_action == "close_workspace":
-                                    workspace.close()
-                                else:
-                                    workspace.deleteLater()
-                                    QCoreApplication.sendPostedEvents(
-                                        None, QEvent.DeferredDelete
-                                    )
-
-                            self.assertIsNone(
-                                getattr(window, "_deferred_view_guard", None)
-                            )
-                            self.assertIsNone(
-                                getattr(
-                                    window,
-                                    "_deferred_view_guard_timer",
-                                    None,
-                                )
-                            )
-                            self.assertIs(
-                                view_box.setRange,
-                                original_set_range,
-                            )
-                            self.assertIs(
-                                view_box.enableAutoRange,
-                                original_enable_auto_range,
-                            )
-                            QTest.qWait(125)
-                            self.app.processEvents()
-                        finally:
-                            sys.excepthook = original_excepthook
-                            if lifecycle_action != "delete_workspace":
-                                workspace.close()
-
-                        self.assertEqual(
-                            captured_exceptions,
-                            [],
-                            "\n".join(
-                                "".join(traceback.format_exception(*captured))
-                                for captured in captured_exceptions
-                            ),
-                        )
-
-    def test_real_plot_rows_snapshot_all_three_presentations_exactly(self):
-        workspaces = []
-        for workspace_type in (ChannelPlotWorkspace, AnalysisWaveformPanel):
-            workspace = workspace_type()
-            workspace.set_channels([0])
-            workspaces.append(workspace)
-            self.addCleanup(workspace.close)
-
-        presentations = (
-            ("set_data", PLOT_PRESENTATION_COMPLETE, 0.5),
-            (
-                "set_cumulative_preview_data",
-                PREVIEW_TIME_MODE_CUMULATIVE,
-                True,
-            ),
-            (
-                "set_relative_preview_data",
-                PREVIEW_TIME_MODE_RELATIVE_LATEST,
-                False,
-            ),
-        )
-        for workspace in workspaces:
-            window = workspace.all_subwindows()[0]
-            view_box = window.plot_widget.getViewBox()
-            for setter_name, expected_mode, x_auto_range in presentations:
-                with self.subTest(
-                    row_type=type(window).__name__, presentation=expected_mode
-                ):
-                    source_x = np.asarray([0.0, 1.5])
-                    source_y = np.asarray([0.25, -0.5], dtype=np.float32)
-                    getattr(window, setter_name)(source_x, source_y)
-                    view_box.enableAutoRange(
-                        axis=pg.ViewBox.XAxis, enable=x_auto_range
-                    )
-                    view_box.updateAutoRange()
-                    expected_x_range = tuple(window.plot_widget.viewRange()[0])
-                    expected_x_auto = view_box.state["autoRange"][0]
-                    saved = window.snapshot_plot_state()
-
-                    source_x[:] = 99.0
-                    source_y[:] = 99.0
-                    window.set_relative_preview_data(
-                        np.asarray([-1.0, 0.0]),
-                        np.asarray([1.0, 2.0], dtype=np.float32),
-                    )
-                    window.restore_plot_state(saved)
-
-                    restored_x, restored_y = window.plot_item.getData()
-                    np.testing.assert_array_equal(restored_x, [0.0, 1.5])
-                    np.testing.assert_array_equal(restored_y, [0.25, -0.5])
-                    self.assertEqual(window.presentation_mode, expected_mode)
-                    self.assertIs(
-                        window.is_live_preview,
-                        expected_mode != PLOT_PRESENTATION_COMPLETE,
-                    )
-                    self.assertEqual(
-                        view_box.state["autoRange"][0], expected_x_auto
-                    )
-                    np.testing.assert_allclose(
-                        window.plot_widget.viewRange()[0], expected_x_range
-                    )
-
-    def test_channel_plot_snapshot_restores_live_data_and_exact_x_view_state(self):
-        workspace = ChannelPlotWorkspace()
-        self.addCleanup(workspace.close)
-        workspace.set_channels([0])
-        window = workspace.all_subwindows()[0]
-        live_time = np.asarray([-1.0, 0.0])
-        live_amplitude = np.asarray([0.25, -0.5], dtype=np.float32)
-        window.set_live_data(live_time, live_amplitude)
-        saved = window.snapshot_plot_state()
-
-        window.set_data(
-            np.asarray([0.0, 30.0]),
-            np.asarray([1.0, 2.0], dtype=np.float32),
-        )
-        window.restore_plot_state(saved)
-
-        restored_time, restored_amplitude = window.plot_item.getData()
-        np.testing.assert_array_equal(restored_time, live_time)
-        np.testing.assert_array_equal(restored_amplitude, live_amplitude)
-        self.assertIs(window.is_live_preview, True)
-        np.testing.assert_allclose(
-            window.plot_widget.viewRange()[0],
-            [-10.0, 0.0],
-        )
-        self.assertIs(
-            window.plot_widget.getViewBox().state["autoRange"][0],
-            False,
-        )
-
-    def test_channel_plot_snapshot_restores_fractional_x_auto_range_exactly(self):
-        workspace = ChannelPlotWorkspace()
-        self.addCleanup(workspace.close)
-        workspace.set_channels([0])
-        window = workspace.all_subwindows()[0]
-        view_box = window.plot_widget.getViewBox()
-        window.set_data(
-            np.asarray([0.0, 1.0, 2.0]),
-            np.asarray([0.25, -0.5, 0.75], dtype=np.float32),
-        )
-        view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=0.5)
-        view_box.updateAutoRange()
-        expected_x_range = window.plot_widget.viewRange()[0]
-        saved = window.snapshot_plot_state()
-
-        window.set_live_data(
-            np.asarray([-1.0, 0.0]),
-            np.asarray([1.0, 2.0], dtype=np.float32),
-        )
-        window.restore_plot_state(saved)
-
-        self.assertEqual(view_box.state["autoRange"][0], 0.5)
-        np.testing.assert_allclose(window.plot_widget.viewRange()[0], expected_x_range)
-        self.assertIs(window.is_live_preview, False)
-
-    def test_channel_plot_snapshot_restores_empty_curve_x_view_state(self):
-        workspace = ChannelPlotWorkspace()
-        self.addCleanup(workspace.close)
-        workspace.set_channels([0])
-        window = workspace.all_subwindows()[0]
-        view_box = window.plot_widget.getViewBox()
-        view_box.disableAutoRange(axis=pg.ViewBox.XAxis)
-        window.plot_widget.setXRange(-4.0, 6.0, padding=0)
-        saved = window.snapshot_plot_state()
-
-        window.set_live_data(
-            np.asarray([-1.0, 0.0]),
-            np.asarray([0.25, -0.5], dtype=np.float32),
-        )
-        window.restore_plot_state(saved)
-
-        self.assertIsNone(window.plot_item)
-        self.assertIs(window.is_live_preview, False)
-        np.testing.assert_allclose(window.plot_widget.viewRange()[0], [-4.0, 6.0])
-        self.assertIs(view_box.state["autoRange"][0], False)
-
-    def test_channel_plot_snapshot_preserves_present_but_empty_curve(self):
-        workspace = ChannelPlotWorkspace()
-        self.addCleanup(workspace.close)
-        workspace.set_channels([0])
-        window = workspace.all_subwindows()[0]
-        window.set_data(np.asarray([]), np.asarray([]))
-        expected_x_range = window.plot_widget.viewRange()[0]
-        saved = window.snapshot_plot_state()
-
-        window.set_live_data(
-            np.asarray([-1.0, 0.0]),
-            np.asarray([0.25, -0.5], dtype=np.float32),
-        )
-        window.restore_plot_state(saved)
-
-        self.assertIsNotNone(window.plot_item)
-        restored_time, restored_amplitude = window.plot_item.getData()
-        np.testing.assert_array_equal(restored_time, np.asarray([]))
-        np.testing.assert_array_equal(restored_amplitude, np.asarray([]))
-        self.assertIs(window.is_live_preview, False)
-        np.testing.assert_allclose(window.plot_widget.viewRange()[0], expected_x_range)
-        self.assertTrue(window.plot_widget.getViewBox().state["autoRange"][0])
-
-    def test_channel_plot_restore_accepts_none_and_legacy_curve_tuple(self):
-        workspace = ChannelPlotWorkspace()
-        self.addCleanup(workspace.close)
-        workspace.set_channels([0])
-        window = workspace.all_subwindows()[0]
-        legacy_time = np.asarray([0.0, 1.0])
-        legacy_amplitude = np.asarray([0.25, -0.5], dtype=np.float32)
-        window.set_live_data(
-            np.asarray([-1.0, 0.0]),
-            np.asarray([1.0, 2.0], dtype=np.float32),
-        )
-
-        window.restore_plot_state((legacy_time, legacy_amplitude))
-
-        restored_time, restored_amplitude = window.plot_item.getData()
-        np.testing.assert_array_equal(restored_time, legacy_time)
-        np.testing.assert_array_equal(restored_amplitude, legacy_amplitude)
-        self.assertIs(window.is_live_preview, False)
-        self.assertEqual(window.presentation_mode, PLOT_PRESENTATION_COMPLETE)
-        self.assertTrue(
-            window.plot_widget.getViewBox().state["autoRange"][0],
-        )
-
-        window.restore_plot_state(None)
-
-        self.assertIsNone(window.plot_item)
-        self.assertIs(window.is_live_preview, False)
-        self.assertEqual(window.presentation_mode, PLOT_PRESENTATION_COMPLETE)
-        self.assertTrue(
-            window.plot_widget.getViewBox().state["autoRange"][0],
-        )
-
-    def test_direction_waveform_panel_hides_old_cards_before_rebuilding(self):
-        panel = DirectionWaveformPanel(
-            condition_configs=[
-                {"condition_name": "6000", "trigger_state": "01"},
-                {"condition_name": "7000", "trigger_state": "02"},
-            ]
-        )
-        panel.resize(800, 400)
-        panel.show()
-        self.app.processEvents()
-        old_cards = list(panel._cards.values())
-        self.assertTrue(old_cards)
-
-        panel.set_conditions([{"condition_name": "8000", "trigger_state": "03"}])
-
-        self.assertTrue(all(not card.isVisible() for card in old_cards))
-        panel.close()
 
     def test_real_operation_panel_keeps_minimum_height_within_window_budget(self):
         widget = _RealisticSequenceWidget()
@@ -1458,6 +267,7 @@ class TestSequenceMainLayout(unittest.TestCase):
                 self.app.processEvents()
                 self.assertEqual(main.sizes(), manual)
                 widget.resize(width + 100, 1180)
+                self.app.processEvents()
                 resized = main.sizes()
                 self.app.processEvents()
                 self.assertEqual(main.sizes(), resized)
@@ -1587,259 +397,32 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertIn("7000 rpm", reason)
         self.assertIn("请启用所有工况的阈值，或使用标记模式", reason)
 
-    def test_waveform_condition_actions_follow_mode(self):
-        played = []
-        marked = []
-        panel = DirectionWaveformPanel(
-            condition_configs=[{"condition_name": "6000 rpm", "trigger_state": "01"}],
-            on_play_condition=played.append,
-            on_mark_condition=lambda key, label: marked.append((key, label)),
-        )
-        card = panel._cards["01"]
-        margins = panel.grid.contentsMargins()
 
-        self.assertFalse(card.play_btn.isHidden())
-        self.assertTrue(card.mark_panel.isHidden())
-        self.assertEqual((margins.left(), margins.top(), margins.right(), margins.bottom()), (8, 0, 8, 8))
-
-        panel.set_mode("mark")
-        self.assertFalse(card.mark_panel.isHidden())
-
-        card.play_btn.click()
-        card.ok_btn.click()
-
-        self.assertEqual(played, ["01"])
-        self.assertEqual(marked, [("01", "OK")])
-
-    def test_waveform_card_click_preview_is_removed(self):
-        panel = DirectionWaveformPanel(
-            condition_configs=[{"condition_name": "6000 rpm", "trigger_state": "01"}],
-        )
-        card = panel._cards["01"]
-        panel.set_direction_data("01", [0, 1], [0.0, 0.5])
-
-        self.assertNotIn("mousePressEvent", type(card).__dict__)
-
-    def test_waveform_panel_keeps_cards_when_condition_keys_repeat(self):
-        panel = DirectionWaveformPanel(
-            condition_configs=[
-                {"condition_name": "6000", "trigger_state": "", "test_queue": "默认配置"},
-                {"condition_name": "7000", "trigger_state": "", "test_queue": "3"},
-                {"condition_name": "8000", "trigger_state": "", "test_queue": "3"},
-            ]
-        )
-
-        self.assertEqual(len(panel._cards), 3)
-        self.assertEqual(len(set(panel.condition_keys())), 3)
-
-    def test_waveform_panel_does_not_seed_fake_waveforms(self):
-        panel = DirectionWaveformPanel(
-            condition_configs=[
-                {"condition_name": "6000", "trigger_state": "01"},
-                {"condition_name": "7000", "trigger_state": "02"},
-            ]
-        )
-
-        self.assertIsNone(panel._cards["01"].plot_item)
-        self.assertIsNone(panel._cards["02"].plot_item)
-
-        panel.set_direction_data("01", [0, 1], [0.0, 0.5])
-
-        self.assertIsNotNone(panel._cards["01"].plot_item)
-        self.assertEqual(
-            panel._cards["01"].plot_item.opts["pen"].color().name().upper(),
-            ui_style_const.COLOR_WAVEFORM,
-        )
-        self.assertIsNone(panel._cards["02"].plot_item)
-
-    def test_final_projection_does_not_reconfigure_condition_workspace(self):
-        widget = _WaveformRefreshWidget()
-
-        widget._configure_direction_waveform_workspace()
-
-        self.assertEqual(widget.channel_workspace.set_condition_calls, [])
-        self.assertEqual(widget.channel_workspace.direction_data, [])
-
-        widget.plot_waveform_to_workspace(
-            [0.0, 0.4],
-            1.0,
-            channel_mapping=(0,),
-        )
-
-        channel, time_axis, amplitude = widget.channel_workspace.direction_data[-1]
-        self.assertEqual(channel, 0)
-        self.assertTrue(np.array_equal(time_axis, [0.0, 1.0]))
-        self.assertTrue(np.allclose(amplitude, [0.0, 0.4]))
-        self.assertEqual(widget._direction_waveform_cache, {})
-
-    def test_final_projection_routes_each_column_to_physical_channel_window(self):
-        widget = _WaveformRefreshWidget()
-        widget._active_input_channels = [0, 2]
-        widget.channel_workspace.set_live_channels((0, 2))
-        waveform = np.asarray(
-            [[1.0, 10.0], [2.0, 20.0]],
-            dtype=np.float32,
-        )
-
-        widget.plot_waveform_to_workspace(
-            waveform,
-            2.0,
-            channel_mapping=(0, 2),
-        )
-
-        self.assertEqual(
-            [entry[0] for entry in widget.channel_workspace.direction_data],
-            [0, 2],
-        )
-        self.assertTrue(
-            np.array_equal(widget.channel_workspace.direction_data[0][2], waveform[:, 0])
-        )
-        self.assertTrue(
-            np.array_equal(widget.channel_workspace.direction_data[1][2], waveform[:, 1])
-        )
-        self.assertEqual(widget._direction_waveform_cache, {})
-
-    def test_final_waveform_display_downsamples_peaks_per_physical_channel(self):
-        widget = _WaveformRefreshWidget()
-        waveform = np.zeros(10_000, dtype=np.float32)
-        waveform[1_234] = -9.0
-        waveform[8_765] = 8.0
-
-        widget.plot_waveform_to_workspace(
-            waveform,
-            1_000.0,
-            channel_mapping=(0,),
-        )
-
-        channel, display_x, display_y = widget.channel_workspace.direction_data[-1]
-        self.assertEqual(channel, 0)
-        self.assertEqual(len(display_x), len(display_y))
-        self.assertLessEqual(len(display_y), widget._WAVEFORM_DISPLAY_MAX_POINTS)
-        self.assertEqual(min(display_y), -9.0)
-        self.assertEqual(max(display_y), 8.0)
-        self.assertEqual(display_x[0], 0.0)
-        self.assertAlmostEqual(display_x[-1], 9.999)
-        self.assertEqual(widget._direction_waveform_cache, {})
-
-    def test_streaming_writer_receives_full_chunk_when_display_is_downsampled(self):
-        class _Writer:
-            def __init__(self):
-                self.chunks = []
-
-            def write_chunk(self, chunk):
-                self.chunks.append(chunk)
-
-        widget = _WaveformRefreshWidget()
-        chunk = np.zeros((6_000, 2), dtype=np.float32)
-        chunk[1_234] = -9.0
-        chunk[5_678] = 8.0
-        widget.streaming_wav_writer = _Writer()
-        widget._active_product_condition_key = "01"
+    def test_streaming_writer_receives_full_chunk_without_display(self):
+        widget = SequenceWidgetStreamingOpsMixin()
+        widget._recording_input_channels = (0, 1)
+        widget.streaming_wav_writer = types.SimpleNamespace(chunks=[])
+        widget.streaming_wav_writer.write_chunk = widget.streaming_wav_writer.chunks.append
         widget._streaming_first_chunk_logged = True
-        widget.default_logger = logging.getLogger(__name__)
-        scheduled_callbacks = _begin_deferred_streaming_waveform_session(
-            widget,
-            sample_rate=48_000,
-            startup_trim_samples=0,
-            direction="01",
-        )
-
-        widget.on_audio_chunk_received({"multi": chunk})
-
-        self.assertEqual(widget.channel_workspace.direction_data, [])
-        self.assertEqual(len(scheduled_callbacks), 1)
+        chunk = np.zeros((6000, 2), dtype=np.float32)
+        chunk[1234] = -9.0
+        chunk[5678] = 8.0
+        widget.on_audio_chunk_received({'multi': chunk})
         self.assertEqual(len(widget.streaming_wav_writer.chunks), 1)
-        self.assertTrue(np.array_equal(widget.streaming_wav_writer.chunks[0], chunk))
-        scheduled_callbacks.pop()()
+        np.testing.assert_array_equal(widget.streaming_wav_writer.chunks[0], chunk)
 
-        self.assertEqual(
-            widget._streaming_waveform_time_mode,
-            PREVIEW_TIME_MODE_RELATIVE_LATEST,
-        )
-        self.assertEqual(
-            [entry[0] for entry in widget.channel_workspace.direction_data],
-            [0, 1],
-        )
-        for channel, display_x, display_y in widget.channel_workspace.direction_data:
-            self.assertLessEqual(len(display_y), widget._WAVEFORM_DISPLAY_MAX_POINTS)
-            self.assertEqual(min(display_y), -9.0)
-            self.assertEqual(max(display_y), 8.0)
-            self.assertEqual(len(display_x), len(display_y))
-            self.assertTrue(np.all(np.diff(display_x) > 0.0))
-            self.assertGreaterEqual(display_x[0], -10.0)
-            self.assertLessEqual(display_x[-1], 0.0)
-            self.assertAlmostEqual(display_x[0], -5_999 / 48_000)
-            self.assertEqual(display_x[-1], 0.0)
-        self.assertNotIn("01", widget._direction_waveform_cache)
-
-    def test_streaming_waveform_hides_startup_trim_but_writer_keeps_raw_chunks(self):
-        class _Writer:
-            def __init__(self):
-                self.chunks = []
-
-            def write_chunk(self, chunk):
-                self.chunks.append(chunk)
-
-        widget = _WaveformRefreshWidget()
-        full_audio = np.arange(280, dtype=np.float32).reshape(140, 2)
-        first_chunk = full_audio[:60]
-        second_chunk = full_audio[60:]
-        widget.streaming_wav_writer = _Writer()
-        widget._active_product_condition_key = "01"
+    def test_streaming_writer_keeps_raw_chunks_before_startup_trim(self):
+        widget = SequenceWidgetStreamingOpsMixin()
+        widget._recording_input_channels = (0, 1)
+        widget.streaming_wav_writer = types.SimpleNamespace(chunks=[])
+        widget.streaming_wav_writer.write_chunk = widget.streaming_wav_writer.chunks.append
         widget._streaming_first_chunk_logged = True
-        widget.default_logger = logging.getLogger(__name__)
-        scheduled_callbacks = _begin_deferred_streaming_waveform_session(
-            widget,
-            sample_rate=1_000,
-            startup_trim_samples=100,
-            direction="01",
-        )
-
-        widget.on_audio_chunk_received({"multi": first_chunk})
-
-        self.assertEqual(len(scheduled_callbacks), 1)
-        scheduled_callbacks.pop()()
-        self.assertEqual(
-            widget.channel_workspace.direction_data,
-            [(0, [], []), (1, [], [])],
-        )
-        self.assertNotIn("01", widget._direction_waveform_cache)
-        self.assertTrue(np.array_equal(widget.streaming_wav_writer.chunks[0], first_chunk))
-
-        widget.on_audio_chunk_received({"multi": second_chunk})
-
-        self.assertEqual(len(scheduled_callbacks), 1)
-        scheduled_callbacks.pop()()
-        second_refresh = widget.channel_workspace.direction_data[-2:]
-        self.assertEqual(
-            widget._streaming_waveform_time_mode,
-            PREVIEW_TIME_MODE_RELATIVE_LATEST,
-        )
-        self.assertEqual([entry[0] for entry in second_refresh], [0, 1])
-        for channel, display_x, display_y in second_refresh:
-            expected_waveform = full_audio[100:, channel]
-            self.assertLess(len(display_y), len(expected_waveform))
-            self.assertLessEqual(len(display_y), widget._WAVEFORM_DISPLAY_MAX_POINTS)
-            self.assertEqual(len(display_x), len(display_y))
-            self.assertTrue(np.all(np.diff(display_x) > 0.0))
-            self.assertGreaterEqual(display_x[0], -10.0)
-            self.assertAlmostEqual(display_x[0], -0.039)
-            self.assertEqual(display_x[-1], 0.0)
-            self.assertEqual(min(display_y), expected_waveform[0])
-            self.assertEqual(max(display_y), expected_waveform[-1])
-            self.assertTrue(np.all(np.isin(display_y, expected_waveform)))
-        for accumulator in widget._streaming_waveform_session._accumulators.values():
-            self.assertEqual(accumulator.raw_sample_count, 140)
-            self.assertEqual(accumulator.display_sample_count, 40)
-            self.assertGreater(accumulator.retained_bucket_count, 0)
-            self.assertLessEqual(
-                accumulator.retained_bucket_count,
-                (widget._WAVEFORM_DISPLAY_MAX_POINTS - 2) // 2,
-            )
-        self.assertNotIn("01", widget._direction_waveform_cache)
+        full_audio = np.arange(280, dtype=np.float32).reshape(140, 2)
+        widget.on_audio_chunk_received({'multi': full_audio[:60]})
+        widget.on_audio_chunk_received({'multi': full_audio[60:]})
         self.assertEqual(len(widget.streaming_wav_writer.chunks), 2)
-        self.assertTrue(np.array_equal(widget.streaming_wav_writer.chunks[0], first_chunk))
-        self.assertTrue(np.array_equal(widget.streaming_wav_writer.chunks[1], second_chunk))
+        np.testing.assert_array_equal(widget.streaming_wav_writer.chunks[0], full_audio[:60])
+        np.testing.assert_array_equal(widget.streaming_wav_writer.chunks[1], full_audio[60:])
 
     def test_invalid_serial_recording_uses_whole_round_abort(self):
         calls = []
@@ -1863,58 +446,10 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn("empty audio", calls[0])
 
-    def test_waveform_panel_resets_old_grid_columns_after_config_switch(self):
-        panel = DirectionWaveformPanel(
-            condition_configs=[
-                {"condition_name": str(i), "trigger_state": str(i)}
-                for i in range(5)
-            ]
-        )
-        self.assertEqual(panel.grid.columnStretch(2), 1)
-
-        panel.set_conditions(
-            [
-                {"condition_name": "6000", "trigger_state": "01"},
-                {"condition_name": "7000", "trigger_state": "02"},
-            ]
-        )
-
-        self.assertEqual(panel.grid.columnStretch(0), 1)
-        self.assertEqual(panel.grid.columnStretch(1), 1)
-        self.assertEqual(panel.grid.columnStretch(2), 0)
-        self.assertEqual(panel.grid.rowStretch(1), 0)
-
-    def test_clear_plot_area_clears_channel_plots_without_deleting_condition_state(self):
-        widget = _DummySequenceWidget()
-        widget.channel_workspace = _DummyChannelWorkspace(["01", "02", "03"])
-        widget._waveform_display_override_direction = "03"
-        widget._current_trigger_direction = ""
-        widget._direction_waveform_cache = {
-            "01": ("wave_6000", 1.0),
-            "02": ("wave_7000", 1.0),
-            "03": ("wave_8000", 1.0),
-        }
-        widget._condition_record_cache = {
-            "01": {"recorded_path": "6000.wav"},
-            "02": {"recorded_path": "7000.wav"},
-            "03": {"recorded_path": "8000.wav"},
-        }
-
-        widget._clear_plot_area()
-
-        self.assertEqual(widget._direction_waveform_cache["01"], ("wave_6000", 1.0))
-        self.assertEqual(widget._direction_waveform_cache["02"], ("wave_7000", 1.0))
-        self.assertEqual(widget._direction_waveform_cache["03"], ("wave_8000", 1.0))
-        self.assertIn("01", widget._condition_record_cache)
-        self.assertIn("02", widget._condition_record_cache)
-        self.assertIn("03", widget._condition_record_cache)
-        self.assertEqual(widget.channel_workspace.cleared_directions, [])
-        self.assertEqual(widget.channel_workspace.clear_all_count, 1)
 
     def test_waveform_mark_does_not_update_left_condition_judgement(self):
         widget = _DummySequenceWidget()
         widget.count_board.mode = "mark"
-        widget.channel_workspace = _DummyChannelWorkspace(["01"])
         widget.left_panel = _SpyLeftPanel()
         widget._condition_record_cache = {}
         widget.recorded_path = None
@@ -1924,13 +459,11 @@ class TestSequenceMainLayout(unittest.TestCase):
             widget.on_waveform_condition_mark_clicked("01", "OK")
 
         warning.assert_called_once()
-        self.assertEqual(widget.channel_workspace.results, [])
         self.assertEqual(widget.left_panel.results, [])
 
     def test_waveform_mark_updates_bound_recent_session_result(self):
         widget = _DummySequenceWidget()
         widget.count_board.mode = "mark"
-        widget.channel_workspace = _DummyChannelWorkspace(["01"])
 
         with tempfile.TemporaryDirectory() as folder:
             old_path = os.path.join(folder, "old.wav")
@@ -1966,12 +499,10 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(session_record["result_label"], "ok")
         self.assertEqual(session_record["recorded_path"], new_path)
         self.assertEqual(session_record["recorded_signal_info"]["labels"], "OK")
-        self.assertEqual(widget.channel_workspace.results, [("01", "OK")])
 
     def test_waveform_mark_with_missing_session_id_updates_matching_condition(self):
         widget = _DummySequenceWidget()
         widget.count_board.mode = "mark"
-        widget.channel_workspace = _DummyChannelWorkspace(["01", "03"])
         widget._current_recent_session_id = "recent_3"
 
         with tempfile.TemporaryDirectory() as folder:
@@ -2040,15 +571,12 @@ class TestSequenceMainLayout(unittest.TestCase):
             "not labeled",
         )
         self.assertEqual(widget._condition_record_cache["01"]["session_id"], "recent_1")
-        self.assertEqual(widget.channel_workspace.results, [("01", "NG")])
 
 
     def test_waveform_mark_falls_back_to_recent_history_when_cache_missing(self):
         widget = _DummySequenceWidget()
         widget.count_board.mode = "mark"
-        widget.channel_workspace = _DummyChannelWorkspace(["01", "02"])
         widget._condition_record_cache = {}
-        widget._waveform_display_override_direction = ""
         widget._current_trigger_direction = ""
         widget.recorded_path = None
         widget.recorded_signal_info = {}
@@ -2084,7 +612,6 @@ class TestSequenceMainLayout(unittest.TestCase):
         self.assertEqual(session_record["recorded_path"], new_path)
         self.assertEqual(session_record["recorded_signal_info"]["labels"], "OK")
         self.assertEqual(widget._condition_record_cache["01"]["recorded_path"], new_path)
-        self.assertEqual(widget.channel_workspace.results, [("01", "OK")])
 
 
 if __name__ == "__main__":

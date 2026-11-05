@@ -4,6 +4,7 @@ import os
 from time import perf_counter
 import copy
 from dataclasses import dataclass
+from base.channel_layout import load_channel_layout
 from base.analysis_segments import normalize_segmented_analysis, recording_duration, segment_count
 import time
 from uuid import uuid4
@@ -32,7 +33,6 @@ class _RecordingFailureRecovery:
     alias_session: object
     modal_pending: bool = True
     terminal_received: bool = False
-
 
 
 class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixin):
@@ -122,8 +122,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
                     ._recording_context_for_session(self, session)
                     is contexts[request_id])
         return active_id == request_id
-
-
 
 
     def _ve_prewarm_admission_available(self):
@@ -226,8 +224,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         request_id = context.request.request_id
         if contexts.get(request_id) is not context:
             return False
-        from ui.sequence.sequence_widget_streaming_ops import _finish_waveform_diagnostics
-        _finish_waveform_diagnostics(context)
         release_csv = getattr(self, "_release_raw_audio_csv_context", None)
         if callable(release_csv):
             release_csv(context)
@@ -259,7 +255,7 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
             "condition_config": copy.deepcopy(getattr(self, "_active_product_condition_config", None) or {}),
             "sequence_config": copy.deepcopy(getattr(self, "sequence_config", []) or []),
             "analysis_config": copy.deepcopy(getattr(self, "analysis_config", {}) or {}),
-            "channel_labels": copy.deepcopy(getattr(getattr(self, "channel_workspace", None), "channel_layout", {}) or {}),
+            "channel_labels": load_channel_layout(),
         }
         segment_settings = normalize_segmented_analysis(analysis_task_config["condition_config"])
         if segment_settings["mode"] != "none":
@@ -292,7 +288,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         attempt_recent_owner = None
         recent_placeholder_attempted = False
         try:
-            self._end_streaming_waveform_session()
             direction = self._resolve_active_recording_waveform_direction(fallback="")
             # The placeholder and UI token exist before any callback can be delivered.
             recent_placeholder_attempted = True
@@ -307,7 +302,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
             context = RecordingProcessContext(
                 request=request,
                 direction=direction,
-                preview_enabled=request.effective_streaming,
                 session_binding_pending=True,
                 recent_session_id=str(
                     getattr(self, "_current_recent_session_id", "") or ""),
@@ -319,13 +313,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
                 csv_reservation=(csv_admission.csv_reservation if csv_admission else None),
                 csv_enabled_snapshot=bool(csv_admission and csv_admission.csv_enabled_snapshot),
             )
-            validate_workspace = getattr(
-                self, "_validate_final_waveform_workspace", None)
-            if callable(validate_workspace):
-                try:
-                    context.final_windows = validate_workspace(request.channels)
-                except (TypeError, ValueError, OverflowError):
-                    context.final_windows = None
         except Exception:
             if recent_placeholder_attempted and attempt_recent_owner is None:
                 candidate_recent_owner = self._recent_session_owner_snapshot()
@@ -343,7 +330,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         callbacks = RecordingCallbacks(
             started=self._on_process_recording_started,
             finalizing=self._on_process_recording_finalizing,
-            preview=self._on_process_recording_preview,
             result_ready=self._on_process_recording_result,
             accepted=self._on_process_recording_accepted,
             failed=self._on_process_recording_failed,
@@ -386,8 +372,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
             raise
         # Compatibility aliases describe the active capture only. Install them
         # only after the bridge's returned identity and registry owner agree.
-        self._recording_process_preview_enabled = context.preview_enabled
-        self._recording_process_sequence = 0
         self._recording_process_final = False
         self._recording_process_failed = False
         self._recording_process_cancelled = False
@@ -396,7 +380,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         self._recording_process_audio = None
         self._recording_process_validated_audio = None
         self._recording_process_request = request
-        self._recording_process_windows = context.final_windows
         self._recording_process_direction = direction
         self._recording_process_id = request.request_id
         self._recording_process_session = session
@@ -459,53 +442,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         row = getattr(panel, "rows", {}).get(context.processing_condition, {})
         if row.get("result") == "数据保存中":
             left_panel.set_condition_result(context.processing_condition, condition_text, tone=tone)
-        workspace = getattr(self, "channel_workspace", None)
-        workspace_context = getattr(workspace, "_condition_contexts", {}).get(
-            context.processing_condition, {})
-        if workspace_context.get("status") == "数据保存中":
-            workspace.set_condition_context(context.processing_condition, status=condition_text)
-
-    def _on_process_recording_preview(self, session, preview):
-        context = self._recording_context_for_session(session)
-        final = (context.final if context is not None
-                 else getattr(self, "_recording_process_final", False))
-        preview_enabled = (context.preview_enabled if context is not None
-                           else getattr(self, "_recording_process_preview_enabled", False))
-        sequence = (context.sequence if context is not None
-                    else getattr(self, "_recording_process_sequence", 0))
-        if (not self._is_active_recording_process(session)
-                or final or not preview_enabled
-                or preview.generation != session.generation
-                or preview.sequence <= sequence):
-            return
-        if context is not None:
-            context.sequence = preview.sequence
-        self._recording_process_sequence = preview.sequence
-        try:
-            if preview.time_mode != session.request.preview_time_mode:
-                raise ValueError("recording preview time mode differs from request")
-            if preview.channels != session.request.channels:
-                raise ValueError("preview physical channels differ from request")
-            windows = self._project_live_waveforms_to_workspace(
-                session.request.channels,
-                preview.waveforms,
-                preview.time_mode,
-            )
-            ve_recording = getattr(session.request, "device", {}).get("backend") == VE_BACKEND
-            if ve_recording:
-                self._set_recording_voltage_tooltips(windows, session.request.calibration_metadata)
-            else:
-                clear_voltage_hint = getattr(self, "_clear_recording_voltage_tooltips", None)
-                if callable(clear_voltage_hint):
-                    clear_voltage_hint(windows)
-        except Exception as error:
-            # Plot implementations are an external presentation boundary. A broken
-            # widget disables live display only; capture/final validation continue.
-            if context is not None:
-                context.preview_enabled = False
-            self._recording_process_preview_enabled = False
-            self.default_logger.warning(f"Recording live preview disabled: {error}")
-
     def _on_process_recording_result(self, session, audio):
         context = self._recording_context_for_session(session)
         if context is None or context.cancelled or context.failed:
@@ -522,9 +458,6 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
                 raise ValueError("main result must be prepared for the exact recording request")
             if getattr(request, "device", {}).get("backend") == VE_BACKEND:
                 self._validate_ve_recording_result(session, audio, context=context)
-            if context.final_windows is None:
-                context.final_windows = self._validate_final_waveform_workspace(
-                    request.channels)
         except (TypeError, ValueError, OverflowError) as error:
             context.failed = True
             session.reject_result(str(error))
@@ -826,13 +759,11 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         if context is None:
             return
         self._finish_process_recording_status(context, "待检测", "等待开始", "pending")
-        context.preview_enabled = False
         context.final = True
         context.accepted_audio = None
         context.cancelled = True
         context.validated_audio = None
         context.cleanup_owned = True
-        self._recording_process_preview_enabled = False
         self._recording_process_final = True
         self._recording_process_audio = None
         self._recording_process_cancelled = True

@@ -618,8 +618,6 @@ motor_left_panel_style = """
 """
 
 
-
-
 motor_left_panel_scroll_area_style = """
             QScrollArea {
                 border: none;
@@ -644,7 +642,6 @@ motor_section_content_style = _style("""
                 border: none;
             }
 """)
-
 
 
 motor_section_title_style = _style("""
@@ -718,8 +715,6 @@ motor_status_badge_pending_style = _style("""
                 border: 1px solid #B7C8E0;
             }
 """)
-
-
 
 
 motor_summary_hint_style = _style("""
@@ -1220,153 +1215,6 @@ product_test_program_table_style = recent_session_table_style + _style("""
             }
 """)
 
-
-waveform_frame_style = _style("""
-            QFrame {
-                background: #FFFFFF;
-                border: 1px solid $COLOR_BORDER_STRONG;
-                border-radius: 2px;
-            }
-""")
-
-waveform_title_bar_style = _style("""
-            QWidget {
-                background-color: $COLOR_PRIMARY;
-                border: none;
-            }
-            QWidget#directionWaveformHeader {
-                border-top-left-radius: 2px;
-                border-top-right-radius: 2px;
-            }
-            QWidget#directionWaveformBody {
-                background-color: #FFFFFF;
-                border: none;
-            }
-            QLabel {
-                color: white;
-                background-color: transparent;
-                font-family: $UI_FONT_FAMILY;
-                font-weight: 600;
-            }
-""")
-
-waveform_title_label_style = _style("""
-            QLabel {
-                background-color: $COLOR_PRIMARY;
-                color: white;
-                font-family: $UI_FONT_FAMILY;
-                font-weight: 600;
-                padding-left: 8px;
-            }
-""")
-
-waveform_action_button_style = _style("""
-            QPushButton {
-                min-width: 34px;
-                min-height: 20px;
-                border: 1px solid $COLOR_BORDER_STRONG;
-                border-radius: 3px;
-                background-color: #F8FBFF;
-                color: $COLOR_PRIMARY_HOVER;
-                font-family: $UI_FONT_FAMILY;
-                font-size: 12px;
-                font-weight: 600;
-                padding: 1px 6px;
-            }
-            QPushButton:hover {
-                background-color: #EAF2FC;
-                border-color: $COLOR_PRIMARY;
-            }
-            QPushButton:pressed {
-                background-color: #DDE9F8;
-            }
-            QPushButton#conditionOkButton {
-                color: #166534;
-                border-color: $COLOR_OK;
-                background-color: #E8F7EE;
-            }
-            QPushButton#conditionNgButton {
-                color: #991B1B;
-                border-color: $COLOR_NG;
-                background-color: #FCE8E8;
-            }
-""")
-
-waveform_mark_button_style = _style("""
-            QPushButton {
-                border: 1px solid $COLOR_BORDER_STRONG;
-                border-radius: 4px;
-                background-color: #F8FBFF;
-                color: $COLOR_PRIMARY_HOVER;
-                font-family: $UI_FONT_FAMILY;
-                font-size: 18px;
-                font-weight: 700;
-            }
-            QPushButton:hover {
-                background-color: #DDEBFA;
-                border-color: $COLOR_PRIMARY;
-                border-width: 2px;
-                color: #1E4F95;
-            }
-            QPushButton:pressed {
-                background-color: #C7D9F2;
-                border-width: 2px;
-                padding-top: 2px;
-                padding-left: 1px;
-            }
-            QPushButton:disabled {
-                background-color: $COLOR_DISABLED_BG;
-                color: $COLOR_DISABLED_TEXT;
-                border-color: $COLOR_BORDER;
-            }
-            QPushButton#conditionOkButton {
-                color: #065F46;
-                border-color: $COLOR_OK;
-                background-color: #E8F7EE;
-            }
-            QPushButton#conditionOkButton:hover {
-                color: #064E3B;
-                background-color: #C8F1D8;
-                border-color: #0F8F3A;
-                border-width: 2px;
-            }
-            QPushButton#conditionOkButton:pressed {
-                color: #064E3B;
-                background-color: #A9E2C1;
-                border-color: #047A2D;
-                border-width: 2px;
-                padding-top: 2px;
-                padding-left: 1px;
-            }
-            QPushButton#conditionNgButton {
-                color: #8B0000;
-                border-color: $COLOR_NG;
-                background-color: #FCE8E8;
-            }
-            QPushButton#conditionNgButton:hover {
-                color: #7F1D1D;
-                background-color: #F8BEBE;
-                border-color: #B91C1C;
-                border-width: 2px;
-            }
-            QPushButton#conditionNgButton:pressed {
-                color: #7F1D1D;
-                background-color: #EF9F9F;
-                border-color: #991B1B;
-                border-width: 2px;
-                padding-top: 2px;
-                padding-left: 1px;
-            }
-""")
-
-waveform_canvas_style = _style("""
-            QWidget {
-                background-color: #F7FAFE;
-                border: 1px solid $COLOR_BORDER;
-            }
-""")
-
-waveform_viewport_style = "background-color: #EEF4FB;"
 
 qcheckbox_style = _style("""
             QCheckBox {

@@ -137,9 +137,7 @@ class SequenceWindow(
         self._manual_direction_fallback_next_direction = "forward"
         self._direction_cycle_started_at = ""
         self._current_cycle_first_direction = ""
-        self._direction_waveform_cache = {"forward": None, "reverse": None}
         self._condition_record_cache = {}
-        self._waveform_display_override_direction = ""
         self._pending_serial_trigger_direction = ""
         self._queued_directional_trigger = ""
         self._serial_product_condition_executing = False
@@ -173,13 +171,6 @@ class SequenceWindow(
         self._hid_mode_active_until = 0.0  # 时间戳，在此之前忽略键盘输入
 
         # Streaming state variables
-        self._streaming_waveform_session = None
-        self._streaming_waveform_time_mode = None
-        self._streaming_waveform_generation = 0
-        self._streaming_waveform_refresh_scheduled = False
-        self._streaming_waveform_pending = False
-        self._streaming_waveform_live_enabled = False
-        self._streaming_waveform_failure_logged = False
         self._streaming_chunk_contract_failed = False
         self.streaming_wav_writer = None  # WAV file writer for incremental saving
         self.streaming_processor = None  # StreamingAudioProcessor instance
@@ -191,7 +182,6 @@ class SequenceWindow(
         self._pending_configured_input_channels = None
         self._channel_selection_error = ""
         self._active_input_channels = [0]
-        self.channel_workspace = None
         self.recent_test_sessions = []
         self.recent_test_session_by_id = {}
         self._recent_session_seq = 0

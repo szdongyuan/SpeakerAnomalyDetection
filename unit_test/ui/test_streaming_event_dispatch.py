@@ -11,22 +11,12 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5 import sip
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication
 
 from base import streaming_audio_processor
 from base.streaming_audio_processor import StreamingAudioProcessor
 from base.utils import custom_signals
 from base.utils.custom_signals import MySignals
-from consts.recording_preview_consts import (
-    MAIN_RECORDING_LIVE_MAX_POINTS,
-    MAIN_RECORDING_LIVE_WINDOW_SECONDS,
-    PREVIEW_TIME_MODE_CUMULATIVE,
-    PREVIEW_TIME_MODE_RELATIVE_LATEST,
-    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
-)
-from ui.sequence import sequence_widget_analysis_ops
-from ui.sequence.multichannel_waveform_session import MultichannelWaveformSession
+from consts.recording_preview_consts import PREVIEW_TIME_MODE_CUMULATIVE, PREVIEW_TIME_MODE_RELATIVE_LATEST, RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 
@@ -150,105 +140,16 @@ class _Writer:
         self.chunks.append(chunk)
 
 
-class _PlotWindow:
-    def __init__(self, channel, calls):
-        self.channel_index = channel
-        self._calls = calls
-        self.data = None
-        self.is_live_preview = False
-
-    def set_data(self, time_axis, amplitude):
-        self.data = (
-            np.array(time_axis, copy=True),
-            np.array(amplitude, copy=True),
-        )
-        self.is_live_preview = False
-        self.calls.append(
-            SimpleNamespace(
-                channel=self.channel_index,
-                time=self.data[0].copy(),
-                amplitude=self.data[1].copy(),
-                live=False,
-            )
-        )
-
-    def set_live_data(self, time_axis, amplitude):
-        self.data = (
-            np.array(time_axis, copy=True),
-            np.array(amplitude, copy=True),
-        )
-        self.is_live_preview = True
-        self.calls.append(
-            SimpleNamespace(
-                channel=self.channel_index,
-                time=self.data[0].copy(),
-                amplitude=self.data[1].copy(),
-                live=True,
-            )
-        )
-
-    def set_cumulative_preview_data(self, time_axis, amplitude):
-        self.data = (
-            np.array(time_axis, copy=True),
-            np.array(amplitude, copy=True),
-        )
-        self.is_live_preview = True
-        self.calls.append(
-            SimpleNamespace(
-                channel=self.channel_index,
-                time=self.data[0].copy(),
-                amplitude=self.data[1].copy(),
-                live=True,
-            )
-        )
-
-    def snapshot_plot_state(self):
-        data = None if self.data is None else tuple(
-            value.copy() for value in self.data
-        )
-        return data, self.is_live_preview
-
-    def restore_plot_state(self, state):
-        data, self.is_live_preview = state
-        self.data = None if data is None else tuple(
-            value.copy() for value in data
-        )
-
-    @property
-    def calls(self):
-        return self._calls
-
-
-class _Workspace:
-    def __init__(self, channels):
-        self.calls = []
-        self._windows = [_PlotWindow(channel, self.calls) for channel in channels]
-
-    def all_subwindows(self):
-        return list(self._windows)
-
-
 class _ChunkHost(SequenceWidgetStreamingOpsMixin):
     def __init__(self, processor):
         self.streaming_processor = processor
         self._streaming_completion_processor = None
         self.streaming_wav_writer = _Writer()
         self.data_struct = SimpleNamespace(sample_rate=48_000)
-        self._direction_waveform_cache = {}
         self._streaming_first_chunk_logged = True
         self.default_logger = logging.getLogger(__name__)
         self._recording_input_channels = (0, 2)
         self.sequence_config = [{"seq1": {"acq": {"detail": {}}}}]
-        self.channel_workspace = _Workspace(self._recording_input_channels)
-        self._streaming_waveform_session = MultichannelWaveformSession(
-            max_points=MAIN_RECORDING_LIVE_MAX_POINTS,
-            rolling_window_seconds=MAIN_RECORDING_LIVE_WINDOW_SECONDS,
-        )
-        self._streaming_waveform_generation = 0
-        self._streaming_waveform_refresh_scheduled = False
-        self._streaming_waveform_pending = False
-        self._streaming_waveform_live_enabled = False
-        self._streaming_waveform_failure_logged = False
         self._streaming_chunk_contract_failed = False
         self.scheduled = []
 
@@ -257,9 +158,6 @@ class _ChunkHost(SequenceWidgetStreamingOpsMixin):
 
     def _resolve_recording_acq_detail(self):
         return self.sequence_config[0]["seq1"]["acq"]["detail"]
-
-    def _schedule_streaming_waveform_callback(self, callback):
-        self.scheduled.append(callback)
 
 
 @pytest.mark.parametrize(
@@ -289,7 +187,6 @@ def test_real_queue_event_chain_preserves_waveform_and_wav_chunk(
     host.sequence_config[0]["seq1"]["acq"]["detail"][
         RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
     ] = preview_mode
-    host._begin_streaming_waveform_session(48_000, 0, "01")
     payload = {
         "mono": np.array([2.0, 3.0, 4.0], dtype=np.float32),
         "multi": np.array([[1.0, 3.0], [2.0, 4.0], [3.0, 5.0]], dtype=np.float32),
@@ -304,43 +201,8 @@ def test_real_queue_event_chain_preserves_waveform_and_wav_chunk(
 
     assert processor.audio_queue.empty()
     np.testing.assert_array_equal(host.streaming_wav_writer.chunks[0], payload["multi"])
-    assert host.channel_workspace.calls == []
-    assert host._direction_waveform_cache == {}
-    assert len(host.scheduled) == 1
-
-    host.scheduled.pop()()
-
-    assert [call.channel for call in host.channel_workspace.calls] == [0, 2]
-    expected_rows = (
-        [0, -1]
-        if preview_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
-        else slice(None)
-    )
-    np.testing.assert_array_equal(
-        host.channel_workspace.calls[0].amplitude,
-        payload["multi"][expected_rows, 0],
-    )
-    np.testing.assert_array_equal(
-        host.channel_workspace.calls[1].amplitude,
-        payload["multi"][expected_rows, 1],
-    )
-    expected_time = (
-        np.array([-2, 0], dtype=np.float64) / 48_000
-        if preview_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
-        else np.array([0, 1, 2], dtype=np.float64) / 48_000
-    )
-    for live_call, window in zip(
-        host.channel_workspace.calls,
-        host.channel_workspace.all_subwindows(),
-    ):
-        np.testing.assert_allclose(live_call.time, expected_time)
-        if preview_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST:
-            assert live_call.time[-1] == 0.0
-        else:
-            assert live_call.time[0] == 0.0
-        assert live_call.live is True
-        assert window.is_live_preview is True
-    assert host._direction_waveform_cache == {}
+    assert len(host.streaming_wav_writer.chunks) == 1
+    assert not hasattr(host, "channel_workspace")
 
 
 class _Button:
@@ -364,17 +226,8 @@ class _WorkflowHost(SequenceWidgetAnalysisOpsMixin, SequenceWidgetStreamingOpsMi
         self.streaming_wav_writer = None
         self.streaming_stimulus_data = None
         self.streaming_mode = None
-        self._streaming_waveform_session = MultichannelWaveformSession(
-            max_points=self._WAVEFORM_DISPLAY_MAX_POINTS
-        )
-        self._streaming_waveform_generation = 0
-        self._streaming_waveform_refresh_scheduled = False
-        self._streaming_waveform_pending = False
-        self._streaming_waveform_live_enabled = False
-        self._streaming_waveform_failure_logged = False
         self._streaming_chunk_contract_failed = False
         self._recording_input_channels = (0, 1)
-        self.channel_workspace = _Workspace(self._recording_input_channels)
         self.scheduled = []
         self._active_input_channels = [0, 1]
         self.recorded_path = "record.wav"
@@ -387,8 +240,6 @@ class _WorkflowHost(SequenceWidgetAnalysisOpsMixin, SequenceWidgetStreamingOpsMi
     def _close_analysis_windows(self):
         return None
 
-    def _clear_plot_area(self):
-        return None
 
     def _cleanup_streaming_resources(self):
         self.streaming_processor = None
@@ -409,8 +260,6 @@ class _WorkflowHost(SequenceWidgetAnalysisOpsMixin, SequenceWidgetStreamingOpsMi
     def _capture_recording_wav_calibration_metadata(self):
         return None
 
-    def _schedule_streaming_waveform_callback(self, callback):
-        self.scheduled.append(callback)
 
     def _on_streaming_complete(self):
         self.events.append("complete")

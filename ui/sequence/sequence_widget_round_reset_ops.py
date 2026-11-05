@@ -287,7 +287,7 @@ class SequenceWidgetRoundResetOpsMixin:
         serial_number = self.lineedit_s_or_n.text()
         # Restoring S/N must not look like a new scan to the debounce handler.
         with QSignalBlocker(self.lineedit_s_or_n):
-            self._reset_manual_product_condition_cycle(clear_waveforms=True)
+            self._reset_manual_product_condition_cycle()
             self.lineedit_s_or_n.setText(serial_number)
         barcode_timer = getattr(self, "_barcode_debounce_timer", None)
         if barcode_timer is not None:

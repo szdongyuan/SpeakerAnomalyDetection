@@ -10,7 +10,7 @@ from consts.recording_preview_consts import (
     MAIN_RECORDING_LIVE_MAX_POINTS,
     MAIN_RECORDING_LIVE_WINDOW_SECONDS,
 )
-from ui.sequence.multichannel_waveform_session import MultichannelWaveformSession
+from base.multichannel_waveform_session import MultichannelWaveformSession
 
 
 def test_session_projects_startup_trim_independently_in_channel_order():

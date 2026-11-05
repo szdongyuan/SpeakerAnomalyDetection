@@ -68,8 +68,6 @@ class RecordingSnapshotHost(SequenceWidgetAnalysisOpsMixin):
     def checked_work_status_message(self):
         return False
 
-    def _clear_plot_area(self):
-        return None
 
     def _cleanup_streaming_resources(self):
         return None
@@ -984,7 +982,6 @@ class StreamingAnalysisHost(
         self._active_product_condition_config = dict(
             self.product_test_condition_configs[0]
         )
-        self._waveform_display_override_direction = "condition-1"
         self._current_trigger_direction = "condition-1"
         self._current_recent_session_id = "session-1"
         self.mic = DEVICE
@@ -1126,10 +1123,6 @@ class StreamingAnalysisHost(
 
 
 def run_streaming_completion(host, factor_loader):
-    host.channel_workspace = SimpleNamespace(
-        all_subwindows=lambda: [SimpleNamespace(channel_index=0)]
-    )
-    host._project_normalized_waveform_to_workspace = mock.Mock()
     recording_manager = SimpleNamespace(
         save_signal_info_to_db=lambda *_args: (error_code.OK, "saved")
     )

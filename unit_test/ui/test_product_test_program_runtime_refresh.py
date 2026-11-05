@@ -15,7 +15,7 @@ from consts.product_test_project_consts import EXPORT_RAW_AUDIO_CSV_KEY
 from ui.sequence import sequence_widget_config_ops as config_ops_module
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from base.load_config import LoadUiConfig
-from ui.sequence.analysis_waveform_panel import AnalysisWaveformPanel
+from ui.sequence.station_plot_grid import StationPlotGrid
 from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
 from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
@@ -34,7 +34,6 @@ class ProductRefreshHost(SequenceWidgetConfigOpsMixin, SequenceWidgetStreamingOp
     _clear_recent_session_history = SequenceWidgetAnalysisOpsMixin._clear_recent_session_history
     _clear_audio_source_analysis_state = SequenceWidgetAnalysisOpsMixin._clear_audio_source_analysis_state
     update_player_btn_is_paused = SequenceWidgetUiOpsMixin.update_player_btn_is_paused
-    _apply_condition_mode_to_waveforms = SequenceWidgetUiOpsMixin._apply_condition_mode_to_waveforms
     _normalize_saved_sequence_mode = staticmethod(SequenceWidgetUiOpsMixin._normalize_saved_sequence_mode)
     _current_condition_mode = SequenceWidgetUiOpsMixin._current_condition_mode
 
@@ -68,11 +67,8 @@ class ProductRefreshHost(SequenceWidgetConfigOpsMixin, SequenceWidgetStreamingOp
             self.count_board, self, self.product_test_condition_configs,
             queue_catalog=self._product_queue_catalog,
         )
-        self.channel_workspace = AnalysisWaveformPanel(
-            self, self.product_test_condition_configs,
-            channel_layout_path=str(Path(manager.program_dir) / "channel_layout.json"),
-        )
-        self.channel_workspace.set_channels([0])
+        self.plot_grid = StationPlotGrid(self)
+        self.plot_grid.set_curve_data(0, 0, [{'x': [0, 1], 'y': [2, 3]}])
         self.update_using_file_combobox()
         self.using_file_combobox.currentTextChanged.connect(self.on_using_file_combobox_changed)
         self._finish_initial_product_configuration()
@@ -90,13 +86,10 @@ class ProductRefreshHost(SequenceWidgetConfigOpsMixin, SequenceWidgetStreamingOp
         self.recent_test_session_by_id = {"old-session": {}}
         self._current_recent_session_id = "old-session"
         self._condition_record_cache = {"old": {"recorded_path": "old.wav"}}
-        self._direction_waveform_cache = {"old": "wave"}
         if not self.product_test_condition_configs:
             return
         key = self.product_test_condition_configs[0]["key"]
         self.left_panel.set_condition_result(key, "NG")
-        self.channel_workspace.set_condition_audio_path(key, "old.wav")
-        self.channel_workspace.set_condition_context(key, status="旧结果")
         self.data_struct.store_wave_data = np.arange(20)
         self.data_struct.store_wave_data_multi = np.arange(20).reshape(-1, 1)
 
@@ -138,7 +131,6 @@ def test_runtime_refresh_allows_acquisition_difference_after_save(refresh_host):
 def test_hardware_channels_refresh_saved_queue_and_live_product_without_opening_editor(refresh_host):
     host, _, path, warnings = refresh_host
     host.mic_channels = [0, 1, 2, 3, 4]
-    host.channel_workspace.set_channels(host.mic_channels)
 
     assert host.synchronize_hardware_analysis_channels() is True
 
@@ -157,7 +149,6 @@ def test_hardware_channels_refresh_saved_queue_and_live_product_without_opening_
     assert host.analysis_config["SPL"]["analysis_channels"] == [0, 2]
     for row in host.left_panel.condition_state.rows.values():
         assert (row["completed_channels"], row["channel_count"]) == (0, 2)
-    assert host.channel_workspace._channel_indices == [0, 1, 2, 3, 4]
 
 
 def test_hardware_channel_save_failure_blocks_stale_runtime_and_retry_recovers(refresh_host, monkeypatch):
@@ -328,21 +319,16 @@ def test_changed_a_resets_once_and_keeps_saved_files(refresh_host, tmp_path):
     reset = Mock(wraps=host._reset_manual_product_condition_cycle)
     host._reset_manual_product_condition_cycle = reset
     host.left_panel.set_condition_configs = Mock(wraps=host.left_panel.set_condition_configs)
-    host.channel_workspace.set_active_condition(host.product_test_condition_configs[-1]["key"])
     project["test_groups"][0]["test_conditions"][0]["input_voltage"] = "12"
     assert host.product_program_manager.save_project("A.json", project)[0]
     host.on_product_test_program_updated()
     assert host._product_config_refresh_state == "ready"
     assert all(row["result"] == "待检测" for row in host.left_panel.condition_state.rows.values())
     assert host.data_struct.store_wave_data is None
-    assert host.channel_workspace._audio_paths == {}
-    assert host.channel_workspace.status_label.text() == "同步待机"
-    assert host.channel_workspace._active_condition_key == host.product_test_condition_configs[0]["key"]
     assert host.recent_test_sessions == []
     assert host._condition_record_cache == {}
-    assert host._direction_waveform_cache == {}
     assert saved_file.read_bytes() == b"existing recording"
-    reset.assert_called_once_with(clear_waveforms=True, refresh_display=False)
+    reset.assert_called_once_with(refresh_display=False)
     host.left_panel.set_condition_configs.assert_called_once()
     host.refresh_serial_product_trigger_runtime.assert_called_once()
     assert not warnings
@@ -996,8 +982,6 @@ def test_main_window_refreshes_button_after_exceptional_dialog_exit():
     assert refresh_states == [False]
 
 
-
-
 def test_active_project_context_exposes_result_storage_identity():
     class _Manager:
         def load_project(self, file_name):
@@ -1088,7 +1072,6 @@ def test_legacy_queue_switch_clears_wav_metadata(monkeypatch):
         data_struct=SimpleNamespace(
             recording_source=object(),
             recording_sources={"old": object()},
-            recording_display_sources={"old": object()},
             store_wave_data="recorded",
             store_wave_data_multi="recorded_multi",
             wav_calibration_metadata={"old": True},
@@ -1112,20 +1095,19 @@ def test_legacy_queue_switch_clears_wav_metadata(monkeypatch):
     assert host.data_struct.wav_calibration_metadata_authoritative is False
     assert host.data_struct.wav_calibration_warning_shown is False
     assert host.data_struct.recording_source is None
-    assert host.data_struct.recording_sources == host.data_struct.recording_display_sources == {}
+    assert host.data_struct.recording_sources == {}
 
 
 def test_product_snapshot_reset_clears_all_recording_identities(refresh_host):
     host, project, _, warnings = refresh_host
     host.data_struct.recording_source = object()
     host.data_struct.recording_sources = {"old": object()}
-    host.data_struct.recording_display_sources = {"old": object()}
     project["test_groups"][0]["test_conditions"][0]["input_voltage"] = "12"
     assert host.product_program_manager.save_project("A.json", project)[0]
     host.on_product_test_program_updated()
     assert warnings == []
     assert host.data_struct.recording_source is None
-    assert host.data_struct.recording_sources == host.data_struct.recording_display_sources == {}
+    assert host.data_struct.recording_sources == {}
 
 
 @pytest.mark.parametrize("configuration", ["missing", "invalid_json", "valid", "empty"])
@@ -1288,7 +1270,8 @@ def test_missing_current_product_recovery_flow(refresh_host, monkeypatch, action
     host.update_using_file_combobox()
     messages = []
     monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[2]))
-    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.Yes)
+    from ui.confirmation_message_box import ConfirmationMessageBox
+    monkeypatch.setattr(ConfirmationMessageBox, "question", lambda *_: QMessageBox.Yes)
     dialog = ProductTestProjectConfigDialog(
         manager, parent=host, deletion_completed=host._configuration_deleted,
     )

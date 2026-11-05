@@ -64,12 +64,9 @@ class _MetadataHost(
         self.mic = {"name": "test input"}
         self.mic_channels = [0, 1, 2, 3, 4]
         self._snapshot_recording_input_channels = Mock(return_value=tuple(self.mic_channels))
-        self.channel_workspace = None
         self._load_sequence_config_for_product_condition = Mock(return_value=(True, ""))
         self._generate_recording_token = Mock(side_effect=["round-1", "round-2"])
         self._generate_product_condition_group_id = self._generate_recording_token
-        self.clear_all_direction_waveforms = Mock()
-        self._clear_plot_area = Mock()
         self.update_player_btn_is_paused = Mock()
         self._init_test_round_metadata()
 
@@ -416,6 +413,143 @@ def test_recording_service_busy_releases_only_an_empty_round(host, partly_comple
     else:
         assert host._test_round_metadata is None
         assert host._manual_product_condition_group_id == ""
+
+
+@pytest.mark.parametrize("busy", [False, True])
+@pytest.mark.parametrize("partly_complete", [False, True])
+def test_explicit_recording_service_denial_preserves_completed_conditions(
+    host, busy, partly_complete,
+):
+    host._prepare_next_manual_product_condition_recording()
+    if partly_complete:
+        host._manual_product_condition_completed_keys = {"a"}
+        host._manual_product_condition_index = 1
+        host._prepare_next_manual_product_condition_recording()
+    metadata = host._test_round_metadata
+    group_id = host._manual_product_condition_group_id
+    host.recording_bridge = SimpleNamespace(
+        service=SimpleNamespace(can_start_recording=False, busy=busy),
+    )
+    host._start_process_recording = Mock()
+
+    with patch("ui.sequence.sequence_widget_analysis_ops.QMessageBox.warning"):
+        host.judge_play_and_record()
+
+    host._start_process_recording.assert_not_called()
+    assert host.toolsbar.sample_number_lineedit.isReadOnly() is partly_complete
+    assert host.toolsbar.current_round_spinbox.isReadOnly() is partly_complete
+    if partly_complete:
+        assert host._test_round_metadata is metadata
+        assert host._manual_product_condition_group_id == group_id
+        assert host._manual_product_condition_completed_keys == {"a"}
+        assert host._active_product_condition_key == "b"
+    else:
+        assert host._test_round_metadata is None
+        assert host._manual_product_condition_group_id == ""
+
+
+@pytest.mark.parametrize("service_denied", [False, True])
+@pytest.mark.parametrize("state, value", [
+    ("_record_workflow_busy", True),
+    ("player_status_flag", True),
+    ("_recording_process_contexts", {"owned": object()}),
+    ("_recording_publication_in_progress", True),
+    ("_recording_cleanup_in_progress", True),
+    ("_streaming_cleanup_in_progress", True),
+    ("_recording_closed", True),
+    ("_closing", True),
+    ("_shutdown_started", True),
+    ("_close_in_progress", True),
+    ("_product_config_refresh_state", "initializing"),
+    ("_product_config_refresh_state", "applying"),
+    ("_product_config_refresh_state", "failed"),
+    ("_product_progress_choice_pending", True),
+    ("_test_metadata_validation_open", True),
+    ("_product_test_program_config_dialog_open", True),
+    ("_test_queue_config_dialog_open", True),
+    ("_serial_trigger_config_dialog_open", True),
+    ("_serial_product_error_dialog_open", True),
+    ("_condition_playback_controller", SimpleNamespace(is_audio_playing=lambda: True)),
+    ("ve_prewarm_lifetime", SimpleNamespace(admission_for=lambda _: "blocked")),
+])
+def test_service_admission_preserves_round_when_host_is_not_idle(
+    host, state, value, service_denied,
+):
+    host._prepare_next_manual_product_condition_recording()
+    metadata = host._test_round_metadata
+    group_id = host._manual_product_condition_group_id
+    setattr(host, state, value)
+    host.recording_bridge = SimpleNamespace(service=SimpleNamespace(
+        can_start_recording=not service_denied, busy=True,
+    ))
+    host._start_process_recording = Mock()
+    cancel = Mock(wraps=host._cancel_test_metadata_preflight)
+    host._cancel_test_metadata_preflight = cancel
+
+    with patch("ui.sequence.sequence_widget_analysis_ops.QMessageBox.warning"):
+        host.judge_play_and_record()
+
+    cancel.assert_not_called()
+    host._start_process_recording.assert_not_called()
+    assert host._test_round_metadata is metadata
+    assert host._manual_product_condition_group_id == group_id
+    assert host.toolsbar.sample_number_lineedit.isReadOnly()
+    assert host.toolsbar.current_round_spinbox.isReadOnly()
+    assert getattr(host, state) is value
+
+
+def test_other_admission_denial_does_not_cancel_prepared_round(host):
+    host._prepare_next_manual_product_condition_recording()
+    metadata = host._test_round_metadata
+    host.recording_bridge = SimpleNamespace(
+        service=SimpleNamespace(can_start_recording=True, busy=True),
+    )
+    host._raw_audio_csv_admission_reason = lambda: "CSV capacity exhausted"
+    host._cancel_test_metadata_preflight = Mock(wraps=host._cancel_test_metadata_preflight)
+
+    with patch("ui.sequence.sequence_widget_analysis_ops.QMessageBox.warning"):
+        host.judge_play_and_record()
+
+    host._cancel_test_metadata_preflight.assert_not_called()
+    assert host._test_round_metadata is metadata
+    assert host.toolsbar.sample_number_lineedit.isReadOnly()
+
+
+def test_recording_admission_query_does_not_cancel_prepared_round(host):
+    host._prepare_next_manual_product_condition_recording()
+    metadata = host._test_round_metadata
+    host.recording_bridge = SimpleNamespace(service=SimpleNamespace(busy=True))
+    host._cancel_test_metadata_preflight = Mock(wraps=host._cancel_test_metadata_preflight)
+
+    assert not host._can_start_recording_workflow()
+
+    host._cancel_test_metadata_preflight.assert_not_called()
+    assert host._test_round_metadata is metadata
+    assert host.toolsbar.sample_number_lineedit.isReadOnly()
+
+
+def test_service_denial_releases_empty_round_without_clearing_plot_data(host):
+    from ui.sequence.station_plot_cell import StationPlotCell
+    from ui.sequence.station_plot_grid import StationPlotGrid
+
+    host._prepare_next_manual_product_condition_recording()
+    host.plot_grid = StationPlotGrid(host)
+    host.plot_grid.set_curve_data(0, 0, [{"x": [0, 1], "y": [2, 3]}])
+    cells = host.plot_grid.findChildren(StationPlotCell)
+    curve = next(item for cell in cells for item in cell.plot_widget.listDataItems())
+    host.recording_bridge = SimpleNamespace(
+        service=SimpleNamespace(can_start_recording=False, busy=False),
+    )
+
+    with patch("ui.sequence.sequence_widget_analysis_ops.QMessageBox.warning"):
+        host.judge_play_and_record()
+
+    assert host._test_round_metadata is None
+    assert not host.toolsbar.sample_number_lineedit.isReadOnly()
+    assert host.plot_grid.findChildren(StationPlotCell) == cells
+    assert next(item for cell in cells for item in cell.plot_widget.listDataItems()) is curve
+    assert list(curve.xData) == [0, 1]
+    assert list(curve.yData) == [2, 3]
 
 
 def test_manual_failure_releases_fields_and_cannot_report_success(host):

@@ -183,10 +183,9 @@ class SequenceWidgetConfigOpsMixin:
         self.update_player_btn_is_paused()
         try:
             self._reset_manual_product_condition_cycle(
-                clear_waveforms=True, refresh_display=False
+                refresh_display=False
             )
             self._clear_recent_session_history()
-            self._direction_waveform_cache = {}
             self._condition_record_cache = {}
             self.recorded_path = None
             self.recorded_signal_info = {}
@@ -205,12 +204,6 @@ class SequenceWidgetConfigOpsMixin:
                 self.product_test_condition_configs, queue_catalog=self._product_queue_catalog
             )
             self.left_panel.set_current_stage("", tone="pending")
-            self.channel_workspace.set_conditions(
-                self.product_test_condition_configs, reset_context=True
-            )
-            self._refresh_waveform_condition_metadata()
-            self._apply_condition_mode_to_waveforms()
-            self._sync_waveform_condition_from_left(self.left_panel.condition_state.selected_key)
             if snapshot.active_file:
                 serial_result = self.refresh_serial_product_trigger_runtime()
                 if not serial_result["ok"]:

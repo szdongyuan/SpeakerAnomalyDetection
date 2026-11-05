@@ -75,8 +75,6 @@ class _PlaybackPermissionHost(SequenceWidgetSerialTriggerOpsMixin, SequenceWidge
     def _load_sequence_config_for_product_condition(self, _condition_config):
         return True, ""
 
-    def clear_all_direction_waveforms(self):
-        return None
 
     def _close_analysis_windows(self):
         return None

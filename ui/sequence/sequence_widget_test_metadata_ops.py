@@ -157,12 +157,12 @@ class SequenceWidgetTestMetadataOpsMixin:
     def _cancel_test_metadata_preflight(self):
         # No recording has started. Preserve a partially completed round for retry.
         if not self._manual_product_condition_completed_keys:
-            self._reset_manual_product_condition_cycle(clear_waveforms=False)
+            self._reset_manual_product_condition_cycle()
 
     def _abort_test_round_metadata(self, reason):
         if self._test_round_metadata is None:
             return False
-        self._reset_manual_product_condition_cycle(clear_waveforms=False)
+        self._reset_manual_product_condition_cycle()
         self._record_workflow_busy = False
         self.player_status_flag = False
         self._awaiting_ok_ng = False

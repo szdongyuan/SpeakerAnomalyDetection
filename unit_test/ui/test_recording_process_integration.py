@@ -106,7 +106,9 @@ def service(tmp_path, ui_qapp, monkeypatch):
         backend_options={"trace_dir": str(tmp_path)}, preview_interval=.01)
     yield instance
     instance.shutdown()
-    pump(ui_qapp, instance.closed.is_set)
+    # closed is published before the supervisor returns from shutdown callbacks.
+    pump(ui_qapp, lambda: instance.closed.is_set()
+         and all(not thread.is_alive() for thread in instance.threads))
     assert all(not thread.is_alive() for thread in instance.threads)
     assert not escaped_moves, "a caught relabel error must not hide unsafe test paths"
 
@@ -538,7 +540,7 @@ def main_host(service, tmp_path, *, streaming=True, monitor=False):
     from consts import model_consts
     from ui.recording_service_bridge import RecordingServiceBridge
     from ui.sequence.sequence_widget_recording_process_ops import SequenceWidgetRecordingProcessOpsMixin
-    from unit_test.ui.test_streaming_event_dispatch import _WorkflowHost, _Workspace
+    from unit_test.ui.test_streaming_event_dispatch import _WorkflowHost
     from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 
     class Host(_WorkflowHost):
@@ -552,7 +554,6 @@ def main_host(service, tmp_path, *, streaming=True, monitor=False):
     host.recording_bridge = RecordingServiceBridge(service)
     host._recording_input_channels = (0, 2)
     host._active_input_channels = [0, 2]
-    host.channel_workspace = _Workspace((0, 2))
     host.recorded_path = str(tmp_path / "main.wav")
     host.recorded_signal_info[model_consts.RECORDING_ROOT_CONFIG_KEY] = str(tmp_path)
     host.mic = device
@@ -583,56 +584,6 @@ def main_host(service, tmp_path, *, streaming=True, monitor=False):
     host._handle_invalid_recording = mock.Mock()
     host._finalize_recording_channel_selection = mock.Mock()
     host._cleanup_failed_recording_initialization = mock.Mock(return_value=True)
-    return host
-def _enable_live_workspace_double(host):
-    """Give the legacy process-test plot doubles the Task 5 live contract."""
-    for window in host.channel_workspace.all_subwindows():
-        window.data = None
-        window.is_live_preview = False
-
-        def set_live_data(time_axis, amplitude, *, _window=window):
-            _window.data = (
-                np.array(time_axis, copy=True),
-                np.array(amplitude, copy=True),
-            )
-            _window.is_live_preview = True
-            _window.calls.append(SimpleNamespace(
-                channel=_window.channel_index,
-                time=_window.data[0].copy(),
-                amplitude=_window.data[1].copy(),
-                live=True,
-            ))
-
-        def set_cumulative_preview_data(time_axis, amplitude, *, _window=window):
-            _window.data = (
-                np.array(time_axis, copy=True),
-                np.array(amplitude, copy=True),
-            )
-            _window.is_live_preview = True
-            _window.presentation_mode = PREVIEW_TIME_MODE_CUMULATIVE
-            _window.calls.append(SimpleNamespace(
-                channel=_window.channel_index,
-                time=_window.data[0].copy(),
-                amplitude=_window.data[1].copy(),
-                live=True,
-            ))
-
-        def snapshot_plot_state(*, _window=window):
-            data = None if _window.data is None else tuple(
-                value.copy() for value in _window.data
-            )
-            return data, _window.is_live_preview
-
-        def restore_plot_state(state, *, _window=window):
-            data, _window.is_live_preview = state
-            _window.data = None if data is None else tuple(
-                value.copy() for value in data
-            )
-
-        window.set_live_data = set_live_data
-        window.set_cumulative_preview_data = set_cumulative_preview_data
-        window.snapshot_plot_state = snapshot_plot_state
-        window.restore_plot_state = restore_plot_state
     return host
 
 
@@ -717,12 +668,6 @@ def test_process_request_rejects_explicit_non_mapping_detail_before_start(
     bridge.start.assert_not_called()
 
 
-
-
-
-
-
-
 @pytest.mark.parametrize("streaming,monitor", [(False, False), (False, True), (True, False), (True, True)])
 def test_main_workflow_uses_prefinalized_child_envelope_and_snapshots(
         ui_qapp, service, tmp_path, monkeypatch, streaming, monitor):
@@ -766,17 +711,17 @@ def test_main_host_relabel_destination_stays_in_test_root(ui_qapp, service, tmp_
     assert Path(target).is_relative_to(tmp_path)
 
 
-def test_workspace_contract_failure_rejects_before_any_publication(ui_qapp, service, tmp_path):
+def test_workspace_order_does_not_reject_saved_recording(ui_qapp, service, tmp_path):
     host = main_host(service, tmp_path)
-    host.channel_workspace._windows.reverse()
     host.judge_play_and_record()
     session = host._recording_process_session
     pump(ui_qapp, session.released.is_set)
-    assert session.state == "failed"
+    pump(ui_qapp, lambda: not host._record_workflow_busy)
+    assert session.state == "completed"
     assert host.data_struct.store_wave_data_multi is None
-    assert host.data_struct.recording_source is None
-    host._handle_invalid_recording.assert_called_once()
-    assert not Path(session.request.path).exists()
+    assert host.data_struct.recording_source.request is session.request
+    host._handle_invalid_recording.assert_not_called()
+    assert Path(session.request.path).exists()
 
 
 def test_exact_path_cleanup_keeps_child_lease_until_delete_and_db_cleanup(ui_qapp, service, tmp_path):
@@ -861,7 +806,7 @@ def test_main_close_waits_for_service_then_preserves_exports(ui_qapp, service, t
     "preview_mode",
     [PREVIEW_TIME_MODE_RELATIVE_LATEST, PREVIEW_TIME_MODE_CUMULATIVE],
 )
-def test_main_close_driven_cancellation_retains_delivered_live_preview(
+def test_main_close_driven_cancellation_releases_without_publishing_audio(
         ui_qapp, service, tmp_path, monkeypatch, preview_mode):
     from base.recording_process_protocol import RecordingPreview
     from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
@@ -869,7 +814,7 @@ def test_main_close_driven_cancellation_retains_delivered_live_preview(
     from PyQt5.QtWidgets import QMainWindow, QMessageBox
 
     service._backend_options["pause_finalize"] = True
-    host = _enable_live_workspace_double(main_host(service, tmp_path))
+    host = main_host(service, tmp_path)
     host.sequence_config[0]["seq1"]["acq"]["detail"][
         RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
     ] = preview_mode
@@ -877,30 +822,6 @@ def test_main_close_driven_cancellation_retains_delivered_live_preview(
     host.judge_play_and_record()
     session = host._recording_process_session
     wait_for_main_finalization(ui_qapp, service, session)
-    waveform = StreamingWaveformSnapshot(
-        (
-            np.array([-0.01, 0.0], dtype=np.float64)
-            if preview_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
-            else np.array([0.0, 0.01], dtype=np.float64)
-        ),
-        np.array([1.0, 2.0], dtype=np.float32),
-        2,
-    )
-    preview = RecordingPreview(
-        session.request.request_id,
-        session.generation,
-        1,
-        2,
-        session.request.channels,
-        (waveform, waveform),
-        preview_mode,
-    )
-    host._on_process_recording_preview(session, preview)
-    prior_states = [
-        plot.snapshot_plot_state()
-        for plot in host.channel_workspace.all_subwindows()
-    ]
-
     class Window(MainWindow):
         def __init__(self):
             QMainWindow.__init__(self)
@@ -914,15 +835,10 @@ def test_main_close_driven_cancellation_retains_delivered_live_preview(
     try:
         window.close()
         assert window.isVisible()
-        for plot in host.channel_workspace.all_subwindows():
-            assert plot.is_live_preview is True
         (tmp_path / "release-finalize").touch()
         pump(ui_qapp, lambda: session.released.is_set() and not window.isVisible())
-        for plot, prior in zip(host.channel_workspace.all_subwindows(), prior_states):
-            current = plot.snapshot_plot_state()
-            np.testing.assert_array_equal(current[0][0], prior[0][0])
-            np.testing.assert_array_equal(current[0][1], prior[0][1])
-            assert current[1] is True
+        assert session.state == "cancelled"
+        assert host.data_struct.recording_source is None
     finally:
         (tmp_path / "release-finalize").touch()
         window.deleteLater()
@@ -1151,151 +1067,21 @@ def test_bounded_shutdown_reports_retained_paths_without_endless_wait(ui_qapp, m
     window.deleteLater()
 
 
-def test_preview_replaces_relative_live_envelope_and_ignores_stale_final(ui_qapp, service, tmp_path):
-    from base.recording_process_protocol import RecordingPreview
-    from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
-    host = _enable_live_workspace_double(main_host(service, tmp_path))
-    host._recording_process_id = "display"
-    host._recording_process_final = False
-    host._recording_process_preview_enabled = True
-    host._recording_process_sequence = 0
-    session = SimpleNamespace(request=SimpleNamespace(
-        request_id="display", channels=(0, 2), device=device_info(),
-        calibration_metadata=None,
-        preview_time_mode=PREVIEW_TIME_MODE_RELATIVE_LATEST), generation=3)
-
-    def preview(sequence, values):
-        relative_time = np.arange(1 - len(values), 1, dtype=np.float64)
-        waveforms = tuple(StreamingWaveformSnapshot(relative_time,
-            np.asarray(values, dtype=np.float32), len(values)) for _ in range(2))
-        return RecordingPreview(
-            "display", 3, sequence, len(values), (0, 2), waveforms,
-            PREVIEW_TIME_MODE_RELATIVE_LATEST,
-        )
-
-    host._on_process_recording_preview(session, preview(1, [1, 2]))
-    host._on_process_recording_preview(session, preview(2, [1, 2, 9, 3]))
-    np.testing.assert_array_equal(host.channel_workspace.calls[-1].amplitude, [1, 2, 9, 3])
-    assert all(window.is_live_preview for window in host.channel_workspace.all_subwindows())
-    assert len(host.channel_workspace.calls) == 4
-    host._recording_process_final = True
-    host._on_process_recording_preview(session, preview(3, [8]))
-    host._recording_process_final = False
-    host._recording_process_id = "next"
-    host._on_process_recording_preview(session, preview(4, [7]))
-    assert len(host.channel_workspace.calls) == 4
-
-
-@pytest.mark.parametrize(
-    "request_mode,payload_mode,accepted",
-    [
-        (PREVIEW_TIME_MODE_RELATIVE_LATEST, PREVIEW_TIME_MODE_RELATIVE_LATEST, True),
-        (PREVIEW_TIME_MODE_CUMULATIVE, PREVIEW_TIME_MODE_CUMULATIVE, True),
-        (PREVIEW_TIME_MODE_RELATIVE_LATEST, PREVIEW_TIME_MODE_CUMULATIVE, False),
-        (PREVIEW_TIME_MODE_CUMULATIVE, PREVIEW_TIME_MODE_RELATIVE_LATEST, False),
-    ],
-)
-def test_process_preview_requires_request_payload_mode_match(
-        ui_qapp, service, tmp_path, request_mode, payload_mode, accepted):
-    from base.recording_process_protocol import RecordingPreview
-    from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
-    host = _enable_live_workspace_double(main_host(service, tmp_path))
-    host.default_logger = mock.Mock()
-    host._recording_process_id = "display"
-    host._recording_process_final = False
-    host._recording_process_preview_enabled = True
-    host._recording_process_sequence = 0
-    session = SimpleNamespace(request=SimpleNamespace(
-        request_id="display", channels=(0, 2), device=device_info(),
-        calibration_metadata=None, preview_time_mode=request_mode), generation=3)
-    time_axis = (
-        np.array([-1.0, 0.0], dtype=np.float64)
-        if payload_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
-        else np.array([0.0, 1.0], dtype=np.float64)
-    )
-    waveform = StreamingWaveformSnapshot(
-        time_axis,
-        np.array([1.0, 2.0], dtype=np.float32),
-        2,
-    )
-    preview = RecordingPreview(
-        "display", 3, 1, 2, (0, 2), (waveform, waveform), payload_mode
-    )
-
-    host._on_process_recording_preview(session, preview)
-
-    if accepted:
-        assert len(host.channel_workspace.calls) == 2
-        assert host._recording_process_preview_enabled is True
-        host.default_logger.warning.assert_not_called()
-    else:
-        assert host.channel_workspace.calls == []
-        assert host._recording_process_preview_enabled is False
-        host.default_logger.warning.assert_called_once()
-
-
-def test_process_preview_second_channel_failure_rolls_back_before_disabling(
-        ui_qapp, service, tmp_path):
-    from base.recording_process_protocol import RecordingPreview
-    from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
-    host = _enable_live_workspace_double(main_host(service, tmp_path))
-    host.default_logger = mock.Mock()
-    host._recording_process_id = "display"
-    host._recording_process_final = False
-    host._recording_process_preview_enabled = True
-    host._recording_process_sequence = 0
-    session = SimpleNamespace(request=SimpleNamespace(
-        request_id="display", channels=(0, 2), device=device_info(),
-        calibration_metadata=None,
-        preview_time_mode=PREVIEW_TIME_MODE_RELATIVE_LATEST), generation=3)
-    prior_time = np.array([-1.0, 0.0], dtype=np.float64)
-    prior_amplitude = np.array([7.0, 8.0], dtype=np.float32)
-    for window in host.channel_workspace.all_subwindows():
-        window.set_live_data(prior_time, prior_amplitude)
-    prior_states = [window.snapshot_plot_state()
-                    for window in host.channel_workspace.all_subwindows()]
-    host.channel_workspace.calls.clear()
-    host.channel_workspace.all_subwindows()[1].set_live_data = mock.Mock(
-        side_effect=RuntimeError("second process plot failed")
-    )
-    waveform = StreamingWaveformSnapshot(
-        np.array([-0.5, 0.0], dtype=np.float64),
-        np.array([1.0, 2.0], dtype=np.float32),
-        2,
-    )
-    preview = RecordingPreview(
-        "display", 3, 1, 2, (0, 2), (waveform, waveform),
-        PREVIEW_TIME_MODE_RELATIVE_LATEST,
-    )
-
-    host._on_process_recording_preview(session, preview)
-
-    for window, prior in zip(host.channel_workspace.all_subwindows(), prior_states):
-        current = window.snapshot_plot_state()
-        np.testing.assert_array_equal(current[0][0], prior[0][0])
-        np.testing.assert_array_equal(current[0][1], prior[0][1])
-        assert current[1] is True
-    assert host._recording_process_preview_enabled is False
-    host.default_logger.warning.assert_called_once()
-
-
 @pytest.mark.parametrize("terminal", ["failed", "cancelled"])
 @pytest.mark.parametrize(
     "preview_mode",
     [PREVIEW_TIME_MODE_RELATIVE_LATEST, PREVIEW_TIME_MODE_CUMULATIVE],
 )
-def test_process_terminal_retains_last_successful_live_preview(
+def test_process_terminal_keeps_audio_unpublished_without_plots(
         ui_qapp, service, tmp_path, monkeypatch, terminal, preview_mode):
     from base.recording_process_protocol import RecordingPreview
     from base.streaming_waveform_accumulator import StreamingWaveformSnapshot
     from ui.sequence.recording_process_context import RecordingProcessContext
     from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
     from PyQt5.QtWidgets import QMessageBox
-    host = _enable_live_workspace_double(main_host(service, tmp_path))
+    host = main_host(service, tmp_path)
     host._recording_process_id = "display"
     host._recording_process_final = False
-    host._recording_process_preview_enabled = True
-    host._recording_process_sequence = 0
     host._recording_process_cleanup_owned = False
     host._recording_process_failed = False
     host._recording_process_cancelled = False
@@ -1303,7 +1089,6 @@ def test_process_terminal_retains_last_successful_live_preview(
     host._recording_process_audio = None
     host._recording_process_session = None
     host._serial_product_condition_executing = False
-    host.clear_all_direction_waveforms = mock.Mock()
     host._handle_invalid_recording = (
         SequenceWidgetStreamingOpsMixin._handle_invalid_recording.__get__(host)
     )
@@ -1315,26 +1100,9 @@ def test_process_terminal_retains_last_successful_live_preview(
         path=str(tmp_path / "display.wav"), calibration_metadata=None,
         preview_time_mode=preview_mode), generation=3)
     context = RecordingProcessContext(
-        session.request, "", True, session=session)
+        session.request, "", session=session)
     host._recording_process_contexts = {"display": context}
     host._active_recording_process_id = "display"
-    waveform = StreamingWaveformSnapshot(
-        (
-            np.array([-1.0, 0.0], dtype=np.float64)
-            if preview_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
-            else np.array([0.0, 1.0], dtype=np.float64)
-        ),
-        np.array([1.0, 2.0], dtype=np.float32),
-        2,
-    )
-    preview = RecordingPreview(
-        "display", 3, 1, 2, (0, 2), (waveform, waveform),
-        preview_mode,
-    )
-    host._on_process_recording_preview(session, preview)
-    prior_states = [window.snapshot_plot_state()
-                    for window in host.channel_workspace.all_subwindows()]
-
     if terminal == "failed":
         host._on_process_recording_failed(
             session, RecordingFailure(
@@ -1344,26 +1112,21 @@ def test_process_terminal_retains_last_successful_live_preview(
     else:
         host._on_process_recording_cancelled(session, SimpleNamespace())
 
-    for window, prior in zip(host.channel_workspace.all_subwindows(), prior_states):
-        current = window.snapshot_plot_state()
-        np.testing.assert_array_equal(current[0][0], prior[0][0])
-        np.testing.assert_array_equal(current[0][1], prior[0][1])
-        assert current[1] is True
-    host.clear_all_direction_waveforms.assert_not_called()
+    assert context.failed if terminal == "failed" else context.cancelled
+    assert host.data_struct.recording_source is None
 
 
-def test_process_failure_without_preview_keeps_existing_clear_behavior(
+def test_process_failure_without_plots_keeps_audio_unpublished(
         ui_qapp, service, tmp_path, monkeypatch):
     from ui.sequence.recording_process_context import RecordingProcessContext
     from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
     from PyQt5.QtWidgets import QMessageBox
-    host = _enable_live_workspace_double(main_host(service, tmp_path))
+    host = main_host(service, tmp_path)
     host._recording_process_id = "display"
     host._recording_process_cleanup_owned = False
     host._recording_process_failed = False
     host._recording_process_session = None
     host._serial_product_condition_executing = False
-    host.clear_all_direction_waveforms = mock.Mock()
     host._handle_invalid_recording = (
         SequenceWidgetStreamingOpsMixin._handle_invalid_recording.__get__(host)
     )
@@ -1372,7 +1135,7 @@ def test_process_failure_without_preview_keeps_existing_clear_behavior(
         request_id="display", channels=(0, 2), device=device_info(),
         path=str(tmp_path / "display.wav")), generation=3)
     context = RecordingProcessContext(
-        session.request, "", False, session=session)
+        session.request, "", session=session)
     host._recording_process_contexts = {"display": context}
     host._active_recording_process_id = "display"
 
@@ -1382,7 +1145,9 @@ def test_process_failure_without_preview_keeps_existing_clear_behavior(
         )
     )
 
-    host.clear_all_direction_waveforms.assert_called_once_with()
+    assert context.failed
+    assert host.data_struct.recording_source is None
+    assert not host._record_workflow_busy
 
 
 def test_paused_qt_preview_has_one_wakeup_while_child_file_continues(ui_qapp, service, tmp_path):
@@ -1496,10 +1261,9 @@ def test_serial_round_cleanup_waits_for_real_child_before_manager_delete(ui_qapp
         (tmp_path / "release-finalize").touch()
 
 
-def test_final_plot_failure_is_warning_and_still_saves_once(ui_qapp, service, tmp_path, monkeypatch):
+def test_final_plot_is_unused_and_recording_saves_once(ui_qapp, service, tmp_path, monkeypatch):
     from ui.sequence import sequence_widget_streaming_ops as stream
     host = main_host(service, tmp_path)
-    host._project_normalized_waveform_to_workspace = mock.Mock(side_effect=RuntimeError("Qt plot failed"))
     save = mock.Mock(return_value=(0, "saved"))
     warnings = []
     monkeypatch.setattr(stream, "RecordingManager", lambda: SimpleNamespace(save_signal_info_to_db=save))
@@ -1508,11 +1272,9 @@ def test_final_plot_failure_is_warning_and_still_saves_once(ui_qapp, service, tm
     session = host._recording_process_session
     pump(ui_qapp, lambda: session.released.is_set() and not host._record_workflow_busy)
     assert session.state == "completed"
-    assert warnings == ["录音已保存，但波形刷新失败。"]
+    assert warnings == []
     save.assert_called_once()
     host._handle_invalid_recording.assert_not_called()
-
-
 
 
 @pytest.mark.parametrize("streaming", [True, False])
@@ -1520,7 +1282,7 @@ def test_final_plot_failure_is_warning_and_still_saves_once(ui_qapp, service, tm
     "preview_mode",
     [PREVIEW_TIME_MODE_RELATIVE_LATEST, PREVIEW_TIME_MODE_CUMULATIVE],
 )
-def test_later_recording_replaces_retained_live_mode_without_inheriting_fixed_range(
+def test_saved_envelope_publication_is_independent_of_preview_mode(
     ui_qapp,
     service,
     tmp_path,
@@ -1529,68 +1291,21 @@ def test_later_recording_replaces_retained_live_mode_without_inheriting_fixed_ra
     preview_mode,
 ):
     from ui.sequence import sequence_widget_streaming_ops as stream
-    from ui.sequence.channel_plot_workspace import ChannelPlotWorkspace
-
     host = main_host(service, tmp_path, streaming=streaming, monitor=False)
-    workspace = ChannelPlotWorkspace()
-    workspace.set_channels((0, 2))
-    host.channel_workspace = workspace
-    retained_time = (
-        np.asarray([-1.0, 0.0])
-        if preview_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
-        else np.asarray([0.0, 1.0])
-    )
-    retained_columns = (
-        np.asarray([7.0, 8.0], dtype=np.float32),
-        np.asarray([9.0, 10.0], dtype=np.float32),
-    )
-    for window, column in zip(workspace.all_subwindows(), retained_columns):
-        setter = (
-            window.set_live_data
-            if preview_mode == PREVIEW_TIME_MODE_RELATIVE_LATEST
-            else window.set_cumulative_preview_data
-        )
-        setter(retained_time, column)
+    host.sequence_config[0]['seq1']['acq']['detail'][RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] = preview_mode
     save = mock.Mock(return_value=(0, "saved"))
     monkeypatch.setattr(
         stream,
         "RecordingManager",
         lambda: SimpleNamespace(save_signal_info_to_db=save),
     )
-    original_projection = host._project_normalized_waveform_to_workspace
-    host._project_normalized_waveform_to_workspace = mock.Mock(
-        wraps=original_projection
-    )
-
-    try:
-        host.judge_play_and_record()
-        session = host._recording_process_session
-        assert host._recording_process_preview_enabled is streaming
-        pump(
-            ui_qapp,
-            lambda: session.released.is_set() and not host._record_workflow_busy,
-        )
-
-        assert session.state == "completed"
-        host._project_normalized_waveform_to_workspace.assert_called_once()
-        prepared = host._project_normalized_waveform_to_workspace.call_args.kwargs["prepared_columns"]
-        assert prepared is session.audio.waveforms
-        assert all(len(values) <= 48_000 for _times, values in prepared)
-        assert_saved_main_envelope(host, session, known_audio()[2:9, (0, 2)])
-        for window in workspace.all_subwindows():
-            time_axis, _amplitude = window.plot_item.getData()
-            assert time_axis[0] == 0.0
-            assert time_axis[-1] == pytest.approx(
-                (host.data_struct.audio_lenth - 1) / 100
-            )
-            assert window.is_live_preview is False
-            assert bool(
-                window.plot_widget.getViewBox().state["autoRange"][0]
-            ) is True
-    finally:
-        workspace.close()
-        workspace.deleteLater()
-        ui_qapp.processEvents()
+    host.judge_play_and_record()
+    session = host._recording_process_session
+    pump(ui_qapp, lambda: session.released.is_set() and not host._record_workflow_busy)
+    assert session.request.preview_time_mode == preview_mode
+    assert session.state == "completed"
+    assert_saved_main_envelope(host, session, known_audio()[2:9, (0, 2)])
+    save.assert_called_once()
 
 
 def test_service_start_rejection_discards_registered_placeholder(ui_qapp, service, tmp_path):
@@ -1603,7 +1318,7 @@ def test_service_start_rejection_discards_registered_placeholder(ui_qapp, servic
     assert host._recording_process_id is None
 
 
-@pytest.mark.parametrize("failure_point", ["end_streaming", "direction"])
+@pytest.mark.parametrize("failure_point", ["direction"])
 def test_start_failure_before_recent_placeholder_preserves_completed_history(
         ui_qapp, service, tmp_path, failure_point):
     host = main_host(service, tmp_path)
@@ -1612,12 +1327,8 @@ def test_start_failure_before_recent_placeholder_preserves_completed_history(
     host.recent_test_session_by_id = {"prior": prior}
     host._current_recent_session_id = "prior"
     host._discard_current_recent_session = mock.Mock()
-    if failure_point == "end_streaming":
-        host._end_streaming_waveform_session = mock.Mock(
-            side_effect=RuntimeError("end streaming failed"))
-    else:
-        host._resolve_active_recording_waveform_direction = mock.Mock(
-            side_effect=RuntimeError("direction failed"))
+    host._resolve_active_recording_waveform_direction = mock.Mock(
+        side_effect=RuntimeError("direction failed"))
 
     recorded, sample_rate = host.reset_work_pram()
     with pytest.raises(RuntimeError):
@@ -1716,14 +1427,13 @@ def failure_recovery_host(tmp_path):
     host._handle_invalid_recording = SequenceWidgetStreamingOpsMixin._handle_invalid_recording.__get__(host)
     host.update_player_btn_is_paused = SequenceWidgetUiOpsMixin.update_player_btn_is_paused.__get__(host)
     host._on_recording_envelope_complete = mock.Mock()
-    host.clear_all_direction_waveforms = mock.Mock()
     host.left_panel = mock.Mock()
     request = RecordingRequest("failure-recovery", "main", 100, 9, (0, 2),
         device_info(), host.recorded_path, False, 0, {}, None, {"enabled": False})
     session = RecordingSession(service, request, RecordingCallbacks())
     session.state = "failed"
     host._recording_workflow_token = object()
-    context = RecordingProcessContext(request, "", False, session=session,
+    context = RecordingProcessContext(request, "", session=session,
         workflow_token=host._recording_workflow_token)
     host._recording_contexts()[request.request_id] = context
     host._active_recording_process_id = host._recording_process_id = request.request_id
@@ -2046,71 +1756,6 @@ def test_unsuccessful_workflows_preserve_save_and_failure_boundaries(ui_qapp, se
             host.run.assert_not_called()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_duplicate_release_preserves_saved_recording(
         ui_qapp, service, tmp_path, monkeypatch):
     host, save = workflow_host(service, tmp_path, monkeypatch)
@@ -2204,10 +1849,6 @@ def test_admission_rejection_restores_only_nonserial_controls(ui_qapp, service, 
         retained._cleanup_failed = False
         retained.release_error = None
         service._release(retained)
-
-
-
-
 
 
 def test_initialization_cleanup_cannot_abort_a_reentrant_new_serial_recording(ui_qapp, service, tmp_path):

@@ -141,7 +141,6 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
         self._manual_product_condition_counted_group_labels = {}
         self._active_product_condition_key = ""
         self._active_product_condition_config = None
-        self._waveform_display_override_direction = ""
         self._current_trigger_direction = ""
         self._current_cycle_recorded_count = None
         self._record_workflow_busy = False
@@ -174,7 +173,6 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
         self.replayer_btn = _Button()
         self.serial_trigger_btn = _Button()
         self._token_seq = 0
-        self.cleared_waveforms = 0
         self.loaded_queues = []
 
     def _product_condition_sequence(self):
@@ -191,10 +189,8 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
             self._current_cycle_recorded_count = group_id
             self._manual_product_condition_results = {}
             self._manual_product_condition_completed_keys = set()
-            self.clear_all_direction_waveforms()
         self._active_product_condition_key = condition["trigger_state"]
         self._active_product_condition_config = dict(condition)
-        self._waveform_display_override_direction = self._active_product_condition_key
         self.left_panel.set_condition_result(
             self._active_product_condition_key,
             "采集中",
@@ -207,9 +203,6 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
         return f"round-{self._token_seq}"
 
     _generate_product_condition_group_id = _generate_recording_token
-
-    def clear_all_direction_waveforms(self):
-        self.cleared_waveforms += 1
 
 
     def _get_active_product_condition_key(self):
@@ -242,7 +235,6 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
             )
         self._active_product_condition_key = ""
         self._active_product_condition_config = None
-        self._waveform_display_override_direction = ""
         self._record_workflow_busy = False
         self.player_status_flag = False
         self._on_serial_product_condition_completed()
@@ -266,7 +258,7 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
     def update_player_btn_is_paused(self):
         self.pause_update_count += 1
 
-    def _reset_manual_product_condition_cycle(self, clear_waveforms=False):
+    def _reset_manual_product_condition_cycle(self):
         self.reset_count += 1
         self._manual_product_condition_index = 0
         self._manual_product_condition_group_id = ""
@@ -275,11 +267,8 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
         self._manual_product_condition_completed_keys = set()
         self._active_product_condition_key = ""
         self._active_product_condition_config = None
-        self._waveform_display_override_direction = ""
         self._current_cycle_recorded_count = None
         self._serial_product_waiting_for_close = False
-        if clear_waveforms:
-            self.clear_all_direction_waveforms()
 
 
 def _payload(frame):
@@ -359,7 +348,6 @@ def test_product_condition_preflight_rejects_before_round_state_is_created():
     assert host._manual_product_condition_group_id == ""
     assert host._active_product_condition_key == ""
     assert host._current_cycle_recorded_count is None
-    assert host.cleared_waveforms == 0
 
 
 def test_production_cycle_waits_for_close_frame_when_configured():
@@ -437,7 +425,6 @@ def test_idle_close_frame_between_conditions_is_ignored_and_round_continues(monk
     assert host.discarded_groups == []
     assert host._manual_product_condition_group_id == "round-1"
     assert host._serial_product_waiting_for_close is False
-    assert host.cleared_waveforms == 1
     assert warnings == []
     assert sum(
         1
@@ -541,12 +528,10 @@ def test_repeated_last_frame_does_not_start_a_new_group_or_clear_waveforms():
         host.complete_current("OK")
 
     assert host._manual_product_condition_group_id == ""
-    assert host.cleared_waveforms == 1
 
     host.on_serial_full_frame_received(_payload(FRAME_8000))
 
     assert host._manual_product_condition_group_id == ""
-    assert host.cleared_waveforms == 1
     assert host.started == [FRAME_6000, FRAME_7000, FRAME_8000]
 
 
@@ -577,7 +562,6 @@ def test_periodic_8000_after_two_condition_round_keeps_6000_round_state():
     assert first_group_id == "round-1"
     assert host._manual_product_condition_group_id == ""
     assert host.started == [FRAME_6000, FRAME_8000]
-    assert host.cleared_waveforms == 1
 
 
 def test_only_complete_idle_frame_releases_last_frame_for_a_new_round():
@@ -599,12 +583,10 @@ def test_only_complete_idle_frame_releases_last_frame_for_a_new_round():
     host.on_serial_full_frame_received(_payload(FRAME_8000))
 
     assert host._manual_product_condition_group_id == ""
-    assert host.cleared_waveforms == 1
     host.on_serial_full_frame_received(_payload(FRAME_IDLE))
     host.on_serial_full_frame_received(_payload(FRAME_8000))
     assert host._manual_product_condition_group_id == "round-2"
     assert host.started[-1] == FRAME_8000
-    assert host.cleared_waveforms == 2
 
 
 def test_duplicate_current_frame_is_ignored_while_recording():
