@@ -3,18 +3,20 @@
 from numbers import Integral
 
 from PyQt5.QtCore import QEvent, QSignalBlocker, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QSizePolicy, QStyle, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
+from consts.running_consts import DEFAULT_DIR
 from consts.ui_style_const import (
     TOOLBAR_ICON_BUTTON_HEIGHT, TOOLBAR_ICON_BUTTON_WIDTH, toolbar_combobox_style,
 )
 from ui.sequence.station_plot_cell import StationPlotCell
 
 
-_CONTROL_VERTICAL_PADDING = 4
+_CONTROL_VERTICAL_PADDING = 8
 _CONTROL_ROW_HEIGHT = TOOLBAR_ICON_BUTTON_HEIGHT + 2 * _CONTROL_VERTICAL_PADDING
 
 
@@ -45,7 +47,7 @@ class _ColumnComboBox(QComboBox):
             self.updateGeometry()
 
     def sizeHint(self):
-        return QSize(self._control_width, TOOLBAR_ICON_BUTTON_HEIGHT)
+        return QSize(self._control_width, 30)
 
     def minimumSizeHint(self):
         return self.sizeHint()
@@ -106,7 +108,8 @@ class _ColumnControls(QWidget):
         self.combo.setEnabled(False)
         self.play = QPushButton(self)
         self.play.setObjectName('stationPlay')
-        self.play.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.play.setIcon(QIcon(DEFAULT_DIR + 'ui/sequence/assets/b_play.png'))
+        self.play.setIconSize(QSize(28, 28))
         self.play.setToolTip('播放')
         self.ok = QPushButton('OK', self)
         self.ok.setObjectName('stationOK')
@@ -177,8 +180,8 @@ class StationPlotGrid(QWidget):
             }}
             QWidget#stationPlotGrid QPushButton:hover {{ background: #EDF4FD; }}
             QWidget#stationPlotGrid QPushButton:pressed {{ background: #DCEAFB; }}
-            QWidget#stationPlotGrid QPushButton#stationOK {{ color: #25825D; }}
-            QWidget#stationPlotGrid QPushButton#stationNG {{ color: #C24C55; }}
+            QWidget#stationPlotGrid QPushButton#stationOK {{ color: #25825D; font-size: 18px; }}
+            QWidget#stationPlotGrid QPushButton#stationNG {{ color: #C24C55; font-size: 18px; }}
         ''')
         layout = QVBoxLayout(self)
         layout.setContentsMargins(1, 1, 1, 1)

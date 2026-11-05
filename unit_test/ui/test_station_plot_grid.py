@@ -1,11 +1,16 @@
+from pathlib import Path
+
 import pyqtgraph as pg
 import pytest
 from PyQt5 import sip
-from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, Qt
+from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QSize, Qt
 from PyQt5.QtGui import QIcon, QImage, QPalette, QWheelEvent
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtTest import QSignalSpy, QTest
-from PyQt5.QtWidgets import QComboBox, QLabel, QPushButton, QScrollArea, QStyle, QStyleOptionComboBox, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (
+    QComboBox, QLabel, QPushButton, QScrollArea, QStyle, QStyleOptionButton,
+    QStyleOptionComboBox, QVBoxLayout, QWidget,
+)
 
 from consts.ui_style_const import COMBO_DOWN_ARROW_ICON, toolbar_combobox_style
 
@@ -49,13 +54,27 @@ def test_title_and_station_colors_are_actually_painted(grid):
     assert title.palette().color(QPalette.WindowText).name() == '#ffffff'
     assert any(title_image.pixelColor(x, y).name() == '#ffffff'
                for x in range(min(150, title.width())) for y in range(title.height()))
+    icon_size = QSize(28, 28)
+    play_icon_path = Path(__file__).resolve().parents[2] / 'ui/sequence/assets/b_play.png'
+    expected_icon = QIcon(str(play_icon_path)).pixmap(icon_size)
+    assert not expected_icon.isNull()
     for column in range(3):
         header = controls(grid, column)
-        assert header.height() == 48
+        assert header.height() == 56
         for button in (header.play, header.ok, header.ng):
             assert (button.width(), button.height()) == (48, 40)
-            assert button.y() == 4
-        assert (header.combo.height(), header.combo.y()) == (40, 4)
+            assert button.y() == 8
+        assert header.play.icon().pixmap(icon_size).toImage() == expected_icon.toImage()
+        assert header.play.iconSize() == icon_size
+        assert (header.combo.height(), header.combo.y()) == (30, 13)
+        for button in (header.ok, header.ng):
+            option = QStyleOptionButton()
+            option.initFrom(button)
+            contents = button.style().subElementRect(QStyle.SE_PushButtonContents, option, button)
+            text_size = button.fontMetrics().size(Qt.TextShowMnemonic, button.text())
+            assert button.font().pixelSize() == 18
+            assert text_size.width() <= contents.width()
+            assert text_size.height() <= contents.height()
         assert header.grab().toImage().pixelColor(2, 2).name() == '#f4f7fc'
         assert header.name.palette().color(QPalette.WindowText).name() == '#183957'
 
@@ -344,7 +363,8 @@ def test_buttons_have_no_action_and_marks_hide_without_space(grid, qt_app):
         qt_app.processEvents()
         assert header.width() == column_width
         assert abs(box.width() - shown / 2) <= 1
-        assert (box.height(), box.y()) == (header.play.height(), header.play.y()) == (40, 4)
+        assert (header.play.height(), header.play.y()) == (40, 8)
+        assert (box.height(), box.y()) == (30, 13)
         assert header.name.geometry().right() < box.x()
         assert box.geometry().right() < header.play.x()
         name_width = header.name.width()
@@ -352,7 +372,8 @@ def test_buttons_have_no_action_and_marks_hide_without_space(grid, qt_app):
         grid.set_mark_buttons_visible(False)
         qt_app.processEvents()
         assert abs(box.width() - hidden / 2) <= 1
-        assert (box.height(), box.y()) == (40, 4)
+        assert (header.play.height(), header.play.y()) == (40, 8)
+        assert (box.height(), box.y()) == (30, 13)
         assert header.name.width() > name_width
         assert header.name.geometry().right() < box.x()
         assert box.geometry().right() < header.play.x()
@@ -427,7 +448,7 @@ def test_equal_cells_fixed_header_and_synchronized_scroll(grid, qt_app, size):
         cell = cells(grid)[0, c]
         assert head.mapTo(grid, QPoint()).x() == cell.mapTo(grid, QPoint()).x()
         assert head.width() == cell.width()
-        assert head.height() == 48
+        assert head.height() == 56
     last = cells(grid)[2, 3]
     bottom_right = last.mapTo(plots.viewport(), last.rect().bottomRight())
     assert plots.viewport().rect().contains(bottom_right)
@@ -482,12 +503,12 @@ def test_local_style_resists_host_and_global_pg_options_unchanged(qt_app):
         qt_app.processEvents()
         header = controls(widget, 0)
         assert header.width() == 280
-        assert (header.combo.width(), header.combo.height(), header.combo.y()) == (48, 40, 4)
+        assert (header.combo.width(), header.combo.height(), header.combo.y()) == (48, 30, 13)
         host.setStyleSheet(host.styleSheet() + '''
             QComboBox { min-width: 150px; max-width: 150px; min-height: 20px; max-height: 20px; }
         ''')
         qt_app.processEvents()
-        assert (header.combo.width(), header.combo.height(), header.combo.y()) == (48, 40, 4)
+        assert (header.combo.width(), header.combo.height(), header.combo.y()) == (48, 30, 13)
         assert header.combo.geometry().right() < header.play.x()
         assert all((b.width(), b.height()) == (48, 40) and b.minimumSize() == b.maximumSize() == b.size()
                    for b in widget.findChildren(QPushButton))
