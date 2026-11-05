@@ -138,6 +138,7 @@ def main():
         column_controls = headers(grid)
         marks_visible = column_controls[0].ok.isVisible()
         checks = {'column_alignment': True, 'controls_fit': True,
+                  'station_control_dimensions': header_scroll.height() == header_scroll.widget().height() == 48,
                   'marks_no_placeholder': True, 'state_preserved': preserved,
                   'plot_contents_fit': True, 'corner_header_geometry': True,
                   'corner_text_elision': True, 'corner_text_style': True,
@@ -246,6 +247,15 @@ def main():
                                                and header_rect[2] == cell_rect[2])
             visible = [w for w in (header.name, header.combo, header.play, header.ok, header.ng)
                        if w.isVisible()]
+            buttons = (header.play, header.ok, header.ng) if marks_visible else (header.play,)
+            old_controls_width = 118 if marks_visible else 50
+            old_combo_width = round((header.width() - old_controls_width) * 3 / 5)
+            checks['station_control_dimensions'] &= (
+                header.height() == 48
+                and all(b.isVisible() and (b.width(), b.height(), b.y()) == (48, 40, 4)
+                        for b in buttons)
+                and (header.combo.height(), header.combo.y()) == (40, 4)
+                and abs(header.combo.width() - old_combo_width / 2) <= 1)
             checks['controls_fit'] &= all(header.rect().contains(w.geometry()) for w in visible)
             checks['controls_fit'] &= all(
                 not left.geometry().intersects(right.geometry())
@@ -286,7 +296,7 @@ def main():
             and title.grab().toImage().pixelColor(title.width() - 3, 3).name() == '#3e75ac'
             and title.palette().color(QPalette.WindowText).name() == '#ffffff')
         checks['painted_station_background'] = all(
-            h.height() == 40 and h.grab().toImage().pixelColor(2, 2).name() == '#f4f7fc'
+            h.grab().toImage().pixelColor(2, 2).name() == '#f4f7fc'
             and h.name.palette().color(QPalette.WindowText).name() == '#183957'
             for h in column_controls)
         checks['single_grid_separators'] = True
@@ -309,8 +319,8 @@ def main():
                 image.pixelColor(header.width() - 1, 2).name() == right
                 and image.pixelColor(header.width() - 2, 2).name() == '#f4f7fc'
                 and image.pixelColor(0, 2).name() == '#f4f7fc'
-                and image.pixelColor(2, 39).name() == '#cddaea'
-                and image.pixelColor(2, 38).name() == '#f4f7fc')
+                and image.pixelColor(2, header.height() - 1).name() == '#cddaea'
+                and image.pixelColor(2, header.height() - 2).name() == '#f4f7fc')
         frame = grid.grab().toImage()
         checks['closed_outer_frame'] = (
             all(frame.pixelColor(x, y).name() == '#cddaea'
@@ -324,9 +334,14 @@ def main():
             box.initStyleOption(option)
             arrow = box.style().subControlRect(
                 QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxArrow, box).center()
+            edit = box.style().subControlRect(
+                QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, box)
+            center_y = box.rect().center().y()
             image = box.grab().toImage()
             checks['project_combo_arrow'] &= (
                 toolbar_combobox_style in box.styleSheet()
+                and abs(arrow.y() - center_y) <= 1
+                and abs(edit.center().y() - center_y) <= 1
                 and any(image.pixelColor(x, y).lightness() < 250
                         for x in range(arrow.x() - 4, arrow.x() + 6)
                         for y in range(arrow.y() - 4, arrow.y() + 6)))
@@ -445,13 +460,15 @@ def main():
     save(grid, 'subheader-variants')
     dispose(grid)
 
-    grid = create(562, 258)
+    grid = create(562, 266)
     populate(grid, 1, 2, long_text=True)
     # Keep this minimum-size case focused on both text rows and axis/colorbar
     # bounds; the existing two-row legend needs a taller ViewBox at 120 DPI.
     grid.set_curve_data(0, 0, [{'x': [0, 1, 2], 'y': [65, 68, 66], 'name': '实测'}])
     save(grid, 'minimum-subheaders')
     assert all((cell.width(), cell.height()) == (280, 180) for cell in cells(grid))
+    viewport = grid.findChild(QScrollArea, 'stationPlotScroll').viewport()
+    assert (viewport.width(), viewport.height()) == (560, 180)
     dispose(grid)
 
     grid = create(1100, 650)

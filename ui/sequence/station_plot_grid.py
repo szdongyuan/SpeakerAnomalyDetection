@@ -2,14 +2,20 @@
 
 from numbers import Integral
 
-from PyQt5.QtCore import QEvent, QSignalBlocker, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QSignalBlocker, QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QSizePolicy, QStyle, QVBoxLayout, QWidget,
 )
 
-from consts.ui_style_const import toolbar_combobox_style
+from consts.ui_style_const import (
+    TOOLBAR_ICON_BUTTON_HEIGHT, TOOLBAR_ICON_BUTTON_WIDTH, toolbar_combobox_style,
+)
 from ui.sequence.station_plot_cell import StationPlotCell
+
+
+_CONTROL_VERTICAL_PADDING = 4
+_CONTROL_ROW_HEIGHT = TOOLBAR_ICON_BUTTON_HEIGHT + 2 * _CONTROL_VERTICAL_PADDING
 
 
 class _ElidedLabel(QLabel):
@@ -31,6 +37,41 @@ class _ColumnComboBox(QComboBox):
     def __init__(self, parent):
         super().__init__(parent)
         self.options = []
+        self._control_width = 40
+
+    def set_control_width(self, width):
+        if width != self._control_width:
+            self._control_width = width
+            self.updateGeometry()
+
+    def sizeHint(self):
+        return QSize(self._control_width, TOOLBAR_ICON_BUTTON_HEIGHT)
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def showPopup(self):
+        # Qt may defer showing its popup window until the animation finishes.
+        self.view().window().installEventFilter(self)
+        super().showPopup()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Show and watched is self.view().window():
+            self._resize_popup(watched)
+        return super().eventFilter(watched, event)
+
+    def _resize_popup(self, popup):
+        # The native popup can follow the narrow closed control. Give its
+        # items room to show their text, within the screen that owns the combo.
+        view = self.view()
+        bounds = popup.geometry()
+        screen = self.screen().availableGeometry()
+        chrome_width = bounds.width() - view.viewport().width()
+        width = min(screen.width(), max(bounds.width(), view.sizeHintForColumn(0) + chrome_width))
+        left = bounds.right() - width + 1 if self.isRightToLeft() else bounds.left()
+        bounds.setWidth(width)
+        bounds.moveLeft(max(screen.left(), min(left, screen.right() - width + 1)))
+        popup.setGeometry(bounds)
 
     def itemData(self, index, role=Qt.UserRole):
         if role == Qt.UserRole:
@@ -53,11 +94,11 @@ class _ColumnControls(QWidget):
         self.name.set_full_text(f'工位 {column + 1}')
         self.combo = _ColumnComboBox(self)
         self.combo.setObjectName(f'stationOptions{column}')
-        self.combo.setMinimumWidth(40)
-        self.combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.combo.setStyleSheet(toolbar_combobox_style + '''
             QComboBox {
-                min-width: 0px; min-height: 0px; max-width: 16777215px;
+                min-width: 0px; max-width: 16777215px;
+                min-height: 0px; max-height: 16777215px;
                 font-size: 12px; padding: 3px 18px 3px 3px;
             }
             QComboBox QAbstractItemView { font-size: 12px; }
@@ -72,15 +113,30 @@ class _ColumnControls(QWidget):
         self.ng = QPushButton('NG', self)
         self.ng.setObjectName('stationNG')
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setContentsMargins(6, _CONTROL_VERTICAL_PADDING, 6, _CONTROL_VERTICAL_PADDING)
         layout.setSpacing(4)
-        layout.addWidget(self.name, 2)
-        layout.addWidget(self.combo, 3)
+        layout.addWidget(self.name, 1)
+        layout.addWidget(self.combo)
         for button in (self.play, self.ok, self.ng):
-            button.setFixedSize(30, 28)
+            button.setFixedSize(TOOLBAR_ICON_BUTTON_WIDTH, TOOLBAR_ICON_BUTTON_HEIGHT)
             layout.addWidget(button)
-        self.ok.setVisible(marks_visible)
-        self.ng.setVisible(marks_visible)
+        self.set_mark_buttons_visible(marks_visible)
+
+    def set_mark_buttons_visible(self, visible):
+        self.ok.setVisible(visible)
+        self.ng.setVisible(visible)
+        self._resize_combo()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._resize_combo()
+
+    def _resize_combo(self):
+        # The old combo took 3/5 of the width left after buttons, margins and
+        # spacing. At the 280 px column minimum, half of that still leaves
+        # room for all three larger buttons. The name gets the rest.
+        old_controls_width = 50 if self.ok.isHidden() else 118
+        self.combo.set_control_width(max(40, (self.width() - old_controls_width) * 3 // 10))
 
 
 class StationPlotGrid(QWidget):
@@ -98,27 +154,31 @@ class StationPlotGrid(QWidget):
         self._headers = {}
         self._marks_visible = True
         self._resizing_contents = False
-        self.setStyleSheet('''
-            QWidget#stationPlotGrid {
+        # QSS sizes cover the content box, inside the one-pixel button border.
+        button_content_width = TOOLBAR_ICON_BUTTON_WIDTH - 2
+        button_content_height = TOOLBAR_ICON_BUTTON_HEIGHT - 2
+        self.setStyleSheet(f'''
+            QWidget#stationPlotGrid {{
                 background: white; color: #183957; border: 1px solid #cddaea;
-            }
-            QWidget#stationPlotGrid QWidget { background: white; color: #183957; border: 0; }
-            QWidget#stationPlotGrid QLabel { background: transparent; color: #183957; }
-            QWidget#stationPlotGrid QLabel#stationPlotTitle {
+            }}
+            QWidget#stationPlotGrid QWidget {{ background: white; color: #183957; border: 0; }}
+            QWidget#stationPlotGrid QLabel {{ background: transparent; color: #183957; }}
+            QWidget#stationPlotGrid QLabel#stationPlotTitle {{
                 background: #3e75ac; color: white; padding-left: 10px;
-            }
-            QWidget#stationPlotGrid QWidget#stationHeaderRow { background: #f4f7fc; }
-            QWidget#stationPlotGrid QScrollArea { border: 0; background: white; }
-            QWidget#stationPlotGrid QPushButton {
-                min-width: 28px; max-width: 28px;
-                min-height: 26px; max-height: 26px; padding: 0px;
+            }}
+            QWidget#stationPlotGrid QWidget#stationHeaderRow {{ background: #f4f7fc; }}
+            QWidget#stationPlotGrid QScrollArea {{ border: 0; background: white; }}
+            QWidget#stationPlotGrid QPushButton {{
+                min-width: {button_content_width}px; max-width: {button_content_width}px;
+                min-height: {button_content_height}px; max-height: {button_content_height}px;
+                padding: 0px;
                 border: 1px solid #CAD7E7; border-radius: 4px;
                 background: #FFFFFF; color: #3B6FB6;
-            }
-            QWidget#stationPlotGrid QPushButton:hover { background: #EDF4FD; }
-            QWidget#stationPlotGrid QPushButton:pressed { background: #DCEAFB; }
-            QWidget#stationPlotGrid QPushButton#stationOK { color: #25825D; }
-            QWidget#stationPlotGrid QPushButton#stationNG { color: #C24C55; }
+            }}
+            QWidget#stationPlotGrid QPushButton:hover {{ background: #EDF4FD; }}
+            QWidget#stationPlotGrid QPushButton:pressed {{ background: #DCEAFB; }}
+            QWidget#stationPlotGrid QPushButton#stationOK {{ color: #25825D; }}
+            QWidget#stationPlotGrid QPushButton#stationNG {{ color: #C24C55; }}
         ''')
         layout = QVBoxLayout(self)
         layout.setContentsMargins(1, 1, 1, 1)
@@ -142,7 +202,7 @@ class StationPlotGrid(QWidget):
         self._header_scroll.setFrameShape(QFrame.NoFrame)
         self._header_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._header_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._header_scroll.setFixedHeight(40)
+        self._header_scroll.setFixedHeight(_CONTROL_ROW_HEIGHT)
         self._header_content = QWidget()
         self._header_layout = QGridLayout(self._header_content)
         self._header_layout.setContentsMargins(0, 0, 0, 0)
@@ -320,8 +380,7 @@ class StationPlotGrid(QWidget):
             return
         self._marks_visible = visible
         for header in self._headers.values():
-            header.ok.setVisible(visible)
-            header.ng.setVisible(visible)
+            header.set_mark_buttons_visible(visible)
 
     def configure_plot(self, row, column, *, kind, title='', right_text='', x_label='', y_label='',
                        x_unit='', y_unit='', x_range=None, y_range=None, subheader_left_text='',
@@ -370,6 +429,6 @@ class StationPlotGrid(QWidget):
         # body then have identical viewport widths and horizontal scroll ranges.
         gutter = self._scroll.width() - viewport.width()
         self._header_row_layout.setContentsMargins(0, 0, gutter, 0)
-        self._header_content.setFixedSize(width, 40)
+        self._header_content.setFixedSize(width, _CONTROL_ROW_HEIGHT)
         self._header_scroll.horizontalScrollBar().setValue(self._scroll.horizontalScrollBar().value())
         self._resizing_contents = False

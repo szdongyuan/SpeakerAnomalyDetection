@@ -71,6 +71,7 @@ def test_render_cli_produces_checked_real_grid_scenarios(tmp_path):
     for entry in renders.values():
         assert {'continuous_grid', 'painted_title', 'painted_station_background',
                 'single_grid_separators', 'closed_outer_frame', 'project_combo_arrow',
+                'station_control_dimensions',
                 'corner_header_geometry', 'corner_text_elision', 'corner_text_style',
                 'subheader_geometry', 'subheader_text', 'subheader_viewbox_alignment'} <= entry['checks'].keys()
         assert all(entry['checks'].values()), entry
