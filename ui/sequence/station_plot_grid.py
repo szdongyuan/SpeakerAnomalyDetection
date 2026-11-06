@@ -1,5 +1,6 @@
 """Caller-fed plot grid with fixed, horizontally synchronized column controls."""
 
+from dataclasses import dataclass, fields
 from html import escape
 from numbers import Integral
 
@@ -20,6 +21,16 @@ from ui.sequence.station_plot_cell import StationPlotCell
 
 _CONTROL_VERTICAL_PADDING = 8
 _CONTROL_ROW_HEIGHT = TOOLBAR_ICON_BUTTON_HEIGHT + 2 * _CONTROL_VERTICAL_PADDING
+
+
+@dataclass(frozen=True)
+class WorkbenchPlotCellDisplay:
+    title: str = ''
+    unit: str = ''
+    first_condition: str = ''
+    second_condition: str = ''
+    warning: str = ''
+    warning_detail: str = ''
 
 
 class _ElidedLabel(QLabel):
@@ -303,12 +314,64 @@ class StationPlotGrid(QWidget):
                 raise ValueError(f'show_workbench_columns: names[{column}] must not be blank')
 
         self._resize_grid(2, len(names))
-        for column, name in enumerate(names):
-            self._headers[column].name.set_full_text(name, plain_text=True)
-            self.set_column_options(column, ())
+        self._set_workbench_column_controls(names)
         for cell in self._cells.values():
             cell.configure_plot(kind='curve')
             cell.clear_plot()
+
+    def show_workbench_layout(self, names, cells):
+        """Replace all workbench plot contents using a fully validated display batch."""
+        context = 'show_workbench_layout'
+        if not isinstance(names, (list, tuple)):
+            raise TypeError(f'{context}: names must be a list or tuple')
+        if not isinstance(cells, (list, tuple)):
+            raise TypeError(f'{context}: cells must be a list or tuple')
+        names = tuple(names)
+        row_count, column_count = len(cells), len(names)
+        if row_count == column_count == 0:
+            self._resize_grid(0, 0)
+            return
+        if not 1 <= row_count <= 3:
+            raise ValueError(f'{context}: rows must be between 1 and 3')
+        if not 1 <= column_count <= 4:
+            raise ValueError(f'{context}: columns must be between 1 and 4')
+        for column, name in enumerate(names):
+            if not isinstance(name, str):
+                raise TypeError(f'{context}: names[{column}] must be a string')
+        display_fields = fields(WorkbenchPlotCellDisplay)
+        rows = []
+        for row_index, row in enumerate(cells):
+            if not isinstance(row, (list, tuple)):
+                raise TypeError(f'{context}: cells[{row_index}] must be a list or tuple')
+            row = tuple(row)
+            if len(row) != column_count:
+                raise ValueError(f'{context}: cells[{row_index}] must have {column_count} columns')
+            for column, display in enumerate(row):
+                location = f'cells[{row_index}][{column}]'
+                if not isinstance(display, WorkbenchPlotCellDisplay):
+                    raise TypeError(f'{context}: {location} must be a WorkbenchPlotCellDisplay')
+                for field in display_fields:
+                    if not isinstance(getattr(display, field.name), str):
+                        raise TypeError(f'{context}: {location}.{field.name} must be a string')
+            rows.append(row)
+
+        self._resize_grid(row_count, column_count)
+        self._set_workbench_column_controls(names)
+        empty_display = WorkbenchPlotCellDisplay()
+        for (row, column), cell in self._cells.items():
+            display = rows[row][column] if names[column] else empty_display
+            cell.configure_plot(
+                kind='curve', title=display.title, right_text=display.warning,
+                right_text_detail=display.warning_detail, subheader_left_text=display.unit,
+                subheader_first_half_text=display.first_condition,
+                subheader_second_half_text=display.second_condition,
+            )
+            cell.clear_plot()
+
+    def _set_workbench_column_controls(self, names):
+        for column, name in enumerate(names):
+            self._headers[column].name.set_full_text(name, plain_text=True)
+            self.set_column_options(column, ())
 
     def _resize_grid(self, rows, columns):
         if (rows, columns) == (self._rows, self._columns):
@@ -470,7 +533,7 @@ class StationPlotGrid(QWidget):
         return super().eventFilter(watched, event)
 
     def _resize_contents(self):
-        if self._resizing_contents or not self._rows:
+        if self._resizing_contents:
             return
         self._resizing_contents = True
         viewport = self._scroll.viewport()

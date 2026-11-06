@@ -498,10 +498,47 @@ def assert_subheader_alignment(cell):
     right = cell.plot_widget.mapFromScene(QPointF(bounds.right(), bounds.top())).x() + origin
     for label, fraction in [(cell.subheader.first_half, 0.25), (cell.subheader.second_half, 0.75)]:
         assert label.geometry().center().x() == pytest.approx(left + (right - left) * fraction, abs=2)
-    assert cell.subheader.left.geometry().right() < left
+    assert cell.subheader.left.x() == 8
     labels = [cell.subheader.left, cell.subheader.first_half, cell.subheader.second_half]
     assert all((cell.subheader.rect().contains(label.geometry()) for label in labels))
-    assert all((not a.geometry().intersects(b.geometry()) for i, a in enumerate(labels) for b in labels[i + 1:]))
+    for before, after in pairwise(labels):
+        assert after.x() - (before.x() + before.width()) >= 8
+    return left
+
+
+@pytest.mark.parametrize('unit', ['dB SPL', 'dB(A) SPL', 'dB(A)'])
+def test_subheader_minimum_size_unit_text_updates_immediately(yahei_font, cell, qt_app, unit):
+    cell.resize(280, 180)
+    cell.plot_widget.getAxis('left').setWidth(14)
+    cell.show()
+    cell.set_plot_subheader('dB', '工况1', '工况2')
+    for _ in range(4):
+        qt_app.processEvents()
+
+    assert (cell.width(), cell.height()) == (280, 180)
+    view_box = cell.plot_widget.getViewBox()
+    old_plot_rect = view_box.sceneBoundingRect()
+    left, first, second = cell.subheader.left, cell.subheader.first_half, cell.subheader.second_half
+    old_unit_width = left.width()
+    old_first_rect = first.geometry()
+    old_second_rect = second.geometry()
+
+    cell.set_plot_subheader(unit, '工况1', '工况2')
+    assert left.text() == unit
+    assert left.width() >= left.fontMetrics().horizontalAdvance(unit) > old_unit_width
+    assert left.toolTip() == unit
+    assert first.text() == '工况1' and second.text() == '工况2'
+    assert first.width() < old_first_rect.width()
+    assert first.geometry().center() == old_first_rect.center()
+    assert second.geometry() == old_second_rect
+    assert view_box.sceneBoundingRect() == old_plot_rect
+    assert_subheader_alignment(cell)
+
+    cell.set_plot_subheader('dB', '工况1', '工况2')
+    assert left.text() == 'dB'
+    assert left.width() == old_unit_width
+    assert first.geometry() == old_first_rect and second.geometry() == old_second_rect
+    assert_subheader_alignment(cell)
 
 
 @pytest.mark.parametrize('kind', ['curve', 'heatmap'])
@@ -595,26 +632,67 @@ def test_subheader_geometry_follows_real_viewbox_axis_width_colorbar_switch_and_
     assert_subheader_alignment(cell)
 
 
+def test_subheader_unit_width_follows_axis_resize_and_kind_changes(yahei_font, cell, qt_app):
+    unit = 'dB(A) SPL'
+    left, first, second = cell.subheader.left, cell.subheader.first_half, cell.subheader.second_half
+    cell.show()
+    for kind in ('curve', 'heatmap', 'curve'):
+        cell.configure_plot(kind=kind, subheader_left_text=unit,
+                            subheader_first_half_text='工况1', subheader_second_half_text='工况2')
+        if kind == 'heatmap':
+            cell.set_heatmap_data([[1, 2], [3, 4]])
+        for width in (280, 600, 280):
+            cell.resize(width, 180)
+            for axis_width in (14, 100, 14):
+                cell.plot_widget.getAxis('left').setWidth(axis_width)
+                for _ in range(4):
+                    qt_app.processEvents()
+                plot_left = assert_subheader_alignment(cell)
+                assert first.text() == '工况1' and second.text() == '工况2'
+                assert left.toolTip() == unit
+                if axis_width == 14 and (kind == 'curve' or width == 600):
+                    assert left.text() == unit
+                    assert first.x() > plot_left + 4
+                    assert first.width() >= 2 * first.fontMetrics().height()
+                else:
+                    assert left.width() == plot_left - 12
+                    assert first.x() == plot_left + 4
+                    if axis_width == 100:
+                        assert left.text() == unit
+                    else:
+                        assert left.text() != unit
+
+
 @pytest.mark.parametrize('texts', [('unit', 'one', 'two'), ('', 'one', ''), ('unit', '', 'two'), ('', '', '')])
 def test_subheader_fixed_empty_positions_independent_rows_and_height(cell, qt_app, texts):
     cell.resize(500, 280)
     cell.show()
     qt_app.processEvents()
     empty = cell.plot_widget.height()
-    cell.set_plot_subheader('unit', 'one', 'two')
+    initial_texts = ('unit', 'one', 'two')
+    labels = (cell.subheader.left, cell.subheader.first_half, cell.subheader.second_half)
+    cell.set_plot_subheader(*initial_texts)
     for _ in range(3):
         qt_app.processEvents()
-    geometry = [label.geometry() for label in (cell.subheader.left, cell.subheader.first_half, cell.subheader.second_half)]
+    geometry = [label.geometry() for label in labels]
     cell.set_plot_subheader(*texts)
     for _ in range(3):
         qt_app.processEvents()
     assert not cell.header.isVisible()
     assert cell.subheader.isVisible() == any(texts)
-    for label, text, rect in zip((cell.subheader.left, cell.subheader.first_half, cell.subheader.second_half), texts, geometry):
+    for label, text in zip(labels, texts):
         assert label.isVisible() == bool(text)
-        if any(texts):
-            assert label.geometry() == rect
     if any(texts):
+        if texts[0] == initial_texts[0]:
+            assert [label.geometry() for label in labels] == geometry
+        else:
+            left, first, second = labels
+            assert left.geometry().topLeft() == geometry[0].topLeft()
+            assert left.height() == geometry[0].height()
+            assert first.geometry().center() == geometry[1].center()
+            assert first.height() == geometry[1].height()
+            assert second.geometry() == geometry[2]
+        assert_subheader_alignment(cell)
         assert empty == cell.plot_widget.height() + cell.subheader.height()
     else:
         assert cell.plot_widget.height() == empty

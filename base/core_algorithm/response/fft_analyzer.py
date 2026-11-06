@@ -53,7 +53,7 @@ class FftAnalyzer:
         if values.size < n_fft:
             raise ValueError("FFT 点数不能大于信号长度")
 
-        weighting = self._normalize_weighting(weighting)
+        weighting = self.normalize_weighting(weighting)
         noverlap = int(n_fft * overlap_ratio)
         if noverlap >= n_fft:
             raise ValueError("重叠率配置无效")
@@ -108,7 +108,8 @@ class FftAnalyzer:
         return overlap_ratio
 
     @staticmethod
-    def _normalize_weighting(weighting: str) -> str:
+    def normalize_weighting(weighting: str) -> str:
+        """Resolve the FFT weighting or raise ValueError for an unsupported value."""
         weighting = str(weighting or "Z").upper()
         if weighting in ("NONE", "Z（NONE）"):
             return "Z"

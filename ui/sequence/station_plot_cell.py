@@ -118,19 +118,22 @@ class StationPlotCell(QWidget):
 
     def configure_plot(self, *, kind, title='', right_text='', x_label='', y_label='', x_unit='',
                        y_unit='', x_range=None, y_range=None, subheader_left_text='',
-                       subheader_first_half_text='', subheader_second_half_text=''):
+                       subheader_first_half_text='', subheader_second_half_text='', right_text_detail=''):
+        context = self._context('configure_plot')
+        if not isinstance(right_text_detail, str):
+            raise TypeError(f'{context}: right_text_detail must be a string')
         config = validate_plot_config(
             kind=kind, title=title, right_text=right_text, x_label=x_label, y_label=y_label, x_unit=x_unit,
             y_unit=y_unit, x_range=x_range, y_range=y_range,
             subheader_left_text=subheader_left_text, subheader_first_half_text=subheader_first_half_text,
             subheader_second_half_text=subheader_second_half_text,
-            context=self._context('configure_plot'))
+            context=context)
         if kind != self.kind:
             self._clear_data()
         self.kind = kind
         self._configuration = config
         plot = self.plot_widget.getPlotItem()
-        self.header.set_texts(title, right_text)
+        self.header.set_texts(title, right_text, right_text_detail=right_text_detail)
         self.subheader.set_texts(subheader_left_text, subheader_first_half_text, subheader_second_half_text)
         plot.setLabel('bottom', text=x_label, units=x_unit)
         plot.setLabel('left', text=y_label, units=y_unit)
