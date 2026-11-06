@@ -744,7 +744,8 @@ def test_main_window_reopens_queue_with_deletion_write_lock(refresh_host, monkey
 
     monkeypatch.setattr(AnalysisModelSelect, "exec", interact)
     callback = _load_main_window_method("_open_analysis_model_select", {"AnalysisModelSelect": make_editor})
-    main = SimpleNamespace(sequence_window=host, mic=None, speaker=None, mic_channels=[], speaker_channels=[])
+    main = SimpleNamespace(sequence_window=host, mic=None, speaker=None, mic_channels=[], speaker_channels=[],
+                           _on_configuration_deleted=Mock())
     callback(main, str(target))
     assert opened == [True]
     assert not host.player_btn.isEnabled()
@@ -809,7 +810,8 @@ def test_queue_editor_blocks_start_and_restores_admission_on_exit(refresh_host, 
                 raise RuntimeError("dialog error")
 
     callback = _load_main_window_method("_open_analysis_model_select", {"AnalysisModelSelect": Dialog})
-    main = SimpleNamespace(sequence_window=host, mic=None, speaker=None, mic_channels=[], speaker_channels=[])
+    main = SimpleNamespace(sequence_window=host, mic=None, speaker=None, mic_channels=[], speaker_channels=[],
+                           _on_configuration_deleted=Mock())
     if dialog_failed:
         with pytest.raises(RuntimeError, match="dialog error"):
             callback(main, "queue.json")
@@ -902,7 +904,6 @@ def test_main_window_connects_program_changes_before_opening_dialog():
     sequence_window = SimpleNamespace(
         _product_test_program_config_dialog_open=False,
         button_enabled=True,
-        on_product_test_program_updated=lambda: events.append("refreshed"),
     )
 
     def refresh_button():
@@ -921,6 +922,8 @@ def test_main_window_connects_program_changes_before_opening_dialog():
     window = SimpleNamespace(
         mic={"backend": "soundcard"},
         _open_analysis_model_select=refresh_nested_queue,
+        _on_configuration_deleted=Mock(),
+        on_workbench_configuration_committed=lambda: events.append("refreshed"),
         sequence_window=sequence_window,
     )
     on_product_test_program_config = _load_main_window_method(
@@ -957,7 +960,6 @@ def test_main_window_refreshes_button_after_exceptional_dialog_exit():
 
     sequence_window = SimpleNamespace(
         _product_test_program_config_dialog_open=False,
-        on_product_test_program_updated=lambda: None,
     )
 
     def refresh_button():
@@ -968,6 +970,8 @@ def test_main_window_refreshes_button_after_exceptional_dialog_exit():
     sequence_window.update_player_btn_is_paused = refresh_button
     window = SimpleNamespace(
         _open_analysis_model_select=lambda _path: None,
+        _on_configuration_deleted=Mock(),
+        on_workbench_configuration_committed=Mock(),
         sequence_window=sequence_window,
     )
     on_product_test_program_config = _load_main_window_method(
@@ -1142,7 +1146,9 @@ def test_main_window_keeps_management_access_after_failed_initial_load(
 
     window = SimpleNamespace(
         sequence_window=host, _open_analysis_model_select=lambda *_: None,
+        _on_configuration_deleted=Mock(), on_workbench_configuration_committed=Mock(),
     )
+    snapshot_before_open = host._applied_product_snapshot
     open_editor = _load_main_window_method(
         "on_product_test_program_config", {"ProductTestProjectConfigDialog": make_dialog},
     )
@@ -1159,10 +1165,9 @@ def test_main_window_keeps_management_access_after_failed_initial_load(
     assert dialogs[0].new_project_btn.isEnabled()
     assert dialogs[0].import_project_btn.isEnabled()
     assert dialogs[0].delete_project_btn.isEnabled()
-    if not can_open:
-        assert host._product_config_refresh_state == "failed"
-        assert not host.player_btn.isEnabled()
-        assert not getattr(host, "_configuration_deletion_error", "")
+    assert host._applied_product_snapshot is snapshot_before_open
+    window.on_workbench_configuration_committed.assert_not_called()
+    assert not getattr(host, "_configuration_deletion_error", "")
     assert not host._product_test_program_config_dialog_open
     assert before == {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()}
 

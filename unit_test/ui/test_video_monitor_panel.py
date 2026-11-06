@@ -1,7 +1,8 @@
 
 import pytest
-from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QImage
+from PyQt5.QtTest import QSignalSpy, QTest
 from PyQt5.QtWidgets import QLabel, QSplitter, QVBoxLayout, QWidget
 
 from consts import ui_style_const
@@ -84,7 +85,7 @@ def test_live_video_fits_sidebar_after_window_shrinks(ui_qapp, tmp_path, state):
             splitter.setSizes([sidebar_width, width - sidebar_width - splitter.handleWidth()])
             ui_qapp.processEvents()
             assert panel.width() == wrapper.width()
-            controls = [panel.title_label, panel.more_button]
+            controls = [panel.title_label, panel.settings_button]
             visible = [control for control in controls if control.isVisible()]
             for control in visible:
                 assert control.geometry().right() < wrapper.width()
@@ -141,46 +142,43 @@ def test_video_status_uses_pixel_font_in_paint_path(ui_qapp, monkeypatch):
         canvas.close()
 
 
-def test_more_menu_and_simulation_disclosure(ui_qapp):
+def test_settings_button_emits_one_intent_for_the_standalone_subscriber(ui_qapp):
     bridge = VideoServiceBridge(StubService())
     widget = VideoMonitorWidget(bridge, simulation=True)
-    calls = []
-    widget.settings_requested.connect(lambda: calls.append("settings"))
+    requests = QSignalSpy(widget.settings_requested)
     try:
+        widget.resize(340, 220)
+        widget.show()
+        ui_qapp.processEvents()
         assert "模拟" in widget.title_label.text()
         assert widget.canvas.simulation
-        widget.settings_action.trigger()
-        assert calls == ["settings"]
-        assert widget.more_button.menu().actions() == [widget.settings_action]
+        button = widget.settings_button
+        assert button.isVisible()
+        assert button.text() == "设置"
+        assert len(requests) == 0
+        QTest.mouseClick(button, Qt.LeftButton)
+        assert len(requests) == 1
     finally:
         widget.close()
         bridge._timer.stop()
 
 
-def test_more_menu_style_geometry_and_actions(ui_qapp, tmp_path):
+def test_settings_button_style_and_geometry(ui_qapp, tmp_path):
     configure_demo_font(ui_qapp)
     bridge = VideoServiceBridge(StubService())
     wrapper = MotorVideoMonitorPanel()
     widget = wrapper.bind_bridge(bridge)
-    menu = widget.more_button.menu()
     try:
-        wrapper.resize(568, 350)
+        wrapper.resize(340, 350)
         wrapper.show()
-        menu.popup(widget.more_button.mapToGlobal(QPoint(0, widget.more_button.height())))
         ui_qapp.processEvents()
-        assert (menu.font().family(), menu.font().pixelSize()) == ("Microsoft YaHei UI", 13)
-        assert widget.settings_action.text() == "摄像头设置"
-        assert widget.more_button.menu().actions() == [widget.settings_action]
-        for action in menu.actions():
-            geometry = menu.actionGeometry(action)
-            assert geometry.height() >= 32
-            assert geometry.width() >= menu.fontMetrics().horizontalAdvance(action.text()) + 24
-        menu.setActiveAction(widget.settings_action)
-        ui_qapp.processEvents()
-        screenshot = tmp_path / "video-more-menu.png"
-        assert menu.grab().save(str(screenshot))
-        print(f"\nVideo menu screenshot: {screenshot}")
+        button = widget.settings_button
+        assert button.isVisible()
+        assert (button.font().family(), button.font().pixelSize()) == ("Microsoft YaHei UI", 13)
+        assert button.text() == "设置"
+        assert button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 16
+        assert button.geometry().right() < widget.header.width()
+        assert widget.header.grab().save(str(tmp_path / "video-settings-button.png"))
     finally:
-        menu.close()
         wrapper.close()
         bridge._timer.stop()

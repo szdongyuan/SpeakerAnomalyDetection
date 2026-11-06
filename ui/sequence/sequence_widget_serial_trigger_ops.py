@@ -194,7 +194,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
         }
 
     def init_serial_trigger_runtime(self):
-        if getattr(self, "_serial_trigger_runtime_initialized", False):
+        if (getattr(self, "workbench_mode", False)
+                or getattr(self, "_serial_trigger_runtime_initialized", False)):
             return
         self._serial_trigger_runtime_initialized = True
         err_code, data = LoadUiConfig.load_serial_discrete_input_config()
@@ -284,6 +285,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
             return
         was_enabled = (getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", False)
         self._serial_trigger_config = next_config
+        if getattr(self, "workbench_mode", False):
+            return
         if was_enabled != next_config.get("enabled", False):
             self._sync_product_progress_after_trigger_switch()
 
@@ -299,6 +302,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
         self.update_player_btn_is_paused()
 
     def refresh_serial_product_trigger_runtime(self):
+        if getattr(self, "workbench_mode", False):
+            return {"ok": True, "message": "disabled"}
         config = getattr(self, "_serial_trigger_config", {}) or {}
         was_enabled = bool(config.get("enabled", False))
         err_code, data = LoadUiConfig.load_serial_discrete_input_config()
@@ -315,7 +320,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
         return result
 
     def on_serial_full_frame_received(self, payload):
-        if getattr(self, "_product_config_refresh_state", "ready") != "ready":
+        if (getattr(self, "workbench_mode", False)
+                or getattr(self, "_product_config_refresh_state", "ready") != "ready"):
             return
         if getattr(self, "_test_queue_config_dialog_open", False):
             return

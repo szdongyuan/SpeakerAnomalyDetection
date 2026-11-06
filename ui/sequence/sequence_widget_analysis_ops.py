@@ -7,6 +7,7 @@ from PyQt5.QtCore import QSize
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from consts import error_code, model_consts
+from consts.product_test_project_consts import WORKBENCH_PRODUCT_TEST_UNAVAILABLE
 from base.load_config import LoadUiConfig
 from base.analysis_artifact_paths import AnalysisStorageContext
 from base.recording_process_protocol import FrozenConfig
@@ -1190,6 +1191,9 @@ class SequenceWidgetAnalysisOpsMixin(
 
 
     def on_clicked_player_btn(self, label="not_labeled"):
+        if getattr(self, "workbench_mode", False):
+            QMessageBox.information(self, "提示", WORKBENCH_PRODUCT_TEST_UNAVAILABLE)
+            return
         if getattr(self, "_product_progress_choice_pending", False):
             if (getattr(self, "_product_progress_prompt_ready", False)
                     and self._offer_product_test_resume()):

@@ -205,11 +205,11 @@ class VideoController(VideoServiceBridge):
             self.closed.emit()
 
     def attach_panel(self, placeholder):
-        self.attach_widget(placeholder.bind_bridge(self))
+        return self.attach_widget(placeholder.bind_bridge(self))
 
     def attach_widget(self, widget):
         self.panel = widget
-        self.panel.settings_requested.connect(self.show_settings)
+        return widget
 
     def show_settings(self):
         from ui.video_settings_dialog import VideoSettingsDialog

@@ -2,7 +2,7 @@
 
 from PyQt5.QtCore import QRect, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter, QPen
-from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QToolButton, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 from consts import ui_style_const
 
@@ -95,7 +95,6 @@ class VideoMonitorWidget(QWidget):
             f"font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; font-size:13px;"
             "font-weight:normal; border-radius:3px; padding:0 7px;}"
             "QToolButton:hover {background:#5389c9;}"
-            "QToolButton::menu-indicator {image:none; width:0px;}"
         )
         header_layout = QHBoxLayout(self.header)
         header_layout.setContentsMargins(10, 0, 8, 0)
@@ -104,25 +103,14 @@ class VideoMonitorWidget(QWidget):
         self.title_label.setStyleSheet(
             f"font-family:{title_font_family}; font-size:16px; font-weight:bold;"
         )
-        self.more_button = QToolButton()
-        self.more_button.setText("…")
-        self.more_button.setFixedSize(28, 24)
-        self.more_button.setToolTip("更多")
-        self.more_button.setPopupMode(QToolButton.InstantPopup)
-        menu = QMenu(self.more_button)
-        menu.setStyleSheet(
-            f"QMenu {{font-family:{ui_style_const.MAIN_UI_SMALL_FONT_FAMILY}; font-size:13px;"
-            "color:#30485E; background:white; border:1px solid #C5D4E3; padding:4px 0;}"
-            "QMenu::item {min-height:24px; padding:4px 12px; background:transparent;}"
-            "QMenu::item:selected {background:#E7F0FB; color:#234E80;}"
-            "QMenu::item:disabled {color:#8998A8; background:transparent;}"
-        )
-        self.settings_action = menu.addAction("摄像头设置")
-        self.settings_action.triggered.connect(self.settings_requested.emit)
-        self.more_button.setMenu(menu)
+        self.settings_button = QToolButton(self.header)
+        self.settings_button.setText("设置")
+        self.settings_button.setMinimumWidth(48)
+        self.settings_button.setFixedHeight(24)
+        self.settings_button.clicked.connect(self.settings_requested)
         header_layout.addWidget(self.title_label)
         header_layout.addStretch(1)
-        header_layout.addWidget(self.more_button)
+        header_layout.addWidget(self.settings_button)
         root.addWidget(self.header)
         self.content = QFrame(self)
         self.content.setObjectName("motorSectionContent")

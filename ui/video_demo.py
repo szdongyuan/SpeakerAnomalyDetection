@@ -65,7 +65,8 @@ def main(argv=None):
     window.setWindowTitle("USB 摄像头预览" if args.usb else "USB 视频交互演示（模拟模式）")
     window.resize(560, 350)
     if args.usb:
-        bridge.attach_widget(window)
+        card = bridge.attach_widget(window)
+        card.settings_requested.connect(bridge.show_settings)
     else:
         window.settings_requested.connect(lambda: QMessageBox.information(
             window, "模拟模式", "本窗口用于验证摄像头预览与连接状态。\n"

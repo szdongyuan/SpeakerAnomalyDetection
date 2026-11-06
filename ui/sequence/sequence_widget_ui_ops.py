@@ -1,6 +1,7 @@
 import re
+from html import escape
 
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtCore import Qt, QSize, QSignalBlocker
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QVBoxLayout, QMessageBox
 
@@ -19,6 +20,7 @@ from base.product_test_project_config import (
 from base.save_data import save_recorded_data_to_json
 from base.utils.custom_signals import sign
 from consts import ui_style_const
+from consts.product_test_project_consts import WORKBENCH_PRODUCT_TEST_UNAVAILABLE
 from consts.running_consts import DEFAULT_DIR
 from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.vkinging_presentation import ve_failure_text
@@ -88,6 +90,8 @@ class SequenceWidgetUiOpsMixin:
         Defer the missing-config prompt until the first showEvent.
         """
         super().showEvent(event)
+        if getattr(self, "workbench_mode", False):
+            return
         self._missing_config_prompt_enabled = True
         # try:
         #     self.refresh_channel_windows()
@@ -210,13 +214,15 @@ class SequenceWidgetUiOpsMixin:
         sequence_layout.addLayout(waveform_layout, stretch=1)
         sequence_layout.setContentsMargins(1, 0, 1, 0)
 
-        self.add_file_to_using_file_combobox()
+        if getattr(self, "workbench_mode", False):
+            self.using_file_combobox.setEnabled(False)
+            self.using_file_combobox.setPlaceholderText("未选择产品")
+        else:
+            self.add_file_to_using_file_combobox()
         self.update_player_btn_is_paused()
 
         self.setLayout(sequence_layout)
 
-        # When test-queue config is confirmed, refresh combobox + reload config first.
-        # (No global signal dependency; MainWindow calls on_sequence_config_updated after dialog closes.)
         # Streaming audio chunks retain queue and WAV delivery.
         sign.stream_audio_chunk_signal.connect(self.on_audio_chunk_received, Qt.AutoConnection)
         sign.stream_audio_queue_ready_signal.connect(
@@ -255,11 +261,21 @@ class SequenceWidgetUiOpsMixin:
         self.barcode_scanner_box.clicked.connect(self.clicked_scanner)
         self.serial_trigger_btn.clicked.connect(self.on_serial_trigger_btn_clicked)
         self.count_board.mark_btn.clicked.connect(self.on_mark_btn_clicked)
-        if hasattr(self.using_file_combobox, "before_show_popup"):
-            self.using_file_combobox.before_show_popup = self.update_using_file_combobox
-        self.using_file_combobox.currentTextChanged.connect(self.on_using_file_combobox_changed)
+        if not getattr(self, "workbench_mode", False):
+            if hasattr(self.using_file_combobox, "before_show_popup"):
+                self.using_file_combobox.before_show_popup = self.update_using_file_combobox
+            self.using_file_combobox.currentTextChanged.connect(self.on_using_file_combobox_changed)
         self.condition_mode_combobox.currentTextChanged.connect(self.on_condition_mode_combobox_changed)
         self._sync_condition_mode_combobox_from_count_board()
+
+    def set_workbench_active_product(self, product_name):
+        combo = self.using_file_combobox
+        with QSignalBlocker(combo):
+            combo.clear()
+            if product_name:
+                combo.addItem(product_name)
+                combo.setCurrentIndex(0)
+        combo.setToolTip(f"<qt>{escape(product_name)}</qt>" if product_name else "")
 
     def on_condition_mode_combobox_changed(self, text):
         target_mode = "mark" if str(text or "").strip() == "标记" else "test"
@@ -462,6 +478,10 @@ class SequenceWidgetUiOpsMixin:
         ).strip()
 
     def update_player_btn_is_paused(self):
+        if getattr(self, "workbench_mode", False):
+            self.player_btn.setEnabled(False)
+            self.player_btn.setToolTip(WORKBENCH_PRODUCT_TEST_UNAVAILABLE)
+            return
         refresh_state = getattr(self, "_product_config_refresh_state", "ready")
         if refresh_state != "ready":
             self.player_btn.setEnabled(False)

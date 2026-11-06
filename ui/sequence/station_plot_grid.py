@@ -1,12 +1,13 @@
 """Caller-fed plot grid with fixed, horizontally synchronized column controls."""
 
+from html import escape
 from numbers import Integral
 
 from PyQt5.QtCore import QEvent, QSignalBlocker, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QSizePolicy, QStyle, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QStyle, QToolTip, QVBoxLayout, QWidget,
 )
 
 from consts.running_consts import DEFAULT_DIR
@@ -22,7 +23,8 @@ _CONTROL_ROW_HEIGHT = TOOLBAR_ICON_BUTTON_HEIGHT + 2 * _CONTROL_VERTICAL_PADDING
 
 
 class _ElidedLabel(QLabel):
-    def set_full_text(self, text):
+    def set_full_text(self, text, *, plain_text=False):
+        self.setTextFormat(Qt.PlainText if plain_text else Qt.AutoText)
         self.setToolTip(text)
         self._elide()
 
@@ -32,6 +34,15 @@ class _ElidedLabel(QLabel):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._elide()
+
+    def event(self, event):
+        if event.type() == QEvent.ToolTip and self.textFormat() == Qt.PlainText and self.toolTip():
+            # Qt's popup interprets markup independently of the label's text format.
+            text = escape(self.toolTip())
+            QToolTip.showText(event.globalPos(),
+                              f'<qt><p style="white-space: pre-wrap;">{text}</p></qt>', self)
+            return True
+        return super().event(event)
 
 
 class _ColumnComboBox(QComboBox):
@@ -276,6 +287,30 @@ class StationPlotGrid(QWidget):
             raise ValueError('set_grid_size: rows must be between 1 and 3')
         if not 1 <= columns <= 4:
             raise ValueError('set_grid_size: columns must be between 1 and 4')
+        self._resize_grid(rows, columns)
+
+    def show_workbench_columns(self, names):
+        """Apply two fresh plot rows for each station, or clear the station area."""
+        if not isinstance(names, (list, tuple)):
+            raise TypeError('show_workbench_columns: names must be a list or tuple')
+        names = tuple(names)
+        if len(names) > 4:
+            raise ValueError('show_workbench_columns: at most four station names are supported')
+        for column, name in enumerate(names):
+            if not isinstance(name, str):
+                raise TypeError(f'show_workbench_columns: names[{column}] must be a string')
+            if not name.strip():
+                raise ValueError(f'show_workbench_columns: names[{column}] must not be blank')
+
+        self._resize_grid(2, len(names))
+        for column, name in enumerate(names):
+            self._headers[column].name.set_full_text(name, plain_text=True)
+            self.set_column_options(column, ())
+        for cell in self._cells.values():
+            cell.configure_plot(kind='curve')
+            cell.clear_plot()
+
+    def _resize_grid(self, rows, columns):
         if (rows, columns) == (self._rows, self._columns):
             return
         for key in list(self._cells):
@@ -319,6 +354,7 @@ class StationPlotGrid(QWidget):
                     self._plot_layout.addWidget(cell, row, column)
                     cell.show()
         self._rows, self._columns = rows, columns
+        self._header_row.setVisible(bool(columns))
         # Each shared edge has exactly one owner: the cell above/to its left.
         # The enclosing widget owns the outer edges, including scrollbar gutters.
         for column, header in self._headers.items():
@@ -439,7 +475,7 @@ class StationPlotGrid(QWidget):
         self._resizing_contents = True
         viewport = self._scroll.viewport()
         width = max(self._columns * 280, viewport.width())
-        height = max(self._rows * 180, viewport.height())
+        height = max(self._rows * 180 if self._columns else 0, viewport.height())
         self._content.setFixedSize(width, height)
         # Leave the same gutter as the body's vertical scrollbar. Header and
         # body then have identical viewport widths and horizontal scroll ranges.

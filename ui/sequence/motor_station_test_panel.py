@@ -2,11 +2,11 @@
 
 import math
 
-from PyQt5.QtCore import QEvent, Qt
-from PyQt5.QtGui import QBrush, QColor
+from PyQt5.QtCore import QEvent, QRect, Qt
+from PyQt5.QtGui import QBrush, QColor, QPainter
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QHeaderView, QLabel, QPushButton, QScrollArea,
-    QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QHeaderView, QLabel, QPushButton, QScrollArea,
+    QSizePolicy, QStyle, QStyleOption, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from consts.ui_style_const import MOTOR_STATION_PANEL_STYLE, MOTOR_STATION_STATUS_COLORS
@@ -51,26 +51,45 @@ class _StationHeader(_ThreeColumns, QPushButton):
         self.setProperty("stationHeader", True)
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
-        self._station_id = station_id
         self._labels = [QLabel(self) for _ in range(3)]
         for label in self._labels:
             label.setAttribute(Qt.WA_TransparentForMouseEvents)
             label.setAlignment(Qt.AlignCenter)
+        self._branch_left = 12
+        self._branch_width = QApplication.style().pixelMetric(QStyle.PM_TreeViewIndentation)
         self._labels[0].setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        self._labels[0].setContentsMargins(12, 0, 0, 0)
+        self._labels[0].setContentsMargins(self._branch_left + self._branch_width, 0, 0, 0)
+        self._labels[0].setTextFormat(Qt.PlainText)
         self._labels[0].setStyleSheet("color: #293b4d;")
         self._labels[1].setObjectName(f"stationForward{station_id}")
         self._labels[2].setObjectName(f"stationReverse{station_id}")
         self.setFixedHeight(max(34, self.fontMetrics().height() + 14))
         self.toggled.connect(self._set_expanded)
-        self._set_expanded(False)
+        self._set_expanded(self.isChecked())
+        self.set_station_name(f"工位 {station_id}")
         self.set_results("--", "--")
 
+    def set_station_name(self, name):
+        self._labels[0].setText(name)
+        self.setAccessibleName(name)
+
     def _set_expanded(self, expanded):
-        arrow = "▼" if expanded else "▶"
-        self._labels[0].setText(f"{arrow}  工位 {self._station_id}")
-        self.setAccessibleName(f"工位 {self._station_id}")
         self.setAccessibleDescription("展开" if expanded else "收起")
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        option = QStyleOption()
+        option.initFrom(self)
+        option.rect = QRect(
+            self._labels[0].x() + self._branch_left, 0, self._branch_width, self.height(),
+        )
+        option.state |= QStyle.State_Children
+        if self.isChecked():
+            option.state |= QStyle.State_Open
+        # The button stylesheet paints the background. The application style paints tree branches.
+        with QPainter(self) as painter:
+            QApplication.style().drawPrimitive(QStyle.PE_IndicatorBranch, option, painter, self)
 
     def set_results(self, forward, reverse):
         for label, status in zip(self._labels[1:], (forward, reverse)):
@@ -140,7 +159,10 @@ class _Station(QWidget):
         self.table = _DetailTable(station_id, self)
         self.table.hide()
         layout.addWidget(self.header)
-        layout.addWidget(self.table)
+        detail_layout = QVBoxLayout()
+        detail_layout.setContentsMargins(9, 0, 9, 0)
+        detail_layout.addWidget(self.table)
+        layout.addLayout(detail_layout)
         self.header.toggled.connect(self.table.setVisible)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
@@ -261,6 +283,38 @@ class MotorStationTestPanel(QWidget):
             station = _Station(len(self._stations) + 1, self._content)
             self._stations.append(station)
             self._station_layout.insertWidget(len(self._stations) - 1, station)
+
+    def show_workbench_stations(self, stations):
+        """Apply (station name, metric names) pairs with fresh result placeholders."""
+        if not isinstance(stations, (list, tuple)):
+            raise TypeError("stations must be a list or tuple")
+        display = []
+        for index, entry in enumerate(stations):
+            field = f"stations[{index}]"
+            if not isinstance(entry, (list, tuple)):
+                raise TypeError(f"{field} must be a name and metrics pair")
+            if len(entry) != 2:
+                raise ValueError(f"{field} must contain a name and metrics")
+            name, metrics = entry
+            if not isinstance(name, str):
+                raise TypeError(f"{field}.name must be a string")
+            if not name.strip():
+                raise ValueError(f"{field}.name must not be blank")
+            if not isinstance(metrics, (list, tuple)):
+                raise TypeError(f"{field}.metrics must be a list or tuple")
+            rows = []
+            for metric_index, metric in enumerate(metrics):
+                if not isinstance(metric, str):
+                    raise TypeError(f"{field}.metrics[{metric_index}] must be a string")
+                rows.append([metric, "--", "--"])
+            display.append((name, rows))
+
+        self.set_station_count(len(display))
+        for station_id, (name, rows) in enumerate(display, start=1):
+            station = self._station(station_id)
+            station.header.set_station_name(name)
+            station.apply_rows(rows)
+            self.set_station_results(station_id, "--", "--")
 
     def set_station_row_count(self, station_id, count):
         """Resize just this station's rows, initializing new cells to --."""

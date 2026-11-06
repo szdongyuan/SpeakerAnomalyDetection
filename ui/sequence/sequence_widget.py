@@ -46,13 +46,15 @@ class SequenceWindow(
 ):
 
     def __init__(self, *, recording_bridge=None, ve_prewarm_lifetime=None,
-                 raw_audio_csv_bridge=None):
+                 raw_audio_csv_bridge=None, workbench_mode=False):
         """Initializes the class instance, setting up the user interface and necessary parameters."""
         super().__init__()
-        self._product_config_refresh_state = "initializing"
-        self._product_config_refresh_error = ""
-        self._applied_product_snapshot = None
-        self._pending_initial_product_snapshot = None
+        self.workbench_mode = workbench_mode
+        if not self.workbench_mode:
+            self._product_config_refresh_state = "initializing"
+            self._product_config_refresh_error = ""
+            self._applied_product_snapshot = None
+            self._pending_initial_product_snapshot = None
         self.default_logger = LogManager.set_log_handler("core")
         self.recording_bridge = recording_bridge
         self.ve_prewarm_lifetime = ve_prewarm_lifetime
@@ -72,19 +74,21 @@ class SequenceWindow(
         self.sequence_config = list()
         self.analysis_config = dict()
         self.get_sequence_config_from_json()
-        self.init_data_struct_stimulus_config()
-        self.init_fft_and_stft_flag()
         self.signal_info = {}
         self.analysis_window = []
         self._analysis_result_summary_window = None
 
-        self._prepare_initial_product_configuration()
+        if self.workbench_mode:
+            self.product_test_condition_configs = []
+            self.product_test_project_context = {}
+            self._product_queue_catalog = {}
+            self.product_test_close_trigger_state = ""
+        else:
+            self._prepare_initial_product_configuration()
+            self.product_test_close_trigger_state = self.load_active_product_test_close_trigger_state()
         self.init_data_struct_stimulus_config()
         self.init_fft_and_stft_flag()
         self.count_board = SequenceCountBoard(self.analysis_config)
-        self.product_test_close_trigger_state = (
-            self.load_active_product_test_close_trigger_state()
-        )
         self._initialize_raw_audio_csv_runtime(raw_audio_csv_bridge=raw_audio_csv_bridge)
         self.left_panel = MotorDetectionLeftPanel(
             self.count_board,
@@ -94,7 +98,8 @@ class SequenceWindow(
         self._initialize_analysis_process_runtime()
         self._init_test_round_metadata()
         self._init_round_reset()
-        self._refresh_test_mode_availability()
+        if not self.workbench_mode:
+            self._refresh_test_mode_availability()
         self.player_status_flag = False
         # True while a record run is still processing (record -> analysis -> save).
         # Used to prevent starting a new recording before the full workflow completes.
@@ -210,7 +215,8 @@ class SequenceWindow(
         self.bind_hw_signals()
         self.init_lineedit_text()
         self.init_ui()
-        self._finish_initial_product_configuration()
         self._serial_trigger_runtime_initialized = False
-        self._init_product_progress_runtime()
+        if not self.workbench_mode:
+            self._finish_initial_product_configuration()
+            self._init_product_progress_runtime()
         self.restore_scanner_checkbox_state()

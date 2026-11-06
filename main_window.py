@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, 
 from base.log_manager import LogManager
 from base.db_manager import DataSave
 from base.hardware_selection import restore_or_default
+from base.motor_workbench_config import MotorWorkbenchConfigRepository
 from base.sound_device_manager import SoundDeviceManager
 from consts import ui_style_const
 from consts.model_consts import DATABASE_PATH
@@ -24,6 +25,7 @@ from ui.hardware_window import open_hardware_selection_window
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
 from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
+from ui.sequence.motor_workbench_controller import MotorWorkbenchController
 from ui.sequence.sequence_widget import SequenceWindow
 from ui.vkinging_presentation import device_display_name, ve_failure_text
 
@@ -526,11 +528,22 @@ class MainWindow(QMainWindow):
             recording_bridge=self.recording_bridge,
             ve_prewarm_lifetime=self.ve_prewarm_lifetime,
             raw_audio_csv_bridge=self.raw_audio_csv_bridge,
+            workbench_mode=True,
         )
         if hasattr(self, "ve_profile_store"):
             self.sequence_window.ve_profile_store = self.ve_profile_store
             self.sequence_window.ve_calibration_store = self.ve_calibration_store
-        self.video_controller.attach_panel(self.sequence_window.left_panel.video_monitor_panel)
+        sequence = self.sequence_window
+        card = self.video_controller.attach_panel(sequence.left_panel.video_monitor_panel)
+        self.workbench_controller = MotorWorkbenchController(
+            MotorWorkbenchConfigRepository(),
+            sequence.left_panel.station_panel,
+            sequence.plot_grid,
+            sequence.set_workbench_active_product,
+            self.video_controller.show_settings,
+        )
+        card.settings_requested.connect(self.workbench_controller.open_video_settings)
+        self.workbench_controller.refresh_configuration()
         menu_bar = self.init_menu()
         title_bar = self.set_title()
         menu_row = self._create_menu_row(menu_bar)
@@ -675,18 +688,15 @@ class MainWindow(QMainWindow):
                 ve_profile_provider=lambda device: self.ve_profile_store.load(
                     device, self.ve_calibration_store),
                 deletion_busy=lambda: sequence._configuration_deletion_busy(),
-                deletion_completed=lambda target: sequence._configuration_deleted(target),
+                deletion_completed=self._on_configuration_deleted,
                 deletion_failed=lambda message: sequence._configuration_deletion_failed(message),
                 deletion_error=lambda: getattr(sequence, "_configuration_deletion_error", ""),
                 **context,
             )
             analysis_model_select_dialog.exec()
         finally:
-            try:
-                sequence.on_sequence_config_updated()
-            finally:
-                sequence._test_queue_config_dialog_open = was_open
-                sequence.update_player_btn_is_paused()
+            sequence._test_queue_config_dialog_open = was_open
+            sequence.update_player_btn_is_paused()
 
     def on_product_test_program_config(self):
         if getattr(
@@ -709,22 +719,23 @@ class MainWindow(QMainWindow):
                 contextual_queue_editor_callback=self._open_analysis_model_select,
                 input_device_provider=lambda: self.mic,
                 deletion_busy=lambda: self.sequence_window._configuration_deletion_busy(),
-                deletion_completed=lambda target: self.sequence_window._configuration_deleted(target),
+                deletion_completed=self._on_configuration_deleted,
                 deletion_failed=lambda message: self.sequence_window._configuration_deletion_failed(message),
                 deletion_error=lambda: getattr(self.sequence_window, "_configuration_deletion_error", ""),
             )
-            if not dialog.initial_load_succeeded:
-                self.sequence_window._product_configuration_apply_failed(
-                    dialog.initial_load_error, show_warning=False,
-                )
-                self.sequence_window.update_using_file_combobox()
-            dialog.programs_changed.connect(
-                self.sequence_window.on_product_test_program_updated
-            )
+            dialog.programs_changed.connect(self.on_workbench_configuration_committed)
             dialog.exec()
         finally:
             self.sequence_window._product_test_program_config_dialog_open = False
             self.sequence_window.update_player_btn_is_paused()
+
+    def on_workbench_configuration_committed(self):
+        """Refresh after the configuration editor has committed its files."""
+        self.workbench_controller.refresh_configuration()
+
+    def _on_configuration_deleted(self, target):
+        self.sequence_window._configuration_deleted(target)
+        self.on_workbench_configuration_committed()
 
     def show_statusbar_layout(self):
         # create status bar, show the user data and device data, and close drag status bar modify window size
@@ -794,10 +805,6 @@ class MainWindow(QMainWindow):
             self.video_controller.start_preview()
             self._expand_sequence_workspace()
             self.sequence_window.show()
-            offer_resume = getattr(self.sequence_window, "_offer_product_test_resume", None)
-            resume_ready = offer_resume() if callable(offer_resume) else True
-            if resume_ready and hasattr(self.sequence_window, "init_serial_trigger_runtime"):
-                self.sequence_window.init_serial_trigger_runtime()
             self.update_statusbar()
         self.on_access_lvl_changed()
 
@@ -993,7 +1000,8 @@ class MainWindow(QMainWindow):
                 video.shutdown()
             return
         save_progress = getattr(sequence, "_save_product_test_progress_before_exit", None)
-        if callable(save_progress) and not getattr(self, "_product_progress_saved", False):
+        if (not getattr(sequence, "workbench_mode", False) and callable(save_progress)
+                and not getattr(self, "_product_progress_saved", False)):
             self._product_progress_saved = True
             save_progress()
         bridge = getattr(self, "recording_bridge", None)
