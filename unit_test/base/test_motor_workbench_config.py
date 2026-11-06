@@ -29,6 +29,10 @@ def condition(condition_id, queue, station_ids):
     }
 
 
+def acquisition():
+    return {"detail": {"sample_rate": 44100, "total_time": 2.5, "streaming": True}}
+
+
 @pytest.fixture
 def config_files(tmp_path):
     programs = tmp_path / "products" / "program_registry.json"
@@ -36,6 +40,18 @@ def config_files(tmp_path):
     product = programs.parent / "motor.json"
     shared = queues.parent / "nested" / "shared.json"
     empty = tmp_path / "absolute" / "empty.json"
+    layout = tmp_path / "layout.json"
+    unused = queues.parent / "unused-queue.json"
+    write_json(layout, {
+        "rows": 1,
+        "columns": 4,
+        "cells": [[
+            {"title": "响度一", "analysis_item": "B", "analysis_type": "SPL"},
+            {"title": "频谱二", "analysis_item": "A", "analysis_type": "FFT"},
+            {"title": "响度三", "analysis_item": "B", "analysis_type": "SPL"},
+            {"title": "频谱四", "analysis_item": "A", "analysis_type": "FFT"},
+        ]],
+    })
     write_json(programs, {
         "active_file": product.name,
         "configs": [{"file": product.name, "project_name": "电机"}],
@@ -44,6 +60,7 @@ def config_files(tmp_path):
         "using_config_path": "unused.json",
         "Shared": "nested/shared.json",
         "Empty": str(empty),
+        "Unused": unused.name,
     })
     write_json(product, {
         "project_id": "motor",
@@ -73,21 +90,35 @@ def config_files(tmp_path):
         ],
     })
     write_json(shared, [{
-        "seq1": {"analysis_list": {"display_sequence": ["B", "A"], "A": {}, "B": {}}},
-    }])
-    write_json(empty, [{"seq1": {"analysis_list": {"display_sequence": []}}}])
+        "seq1": {
+            "acq": {**acquisition(), "mode": " record_only "},
+            "analysis_list": {
+                "display_sequence": ["B", "A"],
+                "auto_analysis": True,
+                "A": {},
+                "B": {"type": "SPL", "analysis_channels": [2, 0], "limits": {"values": [3, 5]}},
+            },
+            "analysis_channel_basis": "wav",
+        },
+    }, {"seq2": {"custom": {"values": [4, 6]}}}])
+    write_json(empty, [{"seq1": {"acq": acquisition(), "analysis_list": {"display_sequence": []}}}])
+    write_json(unused, [{"seq1": {"analysis_list": {"display_sequence": []}}}])
     return {
         "programs": programs,
         "queues": queues,
         "product": product,
         "shared": shared,
         "empty": empty,
+        "layout": layout,
+        "unused": unused,
     }
 
 
 @pytest.fixture
 def repository(config_files):
-    return MotorWorkbenchConfigRepository(config_files["programs"], config_files["queues"])
+    return MotorWorkbenchConfigRepository(
+        config_files["programs"], config_files["queues"], plot_layout_path=config_files["layout"]
+    )
 
 
 def test_load_active_preserves_order_and_parameters(repository, config_files):
@@ -120,6 +151,70 @@ def test_load_active_preserves_order_and_parameters(repository, config_files):
         config.conditions[0].segmented_analysis["settings"]["intervals"] = (3,)
 
 
+def test_load_active_preserves_layout_and_exports_independent_process_configs(repository, config_files):
+    config = repository.load_active()
+    layout = config.plot_layout
+    assert (layout.rows, layout.columns) == (1, 4)
+    assert isinstance(layout.cells, tuple)
+    assert isinstance(layout.cells[0], tuple)
+    cell = layout.cells[0][1]
+    assert (cell.title, cell.analysis_item, cell.analysis_type) == ("频谱二", "A", "FFT")
+
+    first, second, empty = config.conditions
+    assert first.queue is second.queue
+    assert first.project_id == config.project_id
+    assert first.result_root_directory == config.result_root_directory
+    assert first.queue.acquisition["detail"]["sample_rate"] == 44100
+    assert first.queue.acquisition_mode == empty.queue.acquisition_mode == "RECORD_ONLY"
+    assert first.queue.analysis["B"]["analysis_channels"] == (2, 0)
+    assert config.conditions_by_id["c2"] is first
+    assert config.station_channels_by_id["s3"] is config.stations[0].channels
+    with pytest.raises(TypeError):
+        config.station_channels_by_id["s3"] = ()
+    with pytest.raises(TypeError):
+        config.conditions_by_id["c2"] = empty
+    with pytest.raises(TypeError):
+        first.queue.acquisition["detail"]["sample_rate"] = 48000
+
+    raw_sequence = json.loads(config_files["shared"].read_text(encoding="utf-8"))
+    raw_seq1 = raw_sequence[0]["seq1"]
+    raw_product = json.loads(config_files["product"].read_text(encoding="utf-8"))
+    exported = first.export_process_config()
+    assert exported == {
+        "acq": raw_seq1["acq"],
+        "condition_config": raw_product["conditions"][0],
+        "sequence_config": raw_sequence,
+        "analysis_config": raw_seq1["analysis_list"],
+    }
+    exported["analysis_config"]["B"]["analysis_channels"].append(99)
+    exported["acq"]["detail"]["sample_rate"] = 1
+    exported["condition_config"]["segmented_analysis"]["settings"]["intervals"].clear()
+    exported["sequence_config"][1]["seq2"]["custom"]["values"].append(99)
+    assert first.export_process_config()["analysis_config"]["B"]["analysis_channels"] == [2, 0]
+    assert second.export_process_config()["sequence_config"] == raw_sequence
+    assert first.queue.acquisition["detail"]["sample_rate"] == 44100
+    assert first.segmented_analysis["settings"]["intervals"] == (1, 2)
+    empty_export = empty.export_process_config()
+    assert empty_export["analysis_config"]["display_sequence"] == []
+    assert "analysis_channel_basis" not in empty_export["sequence_config"][0]["seq1"]
+    assert "mode" not in empty_export["acq"]
+
+
+def test_default_layout_is_loaded_from_the_application_root(config_files, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    repository = MotorWorkbenchConfigRepository(config_files["programs"], config_files["queues"])
+
+    layout = repository.load_active().plot_layout
+
+    assert (layout.rows, layout.columns) == (2, 4)
+    assert tuple((cell.title, cell.analysis_item, cell.analysis_type) for cell in layout.cells[0]) == (
+        ("声压级（SPL）1", "声压级", "SPL"),
+    ) * 4
+    assert tuple((cell.title, cell.analysis_item, cell.analysis_type) for cell in layout.cells[1]) == (
+        ("快速傅里叶变换 (FFT) 1", "快速傅里叶变换 (FFT) 1", "FFT"),
+    ) * 4
+
+
 def test_same_queue_is_read_once_per_load_and_load_is_read_only(
     repository, config_files, monkeypatch,
 ):
@@ -138,10 +233,12 @@ def test_same_queue_is_read_once_per_load_and_load_is_read_only(
         patch.setattr(builtins, "open", watch_open(builtins.open))
         repository.load_active()
         assert reads.count(config_files["shared"]) == 1
+        assert reads.count(config_files["layout"]) == 1
+        assert config_files["unused"] not in reads
 
     assert before == {path: path.read_bytes() for path in config_files.values()}
     write_json(config_files["shared"], [{
-        "seq1": {"analysis_list": {"display_sequence": ["C"], "C": {}}},
+        "seq1": {"acq": acquisition(), "analysis_list": {"display_sequence": ["C"], "C": {}}},
     }])
     assert repository.load_active().conditions[0].metric_names == ("C",)
 
@@ -152,7 +249,7 @@ def test_partially_qualified_windows_queue_paths_are_rejected_before_reading(
 ):
     registry = config_files["queues"]
     write_json(registry, {"Shared": saved_path, "Empty": str(config_files["empty"])})
-    allowed_reads = {config_files[key] for key in ("programs", "product", "queues")}
+    allowed_reads = {config_files[key] for key in ("programs", "product", "queues", "layout")}
     original_open = Path.open
 
     def guard_open(path, *args, **kwargs):
@@ -166,9 +263,10 @@ def test_partially_qualified_windows_queue_paths_are_rejected_before_reading(
     assert "Shared" in str(caught.value)
 
 
-def test_no_active_product_does_not_read_queue_registry(repository, config_files):
+def test_no_active_product_does_not_read_layout_or_queue_registry(repository, config_files):
     write_json(config_files["programs"], {"active_file": None, "configs": []})
     config_files["queues"].unlink()
+    config_files["layout"].unlink()
 
     assert repository.load_active() is None
 
@@ -187,6 +285,8 @@ def test_active_product_accepts_empty_conditions(repository, config_files):
     ("programs", "decoder nesting", RecursionError),
     ("queues", "encoding", UnicodeDecodeError),
     ("product", "missing", FileNotFoundError),
+    ("layout", "json", json.JSONDecodeError),
+    ("layout", "missing", FileNotFoundError),
     ("shared", "missing", FileNotFoundError),
 ])
 def test_file_errors_have_path_and_cause(repository, config_files, file_key, breakage, cause):
@@ -233,6 +333,52 @@ def test_deep_segmented_analysis_reports_its_field_and_cause(repository, config_
     assert isinstance(caught.value.__cause__, RecursionError)
 
 
+def test_deepest_loadable_condition_can_be_exported_and_compared(repository, config_files):
+    path = config_files["product"]
+    product = json.loads(path.read_text(encoding="utf-8"))
+    product["conditions"][0]["segmented_analysis"]["settings"] = "nested_placeholder"
+    template = json.dumps(product)
+    # The highest loadable depth depends on the Python version and the call stack.
+    for depth in range(sys.getrecursionlimit(), 0, -1):
+        nested = '{"child":' * depth + "42" + "}" * depth
+        path.write_text(template.replace('"nested_placeholder"', nested), encoding="utf-8")
+        try:
+            config = repository.load_active()
+        except WorkbenchConfigurationError as error:
+            assert isinstance(error.__cause__, RecursionError)
+        else:
+            break
+    else:
+        pytest.fail("No depth could be loaded")
+
+    exported = config.conditions[0].export_process_config()
+    settings = exported["condition_config"]["segmented_analysis"]["settings"]
+    for _ in range(depth):
+        assert type(settings) is dict
+        settings = settings["child"]
+    assert settings == 42
+    assert repository.load_active() == config
+
+
+def test_snapshot_equality_compares_channel_types_but_ignores_object_key_order(repository, config_files):
+    path = config_files["shared"]
+    sequence = json.loads(path.read_text(encoding="utf-8"))
+    metric = sequence[0]["seq1"]["analysis_list"]["B"]
+    metric["analysis_channels"] = [1, 0]
+    write_json(path, sequence)
+    original = repository.load_active()
+
+    path.write_text(json.dumps(sequence, sort_keys=True), encoding="utf-8")
+    assert repository.load_active() == original
+
+    metric["analysis_channels"][0] = True
+    write_json(path, sequence)
+    updated = repository.load_active()
+
+    assert updated != original
+    assert updated.conditions[0].export_process_config()["analysis_config"]["B"]["analysis_channels"][0] is True
+
+
 @pytest.mark.parametrize(("file_key", "keys", "replacement", "diagnostic"), [
     ("programs", (), [], "registry"),
     ("programs", ("active_file",), "other.json", "active_file"),
@@ -268,8 +414,32 @@ def test_deep_segmented_analysis_reports_its_field_and_cause(repository, config_
     ("product", ("conditions", 0, "segmented_analysis"), {}, "mode"),
     ("queues", ("Shared",), {}, "Shared"),
     ("queues", ("Shared",), "shared\u0000.json", "Shared"),
+    ("layout", ("rows",), True, "rows"),
+    ("layout", ("rows",), 0, "rows"),
+    ("layout", ("rows",), 4, "rows"),
+    ("layout", ("columns",), 4.0, "columns"),
+    ("layout", ("columns",), 5, "columns"),
+    ("layout", ("rows",), 2, "cells"),
+    ("layout", ("cells", 0), [], "cells[0]"),
+    ("layout", ("cells", 0, 0, "analysis_type"), "STFT", "cells[0][0].analysis_type"),
+    ("layout", ("cells", 0, 0, "title"), " ", "cells[0][0].title"),
+    ("layout", ("cells", 0, 0, "analysis_item"), "", "cells[0][0].analysis_item"),
     ("shared", (), [], "seq1"),
     ("shared", (0, "seq1"), [], "seq1"),
+    ("shared", (0, "seq1"), {"analysis_list": {"display_sequence": []}}, "seq1.acq"),
+    ("shared", (0, "seq1", "acq"), {}, "seq1.acq.detail"),
+    ("shared", (0, "seq1", "acq", "mode"), "PLAY_ONLY", "seq1.acq.mode"),
+    ("shared", (0, "seq1", "acq", "mode"), " \t ", "seq1.acq.mode"),
+    ("shared", (0, "seq1", "acq", "mode"), False, "seq1.acq.mode"),
+    ("shared", (0, "seq1", "acq", "detail"), {"total_time": 3}, "acq.detail.sample_rate"),
+    ("shared", (0, "seq1", "acq", "detail"), {"sample_rate": 100}, "acq.detail.total_time"),
+    ("shared", (0, "seq1", "acq", "detail", "total_time"), 0, "acq.detail.total_time"),
+    ("shared", (0, "seq1", "acq", "detail", "total_time"), True, "acq.detail.total_time"),
+    ("shared", (0, "seq1", "acq", "detail", "sample_rate"), -1, "acq.detail.sample_rate"),
+    ("shared", (0, "seq1", "acq", "detail", "sample_rate"), True, "acq.detail.sample_rate"),
+    ("shared", (0, "seq1", "acq", "detail"), {
+        "total_time": 3, "sample_rate": 100, "recording_preview_time_mode": "bad",
+    }, "acq.detail.recording_preview_time_mode"),
     ("shared", (0, "seq1", "analysis_list"), {}, "display_sequence"),
     ("shared", (0, "seq1", "analysis_list", "display_sequence"), ["A", "A"], "display_sequence"),
     ("shared", (0, "seq1", "analysis_list", "display_sequence"), [0], "display_sequence"),
@@ -294,3 +464,32 @@ def test_invalid_schema_has_path_and_diagnostic(
         repository.load_active()
     assert str(path) in str(caught.value)
     assert diagnostic in str(caught.value)
+
+
+@pytest.mark.parametrize("field", ["sample_rate", "total_time"])
+def test_nonfinite_acquisition_numbers_are_rejected(repository, config_files, field):
+    path = config_files["shared"]
+    queue = json.loads(path.read_text(encoding="utf-8"))
+    queue[0]["seq1"]["acq"]["detail"][field] = "number_placeholder"
+    path.write_text(json.dumps(queue).replace('"number_placeholder"', "1e999"), encoding="utf-8")
+
+    with pytest.raises(WorkbenchConfigurationError) as caught:
+        repository.load_active()
+
+    assert str(path) in str(caught.value)
+    assert f"acq.detail.{field}" in str(caught.value)
+
+
+def test_station_count_must_fit_layout(repository, config_files):
+    path = config_files["layout"]
+    layout = json.loads(path.read_text(encoding="utf-8"))
+    layout["columns"] = 2
+    layout["cells"][0] = layout["cells"][0][:2]
+    write_json(path, layout)
+
+    with pytest.raises(WorkbenchConfigurationError) as caught:
+        repository.load_active()
+
+    assert str(path) in str(caught.value)
+    assert str(config_files["product"]) in str(caught.value)
+    assert "columns" in str(caught.value)

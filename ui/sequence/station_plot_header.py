@@ -13,6 +13,7 @@ from consts.ui_style_const import (
 class _CornerLabel(QLabel):
     def __init__(self, parent, *, alignment, color, pixel_size=13):
         super().__init__(parent)
+        self._full_text = ''
         self.setTextFormat(Qt.PlainText)
         self.setAlignment(alignment | Qt.AlignVCenter)
         self.setMinimumWidth(0)
@@ -27,17 +28,22 @@ class _CornerLabel(QLabel):
             + main_window_tooltip_style
         )
 
-    def set_full_text(self, text):
-        self.setToolTip(text)
+    def set_full_text(self, text, *, detail=''):
+        self._full_text = text
+        self.setToolTip(detail or text)
         self.setVisible(bool(text))
         self._elide()
 
+    def _single_line_text(self):
+        # Keep the visible bar to one line even if the text contains line breaks or tabs.
+        return ' '.join(self._full_text.splitlines()).replace('\t', ' ')
+
+    def full_text_width(self):
+        return self.fontMetrics().horizontalAdvance(self._single_line_text())
+
     def _elide(self):
-        # Preserve the submission in the tooltip, but keep the visible bar to
-        # one line even when the caller supplies line breaks or tabs.
-        text = ' '.join(self.toolTip().splitlines()).replace('\t', ' ')
         self.setText(self.fontMetrics().elidedText(
-            text, Qt.ElideRight, self.contentsRect().width()))
+            self._single_line_text(), Qt.ElideRight, self.contentsRect().width()))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -47,7 +53,7 @@ class _CornerLabel(QLabel):
         if event.type() == QEvent.ToolTip and self.toolTip():
             # Qt auto-detects rich text for tooltips independently of QLabel's
             # PlainText setting. Escape at the popup boundary, keeping raw text
-            # in toolTip() for elision and caller inspection.
+            # in toolTip() for caller inspection.
             QToolTip.showText(event.globalPos(),
                               '<qt><p style="white-space: pre-wrap;">'
                               + escape(self.toolTip()) + '</p></qt>', self)
@@ -70,14 +76,14 @@ class StationPlotHeader(QWidget):
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.set_texts('', '')
 
-    def set_texts(self, left_text, right_text):
+    def set_texts(self, left_text, right_text, *, right_text_detail=''):
         self.left.set_full_text(left_text)
-        self.right.set_full_text(right_text)
+        self.right.set_full_text(right_text, detail=right_text_detail)
         self.setVisible(bool(left_text or right_text))
 
 
 class StationPlotSubheader(QWidget):
-    """Three fixed slots aligned to the axis margin and actual ViewBox halves."""
+    """Three labels aligned to the axis margin and actual ViewBox halves."""
 
     resized = pyqtSignal()
 
@@ -86,6 +92,7 @@ class StationPlotSubheader(QWidget):
         self.left = _CornerLabel(self, alignment=Qt.AlignLeft, color='#5d7691', pixel_size=11)
         self.first_half = _CornerLabel(self, alignment=Qt.AlignHCenter, color='#5d7691', pixel_size=11)
         self.second_half = _CornerLabel(self, alignment=Qt.AlignHCenter, color='#5d7691', pixel_size=11)
+        self._plot_span = (0, 0)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.setFixedHeight(self.left.fontMetrics().height() + 6)
         self.set_texts('', '', '')
@@ -95,14 +102,27 @@ class StationPlotSubheader(QWidget):
                                (left_text, first_half_text, second_half_text)):
             label.set_full_text(text)
         self.setVisible(bool(left_text or first_half_text or second_half_text))
+        self._update_label_geometry()
 
     def set_plot_span(self, left, right):
-        # Round shared boundaries once. Padding leaves adjacent slots disjoint
-        # without changing their centers when another label is empty.
-        left, right = round(left), round(right)
+        self._plot_span = round(left), round(right)
+        self._update_label_geometry()
+
+    def _update_label_geometry(self):
+        left, right = self._plot_span
         middle = round((left + right) / 2)
-        for label, start, end in ((self.left, 8, left - 4),
-                                  (self.first_half, left + 4, middle - 4),
+        unit_start, unit_end = 8, left - 4
+        first_start, first_end = left + 4, middle - 4
+        first_width = max(0, first_end - first_start)
+        reserve = min(first_width, 2 * self.first_half.fontMetrics().height())
+        shift = unit_start + self.left.full_text_width() - unit_end
+        if shift > 0 and first_width - 2 * shift >= reserve:
+            # Keep the gap and the first label's center by narrowing both sides.
+            unit_end += shift
+            first_start += shift
+            first_end -= shift
+        for label, start, end in ((self.left, unit_start, unit_end),
+                                  (self.first_half, first_start, first_end),
                                   (self.second_half, middle + 4, right - 4)):
             label.setGeometry(start, 3, max(0, end - start), self.height() - 6)
 

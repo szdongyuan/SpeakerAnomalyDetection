@@ -349,6 +349,130 @@ def test_invalid_workbench_column_batch_preserves_display(grid, names, error):
     assert combo(grid, 0).currentData() == "value"
 
 
+def test_workbench_layout_resets_same_size_plots_and_preserves_empty_column(grid, qt_app):
+    grid.set_grid_size(1, 2)
+    grid.configure_plot(0, 0, kind="curve", title="旧曲线", x_label="时间")
+    grid.set_curve_data(0, 0, [{"x": [0, 1], "y": [2, 3]}])
+    grid.configure_plot(0, 1, kind="heatmap", title="旧热图", right_text="旧提示")
+    grid.set_heatmap_data(0, 1, [[1, 2]])
+    grid.set_column_options(0, [("旧选项", "old")])
+    spy = QSignalSpy(grid.column_selection_changed)
+    display = station_plot_grid.WorkbenchPlotCellDisplay(
+        title="声压级（SPL）1", unit="dB(A)", first_condition="工况1", second_condition="工况2",
+    )
+
+    grid.show_workbench_layout(("工位1", ""), ((display, station_plot_grid.WorkbenchPlotCellDisplay()),))
+    qt_app.processEvents()
+
+    assert set(cells(grid)) == {(0, 0), (0, 1)}
+    assert [controls(grid, c).name.text() for c in range(2)] == ["工位1", ""]
+    assert all(not combo(grid, c).isEnabled() and combo(grid, c).count() == 0 for c in range(2))
+    assert len(spy) == 0
+    for cell in cells(grid).values():
+        plot = cell.plot_widget.getPlotItem()
+        assert cell.kind == "curve" and not curves(cell)
+        assert not any(isinstance(item, pg.ImageItem) for item in plot.items)
+        assert not plot.getAxis("bottom").labelText
+    populated = cells(grid)[0, 0]
+    assert populated.header.left.text() == "声压级（SPL）1"
+    assert populated.subheader.left.text() == "dB(A)"
+    assert populated.subheader.first_half.text() == "工况1"
+    assert populated.subheader.second_half.text() == "工况2"
+    placeholder = cells(grid)[0, 1]
+    assert not placeholder.header.isVisible() and not placeholder.subheader.isVisible()
+
+    grid.show_workbench_layout((), ())
+    assert not cells(grid) and not grid.findChildren(QComboBox)
+    assert grid.findChild(QLabel, "stationPlotTitle").isVisible()
+
+
+def test_workbench_layout_resets_scroll_geometry_when_cleared_and_restored(grid, qt_app):
+    names = ("工位1", "工位2", "工位3", "工位4")
+    matrix = ((station_plot_grid.WorkbenchPlotCellDisplay(),) * 4,) * 3
+    grid.resize(530, 330)
+    grid.show_workbench_layout(names, matrix)
+    qt_app.processEvents()
+    body = grid.findChild(QScrollArea, "stationPlotScroll")
+    header = grid.findChild(QScrollArea, "stationHeaderScroll")
+    horizontal, vertical = body.horizontalScrollBar(), body.verticalScrollBar()
+    header_scroll = header.horizontalScrollBar()
+    assert horizontal.isVisible() and vertical.isVisible()
+    for bar in (horizontal, vertical):
+        bar.setValue(bar.maximum() // 2)
+        assert bar.value() > 0
+    assert header_scroll.value() == horizontal.value()
+
+    grid.show_workbench_layout((), ())
+    qt_app.processEvents()
+
+    assert not horizontal.isVisible() and not vertical.isVisible()
+    assert horizontal.value() == vertical.value() == header_scroll.value() == 0
+    assert body.widget().size() == body.viewport().size()
+    assert header.widget().width() == body.viewport().width()
+
+    grid.show_workbench_layout(names, matrix)
+    qt_app.processEvents()
+
+    assert horizontal.isVisible() and vertical.isVisible()
+    assert horizontal.value() == vertical.value() == header_scroll.value() == 0
+    assert controls(grid, 0).mapTo(grid, QPoint()).x() == cells(grid)[0, 0].mapTo(grid, QPoint()).x()
+
+
+@pytest.mark.parametrize(("names", "matrix", "error", "field"), [
+    (("新工位", None), lambda cell: ((cell(), cell()),), TypeError, r"names\[1\]"),
+    (("新工位",), lambda cell: (), ValueError, "rows"),
+    ((), lambda cell: ((),), ValueError, "columns"),
+    (("新工位",), lambda cell: ((cell(),),) * 4, ValueError, "rows"),
+    (("新工位",) * 5, lambda cell: ((cell(),) * 5,), ValueError, "columns"),
+    (("新工位", "另一工位"), lambda cell: ((cell(), cell()), (cell(),)), ValueError, r"cells\[1\]"),
+    (("新工位", "另一工位"), lambda cell: ((cell(), None),), TypeError, r"cells\[0\]\[1\]"),
+    (("新工位", "另一工位"), lambda cell: ((cell(), cell(warning_detail=1)),), TypeError,
+     r"cells\[0\]\[1\]\.warning_detail"),
+])
+def test_invalid_workbench_layout_preserves_existing_grid(grid, names, matrix, error, field):
+    before = cells(grid)
+    grid.set_station_name(0, "保留工位")
+    grid.configure_plot(0, 0, kind="curve", title="保留标题")
+    grid.set_curve_data(0, 0, [{"x": [0, 1], "y": [2, 3]}])
+    grid.set_column_options(0, [("保留选项", "old")])
+    curve, = curves(before[0, 0])
+
+    with pytest.raises(error, match=f"show_workbench_layout.*{field}"):
+        grid.show_workbench_layout(names, matrix(station_plot_grid.WorkbenchPlotCellDisplay))
+
+    assert cells(grid) == before
+    assert curves(before[0, 0]) == [curve]
+    assert before[0, 0].header.left.text() == "保留标题"
+    assert controls(grid, 0).name.text() == "保留工位"
+    assert combo(grid, 0).currentData() == "old"
+
+
+def test_workbench_warning_shows_short_text_and_escapes_full_tooltip(grid, qt_app):
+    display = station_plot_grid.WorkbenchPlotCellDisplay(
+        title="声压级（SPL）1", unit="dB(A)", first_condition="工况1", warning="单位不一致",
+        warning_detail="<b>工况1</b> dB(A)\n工况2 & dB(Z)",
+    )
+    grid.show_workbench_layout(("工位1",), ((display,),))
+    qt_app.processEvents()
+
+    warning = cells(grid)[0, 0].header.right
+    assert warning.text() == "单位不一致"
+    assert warning.textFormat() == Qt.PlainText
+    assert warning.toolTip() == display.warning_detail
+    pos = warning.rect().center()
+    try:
+        QCoreApplication.sendEvent(warning, QHelpEvent(QEvent.ToolTip, pos, warning.mapToGlobal(pos)))
+        assert QToolTip.isVisible()
+        document = QTextDocument()
+        document.setHtml(QToolTip.text())
+        assert document.toPlainText() == display.warning_detail
+    finally:
+        QToolTip.hideText()
+
+    grid.set_plot_header(0, 0, "独立标题", "独立提示")
+    assert warning.text() == warning.toolTip() == "独立提示"
+
+
 @pytest.mark.parametrize('rows,columns', [(1, 1), (1, 4), (3, 1), (3, 4)])
 def test_grid_boundaries(grid, rows, columns):
     assert grid.set_grid_size(rows, columns) is None
