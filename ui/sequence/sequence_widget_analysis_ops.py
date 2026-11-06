@@ -13,7 +13,7 @@ from base.analysis_artifact_paths import AnalysisStorageContext
 from base.recording_process_protocol import FrozenConfig
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.vkinging_presentation import ve_failure_text
-from base.product_test_project_config import (
+from base.product_test_runtime_policy import (
     classify_project_trigger_mode,
     is_manual_project_play_allowed,
 )

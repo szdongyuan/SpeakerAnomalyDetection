@@ -29,6 +29,9 @@ def recording_only_notices(monkeypatch):
 
 @pytest.fixture
 def editor(app, tmp_path, monkeypatch):
+    # These minimal products exercise reference/save workflows, not station mappings.
+    # Real station-channel validation is covered by test_product_wav_queue.py.
+    monkeypatch.setattr("ui.operation_sequence.validate_queue_save", lambda *_: [])
     products = tmp_path / "products"
     registry = products / "registry.json"
     queues = tmp_path / "queues.json"
@@ -62,7 +65,7 @@ def change(window):
 
 @pytest.mark.parametrize("action", ["save", "save_as"])
 @pytest.mark.parametrize("has_analysis", [False, True])
-def test_explicit_save_explains_recording_only_product_queue_limit(
+def test_explicit_save_explains_recording_only_product_queue_support(
     editor, monkeypatch, recording_only_notices, action, has_analysis
 ):
     window, target, *_ = editor
@@ -87,7 +90,7 @@ def test_explicit_save_explains_recording_only_product_queue_limit(
     else:
         assert len(recording_only_notices) == 1
         assert "未配置分析项" in recording_only_notices[0]
-        assert "添加分析项后，才会显示在产品测试配置中" in recording_only_notices[0]
+        assert "可作为仅录音队列在产品测试配置中选择使用" in recording_only_notices[0]
 
 
 def test_explicit_save_still_explains_already_autosaved_recording_only_queue(
@@ -750,7 +753,7 @@ def test_dialog_long_list_and_incomplete_details_are_readable(editor):
     from ui.shared_queue_save_dialog import SharedQueueSaveDialog
     window, target, _, products, _ = editor
     data = project(*(["Q"] * 100))
-    for index, condition in enumerate(data["test_groups"][0]["test_conditions"]):
+    for index, condition in enumerate(data["conditions"]):
         condition["condition_name"] = f"Condition {index + 1}"
     write_json(products / "one.json", data)
     result = window.reference_scanner.find_references(str(target))
@@ -779,10 +782,10 @@ def test_dialog_paths_deduplicate_saved_draft_but_keep_renames(editor):
     from ui.shared_queue_save_dialog import SharedQueueSaveDialog
     window, target, _, products, _ = editor
     saved = project("Q", "Q", name="<b>Product</b>")
-    saved["test_groups"][0]["test_conditions"][1]["condition_name"] = "A"
+    saved["conditions"][1]["condition_name"] = "A"
     write_json(products / "one.json", saved)
     draft = copy.deepcopy(saved)
-    draft["test_groups"][0]["test_conditions"][1]["condition_name"] = "Renamed"
+    draft["conditions"][1]["condition_name"] = "Renamed"
     result = window.reference_scanner.find_references(str(target), drafts=(
         QueueReferenceDraft(draft, products / "one.json"),))
     dialog = SharedQueueSaveDialog(str(target), result)

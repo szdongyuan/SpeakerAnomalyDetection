@@ -1,975 +1,227 @@
-"""Project-level product test configuration management."""
-
+"""Product configuration service. Persistence reuses the existing JSON utilities."""
 import copy
-import math
-import ntpath
 import os
+from pathlib import PureWindowsPath
 
-from base.analysis_segments import (
-    segment_condition_fields, normalize_segmented_analysis, segment_count,
-    validate_input_voltage,
-)
-from base.hardware_trigger.serial_full_frame_matcher import normalize_hex_frame
-from base.hardware_trigger.serial_product_port_plan import build_serial_product_port_plan
 from base.load_config import LoadUiConfig
-from base.analysis_config_validation import validate_analysis_config
-from base.recording_preview_config import resolve_recording_preview_time_mode
-from base.vkinging_input import validate_range_index, validate_sample_rate
+from base.product_test.config_model import (
+    RUNTIME_UNAVAILABLE, copy_project, default_project, hardware_channels, normalize_project,
+)
+from base.product_test.config_validation import validate_structure, validate_references
+from base.test_queue_catalog import load_queue_info, resolve_queue_path
 from consts import error_code
-from consts.vkinging_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY, VE_RANGE_LABELS
-from consts.product_test_project_consts import (
-    CONDITION_NAME_KEY,
-    EXPORT_RAW_AUDIO_CSV_KEY,
-    GROUP_NAME_KEY,
-    INVALID_PROJECT_NAME_CHARS,
-    LIMIT_RULE_ANALYSIS_TYPES,
-    OUTPUT_LOAD_KEY,
-    PRODUCT_TRIGGER_MODE_MANUAL,
-    PRODUCT_TRIGGER_MODE_MIXED,
-    PRODUCT_TRIGGER_MODE_SERIAL,
-    PROGRAM_REGISTRY_FILE,
-    PROJECT_NAME_KEY,
-    REGISTRY_ACTIVE_FILE_KEY,
-    REGISTRY_CONFIGS_KEY,
-    REGISTRY_FILE_KEY,
-    RESULT_ROOT_DIRECTORY_KEY,
-    TEST_CONDITIONS_KEY,
-    TEST_GROUPS_KEY,
-    TEST_QUEUE_KEY,
-    TRIGGER_STATE_KEY,
-)
 from consts.running_consts import (
-    PRODUCT_TEST_PROGRAM_DIR,
-    PRODUCT_TEST_PROGRAM_REGISTRY_PATH,
-    SEQUENCE_CONFIG_REGISTRY_PATH,
+    PRODUCT_TEST_PROGRAM_DIR, PRODUCT_TEST_PROGRAM_REGISTRY_PATH, SEQUENCE_CONFIG_REGISTRY_PATH,
 )
+from consts.product_test_project_consts import PROGRAM_REGISTRY_FILE
 
 
-def normalize_project_name(name):
-    project_name = str(name or "").strip()
-    if project_name.lower().endswith(".json"):
-        project_name = project_name[:-5].strip()
-    return project_name
+def iter_test_conditions(project):
+    """Reference-scanner view; it does not expand conditions into execution tasks."""
+    names = {s["station_id"]: s["station_name"] for s in project["stations"]}
+    for index, condition in enumerate(project["conditions"], 1):
+        group = {"group_name": "、".join(names.get(key, key) for key in condition["applicable_station_ids"])}
+        yield 0, group, index, condition
 
 
-def project_file_name(project_name):
-    return normalize_project_name(project_name) + ".json"
-
-
-def normalize_trigger_state(value):
-    return " ".join(str(value or "").strip().upper().split())
-
-
-def normalize_optional_hex_frame(value):
-    normalized = normalize_trigger_state(value)
-    if not normalized:
-        return ""
-    try:
-        return normalize_hex_frame(normalized)
-    except ValueError:
-        return normalized
-
-
-def iter_test_conditions(project_data):
-    if not isinstance(project_data, dict):
-        return
-    for group_index, group in enumerate(project_data.get(TEST_GROUPS_KEY, []), 1):
-        if not isinstance(group, dict):
-            continue
-        for condition_index, condition in enumerate(
-            group.get(TEST_CONDITIONS_KEY, []),
-            1,
-        ):
-            if isinstance(condition, dict):
-                yield group_index, group, condition_index, condition
-
-
-def flatten_test_conditions(project_data):
-    result = []
-    for group_index, group, condition_index, condition in iter_test_conditions(
-        project_data
-    ):
-        group_name = str(group.get(GROUP_NAME_KEY, "") or "").strip()
-        condition_name = str(condition.get(CONDITION_NAME_KEY, "") or "").strip()
-        result.append(
-            {
-                "key": f"group_{group_index}:condition_{condition_index}",
-                GROUP_NAME_KEY: group_name,
-                **segment_condition_fields(condition),
-                CONDITION_NAME_KEY: condition_name,
-                TRIGGER_STATE_KEY: normalize_trigger_state(
-                    condition.get(TRIGGER_STATE_KEY, "")
-                ),
-                TEST_QUEUE_KEY: str(
-                    condition.get(TEST_QUEUE_KEY, "") or ""
-                ).strip(),
-            }
-        )
-    return result
-
-
-def classify_project_trigger_mode(conditions_or_project):
-    if isinstance(conditions_or_project, dict):
-        conditions = flatten_test_conditions(conditions_or_project)
-    else:
-        conditions = conditions_or_project or []
-    trigger_flags = [
-        bool(normalize_trigger_state(item.get(TRIGGER_STATE_KEY, "")))
-        for item in conditions
-        if isinstance(item, dict)
-    ]
-    if not any(trigger_flags):
-        return PRODUCT_TRIGGER_MODE_MANUAL
-    if all(trigger_flags):
-        return PRODUCT_TRIGGER_MODE_SERIAL
-    return PRODUCT_TRIGGER_MODE_MIXED
-
-
-def is_manual_project_play_allowed(conditions_or_project, *, serial_enabled=True):
-    trigger_mode = classify_project_trigger_mode(conditions_or_project)
-    return trigger_mode == PRODUCT_TRIGGER_MODE_MANUAL or (
-        trigger_mode == PRODUCT_TRIGGER_MODE_SERIAL and not serial_enabled
-    )
-
-
-class QueueAcquisitionConflict(str):
-    """String-compatible save error with complete ordered comparison rows."""
-
-    def __new__(cls, summary, rows):
-        rows = tuple(rows)
-        message = super().__new__(cls, "\n".join((summary, *rows)))
-        message.summary = summary
-        message.rows = rows
-        return message
-
-
-class ProductTestProjectValidator(object):
-    @staticmethod
-    def validate_queue_acquisition_consistency(project_data, queue_catalog, *, check_range=False):
-        """Validate explicit acquisition parameters of referenced queues on save."""
-        applicable_fields = [("sample_rate", "采样率", validate_sample_rate)]
-        if check_range:
-            applicable_fields.append((VE_RANGE_INDEX_CONFIG_KEY, "量程", validate_range_index))
-        parameter_values = []
-        rows = []
-        for group_index, group, condition_index, condition in iter_test_conditions(
-            project_data
-        ):
-            queue_name = str(condition.get(TEST_QUEUE_KEY, "") or "").strip()
-            if not queue_name:
-                continue
-            queue_data = queue_catalog.get(queue_name, {}).get("data")
-            # The catalog retains data only once its first sequence is readable.
-            # Missing/unreadable queues remain the reference validator's concern.
-            if queue_data is None:
-                continue
-            sequence = next(iter(queue_data[0].values()))
-            location = ProductTestProjectValidator.condition_location(
-                group_index, group, condition_index, condition
-            )
-            context = " ".join(f"{location}的测试队列“{queue_name}”".splitlines())
-            acquisition = sequence.get("acq")
-            if not isinstance(acquisition, dict):
-                return [f"{context}的 acq 必须是对象"]
-            detail = acquisition.get("detail")
-            if not isinstance(detail, dict):
-                return [f"{context}的 acq.detail 必须是对象"]
-            for field, label, validator in applicable_fields:
-                if field not in detail:
-                    return [f"{context}缺少{label}字段 {field}"]
-                try:
-                    validator(detail[field])
-                except ValueError:
-                    return [f"{context}的{label}字段 {field} 无效：{detail[field]!r}"]
-            values = tuple(detail[field] for field, _, _ in applicable_fields)
-            description = f"{context}（采样率 {values[0]} Hz"
-            if check_range:
-                description += f"，量程 {VE_RANGE_LABELS[values[1]]}"
-            description += "）"
-            parameter_values.append(values)
-            rows.append(description)
-        fields = "、".join(
-            label for index, (_, label, _) in enumerate(applicable_fields)
-            if len({values[index] for values in parameter_values}) > 1
-        )
-        if fields:
-            return [QueueAcquisitionConflict(f"{fields}不一致：", rows)]
-        return []
-
-    @staticmethod
-    def validate_test_queue_references(project_data, queue_catalog):
-        errors = []
-        for group_index, group, condition_index, condition in iter_test_conditions(
-            project_data
-        ):
-            location = ProductTestProjectValidator.condition_location(
-                group_index,
-                group,
-                condition_index,
-                condition,
-            )
-            test_queue_value = condition.get(TEST_QUEUE_KEY, "")
-            if not isinstance(test_queue_value, str):
-                continue
-            test_queue = test_queue_value.strip()
-            if not test_queue:
-                continue
-            queue_info = queue_catalog.get(test_queue)
-            if not queue_info:
-                errors.append(f"{location}引用的测试队列不存在：{test_queue}")
-            elif not queue_info.get("available", False):
-                errors.append(f"{location}引用的测试队列不可用：{test_queue}")
-            if isinstance(queue_info, dict) and queue_info.get("available"):
-                try:
-                    segment_count(normalize_segmented_analysis(condition), queue_info.get("duration"))
-                except ValueError as error:
-                    errors.append(str(error))
-        return errors
-
-    @staticmethod
-    def validate_for_save(project_data, registry, current_file, *, port_switch_idle_code=""):
-        if not isinstance(project_data, dict):
-            return ["产品测试配置必须是 JSON 对象"]
-
-        errors = []
-        project_name = normalize_project_name(
-            project_data.get(PROJECT_NAME_KEY, "")
-        )
-        if not project_name:
-            errors.append("项目名称不能为空")
-        elif any(char in project_name for char in INVALID_PROJECT_NAME_CHARS):
-            errors.append('项目名称不能包含以下字符：\\ / : * ? " < > | _')
-        elif project_name.endswith("."):
-            errors.append("项目名称不能以句点结尾")
-        elif project_file_name(project_name).lower() == PROGRAM_REGISTRY_FILE:
-            errors.append("项目名称不能使用系统保留名称：program_registry")
-
-        result_root_value = project_data.get(RESULT_ROOT_DIRECTORY_KEY, "")
-        if not isinstance(result_root_value, str) or not result_root_value.strip():
-            errors.append("测试结果根目录不能为空")
-        elif not ntpath.isabs(result_root_value.strip()):
-            errors.append("测试结果根目录必须是绝对路径")
-
-        export_raw_audio_csv = project_data.get(EXPORT_RAW_AUDIO_CSV_KEY, False)
-        if type(export_raw_audio_csv) is not bool:
-            errors.append("原始音频 CSV 保存配置必须是布尔值")
-
-        groups = project_data.get(TEST_GROUPS_KEY)
-        if not isinstance(groups, list):
-            errors.append("test_groups 必须是列表")
-            return errors
-        if not groups:
-            errors.append("至少需要配置一个端口")
-
-        group_names = set()
-        all_conditions = []
-        trigger_state_lengths = set()
-        for group_index, group in enumerate(groups, 1):
-            trigger_states = set()
-            if not isinstance(group, dict):
-                errors.append(f"第 {group_index} 个端口格式错误")
-                continue
-            group_name = str(group.get(GROUP_NAME_KEY, "") or "").strip()
-            group_label = group_name or f"第 {group_index} 个端口"
-            if not group_name:
-                errors.append(f"第 {group_index} 个端口名称不能为空")
-            elif group_name in group_names:
-                errors.append(f"端口名称重复：{group_name}")
-            else:
-                group_names.add(group_name)
-
-            conditions = group.get(TEST_CONDITIONS_KEY)
-            if not isinstance(conditions, list):
-                errors.append(f"{group_label}的 test_conditions 必须是列表")
-                continue
-            if not conditions:
-                errors.append(f"{group_label}至少需要配置一个工况")
-                continue
-
-            condition_names = set()
-            for condition_index, condition in enumerate(conditions, 1):
-                if not isinstance(condition, dict):
-                    errors.append(f"{group_label}的第 {condition_index} 个工况格式错误")
-                    continue
-                all_conditions.append(condition)
-                condition_name = str(
-                    condition.get(CONDITION_NAME_KEY, "") or ""
-                ).strip()
-                row_name = condition_name or f"第 {condition_index} 个工况"
-                location = f"{group_label}/{row_name}"
-                if not condition_name:
-                    errors.append(f"{group_label}的第 {condition_index} 个工况名称不能为空")
-                elif condition_name in condition_names:
-                    errors.append(
-                        f"{group_label}中的工况名称重复：{condition_name}"
-                    )
-                else:
-                    condition_names.add(condition_name)
-
-                trigger_value = condition.get(TRIGGER_STATE_KEY, "")
-                if not isinstance(trigger_value, str):
-                    errors.append(f"{location}的状态码必须是字符串")
-                else:
-                    trigger_state = normalize_trigger_state(trigger_value)
-                    if trigger_state:
-                        try:
-                            trigger_state = normalize_hex_frame(trigger_state)
-                        except ValueError as error:
-                            errors.append(f"{location}的状态码格式错误：{error}")
-                        else:
-                            trigger_state_lengths.add(len(trigger_state.split()))
-                            if trigger_state in trigger_states:
-                                errors.append(f"状态码重复：{trigger_state}")
-                            else:
-                                trigger_states.add(trigger_state)
-
-                try:
-                    validate_input_voltage(condition.get("input_voltage", ""))
-                    segment_condition_fields(condition)
-                except ValueError as error:
-                    errors.append(str(error))
-
-                if OUTPUT_LOAD_KEY in condition:
-                    load = condition[OUTPUT_LOAD_KEY]
-                    if not isinstance(load, dict):
-                        errors.append(f"{location}的输出负载配置必须是对象")
-                    else:
-                        values = load.get("values")
-                        seconds = load.get("analysis_seconds")
-                        if type(load.get("enabled")) is not bool:
-                            errors.append(f"{location}的输出负载启用状态必须是布尔值")
-                        if not isinstance(values, list) or any(
-                            type(value) not in (int, float)
-                            or not math.isfinite(value)
-                            or value < 0
-                            for value in values
-                        ):
-                            errors.append(f"{location}的输出负载必须是非负数列表")
-                        elif load.get("enabled") and not values:
-                            errors.append(f"{location}的输出负载不能为空")
-                        if (
-                            type(seconds) not in (int, float)
-                            or not math.isfinite(seconds)
-                            or seconds <= 0
-                        ):
-                            errors.append(f"{location}的每段分析时长必须大于零")
-
-                test_queue = condition.get(TEST_QUEUE_KEY, "")
-                if not isinstance(test_queue, str):
-                    errors.append(f"{location}的测试队列名称格式错误")
-                elif not test_queue.strip():
-                    errors.append(f"{location}尚未选择测试队列")
-
-        if (
-            all_conditions
-            and classify_project_trigger_mode(all_conditions)
-            == PRODUCT_TRIGGER_MODE_MIXED
-        ):
-            errors.append("所有工况状态码必须全部配置或全部留空")
-
-        if len(trigger_state_lengths) > 1:
-            errors.append("同一项目内所有工况状态码必须按字节数等长（不计空格）")
-
-        if (
-            not errors and all_conditions
-            and classify_project_trigger_mode(all_conditions) != PRODUCT_TRIGGER_MODE_MANUAL
-        ):
-            try:
-                build_serial_product_port_plan(
-                    flatten_test_conditions(project_data), port_switch_idle_code
-                )
-            except ValueError as error:
-                errors.append(str(error))
-
-        for item in (registry or {}).get(REGISTRY_CONFIGS_KEY, []):
-            if not isinstance(item, dict):
-                continue
-            file_name = str(item.get(REGISTRY_FILE_KEY, "") or "").strip()
-            registered_name = normalize_project_name(
-                item.get(PROJECT_NAME_KEY, "")
-            )
-            if (
-                file_name.casefold() != str(current_file or "").casefold()
-                and registered_name.casefold() == project_name.casefold()
-            ):
-                errors.append(f"项目名称已存在：{project_name}")
-                break
-        return errors
-
-    @staticmethod
-    def validate_for_use(project_data, queue_catalog):
-        if not flatten_test_conditions(project_data):
-            return ["至少需要配置一个工况"]
-        return ProductTestProjectValidator.validate_test_queue_references(
-            project_data,
-            queue_catalog,
-        )
-
-    @staticmethod
-    def condition_location(
-        group_index,
-        group,
-        condition_index,
-        condition,
-    ):
-        group_name = str(group.get(GROUP_NAME_KEY, "") or "").strip()
-        condition_name = str(condition.get(CONDITION_NAME_KEY, "") or "").strip()
-        return (
-            f"{group_name or f'第 {group_index} 个端口'}/"
-            f"{condition_name or f'第 {condition_index} 个工况'}"
-        )
-
-
-class ProductTestProjectConfigManager(object):
-    def __init__(
-        self,
-        program_dir=PRODUCT_TEST_PROGRAM_DIR,
-        registry_path=PRODUCT_TEST_PROGRAM_REGISTRY_PATH,
-        queue_registry_path=SEQUENCE_CONFIG_REGISTRY_PATH,
-        *,
-        input_device_provider=None,
-    ):
+class ProductTestProjectConfigManager:
+    def __init__(self, program_dir=PRODUCT_TEST_PROGRAM_DIR,
+                 registry_path=PRODUCT_TEST_PROGRAM_REGISTRY_PATH,
+                 queue_registry_path=SEQUENCE_CONFIG_REGISTRY_PATH, *, input_device_provider=None):
         self.program_dir = os.path.abspath(program_dir)
         self.registry_path = os.path.abspath(registry_path)
         self.queue_registry_path = os.path.abspath(queue_registry_path)
         self.input_device_provider = input_device_provider
 
-    @staticmethod
-    def default_project():
-        return {
-            PROJECT_NAME_KEY: "",
-            RESULT_ROOT_DIRECTORY_KEY: "",
-            EXPORT_RAW_AUDIO_CSV_KEY: False,
-            TEST_GROUPS_KEY: [
-                {
-                    GROUP_NAME_KEY: "新端口1",
-                    TEST_CONDITIONS_KEY: [
-                        {
-                            CONDITION_NAME_KEY: "档位1",
-                            TRIGGER_STATE_KEY: "",
-                            TEST_QUEUE_KEY: "",
-                        }
-                    ],
-                }
-            ],
-        }
+    default_project = staticmethod(default_project)
 
     def load_registry(self):
-        load_code, data = LoadUiConfig.load_data_from_json(self.registry_path)
-        if load_code != error_code.OK or not isinstance(data, dict):
-            return {
-                REGISTRY_ACTIVE_FILE_KEY: None,
-                REGISTRY_CONFIGS_KEY: [],
-            }
-
-        configs = []
-        for item in data.get(REGISTRY_CONFIGS_KEY, []):
-            if not isinstance(item, dict):
-                continue
-            file_name = str(item.get(REGISTRY_FILE_KEY, "") or "").strip()
-            project_name = str(item.get(PROJECT_NAME_KEY, "") or "").strip()
-            if (
-                self._is_safe_file_name(file_name)
-                and project_name
-                and file_name == project_file_name(project_name)
-            ):
-                configs.append(
-                    {REGISTRY_FILE_KEY: file_name, PROJECT_NAME_KEY: project_name}
-                )
-
-        active_file = (
-            str(data.get(REGISTRY_ACTIVE_FILE_KEY, "") or "").strip() or None
-        )
-        known_files = {item[REGISTRY_FILE_KEY] for item in configs}
-        if active_file not in known_files:
-            active_file = None
-        return {
-            REGISTRY_ACTIVE_FILE_KEY: active_file,
-            REGISTRY_CONFIGS_KEY: configs,
-        }
+        if not os.path.exists(self.registry_path):
+            return {"active_file": None, "configs": []}
+        code, data = LoadUiConfig.load_data_from_json(self.registry_path)
+        if code != error_code.OK or not isinstance(data, dict) or not isinstance(data.get("configs"), list):
+            raise ValueError("配置列表损坏，未创建或覆盖任何配置")
+        seen = set()
+        project_ids = set()
+        for item in data["configs"]:
+            if (not isinstance(item, dict) or not self._is_safe_file_name(item.get("file"))
+                    or not isinstance(item.get("project_name", item.get("name")), str)):
+                raise ValueError("配置列表包含无效记录")
+            if item["file"].casefold() in seen:
+                raise ValueError("配置列表包含重复文件")
+            seen.add(item["file"].casefold())
+            project_id = item.get("project_id")
+            if project_id is not None:
+                if not isinstance(project_id, str) or not project_id or project_id in project_ids:
+                    raise ValueError("配置列表包含无效或重复项目 ID")
+                project_ids.add(project_id)
+        return data
 
     def save_registry(self, registry):
-        normalized = {
-            REGISTRY_ACTIVE_FILE_KEY: (
-                registry or {}
-            ).get(REGISTRY_ACTIVE_FILE_KEY) or None,
-            REGISTRY_CONFIGS_KEY: [
-                {
-                    REGISTRY_FILE_KEY: str(
-                        item.get(REGISTRY_FILE_KEY, "") or ""
-                    ).strip(),
-                    PROJECT_NAME_KEY: str(
-                        item.get(PROJECT_NAME_KEY, "") or ""
-                    ).strip(),
-                }
-                for item in (registry or {}).get(REGISTRY_CONFIGS_KEY, [])
-                if isinstance(item, dict)
-            ],
-        }
-        return LoadUiConfig.save_data_to_json(normalized, self.registry_path)
+        return LoadUiConfig.save_data_to_json(registry, self.registry_path)
 
     def load_project(self, file_name):
         if not self._is_safe_file_name(file_name):
-            return error_code.INVALID_DATA_LOADING, "产品测试配置文件名不合法"
-        file_path = os.path.join(self.program_dir, file_name)
-        if not os.path.isfile(file_path):
-            return (
-                error_code.INVALID_DATA_LOADING,
-                "产品测试配置文件不存在，请选择其他配置。",
-            )
-        load_code, data = LoadUiConfig.load_data_from_json(file_path)
-        if load_code != error_code.OK or not isinstance(data, dict):
-            return error_code.INVALID_DATA_LOADING, data
+            return error_code.INVALID_DATA_LOADING, "配置文件名无效"
+        code, data = LoadUiConfig.load_data_from_json(os.path.join(self.program_dir, file_name))
+        if code != error_code.OK:
+            return code, data
+        errors = validate_structure(data)
+        if errors:
+            return error_code.INVALID_DATA_LOADING, "\n".join(errors)
         return error_code.OK, data
 
+    def get_hardware_channels(self):
+        device = self.input_device_provider() if self.input_device_provider else None
+        return hardware_channels(device)
+
+    def load_queue_catalog(self, queue_names=None):
+        registry = LoadUiConfig._load_sequence_config_registry(self.queue_registry_path)
+        directory = os.path.dirname(self.queue_registry_path)
+        return {name: load_queue_info(resolve_queue_path(path, directory))
+                for name, path in registry.items()
+                if name != "using_config_path" and isinstance(path, str)
+                and (queue_names is None or name in queue_names)}
+
+    def validate_project(self, project, current_file=None, queue_catalog=None, *, check_acquisition_consistency=False):
+        errors = validate_structure(project)
+        warnings = []
+        if not errors:
+            name_error = self._project_name_error(project["project_name"].strip())
+            if name_error:
+                errors.append(name_error)
+            catalog = self.load_queue_catalog() if queue_catalog is None else queue_catalog
+            errors.extend(validate_references(project, catalog))
+            available = self.get_hardware_channels()
+            keys = {(x["device_ref"], x["physical_channel_index"]) for x in available}
+            devices = {x["device_ref"] for x in available}
+            for station in project["stations"]:
+                for col, channel in enumerate(station["channels"], 1):
+                    hw = channel["hardware_channel"]
+                    key = (hw["device_ref"], hw["physical_channel_index"])
+                    label = f"{station['station_name']} WAV第{col}通道"
+                    if hw["device_ref"] in devices and key not in keys:
+                        errors.append(f"{label}超出已知硬件通道范围")
+                    elif key not in keys:
+                        warnings.append(f"{label}硬件引用未核实（设备未连接或不在当前硬件目录中）")
+        return {"can_save": not errors, "save_errors": errors,
+                "is_usable": False, "is_test_mode_usable": False,
+                "use_errors": errors + [RUNTIME_UNAVAILABLE], "use_warnings": warnings,
+                "test_mode_errors": [RUNTIME_UNAVAILABLE]}
+
     def save_project(self, current_file, project_data, *, update_active=True):
+        validation = self.validate_project(project_data, current_file)
+        if validation["save_errors"]:
+            return False, "\n".join(validation["save_errors"])
         if current_file and not self._is_safe_file_name(current_file):
-            return False, "产品测试配置文件名不合法"
+            return False, "配置文件名无效"
+        try:
+            registry = self.load_registry()
+        except ValueError as error:
+            return False, str(error)
+        project = normalize_project(project_data)
+        project_id = project["project_id"]
+        target_file = project["project_name"] + ".json"
+        for entry in registry["configs"]:
+            if entry["file"] == current_file and entry.get("project_id") != project_id:
+                return False, "不能用另一项目身份覆盖当前配置，请另存为"
+            if entry["file"] != current_file and entry.get("project_id") == project_id:
+                return False, "项目 ID 已存在，请另存为独立配置"
+            if entry["file"] != current_file and entry["file"].casefold() == target_file.casefold():
+                return False, "同名产品配置已存在，请修改项目名称"
         if current_file:
-            current_file = self.existing_project_file(current_file) or current_file
-
-        registry = self.load_registry()
-        errors, _queue_catalog = self._collect_save_errors(
-            project_data, registry, current_file, check_acquisition_consistency=True
-        )
-        if errors:
-            return False, errors[0] if len(errors) == 1 else "\n".join(errors)
-
-        normalized_project = self._normalize_project(project_data)
-        project_name = normalized_project[PROJECT_NAME_KEY]
-        target_file = project_file_name(project_name)
-        # A case-only change updates the same project, keeping its saved spelling.
-        if current_file and target_file.casefold() == current_file.casefold():
-            target_file = current_file
-            project_name = os.path.splitext(current_file)[0]
-            normalized_project[PROJECT_NAME_KEY] = project_name
-        current_path = (
-            os.path.join(self.program_dir, current_file) if current_file else None
-        )
-        target_path = os.path.join(self.program_dir, target_file)
-        if target_file != current_file and (
-            self.existing_project_file(project_name) or os.path.exists(target_path)
-        ):
-            return False, f"项目名称已存在：{project_name}"
-
+            code, existing = self.load_project(current_file)
+            if code != error_code.OK:
+                return False, "原配置无法读取，未覆盖原文件"
+            if existing["project_id"] != project_id:
+                return False, "不能用另一项目身份覆盖当前配置，请另存为"
         try:
-            os.makedirs(
-                os.path.join(
-                    normalized_project[RESULT_ROOT_DIRECTORY_KEY],
-                    project_name,
-                ),
-                exist_ok=True,
-            )
+            files = os.listdir(self.program_dir) if os.path.isdir(self.program_dir) else []
         except OSError as error:
-            return False, f"无法创建项目测试结果目录：{error}"
+            return False, f"配置目录无法读取：{error}"
+        if any(name != current_file and name.casefold() == target_file.casefold() for name in files):
+            return False, "同名文件已存在，请修改项目名称"
+        updated = copy.deepcopy(registry)
+        updated["configs"] = [e for e in updated["configs"] if e["file"] != current_file]
+        updated["configs"].append({"project_id": project_id, "project_name": project["project_name"], "file": target_file})
+        if ((current_file and updated.get("active_file") == current_file)
+                or (update_active and not updated.get("active_file"))):
+            updated["active_file"] = target_file
+        return self._write_project(project, current_file, target_file, updated)
 
+    def _write_project(self, project, current_file, target_file, registry):
+        path = os.path.join(self.program_dir, target_file)
+        original_path = os.path.join(self.program_dir, current_file) if current_file else path
+        same_path = os.path.normcase(original_path) == os.path.normcase(path)
         try:
-            target_snapshot = self._read_file_snapshot(target_path)
+            snapshot = self._read_file_snapshot(path)
+            registry_snapshot = self._read_file_snapshot(self.registry_path)
+            if not LoadUiConfig.save_data_to_json(project, path):
+                return False, "产品配置写入失败"
         except OSError as error:
-            return False, f"无法读取原产品测试配置：{error}"
-        if not LoadUiConfig.save_data_to_json(normalized_project, target_path):
-            return False, "产品测试配置保存失败"
-
-        original_registry = self._copy_registry(registry)
-        active_file_before_save = registry.get(REGISTRY_ACTIVE_FILE_KEY)
-        self._replace_registry_entry(
-            registry,
-            current_file,
-            target_file,
-            project_name,
-        )
-        if update_active and (
-            not active_file_before_save or active_file_before_save == current_file
-        ):
-            registry[REGISTRY_ACTIVE_FILE_KEY] = target_file
-        if not self.save_registry(registry):
-            restored = self._restore_file_snapshot(target_path, target_snapshot)
-            message = "产品测试配置保存失败：注册表更新失败"
-            if not restored:
-                message += "，且原配置恢复失败"
-            return False, message
-
-        if current_path and current_path != target_path and os.path.isfile(current_path):
+            return False, f"产品配置写入失败：{error}"
+        failure = "配置列表保存失败"
+        try:
+            saved = self.save_registry(registry)
+            if saved and current_file and not same_path:
+                failure = "原配置文件移除失败"
+                os.remove(original_path)
+        except OSError:
+            saved = False
+        if not saved:
+            # Keep the old file until the registry is saved. Roll back both files
+            # on handled failures, including failure to remove the old filename.
+            restored = self._restore_file_snapshot(original_path if same_path else path, snapshot)
             try:
-                os.remove(current_path)
-            except OSError as error:
-                self.save_registry(original_registry)
-                restored = self._restore_file_snapshot(target_path, target_snapshot)
-                message = f"产品测试配置文件重命名失败：{error}"
-                if not restored:
-                    message += "，且目标文件恢复失败"
-                return False, message
+                registry_restored = (self._read_file_snapshot(self.registry_path) == registry_snapshot
+                                     or self._restore_file_snapshot(self.registry_path, registry_snapshot))
+            except OSError:
+                registry_restored = False
+            return False, failure + ("，原配置已恢复" if restored and registry_restored else "，原配置恢复失败")
         return True, target_file
 
-    def save_as(self, project_data, new_name):
-        if not isinstance(project_data, dict):
-            return False, "产品测试配置必须是 JSON 对象"
-        copied_project = self._normalize_project(project_data)
-        copied_project[PROJECT_NAME_KEY] = normalize_project_name(new_name)
-        return self.save_project(None, copied_project, update_active=False)
+    @staticmethod
+    def _project_name_error(name):
+        if any(char in '<>:"/\\|?*' or ord(char) < 32 for char in name):
+            return '项目名称用于文件名，不能包含以下字符：< > : " / \\ | ? * 或控制字符'
+        if name.endswith(".") or PureWindowsPath(name + ".json").is_reserved():
+            return "项目名称不能以句点结尾，也不能使用 Windows 保留名称（如 CON、NUL、COM1）"
+        if (name + ".json").casefold() == PROGRAM_REGISTRY_FILE.casefold():
+            return "项目名称与配置列表文件重名，请更换名称"
+        if len((name + ".json").encode("utf-16-le")) // 2 > 255:
+            return "项目名称过长，请缩短名称"
+        return ""
 
     def import_project(self, source_path):
-        """Read an import draft; persistence is handled only by save_project."""
-        load_code, project_data = LoadUiConfig.load_data_from_json(source_path)
-        if load_code != error_code.OK or not isinstance(project_data, dict):
-            return False, "导入文件不是有效的产品测试配置 JSON"
-        errors = ProductTestProjectValidator.validate_for_save(
-            project_data, {}, None
-        )
+        code, project = LoadUiConfig.load_data_from_json(source_path)
+        if code != error_code.OK:
+            return False, project
+        errors = validate_structure(project)
+        return (False, "\n".join(errors)) if errors else (True, project)
+
+    def save_as(self, project, new_name):
+        errors = validate_structure(project)
         if errors:
             return False, "\n".join(errors)
-        return True, project_data
+        return self.save_project(None, copy_project(project, new_name), update_active=False)
 
-    def existing_project_file(self, project_name):
-        """Find the managed save target, including a missing registered file."""
-        target_file = project_file_name(project_name)
-        if not self._is_safe_file_name(target_file):
-            return None
-        for item in self.load_registry().get(REGISTRY_CONFIGS_KEY, []):
-            if item[REGISTRY_FILE_KEY].casefold() == target_file.casefold():
-                return item[REGISTRY_FILE_KEY]
-        if os.path.isdir(self.program_dir):
-            with os.scandir(self.program_dir) as entries:
-                for entry in entries:
-                    if entry.name.casefold() == target_file.casefold() and entry.is_file():
-                        return entry.name
+    def existing_project_file(self, identity):
+        for entry in self.load_registry()["configs"]:
+            if identity in (entry.get("project_id"), entry["file"]):
+                return entry["file"]
         return None
 
     def delete_project(self, file_name):
-        from base.config_deletion import ConfigDeletionError, ConfigDeletionService
-
+        from base.config_deletion import ConfigDeletionService, ConfigDeletionError
         service = ConfigDeletionService(self)
         try:
-            target = next((item for item in service.list_targets("product")
-                           if item.key == file_name), None)
+            target = next((t for t in service.list_targets("product") if t.key == file_name), None)
             if target is None:
-                return False, "产品配置未登记或文件名无效"
+                return False, "配置不存在"
             service.delete(target)
         except ConfigDeletionError as error:
             return False, str(error)
-        return True, file_name
-
-    def validate_project(
-        self, project_data, current_file, queue_catalog=None, *,
-        check_acquisition_consistency=False,
-    ):
-        registry = self.load_registry()
-        save_errors, queue_catalog = self._collect_save_errors(
-            project_data,
-            registry,
-            current_file,
-            queue_catalog,
-            check_acquisition_consistency=check_acquisition_consistency,
-        )
-        use_errors = list(save_errors)
-        if not save_errors:
-            use_errors.extend(
-                ProductTestProjectValidator.validate_for_use(
-                    project_data,
-                    queue_catalog,
-                )
-            )
-
-        use_warnings = []
-        test_mode_errors = []
-        if not save_errors:
-            for group_index, group, condition_index, condition in iter_test_conditions(
-                project_data
-            ):
-                test_queue = str(
-                    condition.get(TEST_QUEUE_KEY, "") or ""
-                ).strip()
-                queue_info = queue_catalog.get(test_queue)
-                if (
-                    queue_info
-                    and queue_info.get("available", False)
-                    and not queue_info.get("can_auto_judge", False)
-                ):
-                    location = ProductTestProjectValidator.condition_location(
-                        group_index,
-                        group,
-                        condition_index,
-                        condition,
-                    )
-                    reason = str(queue_info.get("judgment_reason", "") or "")
-                    warning = (
-                        f"{location}的测试队列不能自动输出 OK/NG："
-                        f"{test_queue}（{reason}）"
-                    )
-                    use_warnings.append(warning)
-        return {
-            "can_save": not save_errors,
-            "is_usable": not use_errors,
-            "is_test_mode_usable": not use_errors,
-            "save_errors": save_errors,
-            "use_errors": use_errors,
-            "use_warnings": use_warnings,
-            "test_mode_errors": test_mode_errors,
-        }
-
-    def _collect_save_errors(
-        self,
-        project_data,
-        registry,
-        current_file,
-        queue_catalog=None,
-        *,
-        check_acquisition_consistency=False,
-    ):
-        """Return errors and the shared catalog, loading it after structure checks."""
-        _serial_error, serial_config = LoadUiConfig.load_serial_discrete_input_config()
-        idle_code = (
-            serial_config.get("port_switch_idle_code", "")
-            if isinstance(serial_config, dict) else ""
-        )
-        errors = ProductTestProjectValidator.validate_for_save(
-            project_data,
-            registry,
-            current_file,
-            port_switch_idle_code=idle_code,
-        )
-        if errors:
-            return errors, queue_catalog
-        if queue_catalog is None:
-            queue_catalog = self.load_queue_catalog()
-        if check_acquisition_consistency:
-            device = self.input_device_provider() if self.input_device_provider is not None else None
-            errors = ProductTestProjectValidator.validate_queue_acquisition_consistency(
-                project_data, queue_catalog, check_range=(device or {}).get("backend") == VE_BACKEND
-            )
-            if errors:
-                return errors, queue_catalog
-        errors.extend(
-            ProductTestProjectValidator.validate_test_queue_references(
-                project_data,
-                queue_catalog,
-            )
-        )
-        return errors, queue_catalog
-
-    def load_queue_catalog(self, queue_names=None):
-        registry = LoadUiConfig._load_sequence_config_registry(
-            self.queue_registry_path
-        )
-        catalog = {}
-        registry_dir = os.path.dirname(self.queue_registry_path)
-        for name, registered_path in registry.items():
-            if name == "using_config_path" or not isinstance(registered_path, str):
-                continue
-            if queue_names is not None and name not in queue_names:
-                continue
-            file_path = self._resolve_queue_path(registered_path, registry_dir)
-            catalog[name] = self._load_queue_info(file_path)
-        return catalog
-
-    @staticmethod
-    def _resolve_queue_path(registered_path, registry_dir):
-        if not os.path.isabs(registered_path):
-            return os.path.abspath(os.path.join(registry_dir, registered_path))
-        absolute_path = os.path.abspath(registered_path)
-        if os.path.isfile(absolute_path):
-            return absolute_path
-        file_name = os.path.basename(absolute_path)
-        for candidate in (
-            os.path.join(registry_dir, file_name),
-            os.path.join(os.path.dirname(registry_dir), file_name),
-        ):
-            if os.path.isfile(candidate):
-                return os.path.abspath(candidate)
-        return absolute_path
-
-    @staticmethod
-    def _normalize_project(project_data):
-        test_groups = []
-        for group in project_data.get(TEST_GROUPS_KEY, []):
-            if not isinstance(group, dict):
-                continue
-            conditions = []
-            for condition in group.get(TEST_CONDITIONS_KEY, []):
-                if not isinstance(condition, dict):
-                    continue
-                conditions.append(
-                    {
-                        CONDITION_NAME_KEY: str(
-                            condition.get(CONDITION_NAME_KEY, "") or ""
-                        ).strip(),
-                        TRIGGER_STATE_KEY: normalize_optional_hex_frame(
-                            condition.get(TRIGGER_STATE_KEY, "")
-                        ),
-                        TEST_QUEUE_KEY: str(
-                            condition.get(TEST_QUEUE_KEY, "") or ""
-                        ).strip(),
-                        **(
-                            segment_condition_fields(condition)
-                        ),
-                    }
-                )
-            test_groups.append(
-                {
-                    GROUP_NAME_KEY: str(
-                        group.get(GROUP_NAME_KEY, "") or ""
-                    ).strip(),
-                    TEST_CONDITIONS_KEY: conditions,
-                }
-            )
-        result_root = str(
-            project_data.get(RESULT_ROOT_DIRECTORY_KEY, "") or ""
-        ).strip()
-        return {
-            PROJECT_NAME_KEY: normalize_project_name(
-                project_data.get(PROJECT_NAME_KEY, "")
-            ),
-            RESULT_ROOT_DIRECTORY_KEY: ntpath.normpath(result_root),
-            EXPORT_RAW_AUDIO_CSV_KEY: (
-                project_data.get(EXPORT_RAW_AUDIO_CSV_KEY, False) is True
-            ),
-            TEST_GROUPS_KEY: test_groups,
-        }
-
-    @staticmethod
-    def _replace_registry_entry(
-        registry,
-        current_file,
-        target_file,
-        project_name,
-    ):
-        for item in registry.get(REGISTRY_CONFIGS_KEY, []):
-            if item.get(REGISTRY_FILE_KEY) == current_file:
-                item[REGISTRY_FILE_KEY] = target_file
-                item[PROJECT_NAME_KEY] = project_name
-                return
-        registry.setdefault(REGISTRY_CONFIGS_KEY, []).append(
-            {REGISTRY_FILE_KEY: target_file, PROJECT_NAME_KEY: project_name}
-        )
-
-    @staticmethod
-    def _load_queue_info(file_path):
-        load_code, queue_data = LoadUiConfig.load_data_from_json(file_path)
-        return ProductTestProjectConfigManager._queue_info_from_data(
-            file_path, queue_data if load_code == error_code.OK else None
-        )
-
-    @staticmethod
-    def _queue_info_from_data(file_path, queue_data):
-        info = {
-            "path": file_path,
-            "available": False,
-            "acquisition_mode": "",
-            "duration": None,
-            "analysis_items": [],
-            "reason": "",
-            "can_auto_judge": False,
-            "judgment_reason": "",
-        }
-        if not isinstance(queue_data, list) or not queue_data:
-            info["reason"] = "测试队列文件无法读取"
-            return info
-        first_sequence_group = queue_data[0]
-        if not isinstance(first_sequence_group, dict) or not first_sequence_group:
-            info["reason"] = "测试队列没有可执行序列"
-            return info
-        sequence_data = next(iter(first_sequence_group.values()))
-        if not isinstance(sequence_data, dict):
-            info["reason"] = "测试队列序列格式错误"
-            return info
-
-        info["data"] = queue_data
-        acquisition = sequence_data.get("acq", {})
-        if not isinstance(acquisition, dict):
-            info["reason"] = "测试队列采集配置格式错误"
-            return info
-        acquisition_mode = str(acquisition.get("mode") or "RECORD_ONLY").strip().upper()
-        info["acquisition_mode"] = acquisition_mode
-        acquisition_detail = acquisition.get("detail", {})
-        analysis_list = sequence_data.get("analysis_list", {})
-        if not isinstance(analysis_list, dict):
-            info["reason"] = "测试队列分析配置格式错误"
-            return info
-        info["analysis_list"] = analysis_list
-        try:
-            validate_analysis_config(analysis_list)
-        except ValueError as exc:
-            info["reason"] = str(exc)
-            return info
-        display_sequence = analysis_list.get("display_sequence", [])
-        if acquisition_mode != "RECORD_ONLY":
-            info["reason"] = f"不支持的采集模式：{acquisition_mode or '-'}"
-            return info
-        try:
-            resolve_recording_preview_time_mode(acquisition_detail)
-        except ValueError as exc:
-            info["reason"] = str(exc)
-            return info
-        duration = acquisition_detail.get("total_time")
-        sample_rate = acquisition_detail.get("sample_rate")
-        if not isinstance(duration, (int, float)) or duration <= 0:
-            info["reason"] = "录音时长无效"
-            return info
-        info["duration"] = duration
-        if not isinstance(sample_rate, (int, float)) or sample_rate <= 0:
-            info["reason"] = "采样率无效"
-            return info
-        if isinstance(display_sequence, list):
-            display_sequence = [
-                name for name in display_sequence
-                if not (
-                    isinstance(analysis_list.get(name), dict)
-                    and analysis_list[name].get("type") == "Excel"
-                )
-            ]
-        if not isinstance(display_sequence, list) or not display_sequence:
-            info["reason"] = "未配置分析项"
-            return info
-        info["analysis_items"] = [str(item) for item in display_sequence]
-        for item_name in display_sequence:
-            if not isinstance(analysis_list.get(item_name), dict):
-                info["reason"] = f"分析项不存在：{item_name}"
-                return info
-        info["available"] = True
-        if ProductTestProjectConfigManager._has_automatic_judgment(
-            analysis_list,
-            display_sequence,
-        ):
-            info["can_auto_judge"] = True
-        else:
-            info["judgment_reason"] = "未配置可输出 OK/NG 的规则阈值"
-        return info
-
-    @staticmethod
-    def _has_automatic_judgment(analysis_list, display_sequence):
-        for item_name in display_sequence:
-            item_config = analysis_list.get(item_name, {})
-            normalized_type = str(item_config.get("type", "") or "").upper()
-            if normalized_type == "RSC":
-                has_reference = bool(
-                    str(item_config.get("reference_source_path", "") or "").strip()
-                )
-                current_only = bool(
-                    item_config.get("view_current_only_without_reference", False)
-                )
-                threshold_enabled = bool(
-                    item_config.get("enable_threshold_judgment", True)
-                )
-                if has_reference and not current_only and threshold_enabled:
-                    return True
-            elif (
-                normalized_type in LIMIT_RULE_ANALYSIS_TYPES
-                and item_config.get("limit_checked")
-            ):
-                return True
-        return False
-
-    @staticmethod
-    def _copy_registry(registry):
-        return {
-            REGISTRY_ACTIVE_FILE_KEY: (registry or {}).get(
-                REGISTRY_ACTIVE_FILE_KEY
-            ),
-            REGISTRY_CONFIGS_KEY: [
-                dict(item)
-                for item in (registry or {}).get(REGISTRY_CONFIGS_KEY, [])
-            ],
-        }
+        return True, ""
 
     @staticmethod
     def _read_file_snapshot(file_path):

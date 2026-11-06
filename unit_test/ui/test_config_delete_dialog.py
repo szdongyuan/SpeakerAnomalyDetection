@@ -150,8 +150,8 @@ def test_referenced_row_does_not_block_deleting_other_checked_queues(files, ui_q
 def test_reference_details_show_whole_rows_and_scroll(files, ui_qapp, references, long_name):
     service, products, _, _, _ = files
     data = product("Q", "项目名称很长" * 12 if long_name else "项目2")
-    data["test_groups"][0]["test_conditions"] = [
-        {"condition_name": f"档位{index}", "test_queue": "Q"}
+    data["conditions"] = [
+        {**data["conditions"][0], "condition_name": f"档位{index}"}
         for index in range(references)
     ]
     write(products / "A.json", data)
@@ -236,6 +236,8 @@ def test_partial_failure_blocks_dialog(files, ui_qapp, monkeypatch):
 def test_product_editor_keeps_other_draft_and_clears_deleted_draft(files, ui_qapp, monkeypatch, delete_current):
     service, products, registry, _, _ = files
     editor = ProductTestProjectConfigDialog(service.manager)
+    from unit_test.product_config_fixtures import make_project
+    editor._show_project(make_project(Path(service.manager.program_dir)), "A.json")
     editor.project_name_input.setText("尚未保存的名称")
     editor._set_dirty(True)
     editor.show()
@@ -619,6 +621,8 @@ def test_multiselect_list_scrolls_and_can_delete_last_checked_item(files, ui_qap
 def test_product_editor_multiselect_clears_current_only_after_success(files, ui_qapp, monkeypatch):
     service, products, registry, _, _ = files
     editor = ProductTestProjectConfigDialog(service.manager)
+    from unit_test.product_config_fixtures import make_project
+    editor._show_project(make_project(Path(service.manager.program_dir)), "A.json")
     editor.project_name_input.setText("Unsaved A")
     editor._set_dirty(True)
     editor.show()
@@ -662,7 +666,9 @@ def test_product_editor_close_depends_on_edited_file_not_active_file(
 ):
     service, _, registry, _, _ = files
     editor = ProductTestProjectConfigDialog(service.manager)
-    assert editor._load_project("B.json")
+    from unit_test.product_config_fixtures import make_project
+    editor._show_project(make_project(Path(service.manager.program_dir)), "A.json")
+    editor._show_project(make_project(Path(service.manager.program_dir), project_name="B"), "B.json")
     editor.project_name_input.setText("Unsaved B")
     editor._set_dirty(True)
     editor.show()
@@ -689,6 +695,8 @@ def test_product_editor_close_depends_on_edited_file_not_active_file(
 def test_cancel_product_deletion_preserves_editor_and_files(files, ui_qapp, monkeypatch):
     service, products, registry, _, _ = files
     editor = ProductTestProjectConfigDialog(service.manager)
+    from unit_test.product_config_fixtures import make_project
+    editor._show_project(make_project(Path(service.manager.program_dir)), "A.json")
     editor.project_name_input.setText("Unsaved A")
     editor._set_dirty(True)
     editor.show()
@@ -712,6 +720,8 @@ def test_cancel_product_deletion_preserves_editor_and_files(files, ui_qapp, monk
 def test_product_delete_failure_keeps_editor_open(files, ui_qapp, monkeypatch, failure_file):
     service, products, registry, _, _ = files
     editor = ProductTestProjectConfigDialog(service.manager)
+    from unit_test.product_config_fixtures import make_project
+    editor._show_project(make_project(Path(service.manager.program_dir)), "A.json")
     editor.project_name_input.setText("Unsaved A")
     editor._set_dirty(True)
     editor.show()
@@ -762,6 +772,8 @@ def test_real_modal_product_delete_closes_editor_after_batch(files, ui_qapp):
             (target.key, editor.isVisible())
         ),
     )
+    from unit_test.product_config_fixtures import make_project
+    editor._show_project(make_project(Path(service.manager.program_dir)), "A.json")
     editor.show()
     errors = []
 

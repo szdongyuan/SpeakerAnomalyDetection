@@ -2,7 +2,7 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace
 
-from base.product_test_project_config import (
+from base.product_test_runtime_policy import (
     classify_project_trigger_mode,
     is_manual_project_play_allowed,
 )

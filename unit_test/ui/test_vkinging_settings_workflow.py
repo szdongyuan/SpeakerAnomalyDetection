@@ -6,12 +6,14 @@ from types import MethodType
 import numpy as np
 import pytest
 import soundfile as sf
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import QDialog
+from PyQt5.QtCore import Qt
+from PyQt5.QtTest import QTest
+from PyQt5.QtWidgets import QDialog, QMessageBox
 
 from base.recording_capture import RecordingCapture
+from base.recording_final_result import prepare_main_recording_result
 from base.recording_process_protocol import RecordingResult
-from base.recording_result_reader import RecordingAudio
+from base.product_test_project_config import ProductTestProjectConfigManager
 from base.sequence_queue_references import SequenceQueueReferenceScanner
 from base.vkinging_capture import VkingingInputStream
 from base.wav_calibration_metadata import inspect_wav_calibration_metadata
@@ -24,7 +26,8 @@ from ui.hardware_window import HardwareSelectionState
 from ui.operation_sequence import AnalysisModelSelect
 from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 from ui.shared_queue_save_dialog import SharedQueueSaveDialog
-from unit_test.base.test_sequence_queue_references import project, write_json
+from unit_test.base.test_sequence_queue_references import write_json
+from unit_test.product_config_fixtures import make_project
 from unit_test.base.vkinging_fakes import CaptureSDK, device_info
 from unit_test.ui.test_vkinging_hardware import controls, confirm, select_device
 from unit_test.ui.test_vkinging_queue_parameters import condition_host, enter_condition
@@ -37,6 +40,7 @@ from unit_test.ui.test_vkinging_recording import (
 def test_discovery_queue_edit_shared_save_condition_capture(
         controls, condition_host, ui_qapp, tmp_path, monkeypatch, reopen_collapsed):
     host = condition_host
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: QMessageBox.Ok)
     controller = controls.create(HardwareSelectionState(
         api_name="MME", mic_device=controls.old_mic, mic_channels=[1]))
     view = controller.view
@@ -73,10 +77,16 @@ def test_discovery_queue_edit_shared_save_condition_capture(
     }}]
     write_json(q, payload)
     write_json(r, payload)
-    write_json(queue_registry, {"Q": str(q), "R": str(r), "using_config_path": str(q)})
-    write_json(product_registry, {"configs": [{"file": "one.json"}, {"file": "two.json"}]})
-    write_json(products / "one.json", project("Q", "R", name="First"))
-    write_json(products / "two.json", project(str(q), name="Second"))
+    write_json(queue_registry, {"Q": str(q), "Q_alias": str(q), "R": str(r), "using_config_path": str(q)})
+    manager = ProductTestProjectConfigManager(str(products), str(product_registry), str(queue_registry))
+    for name, queues in (("First", ("Q", "R")), ("Second", ("Q_alias",))):
+        configured = make_project(tmp_path, project_name=name, station_count=1, condition_count=len(queues))
+        configured["stations"][0]["station_name"] = "Port"
+        for index, (condition, queue) in enumerate(zip(configured["conditions"], queues)):
+            condition["condition_name"] = chr(65 + index)
+            condition["test_queue"] = queue
+        saved, message = manager.save_project(None, configured)
+        assert saved, message
     monkeypatch.setattr("base.load_config.SEQUENCE_CONFIG_REGISTRY_PATH", str(queue_registry))
     scanner = SequenceQueueReferenceScanner(products, product_registry, queue_registry)
     editor = AnalysisModelSelect(str(q), mic=host.mic, mic_channels=host.mic_channels,
@@ -96,8 +106,8 @@ def test_discovery_queue_edit_shared_save_condition_capture(
         dialog.ve_range_combo.setCurrentIndex(5)
         ui_qapp.processEvents()
         dialog.ve_range_combo.showPopup()
-        ui_qapp.processEvents()
         popup = dialog.ve_range_combo.view()
+        assert QTest.qWaitForWindowExposed(popup.window(), 1000)
         assert popup.isVisible()
         assert [dialog.ve_range_combo.itemText(i) for i in range(7)] == list(VE_RANGE_LABELS)
         assert dialog.ve_range_combo.count() == 7
@@ -129,7 +139,6 @@ def test_discovery_queue_edit_shared_save_condition_capture(
             monkeypatch.setattr(RecordConfigWindow, "exec", accept_collapsed)
             editor.select_list.show_dialog(editor.select_list.config[0].name)
 
-        real_exec = SharedQueueSaveDialog.exec_
         decisions = iter((False, True))
         shown = []
 
@@ -137,9 +146,7 @@ def test_discovery_queue_edit_shared_save_condition_capture(
             shown.append(dialog.details.toPlainText())
             assert "First/Port/A" in shown[-1] and "Second/Port/A" in shown[-1]
             assert "First/Port/B" not in shown[-1]
-            button = dialog.save_button if next(decisions) else dialog.cancel_button
-            QTimer.singleShot(0, button.click)
-            return real_exec(dialog)
+            return QMessageBox.Ok if next(decisions) else QMessageBox.Cancel
 
         monkeypatch.setattr(SharedQueueSaveDialog, "exec_", decide_shared)
         editor.ok_btn_clicked()
@@ -188,15 +195,19 @@ def test_discovery_queue_edit_shared_save_condition_capture(
             assert sdk.calls("verify_actual_sample_rate") == 1
             data, actual_rate = sf.read(request.path, dtype="float32", always_2d=True)
             assert actual_rate == rate and len(data) == int(.1 * rate)
-            assert sf.info(request.path).subtype == "FLOAT"
-            np.testing.assert_array_equal(data, np.tile(np.float32([.0125, -.025]), (len(data), 1)))
+            assert sf.info(request.path).subtype == "PCM_24"
+            # Literal PCM24 codes for the fake input voltages; do not derive the
+            # expected samples with the production quantizer being exercised.
+            expected = (np.array([104857, -209716]) / 8388608).astype(np.float32)
+            np.testing.assert_array_equal(data, np.tile(expected, (len(data), 1)))
             metadata = inspect_wav_calibration_metadata(request.path).metadata
             assert metadata["acquisition"]["sample_rate"] == rate
             assert metadata["acquisition"]["range_min"] == -limit
             assert metadata["acquisition"]["range_max"] == limit
             channel = metadata["recorded_channels"][0]
             assert channel["physical_input_channel"] == 7
-            assert channel["v2pa_factor"] == 12 and channel["factor_source"] == "measured"
+            assert metadata["schema_version"] == 2
+            assert channel["v2pa_factor"] == 12 and channel["factor_source"] == "calibrated"
             assert metadata["recorded_channels"][1]["factor_source"] == "none"
             preview = capture.snapshot(generation=session.generation, sequence=1)
             if live:
@@ -206,7 +217,7 @@ def test_discovery_queue_edit_shared_save_condition_capture(
                 np.testing.assert_allclose(preview.waveforms[0].amplitude, .0125)
             else:
                 assert preview is None
-            finish_ve_capture(host, session, RecordingAudio(result, data, data.mean(axis=1)))
+            finish_ve_capture(host, session, prepare_main_recording_result(result, request))
             assert host.ve_calibration_store.get_factor(request.device, 7) == 12
             assert host.ve_profile_store.path.read_bytes() == profile_before
             assert host.ve_calibration_store.path.read_bytes() == calibration_before
@@ -217,7 +228,7 @@ def test_discovery_queue_edit_shared_save_condition_capture(
         editor.close()
 
 
-@pytest.mark.parametrize("entry", ["direct", "project", "program"])
+@pytest.mark.parametrize("entry", ["direct", "project"])
 def test_queue_editor_after_startup_uses_saved_profile_for_missing_rate(
         host_factory, ui_qapp, tmp_path, monkeypatch, entry):
     from pathlib import Path
@@ -228,11 +239,8 @@ def test_queue_editor_after_startup_uses_saved_profile_for_missing_rate(
         make_manager, prepare_project,
     )
     from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
-    from ui.product_test_program_config_dialog import ProductTestProgramConfigDialog
-    from unit_test.test_product_test_program_config_dialog import (
-        make_manager as make_program_manager, prepare_program,
-    )
 
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: QMessageBox.Ok)
     host = host_factory(48000)
     window = _WindowHarness()
     window.sequence_window = host
@@ -253,17 +261,12 @@ def test_queue_editor_after_startup_uses_saved_profile_for_missing_rate(
     monkeypatch.setattr("ui.operation_sequence.QMessageBox.information", notice)
     callback = MethodType(main_window.MainWindow._open_analysis_model_select, window)
     parent = None
-    if entry == "program":
-        manager = make_program_manager(tmp_path)
-        prepare_program(manager)
-        parent = ProductTestProgramConfigDialog(manager, contextual_queue_editor_callback=callback)
-        queue_path = Path(manager.load_queue_catalog()["queue_6000"]["path"])
-    else:
-        manager = make_manager(tmp_path)
-        prepare_project(manager, tmp_path)
-        queue_path = Path(next(iter(manager.load_queue_catalog().values()))["path"])
-        if entry == "project":
-            parent = ProductTestProjectConfigDialog(manager, contextual_queue_editor_callback=callback)
+    manager = make_manager(tmp_path)
+    prepare_project(manager, tmp_path)
+    queue_name, queue_info = next(iter(manager.load_queue_catalog().items()))
+    queue_path = Path(queue_info["path"])
+    if entry == "project":
+        parent = ProductTestProjectConfigDialog(manager, contextual_queue_editor_callback=callback)
     payload = [{"seq1": {
         "acq": {"name": "录制音频", "mode": "RECORD_ONLY", "detail": {
             "total_time": .1, "ve_range_index": 5}},
@@ -310,11 +313,8 @@ def test_queue_editor_after_startup_uses_saved_profile_for_missing_rate(
     try:
         if entry == "direct":
             callback(str(queue_path))
-        elif entry == "project":
-            _, button = parent._queue_controls_for_row(0)
-            parent._edit_queue_for_button(button)
         else:
-            parent._edit_queue_cell(parent.program_table.cellWidget(0, 3))
+            parent._edit_queue(queue_name)
         assert observed_rates == ["48000", "48000"]
         saved = json.loads(queue_path.read_text(encoding="utf-8"))[0]["seq1"]["acq"]["detail"]
         assert saved["sample_rate"] == 48000 and saved["ve_range_index"] == 5

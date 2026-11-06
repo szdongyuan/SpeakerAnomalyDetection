@@ -44,6 +44,9 @@ def build_analysis_task_request(
     task_id=None,
     condition_config=None,
 ):
+    if any(seq.get("analysis_channel_basis") == "wav"
+           for group in (sequence_config or []) for seq in group.values()):
+        raise AnalysisTaskBuildError("WAV 通道队列的工位分析执行尚未接通")
     absolute_path = os.path.abspath(str(wav_path or "").strip())
     if not absolute_path or not os.path.isfile(absolute_path):
         raise AnalysisTaskBuildError("所选档位的 WAV 文件不存在")

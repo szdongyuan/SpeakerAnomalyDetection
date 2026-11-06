@@ -8,14 +8,13 @@ from base.product_test_project_config import (
     ProductTestProjectConfigManager,
     iter_test_conditions,
 )
+from base.test_queue_catalog import resolve_queue_path
 from consts.product_test_project_consts import (
     CONDITION_NAME_KEY,
     GROUP_NAME_KEY,
     PROJECT_NAME_KEY,
     REGISTRY_CONFIGS_KEY,
     REGISTRY_FILE_KEY,
-    TEST_CONDITIONS_KEY,
-    TEST_GROUPS_KEY,
     TEST_QUEUE_KEY,
 )
 from consts.running_consts import (
@@ -193,7 +192,7 @@ class SequenceQueueReferenceScanner:
 
     @staticmethod
     def _queue_key(path, registry_dir):
-        resolved = ProductTestProjectConfigManager._resolve_queue_path(path, registry_dir)
+        resolved = resolve_queue_path(path, registry_dir)
         return queue_path_key(resolved, registry_dir)
 
     def _collect(self, data, path, identity, registered_name, source, catalog,
@@ -236,7 +235,7 @@ class SequenceQueueReferenceScanner:
                 continue
             if key != target_key and queue not in aliases:
                 continue
-            position = (identity, group_index, condition_index)
+            position = (identity, condition.get("condition_id", condition_index))
             names = QueueReferenceNames(source, name, group_name, condition_name)
             previous = references.get(position)
             if previous is None:
@@ -260,32 +259,21 @@ class SequenceQueueReferenceScanner:
         return value.strip() or fallback
 
     def _conditions(self, data, path, name, source, issues):
-        if TEST_GROUPS_KEY in data:
-            groups = data[TEST_GROUPS_KEY]
-        elif "sub_configs" in data:
-            groups = [{GROUP_NAME_KEY: "", TEST_CONDITIONS_KEY: data["sub_configs"]}]
-        else:
-            self._issue(issues, path, name, source, "Missing test_groups or sub_configs")
+        if "stations" not in data or "conditions" not in data:
+            self._issue(issues, path, name, source, "旧配置无法完整检查引用，请先处理旧配置")
             return
-        if not isinstance(groups, list):
-            self._issue(issues, path, name, source, "test_groups must be a list")
+        stations = data["stations"]
+        conditions = data["conditions"]
+        if (not isinstance(stations, list) or not isinstance(conditions, list)
+                or any(not isinstance(s, dict) or not isinstance(s.get("station_id"), str)
+                       or not isinstance(s.get("station_name"), str) for s in stations)):
+            self._issue(issues, path, name, source, "工位或工况引用结构无效")
             return
-        # Retain positions while validating the shapes the shared iterator uses.
         checked = []
-        for group_index, group in enumerate(groups, 1):
-            if not isinstance(group, dict):
-                self._issue(issues, path, name, source, f"Group {group_index} must be an object")
-                checked.append({})
+        for index, condition in enumerate(conditions, 1):
+            if (not isinstance(condition, dict) or not isinstance(condition.get("applicable_station_ids"), list)
+                    or not all(isinstance(key, str) for key in condition["applicable_station_ids"])):
+                self._issue(issues, path, name, source, f"工况{index}引用结构无效")
                 continue
-            conditions = group.get(TEST_CONDITIONS_KEY)
-            if not isinstance(conditions, list):
-                self._issue(issues, path, name, source,
-                            f"Group {group_index}: test_conditions must be a list")
-                checked.append({})
-                continue
-            for condition_index, condition in enumerate(conditions, 1):
-                if not isinstance(condition, dict):
-                    self._issue(issues, path, name, source,
-                                f"Group {group_index}, condition {condition_index} must be an object")
-            checked.append(group)
-        yield from iter_test_conditions({TEST_GROUPS_KEY: checked})
+            checked.append(condition)
+        yield from iter_test_conditions({"stations": stations, "conditions": checked})

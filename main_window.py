@@ -723,7 +723,7 @@ class MainWindow(QMainWindow):
                 deletion_failed=lambda message: self.sequence_window._configuration_deletion_failed(message),
                 deletion_error=lambda: getattr(self.sequence_window, "_configuration_deletion_error", ""),
             )
-            dialog.programs_changed.connect(self.on_workbench_configuration_committed)
+            dialog.projects_changed.connect(self.on_workbench_configuration_committed)
             dialog.exec()
         finally:
             self.sequence_window._product_test_program_config_dialog_open = False

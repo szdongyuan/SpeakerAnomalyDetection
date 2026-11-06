@@ -6,13 +6,14 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QVBoxLayout, QMessageBox
 
 from base.load_config import LoadUiConfig
+from base.product_test.config_model import RUNTIME_UNAVAILABLE
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.recording_channel_selection import (
     RecordingChannelSelectionError,
     canonicalize_recording_input_channels,
 )
 from base.vkinging_input import validate_physical_channels
-from base.product_test_project_config import (
+from base.product_test_runtime_policy import (
     PRODUCT_TRIGGER_MODE_MIXED,
     classify_project_trigger_mode,
     is_manual_project_play_allowed,
@@ -97,7 +98,8 @@ class SequenceWidgetUiOpsMixin:
         #     self.refresh_channel_windows()
         # except Exception:
         #     pass
-        if not self.sequence_config and not self._missing_config_prompted:
+        if (not self.sequence_config and not self._missing_config_prompted
+                and getattr(self, "_product_config_refresh_error", "") != RUNTIME_UNAVAILABLE):
             QMessageBox.warning(
                 self,
                 "提示",
@@ -485,6 +487,9 @@ class SequenceWidgetUiOpsMixin:
         refresh_state = getattr(self, "_product_config_refresh_state", "ready")
         if refresh_state != "ready":
             self.player_btn.setEnabled(False)
+            if getattr(self, "_product_config_refresh_error", "") == RUNTIME_UNAVAILABLE:
+                self.player_btn.setToolTip(RUNTIME_UNAVAILABLE)
+                return
             self.player_btn.setToolTip({
                 "initializing": "正在加载产品配置",
                 "applying": "正在应用产品配置",

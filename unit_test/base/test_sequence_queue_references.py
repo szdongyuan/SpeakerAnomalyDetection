@@ -7,7 +7,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from base.load_config import LoadUiConfig
-from base.product_test_program_config import ProductTestProgramConfigManager
+from base.product_test_project_config import ProductTestProjectConfigManager
 from base.sequence_queue_references import (
     QueueReferenceDraft,
     SequenceQueueReferenceScanner,
@@ -20,13 +20,12 @@ def write_json(path, data):
 
 
 def project(*queues, name="Product", group="Port"):
-    return {"project_name": name, "test_groups": [{
-        "group_name": group,
-        "test_conditions": [
-            {"condition_name": chr(65 + index), "test_queue": queue}
-            for index, queue in enumerate(queues)
-        ],
-    }]}
+    from uuid import uuid5, NAMESPACE_URL
+    station_id = str(uuid5(NAMESPACE_URL, "station"))
+    return {"project_name": name, "stations": [{"station_id": station_id, "station_name": group, "channels": []}],
+            "conditions": [{"condition_id": str(uuid5(NAMESPACE_URL, f"condition-{index}")),
+                            "condition_name": chr(65+index), "test_queue": queue,
+                            "applicable_station_ids": [station_id]} for index, queue in enumerate(queues)]}
 
 
 @pytest.fixture
@@ -67,34 +66,21 @@ def test_saved_union_draft_preserves_redirected_reference_and_new_condition(file
     assert [r.condition_name for r in scanner.find_references(target).references] == ["A", "C"]
 
 
-def test_registered_inactive_legacy_and_duplicate_names_have_positional_identity(files):
+def test_legacy_file_is_diagnostic_without_losing_valid_new_refs(files):
     scanner, product_dir, registry, _, target = files
-    data = project("Q", "Q")
-    data["test_groups"][0]["test_conditions"][1]["condition_name"] = "A"
-    data["test_groups"].append(copy.deepcopy(data["test_groups"][0]))
-    write_json(product_dir / "one.json", data)
-    write_json(product_dir / "old.json", {"name": "Legacy", "sub_configs": [
-        {"condition_name": "Old", "test_queue": "alias"},
-    ]})
-    write_json(registry, {"active_file": "one.json", "configs": [
-        {"file": "one.json", "project_name": "Product"},
-        {"file": "old.json", "name": "Legacy"},
-        {"file": "one.json", "project_name": "duplicate registry entry"},
-    ]})
-    write_json(product_dir / "unregistered.json", project("Q"))
+    write_json(product_dir / "old.json", {"name": "Legacy", "sub_configs": [{"test_queue": "Q"}]})
+    write_json(registry, {"configs": [{"file": "one.json", "project_name": "Product"},
+                                     {"file": "old.json", "project_name": "Legacy"}]})
     result = scanner.find_references(target)
-    assert not result.issues
-    assert [(r.product_name, r.group_index, r.condition_index) for r in result.references] == [
-        ("Product", 1, 1), ("Product", 1, 2),
-        ("Product", 2, 1), ("Product", 2, 2), ("Legacy", 1, 1),
-    ]
+    assert len(result.references) == 2
+    assert len(result.issues) == 1 and result.issues[0].blocks_deletion
 
 
 def test_new_draft_instance_identity_and_renamed_display_names(files):
     scanner, product_dir, _, _, target = files
     renamed = QueueReferenceDraft(project("Q", name="Renamed", group="New port"),
                                   product_path=product_dir / "one.json")
-    renamed.data["test_groups"][0]["test_conditions"][0]["condition_name"] = "New condition"
+    renamed.data["conditions"][0]["condition_name"] = "New condition"
     first = QueueReferenceDraft(project("Q", name="New"))
     second = QueueReferenceDraft(project("Q", name="New"))
     result = scanner.find_references(target, drafts=(renamed, first, first, second))
@@ -150,14 +136,13 @@ def test_invalid_product_schema_reports_issue_and_keeps_other_known_refs(files, 
 def test_malformed_rows_do_not_discard_valid_siblings(files):
     scanner, product_dir, registry, queue_registry, target = files
     data = project("Q", "Q")
-    data["test_groups"][0]["test_conditions"].extend([None, {"test_queue": 42}])
-    data["test_groups"].extend([False, {"test_conditions": None}])
+    data["conditions"].extend([None, {"test_queue": 42}])
     write_json(product_dir / "one.json", data)
     write_json(registry, {"configs": [None, {"file": "one.json"}, {"file": 42}]})
     write_json(queue_registry, {"Q": "Q.json", "bad": {}, "using_config_path": None})
     result = scanner.find_references(target)
     assert len(result.references) == 2
-    assert len(result.issues) == 7
+    assert len(result.issues) == 5
 
 
 @pytest.mark.parametrize("failure", ["missing", "json", "encoding", "denied"])
@@ -184,8 +169,7 @@ def test_registered_product_read_failure_is_diagnostic_and_query_never_writes(fi
     monkeypatch.setattr(builtins, "open", read_only_open)
     monkeypatch.setattr(LoadUiConfig, "save_data_to_json", forbidden)
     monkeypatch.setattr(LoadUiConfig, "_load_sequence_config_registry", forbidden)
-    monkeypatch.setattr(ProductTestProgramConfigManager, "load_registry", forbidden)
-    monkeypatch.setattr(ProductTestProgramConfigManager, "rebuild_registry", forbidden)
+    monkeypatch.setattr(ProductTestProjectConfigManager, "load_registry", forbidden)
     result = scanner.find_references(target)
     assert len(result.references) == 2
     assert len(result.issues) == 1

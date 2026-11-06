@@ -10,8 +10,10 @@ from base import load_config
 from base.load_config import LoadUiConfig
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.product_test_project_config import ProductTestProjectConfigManager
+from base.product_test.config_model import RUNTIME_UNAVAILABLE
 from base.product_test_config_refresh import (
     ProductTestConfigurationError,
+    ProductTestRuntimeUnavailableError,
     build_product_test_refresh_snapshot,
 )
 from consts import error_code
@@ -177,6 +179,9 @@ class SequenceWidgetConfigOpsMixin:
         first_error = str(error).split("\n", 1)[0]
         title = "配置无法应用"
         message = f"{first_error}\n请修正配置并保存，再开始新测试。"
+        if isinstance(error, ProductTestRuntimeUnavailableError):
+            title = "测试功能尚未接通"
+            message = first_error
         if deleted_target is not None:
             title = f"配置已{deleted_target.action}"
             message = (
@@ -198,18 +203,26 @@ class SequenceWidgetConfigOpsMixin:
             if not os.path.isfile(os.path.join(manager.program_dir, active_file)):
                 return f"产品配置“{active_file}”不存在，请选择其他配置或恢复文件。"
         error = str(getattr(self, "_product_config_refresh_error", "") or "").split("\n", 1)[0]
+        if error == RUNTIME_UNAVAILABLE:
+            return error
         if error:
             return f"{error}\n请选择其他产品配置，或检查当前配置。"
         return "请先选择产品配置，或到【功能-产品测试配置】中新建或导入。"
 
-    def _refresh_active_product_configuration(self, *, deleted_target=None):
+    def _refresh_active_product_configuration(self, *, deleted_target=None,
+                                              notify_runtime_unavailable=True):
         """Compare before changing any runtime parameters, results or waveform state."""
         if getattr(self, "_configuration_deletion_error", ""):
             return False
         manager = self._get_product_program_manager()
-        registry = manager.load_registry()
         try:
+            registry = manager.load_registry()
             snapshot = build_product_test_refresh_snapshot(manager, registry.get("active_file"))
+        except ProductTestRuntimeUnavailableError as error:
+            self._product_configuration_apply_failed(
+                error, show_warning=notify_runtime_unavailable,
+            )
+            return False
         except ProductTestConfigurationError as error:
             # Invalid product data disables testing, but must remain repairable.
             self._product_configuration_apply_failed(error, deleted_target=deleted_target)
@@ -361,7 +374,14 @@ class SequenceWidgetConfigOpsMixin:
 
     def _get_product_program_registry(self):
         manager = self._get_product_program_manager()
-        registry = manager.load_registry()
+        try:
+            registry = manager.load_registry()
+        except ValueError as error:
+            # Keep configuration management reachable without replacing corrupt data.
+            self._product_config_refresh_error = str(error)
+            self._product_config_refresh_state = "failed"
+            self.default_logger.error("Product configuration registry could not be read: %s", error)
+            registry = {"active_file": None, "configs": []}
         self.product_program_registry = registry
         self.active_product_program_file = registry.get("active_file")
         return registry
@@ -851,7 +871,7 @@ class SequenceWidgetConfigOpsMixin:
                     self._get_product_program_manager().program_dir, active_file,
                 ))):
             return
-        self._refresh_active_product_configuration()
+        self._refresh_active_product_configuration(notify_runtime_unavailable=False)
 
     def add_file_to_using_file_combobox(self):
         """
@@ -879,9 +899,11 @@ class SequenceWidgetConfigOpsMixin:
                     "暂无可用配置" if registry.get("configs") else "暂无配置"
                 )
             )
-            # Failed configurations need an explicit selection to retry loading.
+            # Execution availability must not clear a valid editing selection.
             idx = (self.using_file_combobox.findData(active_file)
-                   if active_file and getattr(self, "_product_config_refresh_state", None) != "failed"
+                   if active_file and (
+                       getattr(self, "_product_config_refresh_state", None) != "failed"
+                       or getattr(self, "_product_config_refresh_error", "") == RUNTIME_UNAVAILABLE)
                    else -1)
             self.using_file_combobox.setCurrentIndex(idx)
         finally:
@@ -920,25 +942,36 @@ class SequenceWidgetConfigOpsMixin:
             product_file = None
         if product_file:
             manager = self._get_product_program_manager()
+            runtime_error = None
             try:
                 snapshot = build_product_test_refresh_snapshot(manager, str(product_file))
+            except ProductTestRuntimeUnavailableError as error:
+                # The file was read and validated; it can still be selected for editing.
+                runtime_error = error
+                snapshot = None
             except Exception as error:
                 self.restore_previous_configuration()
                 QMessageBox.warning(self, "产品配置不可用", str(error).split("\n", 1)[0])
                 return
-            registry = manager.load_registry()
-            registry["active_file"] = str(product_file)
-            if not manager.save_registry(registry):
+            try:
+                registry = manager.load_registry()
+                registry["active_file"] = str(product_file)
+                if not manager.save_registry(registry):
+                    raise OSError("当前配置记录保存失败，请检查配置目录权限。")
+            except (OSError, ValueError) as error:
                 self.restore_previous_configuration()
                 QMessageBox.warning(
                     self,
                     "产品配置切换失败",
-                    "无法切换使用配置：当前配置记录保存失败，请检查配置目录权限。",
+                    f"无法切换使用配置：{error}",
                 )
                 return
             self.product_program_registry = registry
             self.active_product_program_file = str(product_file)
-            self._apply_product_test_snapshot(snapshot)
+            if runtime_error is not None:
+                self._product_configuration_apply_failed(runtime_error, show_warning=False)
+            else:
+                self._apply_product_test_snapshot(snapshot)
             self.using_file_combobox.clearFocus()
             if self.lineedit_s_or_n.isEnabled():
                 try:
@@ -1004,7 +1037,8 @@ class SequenceWidgetConfigOpsMixin:
                 or getattr(self, "using_config_path", None)
             )
         index = self.using_file_combobox.findData(active_file)
-        if getattr(self, "_product_config_refresh_state", None) == "failed":
+        if (getattr(self, "_product_config_refresh_state", None) == "failed"
+                and getattr(self, "_product_config_refresh_error", "") != RUNTIME_UNAVAILABLE):
             index = -1
         was_blocked = self.using_file_combobox.blockSignals(True)
         self.using_file_combobox.setCurrentIndex(index)
@@ -1048,9 +1082,9 @@ class SequenceWidgetConfigOpsMixin:
             self.analysis_config = dict()
             self._set_sequence_config_available_state(False)
             # Only show prompt after login success (window shown).
-            if getattr(self, "_missing_config_prompt_enabled", False) and not getattr(
-                self, "_missing_config_prompted", False
-            ):
+            if (getattr(self, "_missing_config_prompt_enabled", False)
+                    and not getattr(self, "_missing_config_prompted", False)
+                    and getattr(self, "_product_config_refresh_error", "") != RUNTIME_UNAVAILABLE):
                 QMessageBox.warning(
                     self,
                     "提示",

@@ -1,970 +1,407 @@
+"""Product configuration service acceptance tests for stations/conditions."""
+import copy
 import json
 import os
-from copy import deepcopy
 from pathlib import Path
+from uuid import UUID
 
 import pytest
-
 from base.load_config import LoadUiConfig
-from base.product_test_project_config import (
-    ProductTestProjectConfigManager,
-    ProductTestProjectValidator,
-    classify_project_trigger_mode,
-    flatten_test_conditions,
-    iter_test_conditions,
-)
-from consts.vkinging_consts import VE_BACKEND
+from base.product_test.config_model import resize_stations, hardware_channels
+from base.product_test.config_validation import validate_structure
+from base.product_test_config_refresh import build_product_test_refresh_snapshot, ProductTestConfigurationError
+from base.config_deletion import ConfigDeletionService, ConfigDeletionError
+from base.sequence_queue_references import SequenceQueueReferenceScanner, QueueReferenceDraft
+from base.product_test.queue_context import validate_queue_save
 from consts import error_code
-from consts.recording_preview_consts import RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY
-from consts.product_test_project_consts import (
-    EXPORT_RAW_AUDIO_CSV_KEY,
-    GROUP_NAME_KEY,
-    PROJECT_NAME_KEY,
-    RESULT_ROOT_DIRECTORY_KEY,
-    TEST_CONDITIONS_KEY,
-    TEST_GROUPS_KEY,
-)
+from unit_test.product_config_fixtures import make_manager, make_project
 
 
-def make_manager(tmp_path, queue_specs=None, *, vk=False, **manager_kwargs):
-    program_dir = tmp_path / "projects"
-    registry_path = program_dir / "program_registry.json"
-    queue_dir = tmp_path / "queues"
-    queue_registry_path = queue_dir / "registry.json"
-    queue_registry = {}
-    for queue_name, spec in (queue_specs or {"基础测试": {}}).items():
-        queue_path = queue_dir / f"{queue_name}.json"
-        analysis_type = spec.get("analysis_type", "SPL")
-        analysis_config = {
-            "type": analysis_type,
-            "limit_checked": spec.get("limit_checked", True),
-        }
-        if analysis_type == "AI":
-            analysis_config["analyse_model_name"] = spec.get(
-                "analyse_model_name",
-                "demo_model",
-            )
-        queue_data = [
-            {
-                "录制与分析": {
-                    "acq": {
-                        "mode": spec.get("mode", "RECORD_ONLY"),
-                        "detail": {
-                            "total_time": spec.get("duration", 600),
-                            "sample_rate": spec.get("sample_rate", 48000),
-                            "ve_range_index": spec.get("ve_range_index", 0),
-                        },
-                    },
-                    "analysis_list": {
-                        "display_sequence": ["分析项1"],
-                        "分析项1": analysis_config,
-                    },
-                }
-            }
-        ]
-        assert LoadUiConfig.save_data_to_json(queue_data, str(queue_path))
-        queue_registry[queue_name] = str(queue_path)
-    assert LoadUiConfig.save_data_to_json(
-        queue_registry,
-        str(queue_registry_path),
-    )
-    if vk:
-        manager_kwargs["input_device_provider"] = lambda: {"backend": VE_BACKEND}
-    return ProductTestProjectConfigManager(
-        program_dir=str(program_dir),
-        registry_path=str(registry_path),
-        queue_registry_path=str(queue_registry_path),
-        **manager_kwargs,
-    )
+def test_saved_station_configuration_loads_in_current_workbench(tmp_path):
+    from base.motor_workbench_config import MotorWorkbenchConfigRepository
+
+    manager = make_manager(tmp_path)
+    project = make_project(tmp_path, condition_count=2)
+    saved, filename = manager.save_project(None, project)
+    assert saved, filename
+    layout = tmp_path / "plots.json"
+    cell = {"title": "声压级", "analysis_item": "声压级", "analysis_type": "SPL"}
+    layout.write_text(json.dumps({"rows": 1, "columns": 2, "cells": [[cell, cell]]}), encoding="utf-8")
+    repository = MotorWorkbenchConfigRepository(manager.registry_path, manager.queue_registry_path, layout)
+    snapshot = repository.load_active()
+    assert snapshot.project_id == project["project_id"]
+    assert snapshot.active_file == filename
+    assert [s.station_id for s in snapshot.stations] == [s["station_id"] for s in project["stations"]]
+    assert [c.condition_id for c in snapshot.conditions] == [c["condition_id"] for c in project["conditions"]]
+    assert snapshot.stations[1].channels[0].hardware_channel.physical_channel_index == 4
+    assert snapshot.conditions[0].queue.analysis["声压级"]["analysis_channels"] == (0,)
 
 
-def make_project(tmp_path, *, project_name="PB-A01充电宝", condition_count=1):
-    conditions = [
-        {
-            "condition_name": f"档位{index}",
-            "trigger_state": "",
-            "test_queue": "基础测试",
-        }
-        for index in range(1, condition_count + 1)
-    ]
-    return {
-        PROJECT_NAME_KEY: project_name,
-        RESULT_ROOT_DIRECTORY_KEY: str(tmp_path / "results"),
-        TEST_GROUPS_KEY: [
-            {
-                GROUP_NAME_KEY: "USB-C输出口",
-                TEST_CONDITIONS_KEY: conditions,
-            },
-            {
-                GROUP_NAME_KEY: "USB-A输出口",
-                TEST_CONDITIONS_KEY: [
-                    {
-                        "condition_name": "档位1",
-                        "trigger_state": "",
-                        "test_queue": "基础测试",
-                    }
-                ],
-            },
-        ],
+def test_roundtrip_rename_updates_filename_keeps_identity_and_order(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path, condition_count=2)
+    ok, filename = manager.save_project(None, project)
+    assert ok, filename
+    assert filename == "电机A.json"
+    assert manager.load_project(filename) == (error_code.OK, project)
+    project["project_name"] = "改名"
+    project["stations"][0]["channels"][0]["channel_name"] = "麦克风"
+    assert manager.save_project(filename, project) == (True, "改名.json")
+    assert not Path(manager.program_dir, filename).exists()
+    assert manager.load_project("改名.json")[1] == project
+    assert manager.load_registry()["active_file"] == "改名.json"
+    assert manager.load_registry()["configs"][0]["project_name"] == "改名"
+    assert not (tmp_path / "results").exists()
+
+
+def test_save_as_remaps_ids_and_keeps_original_active(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    ok, original = manager.save_project(None, project)
+    assert ok
+    snapshot = copy.deepcopy(project)
+    ok, filename = manager.save_as(project, "副本")
+    assert ok, filename
+    copied = manager.load_project(filename)[1]
+    assert copied["project_id"] != project["project_id"]
+    assert copied["conditions"][0]["applicable_station_ids"] == [s["station_id"] for s in copied["stations"]]
+    assert copied["stations"][0]["channels"][0]["channel_id"] != project["stations"][0]["channels"][0]["channel_id"]
+    assert project == snapshot
+    assert manager.load_registry()["active_file"] == original
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda p: p.update(project_id="invalid"),
+    lambda p: p["stations"][1].update(station_id=p["stations"][0]["station_id"]),
+    lambda p: p["conditions"][0].update(applicable_station_ids=["missing"]),
+    lambda p: p["conditions"][0].update(applicable_station_ids=[]),
+    lambda p: p["stations"][0]["channels"][0]["hardware_channel"].update(physical_channel_index=True),
+    lambda p: p["stations"][0]["channels"][0].update(signal_type=[]),
+    lambda p: p.update(export_raw_audio_csv=False),
+    lambda p: p["conditions"][0].update(input_voltage="12"),
+    lambda p: p.update(stations=[]),
+])
+def test_invalid_structure_never_writes(tmp_path, mutation):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    mutation(project)
+    ok, error = manager.save_project(None, project)
+    assert not ok and error
+    assert not (tmp_path / "products").exists()
+
+
+def test_trigger_is_protocol_neutral(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    project["conditions"][0]["trigger_state"] = "PLC.motorReady"
+    assert manager.save_project(None, project)[0]
+
+
+def test_product_condition_rejects_removed_output_load_mode(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    project["conditions"][0]["segmented_analysis"] = {
+        "mode": "output_load", "load_values": [0, 1], "load_unit": "A", "analysis_seconds": 1,
     }
+    assert any("仅支持不分段或按时间" in error
+               for error in manager.validate_project(project)["save_errors"])
 
 
-def set_queue_acquisition(manager, queue_name, mutate):
-    path = Path(manager.load_queue_catalog()[queue_name]["path"])
-    data = json.loads(path.read_text(encoding="utf-8"))
-    mutate(next(iter(data[0].values())))
-    assert LoadUiConfig.save_data_to_json(data, str(path))
-
-
-@pytest.mark.parametrize("legacy_range", ["missing", "invalid", "different"])
-@pytest.mark.parametrize("save_as", [False, True])
-def test_soundcard_save_ignores_range(tmp_path, legacy_range, save_as):
-    manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {}})
-    project = make_project(tmp_path)
-    project[TEST_GROUPS_KEY][1][TEST_CONDITIONS_KEY][0]["test_queue"] = "队列B"
-    def change(sequence):
-        detail = sequence["acq"]["detail"]
-        if legacy_range == "missing":
-            detail.pop("ve_range_index")
-        else:
-            detail["ve_range_index"] = "bad" if legacy_range == "invalid" else 1
-    set_queue_acquisition(manager, "队列B", change)
-    queues_before = {p: p.read_bytes() for p in (tmp_path / "queues").glob("*.json")}
-    assert ProductTestProjectValidator.validate_queue_acquisition_consistency(
-        project, manager.load_queue_catalog()
-    ) == []
-
-    success, message = (manager.save_as(project, "副本") if save_as
-                        else manager.save_project(None, project))
-
-    assert success, message
-    assert {p: p.read_bytes() for p in queues_before} == queues_before
-
-
-def test_soundcard_rate_conflict_has_all_rows_without_range(tmp_path):
-    manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {"sample_rate": 44100, "ve_range_index": "bad"}})
+def test_resize_removes_references_not_conditions(tmp_path):
     project = make_project(tmp_path, condition_count=2)
-    project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][1]["test_queue"] = "队列B"
-    success, conflict = manager.save_project(None, project)
-    assert not success
-    assert conflict.summary == "采样率不一致："
-    assert conflict.rows == (
-        "USB-C输出口/档位1的测试队列“基础测试”（采样率 48000 Hz）",
-        "USB-C输出口/档位2的测试队列“队列B”（采样率 44100 Hz）",
-        "USB-A输出口/档位1的测试队列“基础测试”（采样率 48000 Hz）",
-    )
-    assert "量程" not in conflict
-    assert not Path(manager.registry_path).exists()
+    ids = [c["condition_id"] for c in project["conditions"]]
+    resize_stations(project, 1)
+    assert [c["condition_id"] for c in project["conditions"]] == ids
+    assert all(c["applicable_station_ids"] == [project["stations"][0]["station_id"]] for c in project["conditions"])
 
 
-@pytest.mark.parametrize("device", [None, {}, {"backend": "soundcard"}, {"backend": VE_BACKEND, "available": False}])
-def test_save_range_requirement_uses_device_backend(tmp_path, device):
-    calls = []
-    def provider():
-        calls.append(device)
-        return device
-    manager = make_manager(tmp_path, input_device_provider=provider)
-    set_queue_acquisition(manager, "基础测试", lambda seq: seq["acq"]["detail"].pop("ve_range_index"))
-    project = make_project(tmp_path)
-    assert manager.validate_project(project, None)["is_usable"]
-    assert calls == []  # Runtime validation must not consult hardware.
-    success, message = manager.save_project(None, project)
-    assert calls == [device]
-    assert success is ((device or {}).get("backend") != VE_BACKEND)
-    if not success:
-        assert "ve_range_index" in message
-        assert not Path(manager.registry_path).exists()
+def test_queue_channel_missing_and_type_mismatch(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    project["stations"][1]["channels"][0]["signal_type"] = "acceleration"
+    assert any("需要声学" in e for e in manager.validate_project(project)["save_errors"])
+    catalog = manager.load_queue_catalog()
+    catalog["测试队列A"]["data"][0]["seq1"]["analysis_list"]["声压级"]["analysis_channels"] = [2]
+    assert any("不存在" in e for e in manager.validate_project(make_project(tmp_path), queue_catalog=catalog)["save_errors"])
 
 
-def test_save_rechecks_device_after_successful_preflight(tmp_path):
-    device = {"backend": "soundcard"}
-    manager = make_manager(tmp_path, input_device_provider=lambda: device)
-    set_queue_acquisition(manager, "基础测试", lambda seq: seq["acq"]["detail"].pop("ve_range_index"))
-    project = make_project(tmp_path)
-    assert manager.validate_project(project, None, check_acquisition_consistency=True)["can_save"]
-    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
-    device["backend"] = VE_BACKEND
-    success, message = manager.save_project(None, project)
-    assert not success and "ve_range_index" in message
-    assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
-    device["backend"] = "soundcard"
+def test_original_queue_can_be_used_without_conversion(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    catalog = manager.load_queue_catalog()
+    assert "analysis_channel_basis" not in catalog["测试队列A"]["data"][0]["seq1"]
+    assert not manager.validate_project(project, queue_catalog=catalog)["save_errors"]
+
+
+@pytest.mark.parametrize("analysis_list", [{"display_sequence": [], "auto_analysis": True}, {}])
+def test_recording_only_queue_is_available_and_product_can_be_saved(tmp_path, analysis_list):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    info = manager.load_queue_catalog()["测试队列A"]
+    info["data"][0]["seq1"]["analysis_list"] = analysis_list
+    assert LoadUiConfig.save_data_to_json(info["data"], info["path"])
+    current = manager.load_queue_catalog()["测试队列A"]
+    assert current["available"] and not current["can_auto_judge"]
+    assert current["analysis_items"] == []
     assert manager.save_project(None, project)[0]
 
 
-def test_save_provider_error_propagates_without_writing(tmp_path):
-    def provider():
-        raise RuntimeError("device context failed")
-    manager = make_manager(tmp_path, input_device_provider=provider)
-    with pytest.raises(RuntimeError, match="device context failed"):
-        manager.save_project(None, make_project(tmp_path))
-    assert not Path(manager.registry_path).exists()
-
-
-def test_load_import_and_runtime_refresh_do_not_read_device(tmp_path):
-    from base.product_test_config_refresh import build_product_test_refresh_snapshot
-
-    setup_manager = make_manager(tmp_path)
-    success, file_name = setup_manager.save_project(None, make_project(tmp_path))
-    assert success
-    def unexpected_provider():
-        pytest.fail("Only save validation may read the device")
-    manager = ProductTestProjectConfigManager(
-        setup_manager.program_dir, setup_manager.registry_path, setup_manager.queue_registry_path,
-        input_device_provider=unexpected_provider,
-    )
-    set_queue_acquisition(manager, "基础测试", lambda seq: seq["acq"]["detail"].pop("ve_range_index"))
-    queue_path = Path(manager.load_queue_catalog()["基础测试"]["path"])
-    queue_data = json.loads(queue_path.read_text(encoding="utf-8"))
-    queue_data[0] = {"seq1": next(iter(queue_data[0].values()))}
-    assert LoadUiConfig.save_data_to_json(queue_data, str(queue_path))
-    assert manager.load_project(file_name)[0] == error_code.OK
-    assert manager.import_project(str(Path(manager.program_dir, file_name)))[0]
-    snapshot = build_product_test_refresh_snapshot(manager, file_name)
-    assert len(snapshot.conditions) == 2
-
-
-@pytest.mark.parametrize("rate,range_index,fields", [
-    (44100, 0, ["采样率"]), (48000, 1, ["量程"]),
-    (44100, 1, ["采样率", "量程"]),
-])
-@pytest.mark.parametrize("cross_group", [False, True])
-def test_save_acquisition_conflict_diagnostic(tmp_path, rate, range_index, fields, cross_group):
-    manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {
-        "sample_rate": rate, "ve_range_index": range_index,
-    }}, vk=True)
-    project = make_project(tmp_path, condition_count=2)
-    group_index, condition_index = (1, 0) if cross_group else (0, 1)
-    project[TEST_GROUPS_KEY][group_index][TEST_CONDITIONS_KEY][condition_index]["test_queue"] = "队列B"
-
-    success, message = manager.save_project(None, project)
-
-    assert not success
-    assert message.summary == "、".join(fields) + "不一致："
-    assert len(message.rows) == 3
-    for text in ["USB-C输出口/档位1", "基础测试", "队列B", "48000 Hz", f"{rate} Hz", "±10 V", *fields]:
-        assert text in message
-    assert ("USB-A输出口/档位1" if cross_group else "USB-C输出口/档位2") in message
-    if range_index == 1:
-        assert "±5 V" in message
-    assert not Path(manager.registry_path).exists()
-    assert not Path(project[RESULT_ROOT_DIRECTORY_KEY]).exists()
-
-
-@pytest.mark.parametrize("field,value", [
-    ("sample_rate", True), ("sample_rate", 48000.0), ("sample_rate", "48000"),
-    ("sample_rate", 0), ("sample_rate", -1), ("sample_rate", 3999), ("sample_rate", 102401),
-    ("ve_range_index", True), ("ve_range_index", 0.0), ("ve_range_index", "0"),
-    ("ve_range_index", -1), ("ve_range_index", 7),
-])
-def test_save_acquisition_invalid_single_queue(tmp_path, field, value):
-    manager = make_manager(tmp_path, {"基础测试": {field: value}}, vk=True)
-    success, message = manager.save_project(None, make_project(tmp_path))
-    assert not success
-    for text in ["USB-C输出口/档位1", "基础测试", field, repr(value)]:
-        assert text in message
-    assert "\n" not in message
-
-
-@pytest.mark.parametrize("field", ["sample_rate", "ve_range_index"])
-def test_save_acquisition_missing_field(tmp_path, field):
-    manager = make_manager(tmp_path, vk=True)
-    set_queue_acquisition(manager, "基础测试", lambda seq: seq["acq"]["detail"].pop(field))
-    success, message = manager.save_project(None, make_project(tmp_path))
-    assert not success
-    for text in ["USB-C输出口/档位1", "基础测试", field, "缺少"]:
-        assert text in message
-
-
-@pytest.mark.parametrize("field,value", [("acq", None), ("acq", []), ("detail", None), ("detail", [])])
-def test_save_acquisition_malformed_shape(tmp_path, field, value):
-    manager = make_manager(tmp_path, vk=True)
-    def mutate(seq):
-        (seq if field == "acq" else seq["acq"])[field] = value
-    set_queue_acquisition(manager, "基础测试", mutate)
-    success, message = manager.save_project(None, make_project(tmp_path))
-    assert not success
-    for text in ["USB-C输出口/档位1", "基础测试", field]:
-        assert text in message
-    assert "\n" not in message
-
-
-@pytest.mark.parametrize("variant", ["single", "repeated", "equal", "unreferenced"])
-def test_save_acquisition_valid_references(tmp_path, variant):
-    manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {
-        "sample_rate": 44100 if variant == "unreferenced" else 48000,
-        "ve_range_index": 1 if variant == "unreferenced" else 0,
-    }}, vk=True)
-    project = make_project(tmp_path)
-    if variant == "single":
-        project[TEST_GROUPS_KEY].pop()
-    elif variant == "equal":
-        project[TEST_GROUPS_KEY][1][TEST_CONDITIONS_KEY][0]["test_queue"] = "队列B"
-    assert manager.save_project(None, project)[0]
-
-
-@pytest.mark.parametrize("variant", ["new", "existing", "renamed", "save_as", "import_draft", "import_overwrite"])
-def test_save_acquisition_rejection_preserves_storage(tmp_path, variant):
-    manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {}})
-    project = make_project(tmp_path)
-    success, current_file = manager.save_project(None, project)
-    assert success
-    project[TEST_GROUPS_KEY][1][TEST_CONDITIONS_KEY][0]["test_queue"] = "队列B"
-    set_queue_acquisition(manager, "队列B", lambda seq: seq["acq"]["detail"].update(sample_rate=44100))
-    project[RESULT_ROOT_DIRECTORY_KEY] = str(tmp_path / "new-results")
-    if variant in {"new", "renamed", "import_draft"}:
-        project[PROJECT_NAME_KEY] = "新项目"
-    if variant.startswith("import"):
-        source = tmp_path / "import.json"
-        assert LoadUiConfig.save_data_to_json(project, str(source))
-        imported, project = manager.import_project(str(source))
-        assert imported  # Import is a draft operation, without the save-only guard.
-    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
-    if variant == "save_as":
-        success, message = manager.save_as(project, "新项目")
+@pytest.mark.parametrize("fault", ["duration", "sample_rate", "missing_analysis", "malformed_order"])
+def test_recording_only_support_does_not_accept_invalid_queue(tmp_path, fault):
+    manager = make_manager(tmp_path)
+    info = manager.load_queue_catalog()["测试队列A"]
+    sequence = info["data"][0]["seq1"]
+    sequence["analysis_list"] = {"display_sequence": []}
+    if fault in {"duration", "sample_rate"}:
+        sequence["acq"]["detail"]["total_time" if fault == "duration" else "sample_rate"] = 0
     else:
-        target = None if variant in {"new", "import_draft"} else current_file
-        success, message = manager.save_project(target, project)
-    assert not success
-    assert "采样率" in message
-    assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
-    assert not Path(project[RESULT_ROOT_DIRECTORY_KEY]).exists()
+        sequence["analysis_list"]["display_sequence"] = ["missing"] if fault == "missing_analysis" else "bad"
+    assert LoadUiConfig.save_data_to_json(info["data"], info["path"])
+    assert not manager.load_queue_catalog()["测试队列A"]["available"]
 
 
-def test_save_acquisition_opt_in_uses_one_fresh_catalog(tmp_path, monkeypatch):
-    manager = make_manager(tmp_path, {"基础测试": {}, "队列B": {"sample_rate": 44100, "ve_range_index": 1}})
-    project = make_project(tmp_path)
-    project[TEST_GROUPS_KEY][1][TEST_CONDITIONS_KEY][0]["test_queue"] = "队列B"
-    assert manager.validate_project(project, None)["is_usable"]
-    original = manager.load_queue_catalog
-    calls = []
-    def load():
-        calls.append(True)
-        return original()
-    monkeypatch.setattr(manager, "load_queue_catalog", load)
-    assert not manager.validate_project(project, None, check_acquisition_consistency=True)["can_save"]
-    assert len(calls) == 1
-    calls.clear()
-    project[PROJECT_NAME_KEY] = ""
-    assert not manager.validate_project(project, None, check_acquisition_consistency=True)["can_save"]
-    assert calls == []
+@pytest.mark.parametrize("rename", [True, False])
+def test_registry_failure_restores_original(tmp_path, monkeypatch, rename):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    ok, filename = manager.save_project(None, project)
+    assert ok
+    before = (tmp_path / "products" / filename).read_bytes()
+    if rename:
+        project["project_name"] = "修改"
+    project["stations"][0]["station_name"] = "已修改工位"
+    monkeypatch.setattr(manager, "save_registry", lambda _: False)
+    assert not manager.save_project(filename, project)[0]
+    assert (tmp_path / "products" / filename).read_bytes() == before
+    assert not (tmp_path / "products" / "修改.json").exists()
+    assert manager.load_registry()["active_file"] == filename
 
 
-def test_runtime_loader_flattens_groups_with_composite_keys(tmp_path):
-    project_path = tmp_path / "PB-A01充电宝.json"
-    project = make_project(tmp_path)
-    project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0][
-        "trigger_state"
-    ] = "01 04 02 00 01 78 f0"
-    project[TEST_GROUPS_KEY][1][TEST_CONDITIONS_KEY][0][
-        "trigger_state"
-    ] = "01 04 02 01 01 29 30"
-    assert LoadUiConfig.save_data_to_json(project, str(project_path))
-
-    conditions = LoadUiConfig.load_product_test_program_condition_configs(
-        str(project_path)
-    )
-
-    assert conditions == [
-        {
-            "key": "group_1:condition_1",
-            "group_name": "USB-C输出口",
-            "condition_name": "档位1",
-            "display_name": "USB-C输出口 / 档位1",
-            "trigger_state": "01 04 02 00 01 78 F0",
-            "test_queue": "基础测试",
-        },
-        {
-            "key": "group_2:condition_1",
-            "group_name": "USB-A输出口",
-            "condition_name": "档位1",
-            "display_name": "USB-A输出口 / 档位1",
-            "trigger_state": "01 04 02 01 01 29 30",
-            "test_queue": "基础测试",
-        },
-    ]
+@pytest.mark.parametrize("name", ["a/b", "a\\b", "a:b", 'a"b', "a?b", "a*b", "a|b", "a<b>",
+                                   "a\nb", "CON", "nul", "COM1", "LPT9", "CON.txt", "项目.",
+                                   "program_registry", "PROGRAM_REGISTRY", "名" * 251])
+def test_invalid_file_names_are_rejected_before_writing(tmp_path, name):
+    manager, project = make_manager(tmp_path), make_project(tmp_path, project_name=name)
+    assert not manager.validate_project(project)["can_save"]
+    assert not manager.save_project(None, project)[0]
+    assert not Path(manager.program_dir).exists()
 
 
-def test_default_project_contains_only_new_schema_fields():
-    project = ProductTestProjectConfigManager.default_project()
-
-    assert set(project) == {
-        PROJECT_NAME_KEY,
-        RESULT_ROOT_DIRECTORY_KEY,
-        EXPORT_RAW_AUDIO_CSV_KEY,
-        TEST_GROUPS_KEY,
-    }
-    assert project[EXPORT_RAW_AUDIO_CSV_KEY] is False
-    assert "name" not in project
-    assert "sub_configs" not in project
-    assert "config_version" not in project
-    assert "close_trigger_state" not in project
-    assert "pdf_report" not in project
-
-
-def test_save_project_keeps_more_than_twenty_conditions_and_writes_registry(
-    tmp_path,
-):
+@pytest.mark.parametrize("registered", [True, False])
+def test_case_insensitive_name_collision_does_not_overwrite(tmp_path, registered):
     manager = make_manager(tmp_path)
-    project = make_project(tmp_path, condition_count=21)
-
-    success, file_name = manager.save_project(None, project)
-
-    assert success is True
-    assert file_name == "PB-A01充电宝.json"
-    load_code, saved = manager.load_project(file_name)
-    assert load_code == error_code.OK
-    assert len(saved[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY]) == 21
-    assert set(saved) == {
-        PROJECT_NAME_KEY,
-        RESULT_ROOT_DIRECTORY_KEY,
-        EXPORT_RAW_AUDIO_CSV_KEY,
-        TEST_GROUPS_KEY,
-    }
-    assert saved[EXPORT_RAW_AUDIO_CSV_KEY] is False
-    assert os.path.isdir(tmp_path / "results" / "PB-A01充电宝")
-    assert manager.load_registry() == {
-        "active_file": file_name,
-        "configs": [
-            {"file": file_name, PROJECT_NAME_KEY: "PB-A01充电宝"}
-        ],
-    }
+    original = make_project(tmp_path, project_name="Motor")
+    assert manager.save_project(None, original)[0]
+    before = Path(manager.program_dir, "Motor.json").read_bytes()
+    if not registered:
+        manager.save_registry({"active_file": None, "configs": []})
+    registry_before = Path(manager.registry_path).read_bytes()
+    candidate = make_project(tmp_path, project_name="motor")
+    assert not manager.save_project(None, candidate)[0]
+    assert Path(manager.program_dir, "Motor.json").read_bytes() == before
+    assert Path(manager.registry_path).read_bytes() == registry_before
 
 
-@pytest.mark.parametrize(
-    ("mutator", "expected_message"),
-    [
-        (
-            lambda project: project.update({PROJECT_NAME_KEY: "PB_A01"}),
-            "项目名称不能包含",
-        ),
-        (
-            lambda project: project.update(
-                {RESULT_ROOT_DIRECTORY_KEY: "relative/results"}
-            ),
-            "测试结果根目录必须是绝对路径",
-        ),
-        (
-            lambda project: project.update(
-                {EXPORT_RAW_AUDIO_CSV_KEY: "true"}
-            ),
-            "原始音频 CSV 保存配置必须是布尔值",
-        ),
-        (
-            lambda project: project[TEST_GROUPS_KEY][1].update(
-                {GROUP_NAME_KEY: "USB-C输出口"}
-            ),
-            "端口名称重复",
-        ),
-        (
-            lambda project: project[TEST_GROUPS_KEY][0][
-                TEST_CONDITIONS_KEY
-            ].append(
-                {
-                    "condition_name": "档位1",
-                    "trigger_state": "",
-                    "test_queue": "基础测试",
-                }
-            ),
-            "工况名称重复",
-        ),
-    ],
-)
-def test_project_validation_reports_project_group_and_condition_errors(
-    tmp_path,
-    mutator,
-    expected_message,
-):
-    project = make_project(tmp_path)
-    mutator(project)
-
-    errors = ProductTestProjectValidator.validate_for_save(
-        project,
-        {"active_file": None, "configs": []},
-        None,
-    )
-
-    assert any(expected_message in error for error in errors)
-
-
-@pytest.mark.parametrize(
-    "state, other_state, error",
-    [
-        ("0102", "02 03", ""),
-        ("0102af", "02 03 04", ""),
-        (" 01  02 af ", "020304", ""),
-        ("A5 5A 01 01 0D 0A", "A5 5A 01 02 0D 0A", ""),
-        ("FE 02 00 00 00 04 6D C6", "FE 02 00 00 00 05 AC 06", ""),
-        ("", "", ""),
-        ("  ", "", ""),
-        ("0102", "02 03 04", "按字节数等长"),
-        ("01020304", "02 03 04", "按字节数等长"),
-        ("01", "02 03", "状态码格式错误"),
-        ("01020", "02 03", "状态码格式错误"),
-        ("01 02 GG", "02 03 04", "状态码格式错误"),
-        ("0x0102", "02 03 04", "状态码格式错误"),
-        ("1 02 AF", "02 03 04", "状态码格式错误"),
-        ("", "02 03 04", "必须全部配置或全部留空"),
-    ],
-)
-@pytest.mark.parametrize("same_port", [True, False])
-def test_project_status_code_lengths_for_save_and_import(
-    tmp_path, state, other_state, error, same_port
-):
+def test_rename_collision_preserves_both_projects(tmp_path):
     manager = make_manager(tmp_path)
-    project = make_project(tmp_path)
-    first, second = project[TEST_GROUPS_KEY]
-    first[TEST_CONDITIONS_KEY][0]["trigger_state"] = state
-    second[TEST_CONDITIONS_KEY][0]["trigger_state"] = other_state
-    if same_port:
-        second[TEST_CONDITIONS_KEY][0]["condition_name"] = "档位2"
-        first[TEST_CONDITIONS_KEY].extend(second[TEST_CONDITIONS_KEY])
-        project[TEST_GROUPS_KEY] = [first]
+    project_a = make_project(tmp_path, project_name="A")
+    project_b = make_project(tmp_path, project_name="B")
+    assert manager.save_project(None, project_a)[0]
+    assert manager.save_project(None, project_b)[0]
+    before = {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()}
+    project_b["project_name"] = "A"
+    assert not manager.save_project("B.json", project_b)[0]
+    assert {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()} == before
+
+
+def test_uuid_filename_remains_readable_and_migrates_on_save(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    legacy_file = project["project_id"] + ".json"
+    LoadUiConfig.save_data_to_json(project, str(Path(manager.program_dir, legacy_file)))
+    manager.save_registry({"active_file": legacy_file, "configs": [{
+        "project_id": project["project_id"], "project_name": project["project_name"], "file": legacy_file,
+    }]})
+    assert manager.load_project(legacy_file) == (error_code.OK, project)
+    assert manager.save_project(legacy_file, project, update_active=False) == (True, "电机A.json")
+    assert not Path(manager.program_dir, legacy_file).exists()
+    assert manager.load_project("电机A.json") == (error_code.OK, project)
+    assert manager.load_registry()["active_file"] == "电机A.json"
+
+
+@pytest.mark.parametrize("registry_fails", [False, True])
+def test_case_only_rename_and_rollback(tmp_path, monkeypatch, registry_fails):
+    manager, project = make_manager(tmp_path), make_project(tmp_path, project_name="Motor")
+    assert manager.save_project(None, project)[0]
+    before = {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()}
+    project["project_name"] = "motor"
+    if registry_fails:
+        monkeypatch.setattr(manager, "save_registry", lambda _: False)
+    result = manager.save_project("Motor.json", project)
+    if registry_fails:
+        assert not result[0]
+        assert {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()} == before
+    else:
+        assert result == (True, "motor.json")
+        assert "motor.json" in os.listdir(manager.program_dir)
+        assert "Motor.json" not in os.listdir(manager.program_dir)
+        assert manager.load_registry()["active_file"] == "motor.json"
+
+
+def test_old_file_cleanup_failure_rolls_back_registry_and_new_file(tmp_path, monkeypatch):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    ok, filename = manager.save_project(None, project)
+    assert ok
+    before = {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()}
+    original_remove = os.remove
+
+    def fail_old_removal(path):
+        if Path(path).name == filename:
+            raise PermissionError("file in use")
+        return original_remove(path)
+
+    monkeypatch.setattr(os, "remove", fail_old_removal)
+    project["project_name"] = "新名称"
+    assert not manager.save_project(filename, project)[0]
+    assert {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()} == before
+
+
+def test_same_name_save_and_nonactive_rename_preserve_active_project(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    assert manager.save_project(None, project) == (True, "电机A.json")
+    project["stations"][0]["station_name"] = "修改工位"
+    assert manager.save_project("电机A.json", project) == (True, "电机A.json")
+    assert manager.load_project("电机A.json")[1] == project
+    second = make_project(tmp_path, project_name="B")
+    assert manager.save_project(None, second)[0]
+    second["project_name"] = "C"
+    assert manager.save_project("B.json", second) == (True, "C.json")
+    assert manager.load_registry()["active_file"] == "电机A.json"
+
+
+@pytest.mark.parametrize("failure", ["return_false", "raise_error"])
+def test_project_write_failure_keeps_original_and_registry(tmp_path, monkeypatch, failure):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    ok, filename = manager.save_project(None, project)
+    assert ok
+    before = {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()}
+
+    def fail_write(*args):
+        if failure == "raise_error":
+            raise OSError("write failed")
+        return False
+
+    monkeypatch.setattr(LoadUiConfig, "save_data_to_json", fail_write)
+    project["project_name"] = "新名称"
+    assert not manager.save_project(filename, project)[0]
+    assert {p.name: p.read_bytes() for p in Path(manager.program_dir).iterdir()} == before
+
+
+def test_unregistered_file_cannot_be_overwritten_with_another_identity(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    LoadUiConfig.save_data_to_json(project, str(Path(manager.program_dir, "旧文件.json")))
+    original = Path(manager.program_dir, "旧文件.json").read_bytes()
+    other = make_project(tmp_path, project_name="其他项目")
+    assert not manager.save_project("旧文件.json", other)[0]
+    assert Path(manager.program_dir, "旧文件.json").read_bytes() == original
+    assert not Path(manager.registry_path).exists()
+
+
+def test_save_as_requires_different_name(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    assert manager.save_project(None, project)[0]
+    original = Path(manager.program_dir, "电机A.json").read_bytes()
+    assert not manager.save_as(project, "电机A")[0]
+    assert Path(manager.program_dir, "电机A.json").read_bytes() == original
+
+
+def test_corrupt_registry_is_not_overwritten(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    path = tmp_path / "products" / "program_registry.json"
+    path.parent.mkdir()
+    path.write_text("broken")
+    assert not manager.save_project(None, project)[0]
+    assert path.read_text() == "broken"
+
+
+def test_import_is_draft_and_duplicate_identity_requires_explicit_target(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
     source = tmp_path / "import.json"
     source.write_text(json.dumps(project), encoding="utf-8")
-
-    assert manager.validate_project(project, None)["can_save"] is (not error)
-    imported, import_result = manager.import_project(str(source))
-    assert imported is (not error)
-    saved, save_result = manager.save_project(None, project)
-    assert saved is (not error)
-    if error:
-        assert error in import_result
-        assert error in save_result
-        assert not Path(manager.registry_path).exists()
-    else:
-        _, loaded = manager.load_project(save_result)
-        assert loaded[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["trigger_state"] == (
-            bytes.fromhex(state).hex(" ").upper()
-        )
-
-
-def test_project_status_code_length_does_not_constrain_idle_code(tmp_path):
-    project = make_project(tmp_path)
-    for index, group in enumerate(project[TEST_GROUPS_KEY], 1):
-        group[TEST_CONDITIONS_KEY][0]["trigger_state"] = f"A5 5A 01 {index:02X} 0D 0A"
-    assert ProductTestProjectValidator.validate_for_save(
-        project, {}, None, port_switch_idle_code="FF 00 01"
-    ) == []
-
-
-def test_status_codes_must_be_all_empty_or_present_and_port_boundary_valid(tmp_path):
-    project = make_project(tmp_path)
-    conditions = flatten_test_conditions(project)
-    assert classify_project_trigger_mode(conditions) == "manual"
-
-    project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["trigger_state"] = (
-        "01 02 03"
-    )
-    mixed_errors = ProductTestProjectValidator.validate_for_save(
-        project,
-        {"active_file": None, "configs": []},
-        None,
-    )
-    assert "所有工况状态码必须全部配置或全部留空" in mixed_errors
-
-    duplicate_state = "01 02 03"
-    for _group_index, _group, _condition_index, condition in iter_test_conditions(
-        project
-    ):
-        condition["trigger_state"] = duplicate_state
-    duplicate_errors = ProductTestProjectValidator.validate_for_save(
-        project,
-        {"active_file": None, "configs": []},
-        None,
-    )
-    assert any("末档" in error and "首档" in error for error in duplicate_errors)
-
-
-def test_registry_keeps_missing_file_record_until_explicit_delete(tmp_path):
-    manager = make_manager(tmp_path)
-    registry = {
-        "active_file": "缺失配置.json",
-        "configs": [
-            {
-                "file": "缺失配置.json",
-                PROJECT_NAME_KEY: "缺失配置",
-            }
-        ],
-    }
-    assert manager.save_registry(registry)
-
-    assert manager.load_registry() == registry
-    load_code, message = manager.load_project("缺失配置.json")
-    assert load_code == error_code.INVALID_DATA_LOADING
-    assert message == "产品测试配置文件不存在，请选择其他配置。"
-    assert manager.load_registry() == registry
-
-
-def test_rename_project_updates_file_and_registry_but_keeps_old_results(tmp_path):
-    manager = make_manager(tmp_path)
-    project = make_project(tmp_path)
-    success, original_file = manager.save_project(None, project)
-    assert success
-
-    project[PROJECT_NAME_KEY] = "PB-A02充电宝"
-    success, renamed_file = manager.save_project(original_file, project)
-
-    assert success is True
-    assert renamed_file == "PB-A02充电宝.json"
-    assert not os.path.exists(os.path.join(manager.program_dir, original_file))
-    assert os.path.isfile(os.path.join(manager.program_dir, renamed_file))
-    assert os.path.isdir(tmp_path / "results" / "PB-A01充电宝")
-    assert os.path.isdir(tmp_path / "results" / "PB-A02充电宝")
-    assert manager.load_registry()["active_file"] == renamed_file
-
-
-@pytest.mark.parametrize("new_name", ["demo", "DEMO"])
-def test_case_only_update_preserves_original_project_name(tmp_path, new_name):
-    manager = make_manager(tmp_path)
-    project = make_project(tmp_path, project_name="Demo")
-    assert manager.save_project(None, project) == (True, "Demo.json")
-    project[PROJECT_NAME_KEY] = new_name
-    project[EXPORT_RAW_AUDIO_CSV_KEY] = True
-
-    assert manager.existing_project_file(new_name) == "Demo.json"
-    assert manager.save_project("Demo.json", project) == (True, "Demo.json")
-    assert manager.load_registry() == {
-        "active_file": "Demo.json",
-        "configs": [{"file": "Demo.json", "project_name": "Demo"}],
-    }
-    saved = manager.load_project("Demo.json")[1]
-    assert saved[PROJECT_NAME_KEY] == "Demo"
-    assert saved[EXPORT_RAW_AUDIO_CSV_KEY] is True
-    assert sorted(p.name for p in Path(manager.program_dir).glob("*.json")) == [
-        "Demo.json", "program_registry.json"
-    ]
-
-
-@pytest.mark.parametrize("operation", ["new", "save-as", "rename"])
-def test_case_insensitive_name_collision_rejects_unapproved_save(tmp_path, operation):
-    manager = make_manager(tmp_path)
-    project = make_project(tmp_path, project_name="Demo")
+    assert manager.import_project(str(source)) == (True, project)
+    assert not (tmp_path / "products").exists()
     assert manager.save_project(None, project)[0]
-    other = make_project(tmp_path, project_name="Other")
-    assert manager.save_project(None, other)[0]
-    before = {p: p.read_bytes() for p in Path(manager.program_dir).glob("*.json")}
-
-    if operation == "save-as":
-        success, message = manager.save_as(other, "DEMO")
-    else:
-        other[PROJECT_NAME_KEY] = "demo"
-        success, message = manager.save_project("Other.json" if operation == "rename" else None, other)
-
-    assert not success
-    assert "项目名称已存在" in message
-    assert {p: p.read_bytes() for p in Path(manager.program_dir).glob("*.json")} == before
+    assert not manager.save_project(None, project)[0]
 
 
-def test_case_insensitive_lookup_preserves_unregistered_file_name(tmp_path):
+def test_legacy_format_rejected_without_modification(tmp_path):
     manager = make_manager(tmp_path)
-    project = make_project(tmp_path, project_name="Demo")
+    source = tmp_path / "legacy.json"
+    source.write_text('{"test_groups": []}', encoding="utf-8")
+    before = source.read_bytes()
+    assert not manager.import_project(str(source))[0]
+    assert source.read_bytes() == before
+
+
+def test_runtime_rejects_new_configuration(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    ok, filename = manager.save_project(None, project)
+    assert ok
+    assert manager.validate_project(project)["can_save"]
+    assert not manager.validate_project(project)["is_usable"]
+    with pytest.raises(ProductTestConfigurationError, match="尚未接通"):
+        build_product_test_refresh_snapshot(manager, filename)
+    assert not build_product_test_refresh_snapshot(manager, None).conditions
+
+
+def test_saved_and_draft_queue_references_protect_deletion(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
     assert manager.save_project(None, project)[0]
-    Path(manager.registry_path).unlink()
-    assert manager.existing_project_file("DEMO") == "Demo.json"
+    service = ConfigDeletionService(manager)
+    target = service.list_targets("queue")[0]
+    with pytest.raises(ConfigDeletionError, match="正在使用"):
+        service.check(target)
+    scanner = service.scanner
+    draft = QueueReferenceDraft(project)
+    result = scanner.find_references(target.path, drafts=(draft,))
+    assert len(result.references) == 2 and not result.issues
 
 
-@pytest.mark.parametrize("selection", ["active", "unselected", "first-copy"])
-def test_save_as_preserves_active_selection_and_original_file(tmp_path, selection):
-    manager = make_manager(tmp_path)
-    original = make_project(tmp_path, project_name="xxx")
-    original[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["input_voltage"] = "10"
-    original_path = Path(manager.program_dir, "xxx.json")
-    if selection != "first-copy":
-        assert manager.save_project(None, original) == (True, "xxx.json")
-        original_bytes = original_path.read_bytes()
-        if selection == "unselected":
-            registry = manager.load_registry()
-            registry["active_file"] = None
-            assert manager.save_registry(registry)
-    active_before = manager.load_registry()["active_file"]
-    draft = deepcopy(original)
-    draft[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["input_voltage"] = "12"
-    before = deepcopy(draft)
-
-    assert manager.save_as(draft, "555") == (True, "555.json")
-
-    assert draft == before
-    assert manager.load_registry()["active_file"] == active_before
-    copied = manager.load_project("555.json")[1]
-    assert copied[PROJECT_NAME_KEY] == "555"
-    assert copied[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["input_voltage"] == "12"
-    if selection != "first-copy":
-        assert original_path.read_bytes() == original_bytes
-    else:
-        assert not original_path.exists()
-        # Ordinary Save still activates the first explicitly saved editor target.
-        assert manager.save_project(None, original) == (True, "xxx.json")
-        assert manager.load_registry()["active_file"] == "xxx.json"
+def test_queue_candidate_validates_all_referenced_stations(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    assert manager.save_project(None, project)[0]
+    info = manager.load_queue_catalog()["测试队列A"]
+    payload = copy.deepcopy(info["data"])
+    payload[0]["seq1"]["analysis_list"]["声压级"]["analysis_channels"] = [1]
+    assert any("需要声学" in e for e in validate_queue_save(payload, info["path"], manager))
 
 
-def test_registry_failure_restores_previous_project_file(tmp_path, monkeypatch):
-    manager = make_manager(tmp_path)
+def test_queue_save_checks_saved_mapping_even_when_editor_draft_changes_it(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    ok, filename = manager.save_project(None, project)
+    assert ok
+    draft = copy.deepcopy(project)
+    for station in draft["stations"]:
+        station["channels"][1]["signal_type"] = "sound_pressure"
+    info = manager.load_queue_catalog()["测试队列A"]
+    payload = copy.deepcopy(info["data"])
+    payload[0]["seq1"]["analysis_list"]["声压级"]["analysis_channels"] = [1]
+    references = (QueueReferenceDraft(draft, product_path=tmp_path / "products" / filename),)
+    assert any("需要声学" in e for e in validate_queue_save(payload, info["path"], manager, references))
+
+
+def test_product_delete_keeps_results(tmp_path):
+    manager, project = make_manager(tmp_path), make_project(tmp_path)
+    ok, filename = manager.save_project(None, project)
+    assert ok
+    results = tmp_path / "results"
+    results.mkdir()
+    (results / "keep.wav").write_bytes(b"test")
+    assert manager.delete_project(filename)[0]
+    assert (results / "keep.wav").exists()
+    assert not manager.load_registry()["configs"]
+
+
+def test_hardware_snapshot_preserves_physical_indices():
+    channels = hardware_channels({"backend": "vkinging", "machine_id": "TEST", "name": "设备A", "physical_channels": [0, 4]})
+    assert [c["physical_channel_index"] for c in channels] == [0, 4]
+    assert channels[0]["device_ref"] == "vkinging:TEST"
+
+
+def test_known_hardware_range_and_offline_warning(tmp_path):
+    manager = make_manager(tmp_path, input_device_provider=lambda: {"backend": "vkinging", "machine_id": "TEST", "physical_channels": [0]})
     project = make_project(tmp_path)
-    success, file_name = manager.save_project(None, project)
-    assert success
-    file_path = os.path.join(manager.program_dir, file_name)
-    with open(file_path, "rb") as file_handle:
-        original_bytes = file_handle.read()
-
-    project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0][
-        "condition_name"
-    ] = "修改后档位"
-    monkeypatch.setattr(manager, "save_registry", lambda _registry: False)
-
-    success, message = manager.save_project(file_name, project)
-
-    assert success is False
-    assert "注册表更新失败" in message
-    with open(file_path, "rb") as file_handle:
-        assert file_handle.read() == original_bytes
-
-
-def test_existing_project_is_not_overwritten_when_snapshot_read_fails(
-    tmp_path, monkeypatch
-):
-    manager = make_manager(tmp_path)
-    project = make_project(tmp_path)
-    success, file_name = manager.save_project(None, project)
-    assert success
-    file_path = os.path.join(manager.program_dir, file_name)
-    with open(file_path, "rb") as file_handle:
-        original_bytes = file_handle.read()
-
-    def fail_snapshot(_file_path):
-        raise OSError("access denied")
-
-    monkeypatch.setattr(manager, "_read_file_snapshot", fail_snapshot)
-    project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0][
-        "condition_name"
-    ] = "修改后档位"
-
-    success, message = manager.save_project(file_name, project)
-
-    assert success is False
-    assert "无法读取原产品测试配置" in message
-    with open(file_path, "rb") as file_handle:
-        assert file_handle.read() == original_bytes
-
-
-def test_delete_project_removes_file_and_registration_without_results(tmp_path):
-    manager = make_manager(tmp_path)
-    project = make_project(tmp_path)
-    success, file_name = manager.save_project(None, project)
-    assert success
-    result_directory = tmp_path / "results" / "PB-A01充电宝"
-
-    success, deleted_file = manager.delete_project(file_name)
-
-    assert success is True
-    assert deleted_file == file_name
-    assert not os.path.exists(os.path.join(manager.program_dir, file_name))
-    assert manager.load_registry() == {"active_file": None, "configs": []}
-    assert result_directory.is_dir()
-
-
-def test_delete_missing_project_only_removes_registry_record(tmp_path):
-    manager = make_manager(tmp_path)
-    assert manager.save_registry(
-        {
-            "active_file": "缺失配置.json",
-            "configs": [
-                {
-                    "file": "缺失配置.json",
-                    PROJECT_NAME_KEY: "缺失配置",
-                }
-            ],
-        }
-    )
-
-    success, _file_name = manager.delete_project("缺失配置.json")
-
-    assert success is True
-    assert manager.load_registry() == {"active_file": None, "configs": []}
-
-
-def test_queue_catalog_rejects_removed_ai_analysis(tmp_path):
-    manager = make_manager(
-        tmp_path,
-        {
-            "AI测试": {
-                "analysis_type": "AI",
-                "analyse_model_name": "demo_model",
-                "duration": 600,
-            }
-        },
-    )
-
-    info = manager.load_queue_catalog()["AI测试"]
-
-    assert info["available"] is False
-    assert info["can_auto_judge"] is False
-    assert "已移除的 AI" in info["reason"]
-
-
-def test_project_without_threshold_can_run_in_test_mode_as_not_labeled(tmp_path):
-    manager = make_manager(
-        tmp_path,
-        {"基础测试": {"analysis_type": "SPL", "limit_checked": False}},
-    )
-    project = make_project(tmp_path)
-
-    validation = manager.validate_project(project, None)
-
-    assert validation["is_usable"] is True
-    assert validation["is_test_mode_usable"] is True
-    assert validation["test_mode_errors"] == []
-    assert "不能自动输出 OK/NG" in validation["use_warnings"][0]
-
-
-def test_project_record_queue_with_invalid_preview_mode_is_unavailable(tmp_path):
-    manager = make_manager(tmp_path)
-    queue_path = tmp_path / "invalid-record.json"
-    queue_data = [{
-        "seq1": {
-            "acq": {
-                "mode": "RECORD_ONLY",
-                "detail": {
-                    "total_time": 1.0,
-                    "sample_rate": 48000,
-                    RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY: "broken",
-                },
-            },
-            "analysis_list": {
-                "display_sequence": ["分析项1"],
-                "分析项1": {"type": "SPL", "limit_checked": True},
-            },
-        }
-    }]
-    assert LoadUiConfig.save_data_to_json(queue_data, str(queue_path))
-
-    info = manager._load_queue_info(str(queue_path))
-
-    assert info["available"] is False
-    assert RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY in info["reason"]
-
-
-@pytest.mark.parametrize("invalid_detail", [None, []])
-def test_project_record_queue_with_non_mapping_detail_is_unavailable(
-    tmp_path, invalid_detail
-):
-    manager = make_manager(tmp_path)
-    queue_path = tmp_path / "invalid-record-detail.json"
-    queue_data = [{
-        "seq1": {
-            "acq": {
-                "mode": "RECORD_ONLY",
-                "detail": invalid_detail,
-            },
-            "analysis_list": {
-                "display_sequence": ["分析项1"],
-                "分析项1": {"type": "SPL", "limit_checked": True},
-            },
-        }
-    }]
-    assert LoadUiConfig.save_data_to_json(queue_data, str(queue_path))
-
-    info = manager._load_queue_info(str(queue_path))
-
-    assert info["available"] is False
-    assert info["reason"] == "recording acquisition detail must be a mapping"
-
-
-def test_import_rejects_legacy_but_loads_duplicate_without_writing(tmp_path):
-    manager = make_manager(tmp_path)
-    legacy_path = tmp_path / "legacy.json"
-    legacy_path.write_text(
-        json.dumps({"name": "旧配置", "sub_configs": []}, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    success, message = manager.import_project(str(legacy_path))
-    assert success is False
-    assert "项目名称不能为空" in message
-
-    project = make_project(tmp_path)
-    success, _file_name = manager.save_project(None, project)
-    assert success
-    duplicate_path = tmp_path / "duplicate.json"
-    duplicate_path.write_text(
-        json.dumps(project, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    before = {
-        path: path.read_bytes()
-        for path in Path(manager.program_dir).iterdir()
-        if path.is_file()
-    }
-    success, imported = manager.import_project(str(duplicate_path))
-    assert success is True
-    assert imported == project
-    assert {path: path.read_bytes() for path in before} == before
-
-
-def test_import_new_project_does_not_create_files_or_results(tmp_path):
-    manager = make_manager(tmp_path)
-    project = make_project(tmp_path)
-    source = tmp_path / "external.json"
-    source.write_text(json.dumps(project), encoding="utf-8")
-    before = set(tmp_path.rglob("*"))
-
-    success, imported = manager.import_project(str(source))
-
-    assert success is True
-    assert imported == project
-    assert set(tmp_path.rglob("*")) == before
-
-
-def test_acquisition_conflict_includes_all_ordered_repeated_references(tmp_path):
-    manager = make_manager(tmp_path, {
-        "基础测试": {}, "队列B": {"sample_rate": 44100},
-        "队列C": {"sample_rate": 44100, "ve_range_index": 1},
-    }, vk=True)
-    project = make_project(tmp_path, condition_count=3)
-    conditions = project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY]
-    conditions[1]["test_queue"] = "队列B"
-    conditions[2]["test_queue"] = "队列C"
-    project[TEST_GROUPS_KEY][1][TEST_CONDITIONS_KEY].append({
-        "condition_name": "档位2", "trigger_state": "", "test_queue": "队列B",
-    })
-    expected = (
-        "USB-C输出口/档位1的测试队列“基础测试”（采样率 48000 Hz，量程 ±10 V）",
-        "USB-C输出口/档位2的测试队列“队列B”（采样率 44100 Hz，量程 ±10 V）",
-        "USB-C输出口/档位3的测试队列“队列C”（采样率 44100 Hz，量程 ±5 V）",
-        "USB-A输出口/档位1的测试队列“基础测试”（采样率 48000 Hz，量程 ±10 V）",
-        "USB-A输出口/档位2的测试队列“队列B”（采样率 44100 Hz，量程 ±10 V）",
-    )
-    errors = ProductTestProjectValidator.validate_queue_acquisition_consistency(
-        project, manager.load_queue_catalog(), check_range=True
-    )
-    assert len(errors) == 1
-    conflict = errors[0]
-    assert isinstance(conflict, str)
-    assert conflict.rows == expected
-    assert conflict.summary == "采样率、量程不一致："
-    assert str(conflict) == "\n".join((conflict.summary, *expected))
-    success, message = manager.save_project(None, project)
-    assert not success
-    assert type(message) is type(conflict)
-    assert message.rows == expected
-
-
-@pytest.mark.parametrize("voltage", ["-12", "-.5V", "−12V", "－12V"])
-def test_negative_voltage_cannot_be_saved_or_imported(tmp_path, voltage):
-    manager = make_manager(tmp_path)
-    project = make_project(tmp_path)
-    success, file_name = manager.save_project(None, project)
-    assert success
-    target = Path(manager.program_dir, file_name)
-    before = target.read_bytes()
-    project[TEST_GROUPS_KEY][0][TEST_CONDITIONS_KEY][0]["input_voltage"] = voltage
-
-    success, message = manager.save_project(file_name, project)
-    assert not success and "电压不能为负值" in message
-    assert target.read_bytes() == before
-
-    source = tmp_path / "negative_voltage.json"
-    source.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
-    success, message = manager.import_project(str(source))
-    assert not success and "电压不能为负值" in message
-    assert target.read_bytes() == before
+    assert any("超出" in e for e in manager.validate_project(project)["save_errors"])
+    manager.input_device_provider = None
+    validation = manager.validate_project(project)
+    assert validation["can_save"] and validation["use_warnings"]
