@@ -1,10 +1,8 @@
-from pathlib import Path
-
 import pyqtgraph as pg
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QSize, Qt
-from PyQt5.QtGui import QIcon, QImage, QPalette, QWheelEvent
+from PyQt5.QtGui import QIcon, QImage, QPalette, QPixmap, QWheelEvent
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtTest import QSignalSpy, QTest
 from PyQt5.QtWidgets import (
@@ -15,6 +13,7 @@ from PyQt5.QtWidgets import (
 from consts.ui_style_const import COLOR_BORDER, COMBO_DOWN_ARROW_ICON, toolbar_combobox_style
 
 from ui.sequence.station_plot_cell import StationPlotCell
+from ui.sequence import station_plot_grid
 from ui.sequence.station_plot_grid import StationPlotGrid
 
 
@@ -58,16 +57,12 @@ def test_title_and_station_colors_are_actually_painted(grid):
     assert any(title_image.pixelColor(x, y).name() == '#ffffff'
                for x in range(min(150, title.width())) for y in range(title.height()))
     icon_size = QSize(28, 28)
-    play_icon_path = Path(__file__).resolve().parents[2] / 'ui/sequence/assets/b_play.png'
-    expected_icon = QIcon(str(play_icon_path)).pixmap(icon_size)
-    assert not expected_icon.isNull()
     for column in range(3):
         header = controls(grid, column)
         assert header.height() == 56
         for button in (header.play, header.ok, header.ng):
             assert (button.width(), button.height()) == (48, 40)
             assert button.y() == 8
-        assert header.play.icon().pixmap(icon_size).toImage() == expected_icon.toImage()
         assert header.play.iconSize() == icon_size
         assert (header.combo.height(), header.combo.y()) == (30, 13)
         for button in (header.ok, header.ng):
@@ -80,6 +75,30 @@ def test_title_and_station_colors_are_actually_painted(grid):
             assert text_size.height() <= contents.height()
         assert header.grab().toImage().pixelColor(2, 2).name() == '#f4f7fc'
         assert header.name.palette().color(QPalette.WindowText).name() == '#183957'
+
+
+@pytest.mark.parametrize('local_image', ['valid', 'missing', 'corrupt'])
+def test_station_play_icon_uses_local_image_or_qt_fallback(qt_app, tmp_path, monkeypatch, local_image):
+    monkeypatch.setattr(station_plot_grid, 'DEFAULT_DIR', tmp_path.as_posix() + '/')
+    image_path = tmp_path / 'ui/ui_pic/sequence_pic/b_play.png'
+    image_path.parent.mkdir(parents=True)
+    icon_size = QSize(28, 28)
+    if local_image == 'valid':
+        local_pixmap = QPixmap(icon_size)
+        local_pixmap.fill(Qt.magenta)
+        assert local_pixmap.save(str(image_path))
+    elif local_image == 'corrupt':
+        image_path.write_bytes(b'invalid PNG')
+
+    grid = StationPlotGrid()
+    button = controls(grid, 0).play
+    if local_image == 'valid':
+        expected_icon = QIcon(local_pixmap)
+    else:
+        expected_icon = button.style().standardIcon(QStyle.SP_MediaPlay)
+    expected_pixmap = expected_icon.pixmap(icon_size)
+    assert not expected_pixmap.isNull()
+    assert button.icon().pixmap(icon_size).toImage() == expected_pixmap.toImage()
 
 
 def test_station_names_and_mark_buttons_use_main_font(grid):

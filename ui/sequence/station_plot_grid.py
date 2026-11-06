@@ -3,10 +3,10 @@
 from numbers import Integral
 
 from PyQt5.QtCore import QEvent, QSignalBlocker, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QStyle, QVBoxLayout, QWidget,
 )
 
 from consts.running_consts import DEFAULT_DIR
@@ -109,7 +109,11 @@ class _ColumnControls(QWidget):
         self.combo.setEnabled(False)
         self.play = QPushButton(self)
         self.play.setObjectName('stationPlay')
-        self.play.setIcon(QIcon(DEFAULT_DIR + 'ui/sequence/assets/b_play.png'))
+        play_pixmap = QPixmap(DEFAULT_DIR + 'ui/ui_pic/sequence_pic/b_play.png')
+        if play_pixmap.isNull():
+            self.play.setIcon(self.play.style().standardIcon(QStyle.SP_MediaPlay))
+        else:
+            self.play.setIcon(QIcon(play_pixmap))
         self.play.setIconSize(QSize(28, 28))
         self.play.setToolTip('播放')
         self.ok = QPushButton('OK', self)
