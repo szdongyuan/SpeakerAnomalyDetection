@@ -58,6 +58,24 @@ def test_a_weighting_reduces_low_frequency_more_than_z_weighting():
     assert a_result.spectrum_db[index] < z_result.spectrum_db[index] - 10.0
 
 
+@pytest.mark.parametrize(("weighting", "canonical"), [
+    ("a", "A"), ("c", "C"), ("None", "Z"), ("Z（NONE）", "Z"),
+])
+def test_welch_fft_resolves_weighting_aliases(weighting, canonical):
+    analyzer = FftAnalyzer()
+    signal = np.sin(2 * np.pi * 1000 * np.arange(1024) / 48000)
+    result = analyzer.analyze(signal, fs=48000, n_fft=512, weighting=weighting)
+    reference = analyzer.analyze(signal, fs=48000, n_fft=512, weighting=canonical)
+
+    assert result.weighting == canonical
+    np.testing.assert_array_equal(result.spectrum_db, reference.spectrum_db)
+
+
+def test_welch_fft_rejects_unsupported_weighting():
+    with pytest.raises(ValueError, match="计权方式必须为 Z、A 或 C"):
+        FftAnalyzer().analyze(np.ones(1024), fs=48000, n_fft=512, weighting="B")
+
+
 def test_v2pa_factor_changes_spectrum_by_expected_level():
     fs = 48000
     time = np.arange(fs) / fs

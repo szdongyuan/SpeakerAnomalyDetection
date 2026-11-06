@@ -10,7 +10,6 @@ from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
-from base.core_algorithm.response.fft_analyzer import FftAnalyzer
 from base.motor_workbench_config import (
     WorkbenchChannel,
     WorkbenchCondition,
@@ -52,21 +51,11 @@ def _station_display(config: WorkbenchConfig) -> tuple[tuple[str, tuple[str, ...
     return tuple(display)
 
 
-def _plot_unit(analysis_type: str, analysis: Mapping[str, object]) -> str:
-    weighting = str(analysis.get("weighting") or "Z")
-    if analysis_type == "SPL":
-        # The SPL filter uppercases the saved value and only applies A/B/C/D.
-        weighting = weighting.upper()
-        if weighting in ("A", "B", "C", "D"):
-            return f"dB({weighting})"
-        return "dB(Z)"
-
-    weighting = FftAnalyzer.normalize_weighting(weighting)
-    if analysis.get("baseline_display_mode") == "delta":
-        return "dB"
-    if weighting == "Z":
-        return "dB SPL"
-    return f"dB({weighting}) SPL"
+def _plot_unit(analysis: Mapping[str, object]) -> str:
+    weighting = str(analysis.get("weighting") or "Z").upper()
+    if weighting in ("NONE", "Z（NONE）"):
+        weighting = "Z"
+    return f"dB({weighting})"
 
 
 def _plot_cell(
@@ -86,14 +75,7 @@ def _plot_cell(
         if str(analysis.get("type") or "").strip() != cell.analysis_type:
             issues.append(f"{condition.condition_name}：分析项「{cell.analysis_item}」类型不符")
             continue
-        try:
-            units[slot] = _plot_unit(cell.analysis_type, analysis)
-        except ValueError as error:
-            issues.append(
-                f"{condition.condition_name}：分析项「{cell.analysis_item}」"
-                f"的计权值 {analysis.get('weighting')!r} 无效（{error}）"
-            )
-            continue
+        units[slot] = _plot_unit(analysis)
         bindings[slot] = WorkbenchPlotBinding(
             station_id, condition.condition_id, cell.analysis_item, cell.analysis_type,
         )

@@ -281,10 +281,10 @@ def test_plot_projection_preserves_positions_and_all_condition_queries(workbench
         (0, 1, ("dB(Z)", "工况2", "", ("c2", None))),
         (0, 2, ("", "", "", (None, None))),
         (0, 3, ("", "", "", (None, None))),
-        (1, 0, ("dB SPL", "工况1", "工况2", ("c1", None))),
+        (1, 0, ("dB(Z)", "工况1", "工况2", ("c1", None))),
         (1, 1, ("", "工况2", "", (None, None))),
-        (2, 0, ("dB(C) SPL", "工况1", "工况2", (None, "c2"))),
-        (2, 1, ("dB", "工况2", "", ("c2", None))),
+        (2, 0, ("dB(C)", "工况1", "工况2", (None, "c2"))),
+        (2, 1, ("dB(Z)", "工况2", "", ("c2", None))),
     ):
         cell = cells[row][column]
         bindings = controller.get_plot_bindings(row, column)
@@ -310,23 +310,47 @@ def test_plot_projection_preserves_positions_and_all_condition_queries(workbench
     assert controller.get_condition_config("missing") is None
 
 
-@pytest.mark.parametrize(("weighting", "mode", "invalid_slot"), [
-    (" A ", "overlay", 0),
-    ("B", "delta", 0),
-    ("B", "delta", 1),
+def test_fft_delta_plot_warns_when_weighting_differs(workbench, plot_config):
+    cell = WorkbenchPlotCell("差值图", "差值", "FFT")
+    layout = WorkbenchPlotLayout(1, 4, ((cell,) * 4,))
+    workbench.repository.result = replace(plot_config, plot_layout=layout)
+    workbench.controller.refresh_configuration()
+
+    display = workbench.plot_batches[-1][1][0][0]
+    assert display.warning == "单位不一致"
+    assert display.warning_detail.splitlines() == ["工况1 dB(C)", "工况2 dB(Z)"]
+    assert (display.unit, display.first_condition, display.second_condition) == ("dB(C)", "工况1", "")
+    first, second = workbench.controller.get_plot_bindings(0, 0)
+    assert first.condition_id == "c1"
+    assert second is None
+
+
+@pytest.mark.parametrize(("analysis_type", "first", "second", "unit"), [
+    pytest.param("SPL", {"weighting": "a"}, {"weighting": "A"}, "dB(A)", id="spl-a"),
+    pytest.param("SPL", {"weighting": "c"}, {"weighting": "C"}, "dB(C)", id="spl-c"),
+    pytest.param("SPL", {"weighting": "None"}, {"weighting": "Z"}, "dB(Z)", id="spl-none"),
+    pytest.param("SPL", {"weighting": "Z（NONE）"}, {"weighting": "Z"}, "dB(Z)", id="spl-z-none"),
+    pytest.param("SPL", {}, {"weighting": "Z"}, "dB(Z)", id="spl-default"),
+    pytest.param("FFT", {"weighting": "a"}, {"weighting": "A"}, "dB(A)", id="fft-a"),
+    pytest.param("FFT", {"weighting": "c"}, {"weighting": "C"}, "dB(C)", id="fft-c"),
+    pytest.param("FFT", {"weighting": "None"}, {"weighting": "Z"}, "dB(Z)", id="fft-none"),
+    pytest.param("FFT", {"weighting": "Z（NONE）"}, {"weighting": "Z"}, "dB(Z)", id="fft-z-none"),
+    pytest.param("FFT", {}, {"weighting": "Z"}, "dB(Z)", id="fft-default"),
+    pytest.param("FFT", {"weighting": "C", "baseline_display_mode": "overlay"},
+                 {"weighting": "C", "baseline_display_mode": "delta"}, "dB(C)", id="fft-mixed-modes"),
+    pytest.param("FFT", {"weighting": "B", "baseline_display_mode": "delta"},
+                 {"weighting": "B", "baseline_display_mode": "delta"}, "dB(B)", id="fft-b"),
 ])
-def test_invalid_fft_weighting_preserves_valid_sibling(workbench, config, weighting, mode, invalid_slot):
-    item = "频谱"
+def test_shared_plot_formats_weighting_and_preserves_raw_config(workbench, config, analysis_type, first, second, unit):
+    item = "分析项"
     station = config.stations[0]
-    invalid = {"type": "FFT", "weighting": weighting, "baseline_display_mode": mode}
-    valid = {"type": "FFT", "weighting": "a"}
-    items = (invalid, valid) if invalid_slot == 0 else (valid, invalid)
+    items = ({"type": analysis_type, **first}, {"type": analysis_type, **second})
     conditions = tuple(
         _plot_condition(config.conditions[0], f"c{i}", f"工况{i}", f"queue-{i}",
                         (station.station_id,), {item: analysis})
         for i, analysis in enumerate(items, start=1)
     )
-    layout = WorkbenchPlotLayout(1, 1, ((WorkbenchPlotCell(item, item, "FFT"),),))
+    layout = WorkbenchPlotLayout(1, 1, ((WorkbenchPlotCell(item, item, analysis_type),),))
     workbench.repository.result = replace(
         config, stations=(station,), conditions=conditions, plot_layout=layout,
     )
@@ -335,17 +359,16 @@ def test_invalid_fft_weighting_preserves_valid_sibling(workbench, config, weight
 
     display = workbench.plot_batches[-1][1][0][0]
     assert (display.unit, display.first_condition, display.second_condition) == (
-        "dB(A) SPL", "工况1", "工况2",
+        unit, "工况1", "工况2",
     )
-    assert display.warning == "分析项不可用"
-    assert conditions[invalid_slot].condition_name in display.warning_detail
-    assert "计权" in display.warning_detail and repr(weighting) in display.warning_detail
+    assert display.warning == display.warning_detail == ""
     bindings = controller.get_plot_bindings(0, 0)
-    assert bindings[invalid_slot] is None
-    assert bindings[1 - invalid_slot].condition_id == conditions[1 - invalid_slot].condition_id
+    assert tuple(binding.condition_id for binding in bindings) == ("c1", "c2")
     for condition, analysis in zip(conditions, items):
         assert controller.get_condition_config(condition.condition_id) is condition
-        assert condition.export_process_config()["analysis_config"][item] == analysis
+        exported = condition.export_process_config()
+        assert exported["analysis_config"][item] == analysis
+        assert exported["sequence_config"][0]["seq1"]["analysis_list"][item] == analysis
 
 
 def test_switch_resets_same_size_views_and_clearing_is_idempotent(workbench, config):
