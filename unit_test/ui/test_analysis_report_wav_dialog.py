@@ -429,7 +429,7 @@ def test_filter_layout_fits_minimum_size_with_scoped_font(ui_qapp, tmp_path):
         if index >= 2:
             assert selectors[index - 2].geometry().bottom() < label.geometry().top()
         assert selector.width() >= selector.minimumSizeHint().width()
-        assert selector.font().family() == "Microsoft YaHei UI"
+        assert selector.font().family() == ui_style_const.MAIN_UI_SMALL_FONT_FAMILY_NAME
         assert selector.parentWidget().rect().contains(selector.geometry())
     assert filters.result_options.y() > selectors[2].geometry().bottom()
     assert filters.apply_button.parentWidget().rect().contains(

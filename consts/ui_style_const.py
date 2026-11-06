@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QApplication
 from consts.running_consts import DEFAULT_DIR
 
 UI_FONT_FAMILY_NAME = "SimSun"
-MAIN_UI_SMALL_FONT_FAMILY_NAME = "Microsoft YaHei UI"
+MAIN_UI_SMALL_FONT_FAMILY_NAME = UI_FONT_FAMILY_NAME
 UI_FONT_FAMILY = f"'{UI_FONT_FAMILY_NAME}'"
 MAIN_UI_SMALL_FONT_FAMILY = f"'{MAIN_UI_SMALL_FONT_FAMILY_NAME}'"
 COMBO_DOWN_ARROW_ICON = DEFAULT_DIR + "ui/ui_pic/select_analysis_model/down.svg"
@@ -119,6 +119,19 @@ qcombobox_style = _style("""
                 font-size: 18px;
                 border-radius: 4px;
                 padding: 4px 8px;
+            }
+            QComboBox::drop-down {
+                border: none;
+                border-left: 1px solid $COLOR_BORDER;
+                width: 22px;
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                background: transparent;
+            }
+            QComboBox::down-arrow {
+                image: url($COMBO_DOWN_ARROW_ICON);
+                width: 10px;
+                height: 10px;
             }
             QComboBox QAbstractItemView {
                 font-family: $UI_FONT_FAMILY;
