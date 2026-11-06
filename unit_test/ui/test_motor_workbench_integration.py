@@ -131,6 +131,10 @@ def _write_plot_program(files, *, custom_layout):
             [spl_cell, spl_cell], [fft_cell, fft_cell],
             [fft_cell, {"title": "基线差值", "analysis_item": other_fft, "analysis_type": "FFT"}],
         ]})
+    else:
+        spl_cell = {"title": "声压级（SPL）1", "analysis_item": spl, "analysis_type": "SPL"}
+        fft_cell = {"title": fft, "analysis_item": fft, "analysis_type": "FFT"}
+        write_json(files["layout"], {"rows": 2, "columns": 4, "cells": [[spl_cell] * 4, [fft_cell] * 4]})
 
 
 @pytest.fixture
@@ -186,8 +190,9 @@ def workbench(qt_app, tmp_path, monkeypatch, config_files, request):
         })
     original = {path: path.read_bytes() for path in (*config_files.values(), independent_path, other_path)}
 
-    layout_args = {} if startup == "default plots" else {"plot_layout_path": config_files["layout"]}
-    repository = MotorWorkbenchConfigRepository(config_files["programs"], config_files["queues"], **layout_args)
+    repository = MotorWorkbenchConfigRepository(
+        config_files["programs"], config_files["queues"], plot_layout_path=config_files["layout"],
+    )
     load_active = Mock(wraps=repository.load_active)
     monkeypatch.setattr(repository, "load_active", load_active)
     monkeypatch.setattr(main_module, "MotorWorkbenchConfigRepository", lambda: repository, raising=False)
@@ -274,7 +279,7 @@ def test_default_plots_and_station_channels_from_real_startup(workbench):
     for column in range(4):
         assert _plot_labels(grid._cells[0, column]) == ("声压级（SPL）1", "dB(A)", "工况1", "工况2")
         assert _plot_labels(grid._cells[1, column]) == (
-            "快速傅里叶变换 (FFT) 1", "dB SPL", "工况1", "工况2",
+            "快速傅里叶变换 (FFT) 1", "dB(Z)", "工况1", "工况2",
         )
 
     first = controller.get_condition_config("c1")
@@ -306,8 +311,8 @@ def test_custom_layout_rebinds_one_cell_through_real_workbench(workbench):
     window = workbench.window
     grid = window.sequence_window.plot_grid
     assert set(grid._cells) == {(row, column) for row in range(3) for column in range(2)}
-    assert _plot_labels(grid._cells[2, 0]) == ("自定义频谱", "dB SPL", "工况1", "工况2")
-    assert _plot_labels(grid._cells[2, 1]) == ("基线差值", "dB", "工况1", "工况2")
+    assert _plot_labels(grid._cells[2, 0]) == ("自定义频谱", "dB(Z)", "工况1", "工况2")
+    assert _plot_labels(grid._cells[2, 1]) == ("基线差值", "dB(Z)", "工况1", "工况2")
     bindings = window.workbench_controller.get_plot_bindings(2, 1)
     assert tuple((b.station_id, b.condition_id, b.analysis_item, b.analysis_type) for b in bindings) == (
         ("s2", "c1", "另一频谱", "FFT"), ("s2", "c2", "另一频谱", "FFT"),
@@ -316,21 +321,21 @@ def test_custom_layout_rebinds_one_cell_through_real_workbench(workbench):
 
 
 @pytest.mark.parametrize("workbench", ["custom plots"], indirect=True)
-def test_spl_padded_weighting_and_z_share_a_plot_after_refresh(workbench):
+def test_spl_lowercase_and_uppercase_weighting_share_a_plot_after_refresh(workbench):
     window, files = workbench.window, workbench.files
-    for file, weighting in (("shared", " a "), ("empty", "Z")):
+    for file, weighting in (("shared", "c"), ("empty", "C")):
         queue = json.loads(files[file].read_text(encoding="utf-8"))
         queue[0]["seq1"]["analysis_list"]["声压级"]["weighting"] = weighting
         write_json(files[file], queue)
     window.on_workbench_configuration_committed()
 
     spl = window.sequence_window.plot_grid._cells[0, 0]
-    assert _plot_labels(spl) == ("自定义声压", "dB(Z)", "工况1", "工况2")
+    assert _plot_labels(spl) == ("自定义声压", "dB(C)", "工况1", "工况2")
     assert spl.header.right.toolTip() == ""
     controller = window.workbench_controller
     assert tuple(binding.condition_id for binding in controller.get_plot_bindings(0, 0)) == ("c1", "c2")
     exported = controller.get_condition_config("c1").export_process_config()
-    assert exported["analysis_config"]["声压级"]["weighting"] == " a "
+    assert exported["analysis_config"]["声压级"]["weighting"] == "c"
 
 
 @pytest.mark.parametrize("workbench", ["custom plots"], indirect=True)
