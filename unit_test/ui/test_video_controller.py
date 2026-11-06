@@ -3,6 +3,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
+from PyQt5.QtCore import Qt
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QDialogButtonBox, QLabel, QMessageBox
 
 from base.video.config import VideoConfig, load_config, save_config
@@ -124,14 +126,40 @@ def test_disabled_defaults_no_process_or_settings_file_and_binds_main_card(ui_qa
     controller = VideoController(config_path=tmp_path / "video.json")
     panel = MotorVideoMonitorPanel()
     try:
-        controller.attach_panel(panel)
+        card = controller.attach_panel(panel)
         controller.poll()
         assert controller.service.process_id is None
         assert not (tmp_path / "video.json").exists()
         assert panel.live_panel.canvas.message == "预览已关闭"
-        assert panel.live_panel.more_button.isEnabled()
+        assert panel.live_panel.settings_button.isEnabled()
+        assert card is panel.live_panel
+        card.settings_button.click()
+        assert controller.dialog is None
         assert panel.card.isHidden()
     finally:
+        controller.shutdown()
+        spin(ui_qapp, lambda: controller.is_shutdown_complete)
+        controller._timer.stop()
+        panel.close()
+
+
+def test_main_card_settings_button_opens_and_reuses_dialog(ui_qapp, tmp_path):
+    panel = MotorVideoMonitorPanel()
+    controller = VideoController(parent=panel, config_path=tmp_path / "video.json")
+    try:
+        card = controller.attach_panel(panel)
+        card.settings_requested.connect(controller.show_settings)
+        panel.show()
+        ui_qapp.processEvents()
+        assert controller.dialog is None
+        QTest.mouseClick(panel.live_panel.settings_button, Qt.LeftButton)
+        dialog = controller.dialog
+        assert dialog is not None and dialog.isVisible()
+        QTest.mouseClick(panel.live_panel.settings_button, Qt.LeftButton)
+        assert controller.dialog is dialog
+    finally:
+        if controller.dialog is not None:
+            controller.dialog.close()
         controller.shutdown()
         spin(ui_qapp, lambda: controller.is_shutdown_complete)
         controller._timer.stop()

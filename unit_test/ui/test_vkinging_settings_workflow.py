@@ -248,6 +248,9 @@ def test_queue_editor_after_startup_uses_saved_profile_for_missing_rate(
     before_device = deepcopy(window.mic)
     profile_before = host.ve_profile_store.path.read_bytes()
     host.on_sequence_config_updated = Mock()
+    window._on_configuration_deleted = Mock()
+    notice = Mock()
+    monkeypatch.setattr("ui.operation_sequence.QMessageBox.information", notice)
     callback = MethodType(main_window.MainWindow._open_analysis_model_select, window)
     parent = None
     if entry == "program":
@@ -318,7 +321,8 @@ def test_queue_editor_after_startup_uses_saved_profile_for_missing_rate(
         assert window.mic == before_device
         assert host.ve_profile_store.path.read_bytes() == profile_before
         assert all(path.read_bytes() == content for path, content in product_before.items())
-        host.on_sequence_config_updated.assert_called_once()
+        assert "测试队列已保存" in notice.call_args.args[2]
+        host.on_sequence_config_updated.assert_not_called()
     finally:
         if parent is not None:
             parent._dirty = False

@@ -6,6 +6,7 @@ from copy import deepcopy
 from PyQt5.QtCore import QEvent, QSignalBlocker
 from PyQt5.QtWidgets import QApplication, QMessageBox, QLineEdit
 
+from base import load_config
 from base.load_config import LoadUiConfig
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.product_test_project_config import ProductTestProjectConfigManager
@@ -22,9 +23,45 @@ from consts.product_test_project_consts import (
 from consts.running_consts import DEFAULT_DIR
 
 
+def _is_independent_analysis_queue(data):
+    """Check the full queue consumed by startup and channel synchronization."""
+    if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+        return False
+    first = data[0].get("seq1")
+    if not isinstance(first, dict):
+        return False
+    for group in data:
+        if not isinstance(group, dict):
+            return False
+        for sequence in group.values():
+            if not isinstance(sequence, dict):
+                return False
+            acquisition = sequence.get("acq", {})
+            analysis = sequence.get("analysis_list", {})
+            if (not isinstance(acquisition, dict) or not isinstance(acquisition.get("detail", {}), dict)
+                    or not isinstance(analysis, dict)):
+                return False
+            if any(isinstance(item, dict) and item.get("type") is not None
+                   and not isinstance(item["type"], str) for item in analysis.values()):
+                return False
+
+    # The initial analysis runtime needs acquisition detail and scheduled item types.
+    if "detail" not in first.get("acq", {}):
+        return False
+    analysis = first.get("analysis_list", {})
+    order = analysis.get("display_sequence", [])
+    return isinstance(order, list) and all(
+        isinstance(name, str) and isinstance(analysis.get(name), dict)
+        and isinstance(analysis[name].get("type"), str)
+        for name in order
+    )
+
+
 class SequenceWidgetConfigOpsMixin:
 
     def synchronize_hardware_analysis_channels(self):
+        if getattr(self, "workbench_mode", False):
+            return self._update_independent_analysis_channels()
         if getattr(self, "_configuration_deletion_error", ""):
             return False
         from base.hardware_analysis_channel_sync import (
@@ -64,6 +101,29 @@ class SequenceWidgetConfigOpsMixin:
         self._product_config_refresh_state = "ready" if snapshot.active_file else "empty"
         self._refresh_test_mode_availability()
         self.update_player_btn_is_paused()
+        return True
+
+    def _update_independent_analysis_channels(self):
+        from base.hardware_analysis_channel_sync import update_sequence_analysis_channels
+        from base.recording_channel_selection import (
+            RecordingChannelSelectionError, canonicalize_recording_input_channels,
+        )
+
+        sequence_config = self.sequence_config
+        if not sequence_config:
+            return True
+        if not _is_independent_analysis_queue(sequence_config):
+            self.default_logger.warning(
+                "Independent analysis queue cannot update channels: invalid runtime structure in %s",
+                self.using_config_path,
+            )
+            return False
+        try:
+            channels = canonicalize_recording_input_channels(self.mic_channels)
+        except RecordingChannelSelectionError as error:
+            self.default_logger.warning("Independent analysis channel update failed: %s", error)
+            return False
+        update_sequence_analysis_channels(sequence_config, channels)
         return True
 
     def _prepare_initial_product_configuration(self):
@@ -236,6 +296,8 @@ class SequenceWidgetConfigOpsMixin:
     def _configuration_deletion_failed(self, message):
         # Do not let the editor-close refresh hide a partially committed deletion.
         self._configuration_deletion_error = str(message)
+        if getattr(self, "workbench_mode", False):
+            return
         self._product_config_refresh_state = "failed"
         self._product_config_refresh_error = str(message)
         self._refresh_test_mode_availability()
@@ -244,14 +306,23 @@ class SequenceWidgetConfigOpsMixin:
     def _configuration_deleted(self, target):
         from base.sequence_queue_references import queue_path_key
 
+        workbench_mode = getattr(self, "workbench_mode", False)
         if (target.kind == "queue" and getattr(self, "using_config_path", None)
                 and queue_path_key(self.using_config_path, os.path.dirname(target.path))
                 == queue_path_key(target.path, os.path.dirname(target.path))):
             self.using_config_path = None
             self.sequence_config = []
             self.analysis_config = {}
-        self.update_using_file_combobox()
-        self._refresh_active_product_configuration(deleted_target=target)
+            if workbench_mode:
+                self.count_board.analysis_config = self.analysis_config
+                self.data_struct.sample_rate = None
+                self.data_struct.stimulus_data = None
+                self.data_struct.stimulus_info = None
+                self.init_fft_and_stft_flag()
+                self._set_sequence_config_available_state(False)
+        if not workbench_mode:
+            self.update_using_file_combobox()
+            self._refresh_active_product_configuration(deleted_target=target)
 
     def _current_ve_recording_device(self, device):
         """Resolve the loaded queue, reading the injected profile only for a missing rate."""
@@ -271,6 +342,10 @@ class SequenceWidgetConfigOpsMixin:
     def _is_sequence_config_path(self, path) -> bool:
         if not path or not isinstance(path, (str, bytes, os.PathLike)):
             return False
+        if getattr(self, "workbench_mode", False):
+            # Display-only workbench queues can omit legacy analysis runtime data.
+            load_code, data = LoadUiConfig.load_sequence_config_from_json(path)
+            return load_code == error_code.OK and _is_independent_analysis_queue(data)
         load_code, data = LoadUiConfig.load_data_from_json(path)
         if load_code != error_code.OK or not isinstance(data, list) or not data:
             return False
@@ -707,6 +782,14 @@ class SequenceWidgetConfigOpsMixin:
         Retrieves the sequence configuration from the registry.
         """
         registry = LoadUiConfig._load_sequence_config_registry()
+        workbench_mode = getattr(self, "workbench_mode", False)
+        if workbench_mode:
+            registry_dir = os.path.dirname(load_config.SEQUENCE_CONFIG_REGISTRY_PATH)
+            registry = {
+                name: os.path.normpath(os.path.join(registry_dir, path))
+                if isinstance(path, str) and path else path
+                for name, path in registry.items()
+            }
         if "using_config_path" in registry and registry["using_config_path"] is None:
             return None, registry
         # IMPORTANT: Do not auto-add "默认配置" into registry.
@@ -733,7 +816,7 @@ class SequenceWidgetConfigOpsMixin:
                 fallback_path = default_path
 
             using_config_path = fallback_path
-            if using_config_path:
+            if using_config_path and not workbench_mode:
                 LoadUiConfig.update_using_config_path(using_config_path)
         return using_config_path, registry
 
@@ -941,6 +1024,11 @@ class SequenceWidgetConfigOpsMixin:
         # Avoid noisy stdout prints; use logger if needed for debugging.
         # self.default_logger.debug(f"Loading sequence config: {self.using_config_path}")
         load_code, result = LoadUiConfig().load_sequence_config_from_json(self.using_config_path)
+        if getattr(self, "workbench_mode", False) and (
+            load_code != error_code.OK or not _is_independent_analysis_queue(result)
+        ):
+            self.using_config_path = None
+            load_code = error_code.INVALID_DATA_LOADING
         if load_code == error_code.OK and result:
             if not isinstance(result, list) or not result or not isinstance(result[0], dict) or "seq1" not in result[0]:
                 self.sequence_config = []

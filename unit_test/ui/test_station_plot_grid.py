@@ -2,12 +2,12 @@ import pyqtgraph as pg
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QSize, Qt
-from PyQt5.QtGui import QIcon, QImage, QPalette, QPixmap, QWheelEvent
+from PyQt5.QtGui import QHelpEvent, QIcon, QImage, QPalette, QPixmap, QTextDocument, QWheelEvent
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtTest import QSignalSpy, QTest
 from PyQt5.QtWidgets import (
     QComboBox, QLabel, QPushButton, QScrollArea, QStyle, QStyleOptionButton,
-    QStyleOptionComboBox, QVBoxLayout, QWidget,
+    QStyleOptionComboBox, QToolTip, QVBoxLayout, QWidget,
 )
 
 from consts.ui_style_const import COLOR_BORDER, COMBO_DOWN_ARROW_ICON, toolbar_combobox_style
@@ -239,6 +239,114 @@ def test_default_empty_grid_and_column_controls(grid):
         assert [button.text() for button in buttons] == ['', 'OK', 'NG']
         assert not buttons[0].icon().isNull()
         assert all(button.isVisible() and not button.isCheckable() for button in buttons)
+
+
+def test_workbench_columns_reset_same_size_results_and_release_all_in_empty_state(grid):
+    grid.set_grid_size(3, 3)
+    grid.show_workbench_columns(("左侧工位", "右侧工位"))
+    assert set(cells(grid)) == {(r, c) for r in range(2) for c in range(2)}
+    assert [grid.findChild(QLabel, f"stationName{c}").toolTip() for c in range(2)] == [
+        "左侧工位", "右侧工位",
+    ]
+    assert all(not combo(grid, c).isEnabled() and combo(grid, c).count() == 0 for c in range(2))
+
+    grid.configure_plot(0, 0, kind="curve", title="旧曲线", x_label="时间", x_range=(1, 2))
+    grid.set_curve_data(0, 0, [{"x": [1, 2], "y": [3, 4]}])
+    grid.configure_plot(1, 1, kind="heatmap", subheader_left_text="旧热图")
+    grid.set_heatmap_data(1, 1, [[1, 2]])
+    grid.set_column_options(0, [("旧选项", "old")])
+    spy = QSignalSpy(grid.column_selection_changed)
+
+    grid.show_workbench_columns(("前工位", "后工位"))
+    assert [grid.findChild(QLabel, f"stationName{c}").text() for c in range(2)] == ["前工位", "后工位"]
+    assert all(not combo(grid, c).isEnabled() and combo(grid, c).count() == 0 for c in range(2))
+    assert len(spy) == 0
+    for cell in cells(grid).values():
+        plot = cell.plot_widget.getPlotItem()
+        assert cell.kind == "curve"
+        assert not curves(cell)
+        assert not any(isinstance(item, pg.ImageItem) for item in plot.items)
+        assert not plot.getAxis("bottom").labelText
+        assert cell.plot_widget.viewRange() == [[0, 1], [0, 1]]
+        assert not cell.header.isVisible()
+        assert not cell.subheader.isVisible()
+
+    old_cells = list(cells(grid).values())
+    old_plots = [cell.plot_widget for cell in old_cells]
+    old_headers = [controls(grid, c) for c in range(2)]
+    grid.show_workbench_columns(())
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert not cells(grid)
+    assert not grid.findChildren(QComboBox)
+    assert all(sip.isdeleted(widget) for widget in old_cells + old_plots + old_headers)
+    assert grid.findChild(QLabel, "stationPlotTitle").isVisible()
+
+    grid.show_workbench_columns(("恢复工位",))
+    assert set(cells(grid)) == {(0, 0), (1, 0)}
+    assert grid.findChild(QLabel, "stationName0").text() == "恢复工位"
+    assert combo(grid, 0).isVisible() and not combo(grid, 0).isEnabled()
+
+
+def test_workbench_column_header_shows_markup_as_literal_text(grid, qt_app):
+    name = "<h1>motor</h1>"
+    grid.show_workbench_columns((name,))
+    qt_app.processEvents()
+
+    label = grid.findChild(QLabel, "stationName0")
+    assert label.text() == name
+    assert label.textFormat() == Qt.PlainText
+
+
+def test_workbench_column_tooltip_renders_elided_markup_as_literal_text(grid, qt_app):
+    name = "<h1>" + "Long station & motor " * 12 + "</h1>"
+    grid.show_workbench_columns((name,))
+    qt_app.processEvents()
+    label = grid.findChild(QLabel, "stationName0")
+    assert label.text().endswith("…")
+    assert label.toolTip() == name
+
+    pos = label.rect().center()
+    try:
+        QCoreApplication.sendEvent(label, QHelpEvent(QEvent.ToolTip, pos, label.mapToGlobal(pos)))
+        assert QToolTip.isVisible()
+        document = QTextDocument()
+        document.setHtml(QToolTip.text())
+        assert document.toPlainText() == name
+    finally:
+        QToolTip.hideText()
+
+
+def test_standalone_station_name_setter_restores_legacy_auto_text(grid):
+    grid.show_workbench_columns(("<h1>configured name</h1>",))
+    label = grid.findChild(QLabel, "stationName0")
+    assert label.textFormat() == Qt.PlainText
+
+    name = "<h1>standalone name</h1>"
+    grid.set_station_name(0, name)
+    assert label.textFormat() == Qt.AutoText
+    assert label.toolTip() == name
+
+
+@pytest.mark.parametrize(("names", "error"), [
+    (("新工位", None), TypeError),
+    (("新工位", " "), ValueError),
+    (("一", "二", "三", "四", "五"), ValueError),
+    ("工位", TypeError),
+])
+def test_invalid_workbench_column_batch_preserves_display(grid, names, error):
+    before = cells(grid)
+    grid.set_station_name(0, "已显示")
+    grid.set_column_options(0, [("保留", "value")])
+    grid.set_curve_data(0, 0, [{"x": [0, 1], "y": [2, 3]}])
+    curve = curves(before[0, 0])[0]
+
+    with pytest.raises(error, match="show_workbench_columns"):
+        grid.show_workbench_columns(names)
+
+    assert cells(grid) == before
+    assert curves(before[0, 0]) == [curve]
+    assert grid.findChild(QLabel, "stationName0").text() == "已显示"
+    assert combo(grid, 0).currentData() == "value"
 
 
 @pytest.mark.parametrize('rows,columns', [(1, 1), (1, 4), (3, 1), (3, 4)])

@@ -3,10 +3,13 @@
 import math
 
 import pytest
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
+from PyQt5.QtCore import QPoint, QRect, Qt
+from PyQt5.QtGui import QColor, QImage, QPainter
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QAbstractItemView, QAbstractButton, QLabel, QScrollArea, QTableWidget, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (
+    QAbstractButton, QAbstractItemView, QLabel, QScrollArea, QStyle, QStyleOption,
+    QTableWidget, QVBoxLayout, QWidget,
+)
 
 from ui.sequence.motor_station_test_panel import MotorStationTestPanel
 
@@ -65,6 +68,164 @@ def test_station_details_use_pixel_fonts(panel):
         widget.ensurePolished()
         font = widget.font()
         assert (font.family(), font.pixelSize(), font.bold()) == ("Microsoft YaHei UI", 13, False)
+
+
+def test_workbench_stations_show_names_and_reset_results_on_same_size_update(panel, qt_app):
+    panel.set_station_count(1)
+    assert header(panel).accessibleName() == "工位 1"
+    assert panel.get_station_data(1)["forward"] == "--"
+    assert panel.get_station_data(1)["reverse"] == "--"
+
+    panel.show_workbench_stations((("左侧工位", ("响度",)), ("右侧工位", ())))
+    qt_app.processEvents()
+    assert panel.get_station_count() == 2
+    first_header = header(panel)
+    assert first_header.accessibleName() == "左侧工位"
+    name_label = first_header.findChildren(QLabel)[0]
+    assert name_label.text() == "左侧工位"
+    assert not first_header.isChecked() and table(panel).isHidden()
+    assert first_header.accessibleDescription() == "收起"
+    first_header.click()
+    assert first_header.isChecked() and table(panel).isVisible()
+    assert first_header.accessibleDescription() == "展开"
+    assert name_label.text() == "左侧工位"
+    first_header.click()
+    assert not first_header.isChecked() and table(panel).isHidden()
+    assert first_header.accessibleDescription() == "收起"
+    first_header.click()
+    assert header(panel, 2).accessibleName() == "右侧工位"
+    assert panel.get_station_data(1)["rows"] == [["响度", "--", "--"]]
+    assert panel.get_station_data(2)["rows"] == []
+    panel.set_station_row(1, 0, ("响度", 10, 20))
+    panel.set_station_results(1, "OK", "NG")
+    panel.set_station_results(2, "NG", "OK")
+
+    panel.show_workbench_stations((("电机工位", ("振动",)), ("备件工位", ())))
+    assert header(panel).accessibleName() == "电机工位"
+    assert name_label.text() == "电机工位"
+    assert header(panel).isChecked() and table(panel).isVisible()
+    assert not header(panel, 2).isChecked() and table(panel, 2).isHidden()
+    assert panel.get_station_data(1) == {
+        "station_id": 1, "forward": "--", "reverse": "--", "rows": [["振动", "--", "--"]],
+    }
+    assert panel.get_station_data(2) == {
+        "station_id": 2, "forward": "--", "reverse": "--", "rows": [],
+    }
+    assert [table(panel).item(0, c).text() for c in range(3)] == ["振动", "--", "--"]
+    for name in ("stationForward1", "stationReverse1", "stationForward2", "stationReverse2"):
+        assert panel.findChild(QLabel, name).text() == "--"
+
+    panel.show_workbench_stations(())
+    assert panel.get_station_count() == 0
+    assert not panel.findChildren(QTableWidget)
+    assert panel.findChild(QLabel, "stationTitle").isVisible()
+
+
+def test_workbench_stations_preserve_empty_and_whitespace_metric_names(panel):
+    panel.show_workbench_stations((("工位", ("", " ")),))
+
+    rows = [["", "--", "--"], [" ", "--", "--"]]
+    assert panel.get_station_data(1)["rows"] == rows
+    assert [[table(panel).item(r, c).text() for c in range(3)] for r in range(2)] == rows
+
+
+def test_workbench_station_header_shows_markup_as_literal_text(panel):
+    name = "<h1>motor</h1>"
+    panel.show_workbench_stations(((name, ()),))
+
+    station_header = header(panel)
+    label = station_header.findChildren(QLabel)[0]
+    assert label.text() == name
+    assert label.textFormat() == Qt.PlainText
+    assert station_header.accessibleName() == name
+    station_header.click()
+    assert label.text() == name
+
+
+def native_branch_mask(style, button, slot, expanded, image):
+    reference = QImage(image.size(), QImage.Format_ARGB32_Premultiplied)
+    reference.setDevicePixelRatio(image.devicePixelRatio())
+    reference.fill(Qt.transparent)
+    option = QStyleOption()
+    option.initFrom(button)
+    option.rect = QRect(QPoint(), slot.size())
+    option.state |= QStyle.State_Children
+    if expanded:
+        option.state |= QStyle.State_Open
+    with QPainter(reference) as painter:
+        style.drawPrimitive(QStyle.PE_IndicatorBranch, option, painter, button)
+    return {(x, y) for y in range(reference.height()) for x in range(reference.width())
+            if reference.pixelColor(x, y).alpha()}
+
+
+def test_native_branch_arrows_follow_only_the_operated_station(panel, qt_app):
+    panel.show_workbench_stations((("左侧工位", ("响度",)), ("右侧工位", ("响度",))))
+    first, second = header(panel), header(panel, 2)
+    second.setChecked(True)
+    qt_app.processEvents()
+
+    style = qt_app.style()
+    slot_width = style.pixelMetric(QStyle.PM_TreeViewIndentation)
+    slot = QRect(12, 0, slot_width, first.height())
+    name = first.findChildren(QLabel)[0]
+    text_left = name.x() + name.contentsRect().left()
+
+    def assert_branch(button, expanded):
+        image = button.grab(slot).toImage()
+        background = button.grab(QRect(0, 0, 1, slot.height())).toImage()
+        mask = {(x, y) for y in range(image.height()) for x in range(image.width())
+                if image.pixel(x, y) != background.pixel(0, y)}
+        assert mask == native_branch_mask(style, button, slot, expanded, image)
+        assert mask
+        return mask
+
+    second_mask = assert_branch(second, True)
+
+    def assert_state(expanded):
+        qt_app.processEvents()
+        assert first.isChecked() == table(panel).isVisible() == expanded
+        assert second.isChecked() and table(panel, 2).isVisible()
+        assert assert_branch(second, True) == second_mask
+        assert name.x() + name.contentsRect().left() == text_left
+        return assert_branch(first, expanded)
+
+    closed_mask = assert_state(False)
+    assert text_left > slot.right()
+    QTest.mouseClick(first, Qt.LeftButton, pos=slot.center())
+    open_mask = assert_state(True)
+    assert open_mask != closed_mask
+
+    QTest.mouseClick(first, Qt.LeftButton, pos=QPoint(text_left + 3, slot.center().y()))
+    assert assert_state(False) == closed_mask
+
+    first.setFocus()
+    assert first.hasFocus()
+    QTest.keyClick(first, Qt.Key_Space)
+    assert assert_state(True) == open_mask
+
+
+@pytest.mark.parametrize(("entry", "error"), [
+    ("not a pair", TypeError),
+    (("缺少指标",), ValueError),
+    ((None, ()), TypeError),
+    (("工位", "指标"), TypeError),
+    (("工位", ("指标", 2)), TypeError),
+    ((" ", ()), ValueError),
+])
+def test_invalid_workbench_station_batch_preserves_display(panel, entry, error):
+    panel.set_station_count(1)
+    panel.set_station_row_count(1, 1)
+    panel.set_station_row(1, 0, ("已显示", 10, 20))
+    panel.set_station_results(1, "OK", "NG")
+    snapshot = panel.get_station_data(1)
+
+    with pytest.raises(error, match=r"stations\[1\]"):
+        panel.show_workbench_stations((("待应用", ("新指标",)), entry))
+
+    assert panel.get_station_count() == 1
+    assert header(panel).accessibleName() == "工位 1"
+    assert panel.get_station_data(1) == snapshot
+    assert table(panel).item(0, 0).text() == "已显示"
 
 
 def test_public_updates_and_independent_tables(panel):

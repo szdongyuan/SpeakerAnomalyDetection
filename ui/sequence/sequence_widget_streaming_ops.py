@@ -645,6 +645,8 @@ class SequenceWidgetStreamingOpsMixin:
 
     def on_sequence_config_updated(self, *_):
         """A shared queue edit uses the same comparison as a product save."""
+        if getattr(self, "workbench_mode", False):
+            return
         self.update_using_file_combobox()
         self._refresh_active_product_configuration()
 
@@ -652,6 +654,8 @@ class SequenceWidgetStreamingOpsMixin:
         """
         Enable test mode for usable programs and expose no-judgment warnings.
         """
+        if getattr(self, "workbench_mode", False):
+            return
         count_board = getattr(self, "count_board", None)
         try:
             can_output, reason = (

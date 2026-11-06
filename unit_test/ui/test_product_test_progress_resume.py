@@ -1705,24 +1705,29 @@ def test_close_preserves_analysis_guard_and_video_audio_order(monkeypatch, pendi
         sequence._save_product_test_progress_before_exit.assert_called_once()
 
 
-@pytest.mark.parametrize("ready", [True, False])
-def test_login_offers_resume_before_enabling_serial(monkeypatch, ready):
-    calls = []
+def test_workbench_login_preserves_preview_and_access_without_product_resume(monkeypatch):
     monkeypatch.setattr(
         main_window_module, "LoginWindow",
         lambda: SimpleNamespace(on_exec=lambda: ("Operator", "tester")),
     )
     sequence = SimpleNamespace(
         show=Mock(),
-        _offer_product_test_resume=lambda: calls.append("offer") or ready,
-        init_serial_trigger_runtime=lambda: calls.append("serial"),
+        _offer_product_test_resume=Mock(),
+        init_serial_trigger_runtime=Mock(),
     )
     main = SimpleNamespace(
         sequence_window=sequence, video_controller=SimpleNamespace(start_preview=Mock()),
         _expand_sequence_workspace=Mock(), update_statusbar=Mock(), on_access_lvl_changed=Mock(),
     )
     MainWindow.on_login_window_init(main)
-    assert calls == (["offer", "serial"] if ready else ["offer"])
+    assert (main.access_lvl, main.user_name) == ("Operator", "tester")
+    main.video_controller.start_preview.assert_called_once_with()
+    main._expand_sequence_workspace.assert_called_once_with()
+    sequence.show.assert_called_once_with()
+    main.update_statusbar.assert_called_once_with()
+    main.on_access_lvl_changed.assert_called_once_with()
+    sequence._offer_product_test_resume.assert_not_called()
+    sequence.init_serial_trigger_runtime.assert_not_called()
 
 
 @pytest.mark.parametrize("button_text,expected", [

@@ -218,8 +218,11 @@ def test_main_window_initialization_contains_scalar_refresh_errors(error_type):
             self.spacing = spacing
 
     class FakeSequenceWindow:
-        def __init__(self, *, recording_bridge, ve_prewarm_lifetime, raw_audio_csv_bridge):
-            self.left_panel = SimpleNamespace(video_monitor_panel=object())
+        def __init__(self, *, recording_bridge, ve_prewarm_lifetime, raw_audio_csv_bridge, workbench_mode):
+            assert workbench_mode
+            self.left_panel = SimpleNamespace(video_monitor_panel=object(), station_panel=object())
+            self.plot_grid = object()
+            self.set_workbench_active_product = mock.Mock()
             self.recording_bridge = recording_bridge
             self.ve_prewarm_lifetime = ve_prewarm_lifetime
             self.v2pa_factor = 9.0
@@ -230,7 +233,7 @@ def test_main_window_initialization_contains_scalar_refresh_errors(error_type):
     menu_bar = object()
     menu_row = object()
     window = SimpleNamespace(
-        video_controller=SimpleNamespace(attach_panel=mock.Mock()),
+        video_controller=SimpleNamespace(attach_panel=mock.Mock(), show_settings=mock.Mock()),
         raw_audio_csv_bridge=None,
         recording_bridge=object(),
         ve_prewarm_lifetime=object(),
@@ -251,6 +254,8 @@ def test_main_window_initialization_contains_scalar_refresh_errors(error_type):
             "QWidget": FakeWidget,
             "QVBoxLayout": FakeLayout,
             "SequenceWindow": FakeSequenceWindow,
+            "MotorWorkbenchConfigRepository": mock.Mock(),
+            "MotorWorkbenchController": mock.Mock(),
             "Qt": SimpleNamespace(AlignTop="align-top"),
         },
     )

@@ -79,9 +79,12 @@ def test_main_owns_fallback_and_shares_with_sequence(ui_qapp, monkeypatch, injec
             assert window.raw_audio_csv_bridge is borrowed
         sequence = QWidget()
         sequence.left_panel = Mock()
+        sequence.plot_grid = Mock()
+        sequence.set_workbench_active_product = Mock()
         sequence.update_v2pa_factor = Mock()
         factory = Mock(return_value=sequence)
         monkeypatch.setattr(module, "SequenceWindow", factory)
+        monkeypatch.setattr(module, "MotorWorkbenchController", Mock())
         monkeypatch.setattr(window, "init_menu", lambda: QWidget())
         monkeypatch.setattr(window, "set_title", lambda: QWidget())
         monkeypatch.setattr(window, "_create_menu_row", lambda menu: QWidget())

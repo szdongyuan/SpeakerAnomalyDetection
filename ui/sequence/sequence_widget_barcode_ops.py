@@ -465,6 +465,8 @@ class SequenceWidgetBarcodeOpsMixin:
         except TypeError:
             pass
         self.hw_manager.sig_barcode.connect(self.on_barcode_received)
+        if getattr(self, "workbench_mode", False):
+            return
         self.hw_manager.sig_trigger.connect(self.on_sensor_triggered)
         self.hw_manager.sig_directional_trigger.connect(self.on_directional_triggered)
         if hasattr(self, "on_serial_full_frame_received"):

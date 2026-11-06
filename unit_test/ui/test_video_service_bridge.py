@@ -1,5 +1,8 @@
 import time
 
+from PyQt5.QtCore import Qt
+from PyQt5.QtTest import QSignalSpy, QTest
+
 from base.video.preview import PreviewFrame
 from base.video.service import VideoService
 from base.video.models import VideoStatus
@@ -59,7 +62,9 @@ def test_real_spawn_to_qt_preview_start_stop_and_async_exit(ui_qapp, tmp_path):
     try:
         service.start()
         spin(ui_qapp, lambda: not widget.canvas.image.isNull())
-        assert [a.text() for a in widget.more_button.menu().actions()] == ["摄像头设置"]
+        requests = QSignalSpy(widget.settings_requested)
+        QTest.mouseClick(widget.settings_button, Qt.LeftButton)
+        assert len(requests) == 1
         assert widget.grab().save(str(tmp_path / "video_demo_preview.png"))
         bridge.shutdown()
         spin(ui_qapp, lambda: bool(closed))
