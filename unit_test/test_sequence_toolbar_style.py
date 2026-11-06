@@ -111,7 +111,7 @@ class TestSequenceToolbarStyle(unittest.TestCase):
         self.assertEqual(toolbar.objectName(), "sequenceToolsBar")
         self.assertIn(ui_style_const.COLOR_TOOLBAR_BG, toolbar.styleSheet())
 
-    def assert_font(self, widget, size, *, family="Microsoft YaHei UI"):
+    def assert_font(self, widget, size, *, family=ui_style_const.MAIN_UI_SMALL_FONT_FAMILY_NAME):
         widget.ensurePolished()
         font = widget.font()
         self.assertEqual((font.family(), font.pixelSize(), font.weight()), (family, size, QFont.Normal))
@@ -180,7 +180,7 @@ class TestSequenceToolbarStyle(unittest.TestCase):
         self.assert_font(button, 20, family="SimSun")
         tooltip_font = QToolTip.font()
         for widget, expected in (
-            (toolbar.player_btn, ("Microsoft YaHei UI", 16)),
+            (toolbar.player_btn, (ui_style_const.MAIN_UI_SMALL_FONT_FAMILY_NAME, 16)),
             (button, (tooltip_font.family(), tooltip_font.pixelSize())),
         ):
             if widget is button:
@@ -236,7 +236,7 @@ class TestSequenceToolbarStyle(unittest.TestCase):
                 self.assertIn("font-size: 15px", style)
                 self.assertIn("font-weight: 400", style)
 
-    def test_splash_uses_the_yahei_ui_font(self):
+    def test_splash_uses_the_shared_ui_font(self):
         from ui.splash_screen_window import Splash
 
         splash = Splash()
