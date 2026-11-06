@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication, QPushButton
 
-from base.product_test_project_config import is_manual_project_play_allowed
+from base.product_test_runtime_policy import is_manual_project_play_allowed
 from ui.sequence import sequence_widget_serial_trigger_ops as serial_ops_module
 from ui.sequence.sequence_widget_serial_trigger_ops import (
     SequenceWidgetSerialTriggerOpsMixin,

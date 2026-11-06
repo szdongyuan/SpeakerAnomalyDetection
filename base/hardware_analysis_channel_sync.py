@@ -24,6 +24,8 @@ def update_sequence_analysis_channels(data, channels):
     """Update only recorded channel fields, retaining all other queue settings."""
     for group in data:
         for sequence in group.values():
+            if sequence.get("analysis_channel_basis") == "wav":
+                continue
             mode = str(sequence.get("acq", {}).get("mode") or "RECORD_ONLY")
             if mode.strip().upper() != "RECORD_ONLY":
                 continue

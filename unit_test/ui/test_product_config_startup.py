@@ -14,17 +14,20 @@ from ui.sequence.sequence_widget import SequenceWindow
 from unit_test.base.test_product_test_config_refresh import make_refresh_manager
 
 
-@pytest.mark.parametrize("configuration", ["valid", "empty", "invalid", "missing"])
+@pytest.mark.parametrize("configuration", ["valid", "empty", "invalid", "missing", "registry"])
 def test_startup_prepares_once_before_widgets_and_registers_after_ui(
     tmp_path, monkeypatch, configuration,
 ):
-    manager, _, queue_path = make_refresh_manager(tmp_path, condition_count=2, port_count=2)
+    manager, project, queue_path = make_refresh_manager(tmp_path, condition_count=2, port_count=2)
+    filename = project["project_name"] + ".json"
     if configuration == "empty":
         manager.save_registry({"active_file": None, "configs": []})
     elif configuration == "invalid":
-        (Path(manager.program_dir) / "A.json").write_text("{", encoding="utf-8")
+        (Path(manager.program_dir) / filename).write_text("{", encoding="utf-8")
     elif configuration == "missing":
-        (Path(manager.program_dir) / "A.json").replace(tmp_path / "moved.json")
+        (Path(manager.program_dir) / filename).replace(tmp_path / "moved.json")
+    elif configuration == "registry":
+        Path(manager.registry_path).write_text("{", encoding="utf-8")
     read = Mock(wraps=manager.load_project)
     monkeypatch.setattr(manager, "load_project", read)
     monkeypatch.setattr(SequenceWindow, "_get_product_program_manager", lambda self: manager)
@@ -53,42 +56,34 @@ def test_startup_prepares_once_before_widgets_and_registers_after_ui(
     monkeypatch.setattr(builtins, "open", no_statistics_open)
     window = SequenceWindow()
     try:
-        expected = {"valid": "ready", "empty": "empty", "invalid": "failed", "missing": "failed"}[configuration]
+        expected = {"valid": "failed", "empty": "empty", "invalid": "failed", "missing": "failed", "registry": "failed"}[configuration]
         assert window._product_config_refresh_state == expected
         assert window._pending_initial_product_snapshot is None
         assert window.left_panel.get_station_count() == 0
-        assert read.call_count == (0 if configuration == "empty" else 1)
+        assert read.call_count == (0 if configuration in {"empty", "registry"} else 1)
+        assert window.product_test_condition_configs == []
+        assert not window.player_btn.isEnabled()
+        assert window.using_file_combobox.isEnabled()
         if configuration == "valid":
-            assert len(window.product_test_condition_configs) == 4
-            snapshot = window._applied_product_snapshot
-            key = window.product_test_condition_configs[0]["key"]
-            window.left_panel.set_condition_result(key, "NG")
-            window.on_product_test_program_updated()
-            assert window._applied_product_snapshot is snapshot
-            assert window.left_panel.condition_state.rows[key]["result"] == "NG"
-        else:
-            assert window.product_test_condition_configs == []
-            assert not window.player_btn.isEnabled()
-            assert window.using_file_combobox.isEnabled()
+            assert "尚未" in window._product_config_refresh_error
         if configuration == "missing":
-            assert window.using_file_combobox.findData("A.json") == -1
+            assert window.using_file_combobox.findData(filename) == -1
             assert window.using_file_combobox.currentIndex() == -1
             assert window.using_file_combobox.placeholderText() == "暂无可用配置"
         window.show()
         QApplication.processEvents()
         assert window.left_panel.dashboard_panel.summary_panel.isVisible()
         assert window.left_panel.get_station_count() == 0
+        assert len(warnings) == (0 if configuration == "valid" else 1)
         if configuration == "valid":
-            assert warnings == []
-        else:
-            assert len(warnings) == 1
-            assert "功能-测试队列" not in warnings[0]
-            if configuration in {"missing", "empty"}:
-                assert warnings[0] == "暂无可用配置。"
-            window.hide()
-            window.show()
-            QApplication.processEvents()
-            assert len(warnings) == 1
+            assert "尚未" in window.player_btn.toolTip()
+            assert "请选择其他" not in window._missing_configuration_message()
+        if configuration in {"missing", "empty"}:
+            assert warnings[0] == "暂无可用配置。"
+        window.hide()
+        window.show()
+        QApplication.processEvents()
+        assert len(warnings) == (0 if configuration == "valid" else 1)
         assert Path(manager.registry_path).read_bytes() == registry_before
     finally:
         window._analysis_process_timer.stop()

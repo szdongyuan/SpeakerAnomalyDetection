@@ -15,9 +15,12 @@ def write(path, value):
 
 
 def product(queue="", name="A"):
-    return {"project_name": name, "test_groups": [{"group_name": "A口", "test_conditions": [
-        {"condition_name": "档位1", "test_queue": queue},
-    ]}]}
+    from base.product_test.config_model import default_project
+    data = default_project()
+    data["project_name"] = name
+    data["stations"][0]["station_name"] = "A口"
+    data["conditions"][0].update(condition_name="档位1", test_queue=queue)
+    return data
 
 
 @pytest.fixture

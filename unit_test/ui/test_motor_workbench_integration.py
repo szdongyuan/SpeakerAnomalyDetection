@@ -25,7 +25,7 @@ from unit_test.base.test_motor_workbench_config import acquisition, config_files
 
 
 class _CommitDialog(QObject):
-    programs_changed = pyqtSignal()
+    projects_changed = pyqtSignal()
 
     def __init__(self, execute):
         super().__init__()
@@ -485,7 +485,7 @@ def test_refresh_reads_committed_files_and_keeps_last_display_on_error(workbench
 
     def save_product():
         write_json(files["product"], product)
-        dialog.programs_changed.emit()
+        dialog.projects_changed.emit()
 
     dialog = _CommitDialog(save_product)
     monkeypatch.setattr(main_module, "ProductTestProjectConfigDialog", lambda *args, **kwargs: dialog)

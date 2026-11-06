@@ -1,10 +1,8 @@
 """Per-condition segmented analysis settings."""
-import re
-
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QButtonGroup, QComboBox, QDialogButtonBox, QDoubleSpinBox,
-    QHBoxLayout, QLabel, QPlainTextEdit, QRadioButton, QSizePolicy, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QRadioButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 from base.analysis_segments import TIME_UNIT_SECONDS, build_segment_plan, normalize_segmented_analysis
 from base.config_number_format import config_number_decimals, format_config_number
@@ -16,12 +14,12 @@ class OutputLoadConfigDialog(ConfigDialogBase):
     def __init__(self, condition_name, settings, total_duration, parent=None, *, port_name=""):
         super().__init__(parent)
         self.setWindowTitle(f"分段分析设置 — {condition_name}")
-        self.resize(580, 440)
-        self.setFixedHeight(440)
+        self.resize(580, 340)
+        self.setFixedHeight(340)
         self.total_duration = total_duration
         settings = settings or {"mode": "none"}
-        if "enabled" in settings:
-            settings = normalize_segmented_analysis({"output_load": settings})
+        if settings.get("mode", "none") not in {"none", "time"}:
+            raise ValueError("产品工况分段方式仅支持不分段或按时间")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 24, 20, 24)
         layout.setSpacing(24)
@@ -31,7 +29,7 @@ class OutputLoadConfigDialog(ConfigDialogBase):
         self.mode_group = QButtonGroup(self)
         self.mode_buttons = {}
         modes = QHBoxLayout()
-        for mode, label in (("none", "不分段"), ("output_load", "按输出负载"), ("time", "按时间")):
+        for mode, label in (("none", "不分段"), ("time", "按时间")):
             button = QRadioButton(label)
             self.mode_group.addButton(button)
             self.mode_buttons[mode] = button
@@ -44,15 +42,6 @@ class OutputLoadConfigDialog(ConfigDialogBase):
         form.setContentsMargins(0, 12, 0, 0)
         form.setSpacing(24)
         form.setAlignment(Qt.AlignTop)
-        self.loads_input = QPlainTextEdit()
-        self.loads_input.setPlaceholderText("例如：0, 0.15, 0.3, 0.6")
-        self.loads_input.setPlainText(", ".join(str(v) for v in settings.get("load_values", [])))
-        self.loads_input.setFixedHeight(80)
-        self.unit_input = QComboBox()
-        self.unit_input.setEditable(True)
-        self.unit_input.setInsertPolicy(QComboBox.NoInsert)
-        self.unit_input.addItems(["A", "mA", "W", "%"])
-        self.unit_input.setCurrentText(settings.get("load_unit", "A"))
         self.interval_input = QDoubleSpinBox()
         self.interval_input.setRange(0.01, 86400)
         self.time_unit_input = QComboBox()
@@ -83,11 +72,7 @@ class OutputLoadConfigDialog(ConfigDialogBase):
         self.duration_input.setRange(min(0.01, analysis_seconds), max(86400, analysis_seconds))
         self.duration_input.setSuffix(" 秒")
         self.duration_input.setValue(analysis_seconds)
-        self.load_rows = (
-            self._add_form_row(form, "负载列表：", self.loads_input),
-            self._add_form_row(form, "负载单位：", self.unit_input),
-        )
-        self.time_row = self._add_form_row(form, "分段间隔：", interval_field)
+        self._add_form_row(form, "分段间隔：", interval_field)
         self._add_form_row(form, "每段分析时长：", self.duration_input)
         layout.addWidget(self.form_widget)
         self.error_label = QLabel()
@@ -107,8 +92,6 @@ class OutputLoadConfigDialog(ConfigDialogBase):
             button.toggled.connect(self._refresh)
         for spin in (self.duration_input, self.interval_input):
             spin.valueChanged.connect(self._refresh)
-        self.loads_input.textChanged.connect(self._refresh)
-        self.unit_input.currentTextChanged.connect(self._refresh)
         self.time_unit_input.currentIndexChanged.connect(self._refresh)
         self._refresh()
 
@@ -130,30 +113,16 @@ class OutputLoadConfigDialog(ConfigDialogBase):
     def settings(self):
         mode = next(mode for mode, button in self.mode_buttons.items() if button.isChecked())
         settings = {"mode": mode, "analysis_seconds": self.duration_input.value()}
-        if mode == "output_load":
-            try:
-                values = [float(v) for v in re.split(r"[,，;；\s]+", self.loads_input.toPlainText().strip()) if v]
-            except ValueError:
-                raise ValueError("负载请输入非负数，用逗号、空格或换行分隔") from None
-            settings.update(load_values=values, load_unit=self.unit_input.currentText())
-        elif mode == "time":
+        if mode == "time":
             unit = self.time_unit_input.currentData()
             settings.update(interval_seconds=self.interval_input.value() * TIME_UNIT_SECONDS[unit],
                             display_time_unit=unit)
         return normalize_segmented_analysis({"segmented_analysis": settings})
 
     def _refresh(self):
-        load = self.mode_buttons["output_load"].isChecked()
         time = self.mode_buttons["time"].isChecked()
-        self.loads_input.setEnabled(load)
-        self.unit_input.setEnabled(load)
-        self.interval_input.setEnabled(time)
-        self.time_unit_input.setEnabled(time)
-        self.duration_input.setEnabled(load or time)
-        self.form_widget.setVisible(load or time)
-        for row in self.load_rows:
-            row.setVisible(load)
-        self.time_row.setVisible(time)
+        self.form_widget.setEnabled(time)
+        self.form_widget.setVisible(time)
         try:
             build_segment_plan(self.settings(), self.total_duration, 1000)
             self.error_label.clear()

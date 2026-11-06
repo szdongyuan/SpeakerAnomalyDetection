@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import QMessageBox
 from base.hardware_trigger.serial_full_frame_matcher import normalize_frame_candidates
 from base.hardware_trigger.serial_product_port_plan import build_serial_product_port_plan
 from base.load_config import LoadUiConfig
-from base.product_test_project_config import classify_project_trigger_mode
+from base.product_test_runtime_policy import classify_project_trigger_mode
 from base.recording_management import RecordingManager
 from consts import error_code, ui_style_const
 from consts.product_test_project_consts import (

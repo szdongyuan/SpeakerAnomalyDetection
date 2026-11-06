@@ -7,6 +7,7 @@ class SequenceData:
         self._display_sequence = []
         self._data = []
         self._auto_analysis = True
+        self.analysis_channel_basis = None
 
         self._acq = {"name": self._name, "mode": self._mode, "detail": self._detail}
         self._analysis_list = {
@@ -90,4 +91,7 @@ class SequenceData:
 
     @property
     def config_info(self):
-        return {self._seq_name: {"acq": self.acq, "analysis_list": self.analysis_list}}
+        sequence = {"acq": self.acq, "analysis_list": self.analysis_list}
+        if self.analysis_channel_basis is not None:
+            sequence["analysis_channel_basis"] = self.analysis_channel_basis
+        return {self._seq_name: sequence}

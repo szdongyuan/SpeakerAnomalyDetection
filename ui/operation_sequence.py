@@ -23,6 +23,7 @@ from time import time
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.analysis_config_validation import validate_sequence_config
 from base.data_struct.sequence_data import SequenceData
+from base.product_test.queue_context import wav_positions, validate_queue_save
 from base.load_config import ConfigManager, LoadUiConfig
 from base.log_manager import LogManager
 from base.recording_defaults import RecordingDefaultsStore, recording_profile_key
@@ -135,6 +136,7 @@ class AnalysisModelSelect(ConfigDialogBase):
             mic_channels=mic_channels,
             ve_profile_provider=ve_profile_provider,
         )
+        self.select_list.wav_channels = wav_positions(self.parent_draft_provider()) if self.parent_draft_provider else None
         self.select_list.set_change_notifier(self._persist_current_config_silently)
         self.analysis_list.setEditTriggers(QTreeView.NoEditTriggers)
         self.select_list.setEditTriggers(QTreeView.NoEditTriggers)
@@ -222,7 +224,7 @@ class AnalysisModelSelect(ConfigDialogBase):
                     QMessageBox.information(
                         self,
                         "提示",
-                        "测试队列已保存。当前未配置分析项，添加分析项后，才会显示在产品测试配置中。",
+                        "测试队列已保存。当前未配置分析项，可作为仅录音队列在产品测试配置中选择使用。",
                     )
                     self._last_recording_only_notice = notice_key
             return result
@@ -238,7 +240,8 @@ class AnalysisModelSelect(ConfigDialogBase):
         self.dirty = True
         error = _recording_preview_validation_error(self.select_list.config)
         if error:
-            QMessageBox.warning(self, "警告", error)
+            if explicit:
+                QMessageBox.warning(self, "警告", error)
             return "failed"
         payload = self.format_config_data(self.select_list.config)
         if not payload:
@@ -261,6 +264,16 @@ class AnalysisModelSelect(ConfigDialogBase):
                 return "unchanged"
             drafts = self.parent_draft_provider() if self.parent_draft_provider else ()
             result = self.reference_scanner.find_references(target_path, drafts=drafts)
+            if (any(seq.get("analysis_channel_basis") == "wav"
+                    for group in payload for seq in group.values())
+                    and any(issue.blocks_deletion for issue in result.issues)):
+                raise ValueError("无法完整检查产品引用，请先处理损坏或旧格式产品配置")
+            if drafts or result.references:
+                manager = ProductTestProjectConfigManager(self.reference_scanner.product_dir,
+                    self.reference_scanner.product_registry_path, self.reference_scanner.queue_registry_path)
+                problems = validate_queue_save(payload, target_path, manager, drafts)
+                if problems:
+                    raise ValueError("\n".join(problems))
             if len(result.references) >= 2 or result.issues:
                 if not explicit:
                     return "deferred"
@@ -276,7 +289,8 @@ class AnalysisModelSelect(ConfigDialogBase):
         except (OSError, UnicodeError, ValueError, TypeError) as error:
             # File/serialization boundary; retain draft and never report success.
             self.default_logger.error(f"Failed to save queue {target_path}: {error}")
-            QMessageBox.warning(self, "保存失败", str(error))
+            if explicit:
+                QMessageBox.warning(self, "保存失败", str(error))
             return "failed"
 
     def _register_saved_queue(self, target_path, *, activate_default=False):
@@ -823,6 +837,7 @@ class OptionList(QListView):
         self.mic = mic
         self.ve_profile_provider = ve_profile_provider
         self.mic_channels = self._normalize_channels(mic_channels)
+        self.wav_channels = None
         self.row_num = None
         self.darpflag = None
         self.sound_item_type = None
@@ -1004,7 +1019,11 @@ class OptionList(QListView):
     def create_config_dialog(
         self, model: QDialog, config_manager: ConfigManager, name, type, signal_len
     ):
-        available_channels = list(self.mic_channels or [0])
+        wav_basis = bool(self.config and self.config[0].analysis_channel_basis == "wav")
+        available_channels = list(
+            self.wav_channels if self.wav_channels is not None
+            else range(128) if wav_basis else (self.mic_channels or [0])
+        )
         acquisition_config = getattr(self, "config", ())
         mode = getattr(acquisition_config[0], "mode", None) if acquisition_config else None
         allow_multiple_channels = (
@@ -1090,6 +1109,7 @@ class OptionList(QListView):
         for i in config_info:
             key, value = next(iter(i.items()))
             sequence_config = SequenceData(key)
+            sequence_config.analysis_channel_basis = value.get("analysis_channel_basis")
             sequence_config.name = value.get("acq", {}).get("name", None)
             sequence_config.mode = value.get("acq", {}).get("mode", None)
             sequence_config.detail = value.get("acq", {}).get("detail", {})
@@ -1566,7 +1586,10 @@ class OptionList(QListView):
             getattr(self.config[0], "mode", None) == "RECORD_ONLY"
             and analysis_type in MULTI_CHANNEL_ANALYSIS_TYPES
         ):
-            selected_channels = OptionList._normalize_channels(self.mic_channels)
+            selected_channels = (
+                [0] if self.wav_channels is not None or self.config[0].analysis_channel_basis == "wav"
+                else OptionList._normalize_channels(self.mic_channels)
+            )
             if selected_channels:
                 default_of_type["analysis_channel"] = selected_channels[0]
                 default_of_type["analysis_channels"] = selected_channels
