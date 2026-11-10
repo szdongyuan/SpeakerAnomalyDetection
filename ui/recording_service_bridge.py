@@ -1,7 +1,6 @@
-"""GUI-thread delivery for the instance-owned recording service.
+"""GUI-thread delivery of recording lifecycle, device capabilities and previews.
 
-Only lifecycle values and one cumulative preview cross this Qt boundary. No
-audio device, file writer, pipe operation or process wait runs in this adapter.
+The service owns devices, files, IPC and process waits.
 """
 import threading
 
@@ -13,6 +12,7 @@ from base.recording_service import RecordingCallbacks, RecordingSession
 
 class RecordingServiceBridge(QObject):
     shutting_down = pyqtSignal()
+    worker_status_changed = pyqtSignal(object)
     _event = pyqtSignal(object)
     _preview_wakeup = pyqtSignal(str)
     _invoke = pyqtSignal(object)
@@ -57,6 +57,7 @@ class RecordingServiceBridge(QObject):
                 or getattr(service, "_closing", False)
                 or (closed is not None and closed.is_set())
                 or getattr(service, "_capture_session", None) is not None
+                or getattr(service, "_pending_soundcard", None) is not None
                 or getattr(service, "_pending_ve_release", None) is not None
                 or getattr(service, "_ownership_uncertain", False)
                 or (worker is not None and getattr(worker, "retiring", False))
@@ -66,6 +67,43 @@ class RecordingServiceBridge(QObject):
             return snapshot()
         with lock:
             return snapshot()
+
+    @property
+    def worker_status(self):
+        return self.service.worker_status
+
+    def ensure_resident(self):
+        if QThread.currentThread() is not self.thread():
+            raise RuntimeError("Recording bridge residency must start on its GUI thread")
+        return self.service.ensure_resident(self._enqueue_worker_status)
+
+    def _enqueue_worker_status(self, status):
+        def deliver():
+            if not self._shutdown_requested or status.state == "closing":
+                self.worker_status_changed.emit(status)
+
+        self._invoke.emit(deliver)
+
+    def prepare_soundcard(self, request, callback=None):
+        if QThread.currentThread() is not self.thread():
+            raise RuntimeError("Recording bridge soundcard preparation must start on its GUI thread")
+        if callback is None:
+            return self.service.prepare_soundcard(request)
+        if not callable(callback):
+            raise TypeError("soundcard callback must be callable or None")
+
+        def complete(result):
+            def deliver():
+                if self._shutdown_requested:
+                    return
+                try:
+                    callback(result)
+                except Exception:
+                    self._logger.exception("Soundcard preparation UI callback failed for %s", result.probe_id)
+
+            self._invoke.emit(deliver)
+
+        return self.service.prepare_soundcard(request, complete)
 
     def release_ve(self, required_signature, callback=None):
         """Request native VE synchronization without blocking the Qt thread."""
@@ -157,7 +195,7 @@ class RecordingServiceBridge(QObject):
             routed[kind] = lambda session, value=None, kind=kind: self._enqueue(kind, session, value)
         try:
             return self.service.start(request, RecordingCallbacks(**routed))
-        except (RuntimeError, ValueError, TypeError):
+        except (RuntimeError, ValueError, TypeError, OSError):
             self._callbacks.pop(request.request_id, None)
             raise
 
@@ -183,7 +221,7 @@ class RecordingServiceBridge(QObject):
             if wake:
                 self._preview_wakeup.emit(key)
             return
-        if kind in ("result_ready", "accepted", "failed", "cancelled"):
+        if kind in ("result_ready", "accepted", "workbench_completed", "failed", "cancelled"):
             with self._lock:
                 self._finished.add(key)
         self._event.emit((kind, session, value))
@@ -232,7 +270,9 @@ class RecordingServiceBridge(QObject):
             if kind == "result_ready":
                 session.reject_result(f"UI result validation failed: {error}")
         finally:
-            if kind == "released":
+            # Grouped cleanup failures retain service leases but have no later
+            # release event. The Qt delivery lifecycle is finished here.
+            if kind == "released" or (kind == "release_failed" and session.request.station_group is not None):
                 self._callbacks.pop(key, None)
                 self._delivered.difference_update((key, name) for name in RecordingCallbacks.__dataclass_fields__)
                 with self._lock:

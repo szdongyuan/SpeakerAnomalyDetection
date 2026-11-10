@@ -21,7 +21,6 @@ from base.product_test_runtime_policy import (
 from base.save_data import save_recorded_data_to_json
 from base.utils.custom_signals import sign
 from consts import ui_style_const
-from consts.product_test_project_consts import WORKBENCH_PRODUCT_TEST_UNAVAILABLE
 from consts.running_consts import DEFAULT_DIR
 from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.vkinging_presentation import ve_failure_text
@@ -217,6 +216,7 @@ class SequenceWidgetUiOpsMixin:
         sequence_layout.setContentsMargins(1, 0, 1, 0)
 
         if getattr(self, "workbench_mode", False):
+            self.set_workbench_recording_state(False, "正在准备录制设备…")
             self.using_file_combobox.setEnabled(False)
             self.using_file_combobox.setPlaceholderText("未选择产品")
         else:
@@ -245,7 +245,8 @@ class SequenceWidgetUiOpsMixin:
         )
 
     def set_member_connect(self):
-        self.player_btn.clicked.connect(lambda: self.on_clicked_player_btn())
+        if not getattr(self, "workbench_mode", False):
+            self.player_btn.clicked.connect(lambda: self.on_clicked_player_btn())
         self.replayer_btn.clicked.connect(lambda: self.judge_play_and_record(is_replay=True))
         self.data_btn.clicked.connect(
             self._start_selected_condition_manual_analysis
@@ -269,6 +270,11 @@ class SequenceWidgetUiOpsMixin:
             self.using_file_combobox.currentTextChanged.connect(self.on_using_file_combobox_changed)
         self.condition_mode_combobox.currentTextChanged.connect(self.on_condition_mode_combobox_changed)
         self._sync_condition_mode_combobox_from_count_board()
+
+    def set_workbench_recording_state(self, enabled, detail):
+        self.player_btn.setEnabled(enabled)
+        self.player_btn.setToolTip(detail)
+        self.player_btn.setAccessibleDescription(detail)
 
     def set_workbench_active_product(self, product_name):
         combo = self.using_file_combobox
@@ -481,8 +487,6 @@ class SequenceWidgetUiOpsMixin:
 
     def update_player_btn_is_paused(self):
         if getattr(self, "workbench_mode", False):
-            self.player_btn.setEnabled(False)
-            self.player_btn.setToolTip(WORKBENCH_PRODUCT_TEST_UNAVAILABLE)
             return
         refresh_state = getattr(self, "_product_config_refresh_state", "ready")
         if refresh_state != "ready":

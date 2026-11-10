@@ -4,6 +4,7 @@ import threading
 import time
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -576,6 +577,8 @@ def process_dependencies(**options):
 
     class ProcessWriter(StreamingWavWriter):
         def __init__(self, *args, **kwargs):
+            if options.get("exclusive_station_files") and "reserved_identity" not in kwargs:
+                kwargs["exclusive"] = True
             super().__init__(*args, **kwargs)
             self._fake_chunks_written = 0
 
@@ -637,18 +640,58 @@ def process_dependencies(**options):
     if options.get("metadata_retained") or options.get("metadata_leftover"):
         def metadata_retained(path, metadata, **kwargs):
             from base.wav_calibration_metadata import WavCalibrationMetadataAppendResult
-            owned = str(Path(path).with_name("exact-owned-temporary.wav"))
-            handle = open(owned, "wb")
+            exclusive = options.get("exclusive_station_files", False)
+            source = Path(path)
+            name = f"{source.stem}-owned-temporary.wav" if exclusive else "exact-owned-temporary.wav"
+            owned = str(source.with_name(name))
+            handle = open(owned, "xb" if exclusive else "wb")
             handle.write(b"owned metadata temporary")
             handle.flush()
+            identities = ()
+            if exclusive:
+                info = os.fstat(handle.fileno())
+                identities = ((owned, info.st_dev, info.st_ino),)
             if options.get("metadata_leftover"):
                 handle.close()
                 return WavCalibrationMetadataAppendResult(
-                    appended=False, handles_released=True, cleanup_paths=(owned,))
+                    appended=False, handles_released=True, cleanup_paths=(owned,),
+                    cleanup_file_identities=identities)
             return WavCalibrationMetadataAppendResult(
                 appended=False, handles_released=False, cleanup_paths=(owned,),
-                close_errors=("injected metadata close failure",), retained_handles=((owned, handle),))
+                close_errors=("injected metadata close failure",), retained_handles=((owned, handle),),
+                cleanup_file_identities=identities)
         dependencies["metadata_appender"] = metadata_retained
+    return dependencies
+
+
+def workbench_soundcard_dependencies(**options):
+    """Add device preparation and a one-shot writer fault to the spawned fake."""
+    from base import recording_worker
+
+    dependencies = process_dependencies(exclusive_station_files=True, **options)
+    backend = dependencies.pop("backend")
+    backend.device["default_samplerate"] = 48000.0
+    backend.default = SimpleNamespace(_default_device=(backend.device["index"], None))
+    backend.query_hostapis = lambda index: {"name": "WASAPI"}
+    backend._terminate = backend.close_trace
+    open_input = backend.InputStream
+    write_wav = dependencies["writer_factory"]
+    fail_write = Path(options["trace_dir"]) / "fail-next-write"
+
+    def open_stream(**config):
+        assert config["channels"] == 3 and config["samplerate"] == 48000
+        return open_input(**config)
+
+    class Writer(write_wav):
+        def write_chunk(self, chunk):
+            if fail_write.is_file():
+                fail_write.unlink()
+                raise OSError("injected workbench write failure")
+            return super().write_chunk(chunk)
+
+    backend.InputStream = open_stream
+    recording_worker.sounddevice_backend = lambda: backend
+    dependencies["writer_factory"] = Writer
     return dependencies
 
 
@@ -733,6 +776,11 @@ def persistent_ve_worker_dependencies(**options):
             return super().read_task_data(*args, **kwargs)
 
     class PausedWriter(StreamingWavWriter):
+        def __init__(self, *args, **kwargs):
+            if options.get("exclusive_station_files") and "reserved_identity" not in kwargs:
+                kwargs["exclusive"] = True
+            super().__init__(*args, **kwargs)
+
         def write_chunk(self, chunk):
             identity = request_id(self.file_path)
             if identity in pause_writers and self.total_frames == 0:

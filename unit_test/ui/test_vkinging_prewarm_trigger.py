@@ -98,6 +98,7 @@ class _WindowHarness:
         self._hardware_analysis_sync_pending = False
         self._status = _StatusBar()
         self.status_updates = 0
+        self.on_workbench_configuration_committed = Mock()
 
     def statusBar(self):
         return self._status

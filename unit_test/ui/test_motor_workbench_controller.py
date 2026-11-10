@@ -1,30 +1,33 @@
+import json
 from dataclasses import replace
-from types import MappingProxyType, SimpleNamespace
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtTest import QSignalSpy, QTest
 from PyQt5.QtWidgets import QAbstractButton, QComboBox, QLabel
 
-from base.motor_workbench_config import (
-    WorkbenchCondition,
-    WorkbenchConfig,
-    WorkbenchConfigurationError,
-    WorkbenchPlotCell,
-    WorkbenchPlotLayout,
-    WorkbenchQueueConfig,
-    WorkbenchStation,
-)
+from base.workbench_config_values import WorkbenchChannel, WorkbenchHardwareChannel, WorkbenchCondition, WorkbenchContext, WorkbenchStation
+from base.workbench_configuration_loader import WorkbenchConfiguration, WorkbenchConfigurationError
+from base.workbench_recording_config import WorkbenchRecordingConfig
+from base.workbench_analysis_config import WorkbenchAnalysisConfig, AnalysisTestQueue
+from base.workbench_ui_config import WorkbenchUiConfig, WorkbenchPlotCell, WorkbenchPlotLayout
+from base.recording_process_protocol import FrozenConfig, RecordingCancelled, RecordingFailure
 from base.video.models import VideoStatus
+from base.workbench_recording_protocol import StationWav, WorkbenchRecordingCompletion
 from ui.sequence.motor_station_test_panel import MotorStationTestPanel
 from ui.sequence.motor_workbench_controller import MotorWorkbenchController
 from ui.sequence.station_plot_cell import StationPlotCell
 from ui.sequence.station_plot_grid import StationPlotGrid
 from ui.video_monitor_widget import VideoMonitorWidget
+from ui.workbench_recording_device import WorkbenchRecordingDeviceSnapshot
 
 
 class RepositoryStub:
     def __init__(self, calls):
+        self.source_identity = "product.json"
         self.result = None
         self.calls = calls
 
@@ -35,100 +38,62 @@ class RepositoryStub:
         return self.result
 
 
+def configuration_with(config, *, plot_layout=None, test_queues=None, parameters=None, **context_changes):
+    context = replace(config.recording.context, **context_changes)
+    return WorkbenchConfiguration(
+        WorkbenchRecordingConfig(context, parameters if parameters is not None else config.recording.parameters_by_queue),
+        WorkbenchAnalysisConfig(context, test_queues if test_queues is not None else config.analysis.test_queues),
+        WorkbenchUiConfig(plot_layout or config.ui.layout, {c.test_queue: "cumulative" for c in context.conditions}),
+    )
+
+
 @pytest.fixture
-def config():
-    project_id = "product"
-    result_directory = "results"
-
-    def condition(condition_id, name, queue_name, station_ids, metrics):
-        acquisition = MappingProxyType({
-            "detail": MappingProxyType({"sample_rate": 44100, "total_time": 2}),
-        })
-        analysis = MappingProxyType({
-            "display_sequence": tuple(metrics), **{
-                name: MappingProxyType(item) for name, item in metrics.items()
-            },
-        })
-        seq1 = MappingProxyType({"acq": acquisition, "analysis_list": analysis})
-        queue = WorkbenchQueueConfig(
-            sequence_config=(MappingProxyType({"seq1": seq1}),),
-            acquisition=acquisition,
-            acquisition_mode="RECORD_ONLY",
-            analysis=analysis,
-            metric_names=tuple(metrics),
-        )
-        saved = MappingProxyType({
-            "condition_id": condition_id,
-            "condition_name": name,
-            "test_queue": queue_name,
-            "applicable_station_ids": station_ids,
-            "trigger_state": "",
-            "segmented_analysis": MappingProxyType({"mode": "none"}),
-        })
-        return WorkbenchCondition(
-            **saved, queue=queue, project_id=project_id, result_root_directory=result_directory,
-            condition_config=saved,
-        )
-
-    return WorkbenchConfig(
-        project_id=project_id,
-        project_name="电机",
-        result_root_directory=result_directory,
-        stations=(
-            WorkbenchStation("right", "右工位", ()),
-            WorkbenchStation("left", "左工位", ()),
-            WorkbenchStation("spare", "备用工位", ()),
-        ),
-        conditions=(
-            condition("warm", "热机", "queue-a", ("left", "right"), {"响度": {}, "": {}, "峰值": {}}),
-            condition("cold", "冷机", "queue-b", ("right",), {"峰值": {}, "转速": {}}),
-            condition("empty", "空指标", "queue-c", ("left",), {}),
-        ),
-        active_file="product.json",
-        plot_layout=WorkbenchPlotLayout(1, 3, ((WorkbenchPlotCell("声压级", "响度", "SPL"),) * 3,)),
+def config(tmp_path):
+    conditions = (
+        WorkbenchCondition("warm", "热机", "queue-a", ("left", "right"), "", {"mode": "none"}),
+        WorkbenchCondition("cold", "冷机", "queue-b", ("right",), "", {"mode": "none"}),
+        WorkbenchCondition("empty", "空指标", "queue-c", ("left",), "", {"mode": "none"}),
+    )
+    context = WorkbenchContext("product", "电机", str(tmp_path / "results"), (
+        WorkbenchStation("right", "右工位", ()), WorkbenchStation("left", "左工位", ()),
+        WorkbenchStation("spare", "备用工位", ()),
+    ), conditions)
+    test_queues = {name: AnalysisTestQueue(None, {"display_sequence": tuple(items), **items}) for name, items in (
+        ("queue-a", {"响度": {}, "": {}, "峰值": {}}),
+        ("queue-b", {"峰值": {}, "转速": {}}), ("queue-c", {}),
+    )}
+    return WorkbenchConfiguration(
+        WorkbenchRecordingConfig(context, {c.test_queue: {"total_time": 2} for c in conditions}),
+        WorkbenchAnalysisConfig(context, test_queues),
+        WorkbenchUiConfig(WorkbenchPlotLayout(1, 3, ((WorkbenchPlotCell("声压级", "响度", "SPL"),) * 3,)), {c.test_queue: "cumulative" for c in conditions}),
     )
 
 
-def _plot_condition(source, condition_id, name, queue_name, station_ids, items, *, extra=None):
-    analysis = MappingProxyType({
-        "display_sequence": tuple(items),
-        **{key: MappingProxyType(value) for key, value in (items | (extra or {})).items()},
-    })
-    seq1 = MappingProxyType({"acq": source.queue.acquisition, "analysis_list": analysis})
-    queue = replace(
-        source.queue, analysis=analysis, metric_names=tuple(items),
-        sequence_config=(MappingProxyType({"seq1": seq1}),),
-    )
-    changes = {
-        "condition_id": condition_id,
-        "condition_name": name,
-        "test_queue": queue_name,
-        "applicable_station_ids": station_ids,
-    }
-    return replace(
-        source, **changes, queue=queue,
-        condition_config=MappingProxyType(dict(source.condition_config) | changes),
-    )
+def _plot_condition(test_queues, source, condition_id, name, queue_name, station_ids, items, *, extra=None):
+    test_queues[queue_name] = AnalysisTestQueue(None, {"display_sequence": tuple(items), **items, **(extra or {})})
+    return replace(source, condition_id=condition_id, condition_name=name,
+                   test_queue=queue_name, applicable_station_ids=station_ids)
 
 
 @pytest.fixture
 def plot_config(config):
-    source = config.conditions[0]
-    first = _plot_condition(source, "c1", "工况1", "Queue A", ("s1",), {
+    test_queues = {}
+    source = config.recording.context.conditions[0]
+    first = _plot_condition(test_queues, source, "c1", "工况1", "Queue A", ("s1",), {
         "声压级": {"type": " SPL ", "weighting": "a"},
         "第一有": {"type": "FFT", "weighting": "None"},
         "差值": {"type": "FFT", "weighting": "C", "baseline_display_mode": "delta"},
     })
-    second = _plot_condition(source, "c2", "工况2", "Queue B", ("s2", "s1"), {
+    second = _plot_condition(test_queues, source, "c2", "工况2", "Queue B", ("s2", "s1"), {
         "声压级": {"type": "SPL"},
         "第二有": {"type": "FFT", "weighting": "c"},
         "差值": {"type": "FFT", "baseline_display_mode": "delta"},
         "类型不同": {"type": "SPL"},
     }, extra={"第一有": {"type": "FFT", "weighting": "C"}})
-    third = _plot_condition(source, "c3", "工况3", "Queue C", ("s1",), {
+    third = _plot_condition(test_queues, source, "c3", "工况3", "Queue C", ("s1",), {
         "声压级": {"type": "SPL", "weighting": "A"},
     })
-    fourth = _plot_condition(source, "c4", "工况4", "Queue D", (), {})
+    fourth = _plot_condition(test_queues, source, "c4", "工况4", "Queue D", (), {})
     rows = (
         (WorkbenchPlotCell("声压级图", "声压级", "SPL"),
          WorkbenchPlotCell("单工况图", "声压级", "SPL"),
@@ -143,10 +108,10 @@ def plot_config(config):
          WorkbenchPlotCell("无工况图", "声压级", "SPL"),
          WorkbenchPlotCell("空列图", "声压级", "SPL")),
     )
-    return replace(
+    return configuration_with(
         config,
         stations=tuple(WorkbenchStation(f"s{i}", f"工位{i}", ()) for i in (1, 2, 3)),
-        conditions=(first, second, third, fourth),
+        conditions=(first, second, third, fourth), test_queues=test_queues,
         plot_layout=WorkbenchPlotLayout(3, 4, rows),
     )
 
@@ -245,7 +210,7 @@ def test_refresh_failure_and_equal_recovery_keep_existing_results(workbench, con
     assert len(curves) == 1
 
     for result in (WorkbenchConfigurationError("product.json: unknown station"),
-                   replace(config), replace(config)):
+                   configuration_with(config), configuration_with(config)):
         workbench.repository.result = result
         workbench.controller.refresh_configuration()
         assert workbench.panel.get_station_data(1) == expected_data
@@ -301,11 +266,12 @@ def test_plot_projection_preserves_positions_and_all_condition_queries(workbench
 
     condition = controller.get_condition_config("c2")
     assert condition.test_queue == "Queue B"
-    assert condition.project_id == config.project_id
-    assert condition.result_root_directory == config.result_root_directory
-    for item in config.conditions:
+    assert controller.get_recording_config() is config.recording
+    assert controller.get_analysis_config() is config.analysis
+    assert controller.get_ui_config() is config.ui
+    for item in config.recording.context.conditions:
         assert controller.get_condition_config(item.condition_id) is item
-    assert controller.get_station_channels("s1") is config.stations[0].channels
+    assert controller.get_station_channels("s1") is config.recording.context.stations[0].channels
     assert controller.get_station_channels("missing") is None
     assert controller.get_condition_config("missing") is None
 
@@ -313,7 +279,7 @@ def test_plot_projection_preserves_positions_and_all_condition_queries(workbench
 def test_fft_delta_plot_warns_when_weighting_differs(workbench, plot_config):
     cell = WorkbenchPlotCell("差值图", "差值", "FFT")
     layout = WorkbenchPlotLayout(1, 4, ((cell,) * 4,))
-    workbench.repository.result = replace(plot_config, plot_layout=layout)
+    workbench.repository.result = configuration_with(plot_config, plot_layout=layout)
     workbench.controller.refresh_configuration()
 
     display = workbench.plot_batches[-1][1][0][0]
@@ -343,16 +309,17 @@ def test_fft_delta_plot_warns_when_weighting_differs(workbench, plot_config):
 ])
 def test_shared_plot_formats_weighting_and_preserves_raw_config(workbench, config, analysis_type, first, second, unit):
     item = "分析项"
-    station = config.stations[0]
+    station = config.recording.context.stations[0]
     items = ({"type": analysis_type, **first}, {"type": analysis_type, **second})
+    test_queues = {}
     conditions = tuple(
-        _plot_condition(config.conditions[0], f"c{i}", f"工况{i}", f"queue-{i}",
+        _plot_condition(test_queues, config.recording.context.conditions[0], f"c{i}", f"工况{i}", f"queue-{i}",
                         (station.station_id,), {item: analysis})
         for i, analysis in enumerate(items, start=1)
     )
     layout = WorkbenchPlotLayout(1, 1, ((WorkbenchPlotCell(item, item, analysis_type),),))
-    workbench.repository.result = replace(
-        config, stations=(station,), conditions=conditions, plot_layout=layout,
+    workbench.repository.result = configuration_with(
+        config, stations=(station,), conditions=conditions, plot_layout=layout, test_queues=test_queues,
     )
     controller = workbench.controller
     controller.refresh_configuration()
@@ -366,9 +333,8 @@ def test_shared_plot_formats_weighting_and_preserves_raw_config(workbench, confi
     assert tuple(binding.condition_id for binding in bindings) == ("c1", "c2")
     for condition, analysis in zip(conditions, items):
         assert controller.get_condition_config(condition.condition_id) is condition
-        exported = condition.export_process_config()
-        assert exported["analysis_config"][item] == analysis
-        assert exported["sequence_config"][0]["seq1"]["analysis_list"][item] == analysis
+        exported = controller.get_analysis_config().describe()
+        assert exported["test_queues"][condition.test_queue]["analysis_config"][item] == analysis
 
 
 def test_switch_resets_same_size_views_and_clearing_is_idempotent(workbench, config):
@@ -380,9 +346,9 @@ def test_switch_resets_same_size_views_and_clearing_is_idempotent(workbench, con
     workbench.grid.set_column_options(0, [("结果", 42)])
     workbench.calls.clear()
 
-    workbench.repository.result = replace(
-        config, project_name="风扇", active_file="fan.json",
-        stations=(replace(config.stations[0], station_name="前工位"), *config.stations[1:]),
+    workbench.repository.result = configuration_with(
+        config, project_name="风扇",
+        stations=(replace(config.recording.context.stations[0], station_name="前工位"), *config.recording.context.stations[1:]),
     )
     workbench.controller.refresh_configuration()
 
@@ -434,7 +400,7 @@ def test_local_view_actions_stay_local_and_program_updates_emit_no_intent(workbe
     assert column_options(workbench.grid, 0).currentData() == 1
     assert workbench.calls == []
 
-    workbench.repository.result = replace(config, project_name="另一产品")
+    workbench.repository.result = configuration_with(config, project_name="另一产品")
     workbench.controller.refresh_configuration()
     assert workbench.calls == ["load", "panel", "grid"]
     assert len(selection) == 1
@@ -460,3 +426,369 @@ def test_settings_intent_calls_only_the_video_port_once(workbench):
     finally:
         widget.close()
         widget.deleteLater()
+
+
+@pytest.fixture
+def recording_workbench(workbench, config):
+    from ui.sequence.motor_workbench_controller import WorkbenchRecordingPorts
+
+    channel = WorkbenchChannel("input", "声音", "audio", WorkbenchHardwareChannel("default", 0))
+    stations = tuple(replace(station, channels=(channel,)) for station in config.recording.context.stations)
+    config = configuration_with(config, stations=stations, conditions=config.recording.context.conditions[:2])
+    workbench.repository.result = config
+    device = SimpleNamespace(
+        login_ready=True, detail="准备中",
+        snapshot=WorkbenchRecordingDeviceSnapshot("probe", 1, FrozenConfig.snapshot({
+            "backend": "sounddevice", "name": "Test", "index": 0, "hostapi": 0,
+            "max_input_channels": 2,
+        }), (0, 1), 48000),
+    )
+    requests, callbacks, states, problems, completions = [], [], [], [], []
+    cleanup_problems = []
+    service = SimpleNamespace(can_start_recording=True)
+    outcome = SimpleNamespace(error=None, on_start=None, hardware_available=True)
+
+    def start(request, lifecycle):
+        requests.append(request)
+        callbacks.append(lifecycle)
+        assert states[-1][0] is False
+        if outcome.on_start is not None:
+            outcome.on_start()
+        if outcome.error is not None:
+            raise outcome.error
+        return SimpleNamespace(request=request)
+
+    controller = MotorWorkbenchController(
+        workbench.repository, workbench.panel, workbench.grid, workbench.products.append,
+        lambda: None,
+    )
+    controller.bind_recording(WorkbenchRecordingPorts(
+        bridge=SimpleNamespace(start=start, service=service),
+        device=device, hardware_available=lambda snapshot: outcome.hardware_available,
+        set_button_state=lambda *state: states.append(state),
+        notify_error=problems.append, completed=completions.append,
+        notify_cleanup_error=cleanup_problems.append,
+    ))
+    controller.refresh_configuration()
+
+    def complete(index=-1, *, outcome="success", payload_id=None):
+        request = requests[index]
+        lifecycle = callbacks[index]
+        session = SimpleNamespace(request=request)
+        request_id = payload_id or request.request_id
+        if outcome == "failure":
+            lifecycle.failed(session, RecordingFailure(request_id, "capture", request.path, "设备断开"))
+        elif outcome == "cancelled":
+            lifecycle.cancelled(session, RecordingCancelled(request_id, request.path, 0, 0))
+        else:
+            group = request.station_group
+            lifecycle.workbench_completed(session, WorkbenchRecordingCompletion(
+                request_id, group.project_id, group.condition_id, request.sample_rate,
+                request.target_samples - request.trim_samples, tuple(
+                    StationWav(station.station_id, str(Path(group.final_path) / station.filename), station.channels)
+                    for station in group.stations
+                ),
+            ))
+
+    return SimpleNamespace(
+        controller=controller, repository=workbench.repository, config=config, requests=requests,
+        device=device, service=service, outcome=outcome, states=states, problems=problems,
+        completions=completions, complete=complete, callbacks=callbacks,
+        cleanup_problems=cleanup_problems,
+    )
+
+
+def test_recording_retries_failures_and_wraps_in_declared_order(recording_workbench):
+    w = recording_workbench
+    start = w.controller.start_recording
+    w.outcome.on_start = start
+    w.outcome.error = RuntimeError("service became busy")
+    assert w.states[-1][0] is True
+    start()
+    assert len(w.requests) == 1
+    assert w.states[-1][0] is True
+    assert "service became busy" in w.problems[-1]
+    w.outcome.error = None
+    start()
+    start()
+    w.complete(outcome="failure", payload_id="wrong")
+    assert w.states[-1][0] is False
+    w.complete(outcome="failure")
+    assert "热机" in w.problems[-1] and "设备断开" in w.problems[-1]
+    start()
+    w.complete(outcome="cancelled")
+    assert not w.completions
+    start()
+    w.complete()
+    w.complete()
+    start()
+    w.complete(-2)
+    assert w.states[-1][0] is False
+    w.complete()
+    start()
+    assert [r.station_group.condition_id for r in w.requests] == ["warm"] * 4 + ["cold", "warm"]
+    assert len({r.request_id for r in w.requests}) == len(w.requests)
+    assert [r.condition_id for r in w.completions] == ["warm", "cold"]
+
+
+def test_old_completion_is_delivered_without_advancing_new_configuration(recording_workbench):
+    w = recording_workbench
+    w.controller.start_recording()
+    second = configuration_with(w.config, project_id="other")
+    w.repository.result = second
+    w.controller.refresh_configuration()
+    w.complete()
+    assert [(r.project_id, r.condition_id) for r in w.completions] == [("product", "warm")]
+    w.controller.start_recording()
+    assert (w.requests[-1].station_group.project_id, w.requests[-1].station_group.condition_id) == (
+        "other", "warm",
+    )
+    w.complete()
+    w.controller.start_recording()
+    assert w.requests[-1].station_group.condition_id == "cold"
+    w.repository.result = w.config
+    w.controller.refresh_configuration()
+    w.repository.result = second
+    w.controller.refresh_configuration()
+    w.complete()
+    w.controller.start_recording()
+    assert w.requests[-1].station_group.condition_id == "warm"
+
+
+@pytest.mark.parametrize("changed", ["root", "product", "condition", "station"])
+def test_applied_output_changes_freeze_active_paths_and_restart_cursor(recording_workbench, tmp_path, changed):
+    w = recording_workbench
+    w.controller.start_recording()
+    original = w.requests[0]
+    root = w.config.recording.context.result_root_directory
+    product = w.config.recording.context.project_name
+    conditions = w.config.recording.context.conditions
+    stations = w.config.recording.context.stations
+    if changed == "root":
+        root = str(tmp_path / "new-results")
+    elif changed == "product":
+        product = "新产品"
+    elif changed == "condition":
+        conditions = (replace(conditions[0], condition_name="新工况"), *conditions[1:])
+    else:
+        stations = (replace(stations[0], station_name="新工位"), *stations[1:])
+    w.repository.result = configuration_with(w.config, project_name=product, result_root_directory=root,
+                                  conditions=conditions, stations=stations)
+    w.controller.refresh_configuration()
+    w.complete()
+    assert w.requests[0] is original
+    assert Path(w.completions[0].stations[0].path) == Path(original.station_group.final_path) / "右工位.wav"
+    assert Path(original.station_group.final_path).parent == Path(w.config.recording.context.result_root_directory) / "电机" / "热机"
+    w.controller.start_recording()
+    current = w.requests[-1]
+    assert current.station_group.condition_id == "warm"
+    assert Path(current.station_group.final_path).parent == Path(root) / product / conditions[0].condition_name
+    assert current.station_group.stations[0].filename == stations[0].station_name + ".wav"
+
+
+def test_recording_timestamp_is_captured_before_request_preparation(recording_workbench, monkeypatch):
+    from ui.sequence import motor_workbench_controller as module
+
+    instant = datetime(2026, 11, 9, 13, 14, 15, 123999)
+    monkeypatch.setattr(module, "datetime", SimpleNamespace(now=lambda: instant), raising=False)
+    build = module.build_recording_request
+
+    def delayed_build(*args, **kwargs):
+        assert kwargs["recorded_at"] == instant
+        return build(*args, **kwargs)
+
+    monkeypatch.setattr(module, "build_recording_request", delayed_build)
+    recording_workbench.controller.start_recording()
+    assert Path(recording_workbench.requests[0].station_group.final_path).name == "2026-11-09_13-14-15-123"
+
+
+def test_invalid_product_root_notifies_ui_without_submission(recording_workbench):
+    w = recording_workbench
+    w.repository.result = configuration_with(w.config, result_root_directory="")
+    w.controller.refresh_configuration()
+    w.controller.start_recording()
+    assert not w.requests
+    assert "根目录" in w.problems[-1]
+
+
+def test_equivalent_refresh_and_recovery_preserve_recording_progress(recording_workbench):
+    w = recording_workbench
+    w.controller.start_recording()
+    w.controller.refresh_configuration()
+    condition, second = w.config.recording.context.conditions
+
+    def with_detail(**changes):
+        return dict(w.config.recording.parameters_by_queue) | {
+            condition.test_queue: dict(w.config.recording.parameters_for(condition.condition_id)) | changes,
+        }
+
+    layout = w.config.ui.layout
+    changed_cells = ((replace(layout.cells[0][0], title="新标题"), *layout.cells[0][1:]),)
+    equivalent = configuration_with(
+        w.config, plot_layout=replace(layout, cells=changed_cells),
+        parameters=with_detail(startup_trim_ms=100.0, audio_validation={"unused_threshold": 2}),
+        conditions=(replace(condition, applicable_station_ids=tuple(reversed(condition.applicable_station_ids))), second),
+    )
+    w.repository.result = equivalent
+    w.controller.refresh_configuration()
+    w.repository.result = WorkbenchConfigurationError("configuration unavailable")
+    w.controller.refresh_configuration()
+    assert not w.states[-1][0]
+    w.complete()
+    assert not w.states[-1][0]
+    w.controller.start_recording()
+    assert len(w.requests) == 1
+    w.repository.result = equivalent
+    w.controller.refresh_configuration()
+    w.controller.start_recording()
+    assert w.requests[-1].station_group.condition_id == "cold"
+    w.repository.result = configuration_with(w.config, parameters=with_detail(total_time=3))
+    w.controller.refresh_configuration()
+    w.complete()
+    w.controller.start_recording()
+    assert w.requests[-1].station_group.condition_id == "warm"
+    assert w.requests[-1].target_samples - w.requests[-1].trim_samples == 3 * 48000
+
+
+@pytest.mark.parametrize("available", [None, ()])
+def test_no_active_product_or_empty_conditions_disables_recording(recording_workbench, available):
+    w = recording_workbench
+    w.repository.result = None if available is None else configuration_with(w.config, conditions=available)
+    w.controller.refresh_configuration()
+    assert not w.states[-1][0]
+    assert w.states[-1][1]
+    w.controller.start_recording()
+    assert not w.requests
+
+
+def test_no_target_station_reports_specific_condition_without_submitting(recording_workbench):
+    w = recording_workbench
+    condition = replace(w.config.recording.context.conditions[0], applicable_station_ids=())
+    w.repository.result = configuration_with(w.config, conditions=(condition,))
+    w.controller.refresh_configuration()
+    assert w.states[-1][0] is True
+    w.controller.start_recording()
+    assert not w.requests
+    assert "热机" in w.problems[-1] and "工位" in w.problems[-1]
+    assert w.states[-1][0] is True
+
+
+def test_recording_admission_is_rechecked_on_each_click(recording_workbench):
+    w = recording_workbench
+    w.service.can_start_recording = False
+    w.controller.start_recording()
+    assert not w.states[-1][0]
+    assert not w.requests
+    w.service.can_start_recording = True
+    w.outcome.hardware_available = False
+    w.controller.start_recording()
+    assert not w.states[-1][0]
+    assert not w.requests
+    w.outcome.hardware_available = True
+    w.controller.refresh_recording_state()
+    assert w.states[-1][0] is True
+
+
+def test_device_generation_must_still_match_when_submitting(recording_workbench, monkeypatch):
+    from ui.sequence import motor_workbench_controller as module
+
+    w = recording_workbench
+    build = module.build_recording_request
+    snapshot = w.device.snapshot
+
+    def build_while_device_is_invalidated(*args, **kwargs):
+        request = build(*args, **kwargs)
+        w.device.snapshot = None
+        return request
+
+    monkeypatch.setattr(module, "build_recording_request", build_while_device_is_invalidated)
+    w.controller.start_recording()
+    assert not w.requests
+    assert not w.states[-1][0]
+    monkeypatch.setattr(module, "build_recording_request", build)
+    w.device.snapshot = replace(snapshot, generation=2)
+    w.controller.refresh_recording_state()
+    assert w.states[-1][0]
+    w.controller.start_recording()
+    assert w.requests[0].station_group.condition_id == "warm"
+
+
+def test_equivalent_enabled_quality_threshold_uses_gate_numeric_semantics(recording_workbench):
+    w = recording_workbench
+    condition, second = w.config.recording.context.conditions
+
+    def with_threshold(min_peak):
+        parameters = dict(w.config.recording.parameters_by_queue)
+        parameters[condition.test_queue] = dict(w.config.recording.parameters_for(condition.condition_id)) | {
+            "audio_validation": {"enabled": True, "min_peak": min_peak},
+        }
+        return configuration_with(w.config, parameters=parameters)
+
+
+    w.repository.result = with_threshold("0.25")
+    w.controller.refresh_configuration()
+    w.controller.start_recording()
+    w.complete()
+    w.repository.result = with_threshold(0.25)
+    w.controller.refresh_configuration()
+    w.controller.start_recording()
+    assert w.requests[-1].station_group.condition_id == "cold"
+
+
+def test_switching_registered_product_file_with_same_id_resets_progress(recording_workbench):
+    w = recording_workbench
+    w.controller.start_recording()
+    w.complete()
+    w.repository.source_identity = "second-product.json"
+    w.repository.result = w.config
+    w.controller.refresh_configuration()
+    w.controller.start_recording()
+    assert w.requests[-1].station_group.condition_id == "warm"
+
+
+def test_release_failure_reports_cleanup_and_refreshes_without_advancing(recording_workbench):
+    w = recording_workbench
+    w.controller.start_recording()
+    w.service.can_start_recording = False
+    w.complete(outcome="failure")
+    assert not w.states[-1][0]
+    request, = w.requests
+    w.service.can_start_recording = True
+    w.callbacks[0].release_failed(SimpleNamespace(request=request), "temporary WAV retained")
+    assert w.states[-1][0]
+    assert "热机" in w.cleanup_problems[-1] and "temporary WAV retained" in w.cleanup_problems[-1]
+    assert w.completions == []
+    w.controller.start_recording()
+    assert w.requests[-1].station_group.condition_id == "warm"
+
+
+def test_inflight_success_does_not_advance_after_quality_limit_becomes_invalid(recording_workbench):
+    w = recording_workbench
+    condition, second = w.config.recording.context.conditions
+
+    def with_threshold(encoded):
+        parameters = dict(w.config.recording.parameters_by_queue)
+        parameters[condition.test_queue] = dict(w.config.recording.parameters_for(condition.condition_id)) | {
+            "audio_validation": json.loads(encoded),
+        }
+        return configuration_with(w.config, parameters=parameters)
+
+
+    valid = with_threshold('{"enabled": true, "min_peak": "-inf"}')
+    w.repository.result = valid
+    w.controller.refresh_configuration()
+    w.controller.start_recording()
+    assert w.requests[0].station_group.condition_id == "warm"
+
+    w.repository.result = with_threshold('{"enabled": true, "min_peak": -1e400}')
+    w.controller.refresh_configuration()
+    w.complete()
+    assert [result.condition_id for result in w.completions] == ["warm"]
+    w.controller.start_recording()
+    assert len(w.requests) == 1
+    assert "audio_validation.min_peak" in w.problems[-1]
+
+    w.repository.result = valid
+    w.controller.refresh_configuration()
+    w.controller.start_recording()
+    assert w.requests[1].station_group.condition_id == "warm"

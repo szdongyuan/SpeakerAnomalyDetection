@@ -7,7 +7,7 @@ import threading
 import json
 
 import pytest
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QDialog, QComboBox
 from PyQt5.QtCore import QPoint
 from PyQt5.QtWidgets import QMainWindow, QAction, QApplication, QLabel
@@ -21,6 +21,7 @@ from base.vkinging_input import validate_device_snapshot
 from base.vkinging_prewarm_lifetime import VePrewarmLifetime
 from base.recording_process_protocol import VeLifecycleCounts
 from base.recording_service import VePrewarmCompletion
+from base.workbench_recording_protocol import WorkbenchRecordingCompletion
 from unit_test.base.vkinging_fakes import device_info
 from unit_test.base.test_vkinging_stores import save_measurement
 from unit_test.base.test_vkinging_hardware_selection import fake_soundcards
@@ -609,6 +610,7 @@ def main_window_harness(controls, monkeypatch):
     klass = next(node for node in parsed.body if isinstance(node, ast.ClassDef) and node.name == "MainWindow")
     namespace = {"LogManager": LogManager, "QMainWindow": QMainWindow, "QAction": QAction, "QApplication": QApplication,
         "QPoint": QPoint, "SoundDeviceManager": hardware_ui.SoundDeviceManager,
+        "pyqtSignal": pyqtSignal, "WorkbenchRecordingCompletion": WorkbenchRecordingCompletion,
         "QMessageBox": hardware_ui.QMessageBox, "restore_or_default": hardware_selection.restore_or_default,
         "save_if_changed": hardware_selection.save_if_changed,
         "device_display_name": device_display_name, "ve_failure_text": ve_failure_text,
@@ -1517,8 +1519,7 @@ def test_explicit_table_reselect_clears_routes_and_reopen_restores_saved_only(co
 def test_default_mainwindow_constructs_with_baseline_sequence(controls, ui_qapp, monkeypatch, tmp_path, legacy_config):
     import main_window
     from PyQt5 import sip
-    from ui.recording_service_bridge import RecordingServiceBridge
-    from base.recording_service import RecordingService
+    from unit_test.ui.test_workbench_recording_startup import RecordingBridge
     monkeypatch.setattr(main_window, "restore_or_default", lambda **kw: (None, None, [], []))
     monkeypatch.setattr(main_window.QMessageBox, "warning", lambda *args: None)
     from base import load_config
@@ -1538,9 +1539,14 @@ def test_default_mainwindow_constructs_with_baseline_sequence(controls, ui_qapp,
     monkeypatch.setattr(main_window.MainWindow, "get_current_version", lambda self: "test")
     for name in ("critical", "information", "question"):
         monkeypatch.setattr(main_window.QMessageBox, name, lambda *a, **kw: main_window.QMessageBox.No)
-    monkeypatch.setattr(main_window.LoginWindow, "on_exec", lambda self: ("Engineer", "test"))
-    service = RecordingService()
-    bridge = RecordingServiceBridge(service)
+    bridge = RecordingBridge()
+
+    def login(_dialog):
+        bridge.change_worker(1)
+        bridge.answer_probe()
+        return "Engineer", "test"
+
+    monkeypatch.setattr(main_window.LoginWindow, "on_exec", login)
     window = None
     try:
         window = main_window.MainWindow(recording_bridge=bridge,
@@ -1558,4 +1564,4 @@ def test_default_mainwindow_constructs_with_baseline_sequence(controls, ui_qapp,
             window._close_ve_discovery()
             sip.delete(window)
         bridge.shutdown()
-        assert service.closed.wait(5)
+        assert bridge.service.closed.is_set()

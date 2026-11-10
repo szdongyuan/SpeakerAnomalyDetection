@@ -335,10 +335,12 @@ def test_request_preview_mode_defaults_validates_and_freezes_source_detail(tmp_p
 
 
 def test_queue_capacity_is_explicit_and_saturation_fails(tmp_path, captures):
-    assert capture_queue_capacity(100, 2, blocksize=8) == (200, 1600)
-    assert capture_queue_capacity(100, 2, blocksize=300) == (300, 2400)
+    assert capture_queue_capacity(100, 2, blocksize=8, seconds=2.0) == (200, 1600)
+    assert capture_queue_capacity(100, 2, blocksize=300, seconds=2.0) == (300, 2400)
     writer = ControlledWriter(pause=True)
-    capture, backend = captures(request(tmp_path, target_samples=500), writer_factory=writer, blocksize=8)
+    capture, backend = captures(
+        request(tmp_path, target_samples=500), writer_factory=writer, blocksize=8, queue_seconds=2.0,
+    )
     backend.stream.feed(known_audio(4))
     assert writer.entered.wait(3)
     backend.stream.feed(known_audio(200))

@@ -5,12 +5,11 @@ import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
+from base.workbench_configuration_loader import WorkbenchConfigurationError
+
 import pytest
 
-from base.motor_workbench_config import (
-    MotorWorkbenchConfigRepository,
-    WorkbenchConfigurationError,
-)
+from base.motor_workbench_config import MotorWorkbenchConfigRepository
 
 
 def write_json(path, data):
@@ -124,87 +123,71 @@ def repository(config_files):
 def test_load_active_preserves_order_and_parameters(repository, config_files):
     config = repository.load_active()
 
-    assert config.project_id == "motor"
-    assert config.project_name == "电机"
-    assert Path(config.result_root_directory) == config_files["product"].parent.parent / "unused-results"
-    assert not Path(config.result_root_directory).exists()
-    assert tuple(station.station_id for station in config.stations) == ("s3", "s1", "s2")
-    assert tuple(station.station_name for station in config.stations) == ("工位三", "工位一", "工位二")
-    channel, = config.stations[0].channels
+    assert config.recording.context.project_id == "motor"
+    assert config.recording.context.project_name == "电机"
+    assert Path(config.recording.context.result_root_directory) == config_files["product"].parent.parent / "unused-results"
+    assert not Path(config.recording.context.result_root_directory).exists()
+    assert tuple(station.station_id for station in config.recording.context.stations) == ("s3", "s1", "s2")
+    assert tuple(station.station_name for station in config.recording.context.stations) == ("工位三", "工位一", "工位二")
+    channel, = config.recording.context.stations[0].channels
     assert (channel.channel_id, channel.channel_name, channel.signal_type) == ("ch", "声音", "audio")
     assert channel.hardware_channel.device_ref == "unavailable-device"
     assert channel.hardware_channel.physical_channel_index == 0
-    assert config.stations[1].channels == ()
-    assert tuple(item.condition_id for item in config.conditions) == ("c2", "c1", "c3")
-    assert tuple(item.condition_name for item in config.conditions) == ("工况 c2", "工况 c1", "工况 c3")
-    assert config.conditions[0].applicable_station_ids == ("s3", "s1")
-    assert config.conditions[0].test_queue == "Shared"
-    assert config.conditions[0].trigger_state == ""
-    assert config.conditions[0].segmented_analysis["mode"] == "time"
-    assert config.conditions[0].segmented_analysis["settings"]["intervals"] == (1, 2)
-    assert tuple(item.metric_names for item in config.conditions) == (("B", "A"), ("B", "A"), ())
+    assert config.recording.context.stations[1].channels == ()
+    assert tuple(item.condition_id for item in config.recording.context.conditions) == ("c2", "c1", "c3")
+    assert tuple(item.condition_name for item in config.recording.context.conditions) == ("工况 c2", "工况 c1", "工况 c3")
+    assert config.recording.context.conditions[0].applicable_station_ids == ("s3", "s1")
+    assert config.recording.context.conditions[0].test_queue == "Shared"
+    assert config.recording.context.conditions[0].trigger_state == ""
+    assert config.recording.context.conditions[0].segmented_analysis["mode"] == "time"
+    assert config.recording.context.conditions[0].segmented_analysis["settings"]["intervals"] == (1, 2)
+    assert tuple(config.analysis.test_queues[item.test_queue].analysis_config["display_sequence"] for item in config.recording.context.conditions) == (("B", "A"), ("B", "A"), ())
     assert repository.load_active() == config
 
     with pytest.raises(FrozenInstanceError):
-        config.project_name = "changed"
+        config.recording.context.project_name = "changed"
     with pytest.raises(TypeError):
-        config.conditions[0].segmented_analysis["settings"]["intervals"] = (3,)
+        config.recording.context.conditions[0].segmented_analysis["settings"]["intervals"] = (3,)
 
 
 def test_load_active_preserves_layout_and_exports_independent_process_configs(repository, config_files):
     config = repository.load_active()
-    layout = config.plot_layout
+    layout = config.ui.layout
     assert (layout.rows, layout.columns) == (1, 4)
     assert isinstance(layout.cells, tuple)
     assert isinstance(layout.cells[0], tuple)
     cell = layout.cells[0][1]
     assert (cell.title, cell.analysis_item, cell.analysis_type) == ("频谱二", "A", "FFT")
 
-    first, second, empty = config.conditions
-    assert first.queue is second.queue
-    assert first.project_id == config.project_id
-    assert first.result_root_directory == config.result_root_directory
-    assert first.queue.acquisition["detail"]["sample_rate"] == 44100
-    assert first.queue.acquisition_mode == empty.queue.acquisition_mode == "RECORD_ONLY"
-    assert first.queue.analysis["B"]["analysis_channels"] == (2, 0)
-    assert config.conditions_by_id["c2"] is first
-    assert config.station_channels_by_id["s3"] is config.stations[0].channels
+    first, second, empty = config.recording.context.conditions
+    assert first.test_queue == second.test_queue
+    assert config.recording.context is config.analysis.context
+    assert config.recording.parameters_for(first.condition_id) is config.recording.parameters_for(second.condition_id)
+    assert "sample_rate" not in config.recording.parameters_for(first.condition_id)
+    assert config.analysis.test_queues[first.test_queue].analysis_config["B"]["analysis_channels"] == (2, 0)
+    assert config.recording.context.get_condition("c2") is first
+    assert config.recording.context.get_station("s3").channels is config.recording.context.stations[0].channels
     with pytest.raises(TypeError):
-        config.station_channels_by_id["s3"] = ()
-    with pytest.raises(TypeError):
-        config.conditions_by_id["c2"] = empty
-    with pytest.raises(TypeError):
-        first.queue.acquisition["detail"]["sample_rate"] = 48000
-
+        config.recording.parameters_for(first.condition_id)["total_time"] = 48000
     raw_sequence = json.loads(config_files["shared"].read_text(encoding="utf-8"))
     raw_seq1 = raw_sequence[0]["seq1"]
-    raw_product = json.loads(config_files["product"].read_text(encoding="utf-8"))
-    exported = first.export_process_config()
-    assert exported == {
-        "acq": raw_seq1["acq"],
-        "condition_config": raw_product["conditions"][0],
-        "sequence_config": raw_sequence,
-        "analysis_config": raw_seq1["analysis_list"],
-    }
-    exported["analysis_config"]["B"]["analysis_channels"].append(99)
-    exported["acq"]["detail"]["sample_rate"] = 1
-    exported["condition_config"]["segmented_analysis"]["settings"]["intervals"].clear()
-    exported["sequence_config"][1]["seq2"]["custom"]["values"].append(99)
-    assert first.export_process_config()["analysis_config"]["B"]["analysis_channels"] == [2, 0]
-    assert second.export_process_config()["sequence_config"] == raw_sequence
-    assert first.queue.acquisition["detail"]["sample_rate"] == 44100
+    exported = config.analysis.describe()
+    assert exported["test_queues"][first.test_queue]["analysis_config"] == raw_seq1["analysis_list"]
+    exported["test_queues"][first.test_queue]["analysis_config"]["B"]["analysis_channels"].append(99)
+    exported["conditions"][0]["segmented_analysis"]["settings"]["intervals"].clear()
+    assert config.analysis.describe()["test_queues"][first.test_queue]["analysis_config"]["B"]["analysis_channels"] == [2, 0]
     assert first.segmented_analysis["settings"]["intervals"] == (1, 2)
-    empty_export = empty.export_process_config()
+    empty_export = config.analysis.describe()["test_queues"][empty.test_queue]
     assert empty_export["analysis_config"]["display_sequence"] == []
-    assert "analysis_channel_basis" not in empty_export["sequence_config"][0]["seq1"]
-    assert "mode" not in empty_export["acq"]
+    assert empty_export["analysis_channel_basis"] is None
+    assert set(exported) == {"stations", "conditions", "test_queues", "tasks"}
 
 
 def test_default_layout_is_loaded_from_the_application_root(config_files, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     repository = MotorWorkbenchConfigRepository(config_files["programs"], config_files["queues"])
 
-    layout = repository.load_active().plot_layout
+    layout = repository.load_active().ui.layout
 
     assert (layout.rows, layout.columns) == (2, 4)
     assert tuple((cell.title, cell.analysis_item, cell.analysis_type) for cell in layout.cells[0]) == (
@@ -232,6 +215,7 @@ def test_same_queue_is_read_once_per_load_and_load_is_read_only(
         patch.setattr(io, "open", watch_open(io.open))
         patch.setattr(builtins, "open", watch_open(builtins.open))
         repository.load_active()
+        assert reads.count(config_files["programs"]) == 1
         assert reads.count(config_files["shared"]) == 1
         assert reads.count(config_files["layout"]) == 1
         assert config_files["unused"] not in reads
@@ -240,7 +224,7 @@ def test_same_queue_is_read_once_per_load_and_load_is_read_only(
     write_json(config_files["shared"], [{
         "seq1": {"acq": acquisition(), "analysis_list": {"display_sequence": ["C"], "C": {}}},
     }])
-    assert repository.load_active().conditions[0].metric_names == ("C",)
+    assert repository.load_active().analysis.test_queues["Shared"].analysis_config["display_sequence"] == ("C",)
 
 
 @pytest.mark.parametrize("saved_path", ["C:shared.json", r"\shared.json"])
@@ -276,7 +260,7 @@ def test_active_product_accepts_empty_conditions(repository, config_files):
     product["conditions"] = []
     write_json(config_files["product"], product)
 
-    assert repository.load_active().conditions == ()
+    assert repository.load_active().recording.context.conditions == ()
 
 
 @pytest.mark.parametrize(("file_key", "breakage", "cause"), [
@@ -351,8 +335,8 @@ def test_deepest_loadable_condition_can_be_exported_and_compared(repository, con
     else:
         pytest.fail("No depth could be loaded")
 
-    exported = config.conditions[0].export_process_config()
-    settings = exported["condition_config"]["segmented_analysis"]["settings"]
+    exported = config.analysis.describe()
+    settings = exported["conditions"][0]["segmented_analysis"]["settings"]
     for _ in range(depth):
         assert type(settings) is dict
         settings = settings["child"]
@@ -376,7 +360,7 @@ def test_snapshot_equality_compares_channel_types_but_ignores_object_key_order(r
     updated = repository.load_active()
 
     assert updated != original
-    assert updated.conditions[0].export_process_config()["analysis_config"]["B"]["analysis_channels"][0] is True
+    assert updated.analysis.describe()["test_queues"]["Shared"]["analysis_config"]["B"]["analysis_channels"][0] is True
 
 
 @pytest.mark.parametrize(("file_key", "keys", "replacement", "diagnostic"), [
@@ -431,12 +415,9 @@ def test_snapshot_equality_compares_channel_types_but_ignores_object_key_order(r
     ("shared", (0, "seq1", "acq", "mode"), "PLAY_ONLY", "seq1.acq.mode"),
     ("shared", (0, "seq1", "acq", "mode"), " \t ", "seq1.acq.mode"),
     ("shared", (0, "seq1", "acq", "mode"), False, "seq1.acq.mode"),
-    ("shared", (0, "seq1", "acq", "detail"), {"total_time": 3}, "acq.detail.sample_rate"),
     ("shared", (0, "seq1", "acq", "detail"), {"sample_rate": 100}, "acq.detail.total_time"),
     ("shared", (0, "seq1", "acq", "detail", "total_time"), 0, "acq.detail.total_time"),
     ("shared", (0, "seq1", "acq", "detail", "total_time"), True, "acq.detail.total_time"),
-    ("shared", (0, "seq1", "acq", "detail", "sample_rate"), -1, "acq.detail.sample_rate"),
-    ("shared", (0, "seq1", "acq", "detail", "sample_rate"), True, "acq.detail.sample_rate"),
     ("shared", (0, "seq1", "acq", "detail"), {
         "total_time": 3, "sample_rate": 100, "recording_preview_time_mode": "bad",
     }, "acq.detail.recording_preview_time_mode"),
@@ -466,8 +447,8 @@ def test_invalid_schema_has_path_and_diagnostic(
     assert diagnostic in str(caught.value)
 
 
-@pytest.mark.parametrize("field", ["sample_rate", "total_time"])
-def test_nonfinite_acquisition_numbers_are_rejected(repository, config_files, field):
+def test_nonfinite_duration_is_rejected(repository, config_files):
+    field = "total_time"
     path = config_files["shared"]
     queue = json.loads(path.read_text(encoding="utf-8"))
     queue[0]["seq1"]["acq"]["detail"][field] = "number_placeholder"
@@ -493,3 +474,37 @@ def test_station_count_must_fit_layout(repository, config_files):
     assert str(path) in str(caught.value)
     assert str(config_files["product"]) in str(caught.value)
     assert "columns" in str(caught.value)
+
+
+@pytest.mark.parametrize("sample_rate", [None, 96000, -1, True, "legacy"])
+def test_saved_sample_rate_is_excluded_without_capture_validation(repository, config_files, sample_rate):
+    path = config_files["shared"]
+    queue = json.loads(path.read_text(encoding="utf-8"))
+    detail = queue[0]["seq1"]["acq"]["detail"]
+    if sample_rate is None:
+        del detail["sample_rate"]
+    else:
+        detail["sample_rate"] = sample_rate
+    write_json(path, queue)
+
+    config = repository.load_active()
+    parameters = config.recording.parameters_for("c2")
+    assert dict(parameters) == {key: value for key, value in detail.items() if key in {"total_time", "startup_trim_ms", "audio_validation"}}
+
+
+def test_source_identity_changes_only_after_successful_load(repository, config_files):
+    assert repository.source_identity == ""
+    repository.load_active()
+    source = repository.source_identity
+    assert Path(source) == config_files["product"]
+    registry = json.loads(config_files["programs"].read_text(encoding="utf-8"))
+    registry["configs"].append({"file": "missing.json", "project_name": "missing"})
+    registry["active_file"] = "missing.json"
+    write_json(config_files["programs"], registry)
+    with pytest.raises(WorkbenchConfigurationError):
+        repository.load_active()
+    assert repository.source_identity == source
+    registry["active_file"] = None
+    write_json(config_files["programs"], registry)
+    assert repository.load_active() is None
+    assert repository.source_identity == ""

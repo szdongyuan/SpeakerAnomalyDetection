@@ -18,6 +18,13 @@ from base.vkinging_input import (
 )
 from base.vkinging_wav_metadata import validate_ve_wav_metadata
 from base.ve_startup_policy import VeStartupBudget
+from base.wav_calibration_metadata import (
+    PHYSICAL_INPUT_CHANNEL_FIELD, normalize_wav_calibration_metadata,
+)
+from base.workbench_recording_protocol import (
+    StationRecordingGroup, StationWav, StationWavChannel, freeze_station_wavs,
+    validate_workbench_request_fields,
+)
 from consts.recording_preview_consts import (
     MAIN_RECORDING_LIVE_MAX_POINTS,
     MAIN_RECORDING_LIVE_WINDOW_SECONDS,
@@ -34,6 +41,10 @@ VE_PREWARM_PROGRESS = "ve_prewarm_progress"
 VE_PREWARM_DETACHING = "ve_prewarm_detaching"
 VE_PREWARM_TERMINAL = "ve_prewarm_terminal"
 VE_RESOURCE_RETRY = "ve_resource_retry"
+WORKBENCH_FILES_OWNED = "workbench_files_owned"
+WORKBENCH_FILES_ACK = "workbench_files_ack"
+SOUNDCARD_PREPARE = "prepare_soundcard"
+SOUNDCARD_PREPARE_RESULT = "soundcard_prepare_result"
 VE_STARTUP_RECOVERY_TERMINAL_STAGES = frozenset({
     "startup_cleanup_timeout", "startup_cleanup_failed", "startup_retry_failed",
     "startup_deadline",
@@ -130,6 +141,15 @@ def _device(device, channels, direction):
     return device
 
 
+def _validate_metadata_order(metadata, channels, source):
+    entries = metadata["recorded_channels"]
+    if (len(entries) != len(channels)
+            or any(entry["wav_channel_index"] != index
+                   or entry.get(PHYSICAL_INPUT_CHANNEL_FIELD) != physical
+                   for index, (entry, physical) in enumerate(zip(entries, channels)))):
+        raise ValueError(f"{source} metadata channel order must match the frozen request")
+
+
 def _ve_request(request):
     profile = request.device["input_config"]
     if request.sample_rate != profile["sample_rate"]:
@@ -137,18 +157,27 @@ def _ve_request(request):
     if request.purpose == "calibration":
         if request.target_samples != 10 * request.sample_rate or request.trim_samples != 0:
             raise ValueError("VE calibration requires ten seconds and trim_samples=0")
-    if request.purpose == "main" or request.calibration_metadata is not None:
-        metadata = validate_ve_wav_metadata(request.calibration_metadata)
-        expected = {"model": request.device["model"],
-                    "machine_id": request.device["machine_id"], **profile}
+
+    expected = {"model": request.device["model"],
+                "machine_id": request.device["machine_id"], **profile}
+
+    def validate_metadata(payload, channels, station_id=None):
+        source = "VE" if station_id is None else f"station {station_id!r} VE"
+        try:
+            metadata = validate_ve_wav_metadata(payload)
+        except ValueError as exc:
+            if station_id is None:
+                raise
+            raise ValueError(f"{source} metadata is invalid: {exc}") from exc
         if metadata["acquisition"] != expected:
-            raise ValueError("VE metadata acquisition must match the frozen request")
-        entries = metadata["recorded_channels"]
-        if (len(entries) != len(request.channels)
-                or any(entry["wav_channel_index"] != index
-                       or entry["physical_input_channel"] != physical
-                       for index, (entry, physical) in enumerate(zip(entries, request.channels)))):
-            raise ValueError("VE metadata channel order must match the frozen request")
+            raise ValueError(f"{source} metadata acquisition must match the frozen request")
+        _validate_metadata_order(metadata, channels, source)
+
+    if request.station_group is not None:
+        for station in request.station_group.stations:
+            validate_metadata(station.calibration_metadata, station.physical_channels, station.station_id)
+    elif request.purpose == "main" or request.calibration_metadata is not None:
+        validate_metadata(request.calibration_metadata, request.channels)
 
 
 @dataclass(frozen=True)
@@ -166,6 +195,7 @@ class RecordingRequest:
     calibration_metadata: Mapping | None
     validation_thresholds: Mapping
     preview_time_mode: str = PREVIEW_TIME_MODE_RELATIVE_LATEST
+    station_group: StationRecordingGroup | None = None
 
     def __post_init__(self):
         if not isinstance(self.request_id, str) or not self.request_id:
@@ -175,7 +205,8 @@ class RecordingRequest:
         _integer("sample_rate", self.sample_rate, 1)
         _integer("target_samples", self.target_samples, 1)
         _integer("trim_samples", self.trim_samples)
-        if isinstance(self.device, Mapping) and self.device.get("backend") == VE_BACKEND:
+        is_ve = isinstance(self.device, Mapping) and self.device.get("backend") == VE_BACKEND
+        if is_ve:
             channels = validate_physical_channels(self.channels)
         else:
             channels = _channels(self.channels)
@@ -205,11 +236,38 @@ class RecordingRequest:
                 raise ValueError("calibration_metadata must be a mapping or None")
             object.__setattr__(self, "calibration_metadata", FrozenConfig.snapshot(self.calibration_metadata))
         object.__setattr__(self, "channels", channels)
-        if self.device.get("backend") == VE_BACKEND:
+        if self.station_group is not None:
+            if not isinstance(self.station_group, StationRecordingGroup) or self.purpose != "main":
+                raise ValueError("station_group requires a StationRecordingGroup for main recording")
+            validate_workbench_request_fields(self.request_id, self.sample_rate)
+            if self.calibration_metadata is not None:
+                raise ValueError("station_group requires per-station calibration metadata")
+            if is_ve:
+                full_channel_order = channels == self.device["physical_channels"]
+            else:
+                full_channel_order = (
+                    len(channels) == self.device["max_input_channels"]
+                    and all(channel == index for index, channel in enumerate(channels))
+                )
+            if not full_channel_order:
+                raise ValueError("station_group requires all input channels in device order")
+            self.station_group.validate_request(self.path, channels)
+        if is_ve:
             _ve_request(self)
+        elif self.station_group is not None:
+            for station in self.station_group.stations:
+                if station.calibration_metadata is None:
+                    continue
+                payload = station.calibration_metadata.to_dict()
+                metadata = normalize_wav_calibration_metadata(payload)
+                source = f"station {station.station_id!r}"
+                if metadata is None or payload.get("backend") == VE_BACKEND:
+                    raise ValueError(f"{source} calibration metadata is invalid for soundcard input")
+                _validate_metadata_order(metadata, station.physical_channels, source)
+
     @property
     def effective_streaming(self):
-        return self.purpose == "main" and self.streaming
+        return self.purpose == "main" and self.station_group is None and self.streaming
 
 
 @dataclass(frozen=True)
@@ -270,6 +328,12 @@ class RecordingResult:
     sample_digest: str | None = None
     finalization_timing: RecordingFinalizationTiming | None = None
     final_envelope: RecordingFinalEnvelope | None = None
+    station_files: tuple[StationWav, ...] = ()
+    # Internal evidence as (stage path, st_dev, st_ino).
+    owned_stage_files: tuple[tuple[str, int, int], ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "station_files", freeze_station_wavs(self.station_files))
 
 
 @dataclass(frozen=True)
@@ -282,6 +346,7 @@ class RecordingFailure:
     written_frames: int = 0
     handles_released: bool = True
     cleanup_paths: tuple[str, ...] = ()
+    owned_stage_files: tuple[tuple[str, int, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -292,6 +357,7 @@ class RecordingCancelled:
     final_frames: int
     handles_released: bool = True
     cleanup_paths: tuple[str, ...] = ()
+    owned_stage_files: tuple[tuple[str, int, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -361,6 +427,24 @@ class RecordingPreview:
         return (type(self), (self.request_id, self.generation, self.sequence,
                              self.sample_stop, self.channels, self.waveforms,
                              self.time_mode))
+
+
+@dataclass(frozen=True)
+class WorkbenchFilesOwned:
+    """Physical station ownership, or an empty attempt-2 retry reset."""
+    request_id: str
+    generation: int
+    files: tuple[tuple[str, int, int], ...]
+    attempt: int = 1
+
+    def __post_init__(self):
+        if type(self.request_id) is not str or not self.request_id:
+            raise ValueError("station ownership request_id is required")
+        _integer("station ownership generation", self.generation, 1)
+        if type(self.attempt) is not int or self.attempt not in (1, 2):
+            raise ValueError("station ownership attempt must be 1 or 2")
+        if type(self.files) is not tuple or (not self.files and self.attempt == 1):
+            raise ValueError("station ownership requires a file list or a retry reset")
 
 
 @dataclass(frozen=True)
@@ -677,6 +761,62 @@ class WorkerFatal:
 
 
 @dataclass(frozen=True)
+class SoundcardPrepareRequest:
+    """A stable saved input identity, or the child process's OS default input."""
+    probe_id: str
+    name: str | None = None
+    hostapi_name: str | None = None
+
+    def __post_init__(self):
+        if type(self.probe_id) is not str or not self.probe_id:
+            raise ValueError("soundcard probe_id is required")
+        if self.name is not None or self.hostapi_name is not None:
+            if any(type(value) is not str or not value.strip()
+                   for value in (self.name, self.hostapi_name)):
+                raise ValueError("soundcard preparation requires both device name and HostAPI name")
+
+
+@dataclass(frozen=True)
+class SoundcardPrepareResult:
+    """Capabilities read without opening a stream in the identified worker."""
+    probe_id: str
+    generation: int
+    device: FrozenConfig | None = None
+    channels: tuple[int, ...] = ()
+    sample_rate: int | None = None
+    detail: str = ""
+
+    def __post_init__(self):
+        if type(self.probe_id) is not str or not self.probe_id:
+            raise ValueError("soundcard probe_id is required")
+        _integer("soundcard generation", self.generation, 1)
+        if type(self.detail) is not str or type(self.channels) is not tuple:
+            raise ValueError("invalid soundcard result details or channels")
+        if self.device is None:
+            if not self.detail or self.channels or self.sample_rate is not None:
+                raise ValueError("failed soundcard preparation requires diagnostic detail only")
+            return
+        if type(self.device) is not FrozenConfig or self.detail:
+            raise ValueError("prepared soundcard requires a stable ordinary input identity")
+        fields = {"backend", "index", "name", "hostapi", "hostapi_name", "max_input_channels"}
+        entries = self.device.entries
+        if (type(entries) is not tuple or len(entries) != len(fields)
+                or any(type(entry) is not tuple or len(entry) != 2 for entry in entries)):
+            raise ValueError("prepared soundcard device fields must be immutable")
+        if set(self.device) != fields or self.device["backend"] != "sounddevice":
+            raise ValueError("prepared soundcard requires a stable ordinary input identity")
+        _integer("soundcard sample rate", self.sample_rate, 1)
+        _device(self.device, _channels(self.channels), "input")
+        if (len(self.channels) != self.device["max_input_channels"]
+                or any(index != channel for index, channel in enumerate(self.channels))):
+            raise ValueError("prepared soundcard requires all input channels in physical order")
+
+    @property
+    def success(self):
+        return self.device is not None
+
+
+@dataclass(frozen=True)
 class RecordingEvent:
     generation: int
     request_id: str
@@ -684,6 +824,8 @@ class RecordingEvent:
     payload: object = None
     version: int = 1
     startup_budget: VeStartupBudget | None = None
+    stage_identity: tuple[int, int] | None = None
+    stage_file_identities: tuple[tuple[int, int], ...] = ()
 
     def __post_init__(self):
         if self.version != 1:
@@ -696,7 +838,9 @@ class RecordingEvent:
                              "completed", "failed", "cancelled", "capture_slot_released",
                              "release_ve", "ve_released", "ve_release_failed", "worker_fatal",
                              VE_PREWARM_COMMAND, VE_PREWARM_STARTED, VE_PREWARM_PROGRESS,
-                             VE_PREWARM_DETACHING, VE_PREWARM_TERMINAL, VE_RESOURCE_RETRY):
+                             VE_PREWARM_DETACHING, VE_PREWARM_TERMINAL, VE_RESOURCE_RETRY,
+                             WORKBENCH_FILES_OWNED, WORKBENCH_FILES_ACK,
+                             SOUNDCARD_PREPARE, SOUNDCARD_PREPARE_RESULT):
             raise ValueError("unknown recording event kind")
         if self.startup_budget is not None:
             if not isinstance(self.startup_budget, VeStartupBudget):
@@ -707,7 +851,29 @@ class RecordingEvent:
                         and isinstance(self.payload.device, Mapping)
                         and self.payload.device.get("backend") == VE_BACKEND)):
                 raise ValueError("startup_budget is only valid on VE startup commands")
-        if (self.kind in ("release_ve", "ve_released", "ve_release_failed", "worker_fatal")
+        grouped_start = (self.kind == "start" and isinstance(self.payload, RecordingRequest)
+                         and self.payload.station_group is not None)
+        if grouped_start:
+            if type(self.stage_identity) is not tuple or len(self.stage_identity) != 2:
+                raise ValueError("grouped start requires a staging directory identity")
+            device, inode = self.stage_identity
+            _integer("stage device", device)
+            _integer("stage inode", inode, 1)
+            if (type(self.stage_file_identities) is not tuple
+                    or len(self.stage_file_identities) != len(self.payload.station_group.stations)):
+                raise ValueError("grouped start requires a reserved identity for every station WAV")
+            for identity in self.stage_file_identities:
+                if type(identity) is not tuple or len(identity) != 2:
+                    raise ValueError("invalid reserved station WAV identity")
+                _integer("station WAV device", identity[0])
+                _integer("station WAV inode", identity[1], 1)
+            if len(set(self.stage_file_identities)) != len(self.stage_file_identities):
+                raise ValueError("grouped start requires distinct station WAV identities")
+        elif self.stage_identity is not None:
+            raise ValueError("staging directory identity is only valid on grouped start")
+        elif self.stage_file_identities != ():
+            raise ValueError("station WAV identities are only valid on grouped start")
+        if (self.kind in ("ready", "release_ve", "ve_released", "ve_release_failed", "worker_fatal")
                 and self.request_id != ""):
             raise ValueError(f"{self.kind} request_id must be empty")
         typed_payloads = {"start": RecordingRequest, "preview": RecordingPreview, "progress": RecordingProgress,
@@ -717,6 +883,9 @@ class RecordingEvent:
                           "ve_released": VeReleaseOutcome,
                           "ve_release_failed": VeReleaseOutcome,
                           "worker_fatal": WorkerFatal,
+                          SOUNDCARD_PREPARE: SoundcardPrepareRequest,
+                          SOUNDCARD_PREPARE_RESULT: SoundcardPrepareResult,
+                          WORKBENCH_FILES_OWNED: WorkbenchFilesOwned,
                           VE_RESOURCE_RETRY: VeResourceRetryProof,
                           VE_PREWARM_COMMAND: VePrewarmRequest,
                           VE_PREWARM_STARTED: VePrewarmStarted,
@@ -727,10 +896,29 @@ class RecordingEvent:
         if expected is not None:
             if not isinstance(self.payload, expected):
                 raise ValueError(f"{self.kind} payload must match its type and session")
+            if (expected in (SoundcardPrepareRequest, SoundcardPrepareResult)
+                    and type(self.payload) is not expected):
+                raise ValueError(f"{self.kind} payload must match its exact type")
+            if expected is RecordingResult:
+                stations = self.payload.station_files
+                if type(stations) is not tuple:
+                    raise ValueError("station WAVs must be an immutable ordered collection")
+                for station in stations:
+                    if type(station) is not StationWav or type(station.channels) is not tuple:
+                        raise ValueError("station WAVs must contain immutable StationWav descriptors")
+                    for channel in station.channels:
+                        if type(channel) is not StationWavChannel:
+                            raise ValueError("station WAV channel descriptor is invalid")
+                        StationWavChannel.__post_init__(channel)
+                    StationWav.__post_init__(station)
             if expected in (CaptureSlotReleased, VeReleaseOutcome, WorkerFatal,
                             VePrewarmRequest, VePrewarmStarted, VePrewarmProgress,
-                            VePrewarmResult, VeResourceRetryProof):
+                            VePrewarmResult, VeResourceRetryProof, WorkbenchFilesOwned,
+                            SoundcardPrepareRequest, SoundcardPrepareResult):
                 expected.__post_init__(self.payload)
+            if (expected in (SoundcardPrepareRequest, SoundcardPrepareResult)
+                    and self.request_id != self.payload.probe_id):
+                raise ValueError(f"{self.kind} probe ID must match its event")
             if expected in (VePrewarmRequest, VePrewarmStarted,
                             VePrewarmProgress, VePrewarmResult):
                 if self.request_id != self.payload.warmup_id:
@@ -747,6 +935,9 @@ class RecordingEvent:
                 raise ValueError(f"{self.kind} generation must match its event")
         elif self.kind == "started" and self.payload is not None:
             _monotonic_time("started", self.payload)
+        elif self.kind == WORKBENCH_FILES_ACK:
+            if type(self.payload) is not int or self.payload not in (1, 2) or not self.request_id:
+                raise ValueError("station ownership acknowledgement requires a request and attempt")
         elif self.kind == "preview_ack":
             _integer("preview acknowledgement sequence", self.payload, 1)
         elif self.kind == "result_ack":

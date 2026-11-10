@@ -29,12 +29,12 @@ def test_saved_station_configuration_loads_in_current_workbench(tmp_path):
     layout.write_text(json.dumps({"rows": 1, "columns": 2, "cells": [[cell, cell]]}), encoding="utf-8")
     repository = MotorWorkbenchConfigRepository(manager.registry_path, manager.queue_registry_path, layout)
     snapshot = repository.load_active()
-    assert snapshot.project_id == project["project_id"]
-    assert snapshot.active_file == filename
-    assert [s.station_id for s in snapshot.stations] == [s["station_id"] for s in project["stations"]]
-    assert [c.condition_id for c in snapshot.conditions] == [c["condition_id"] for c in project["conditions"]]
-    assert snapshot.stations[1].channels[0].hardware_channel.physical_channel_index == 4
-    assert snapshot.conditions[0].queue.analysis["声压级"]["analysis_channels"] == (0,)
+    assert snapshot.recording.context.project_id == project["project_id"]
+    assert Path(repository.source_identity).name == filename
+    assert [s.station_id for s in snapshot.recording.context.stations] == [s["station_id"] for s in project["stations"]]
+    assert [c.condition_id for c in snapshot.recording.context.conditions] == [c["condition_id"] for c in project["conditions"]]
+    assert snapshot.recording.context.stations[1].channels[0].hardware_channel.physical_channel_index == 4
+    assert snapshot.analysis.test_queues[snapshot.recording.context.conditions[0].test_queue].analysis_config["声压级"]["analysis_channels"] == (0,)
 
 
 def test_roundtrip_rename_updates_filename_keeps_identity_and_order(tmp_path):
