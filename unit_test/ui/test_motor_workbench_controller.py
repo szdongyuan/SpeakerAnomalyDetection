@@ -704,11 +704,11 @@ def test_applied_output_changes_freeze_active_paths_and_restart_cursor(recording
     w.complete()
     assert w.requests[0] is original
     assert Path(w.completions[0].stations[0].path).name == "2026-11-09_00-00-00-000_右工位_热机_M-02_007_SN-008.wav"
-    assert Path(original.station_group.final_path) == Path(w.config.recording.context.result_root_directory) / "电机" / "wav"
+    assert Path(original.station_group.final_path) == Path(w.config.recording.context.result_root_directory) / "电机" / "audio"
     w.controller.start_recording()
     current = w.requests[-1]
     assert current.station_group.condition_id == "warm"
-    assert Path(current.station_group.final_path) == Path(root) / product / "wav"
+    assert Path(current.station_group.final_path) == Path(root) / product / "audio"
     assert current.station_group.stations[0].filename == (
         f"2026-11-09_00-00-00-000_{stations[0].station_name}_{conditions[0].condition_name}_M-02_007_SN-008.wav"
     )
