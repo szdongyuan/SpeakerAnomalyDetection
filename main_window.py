@@ -16,6 +16,7 @@ from base.db_manager import DataSave
 from base.hardware_selection import restore_or_default
 from base.motor_workbench_config import MotorWorkbenchConfigRepository
 from base.sound_device_manager import SoundDeviceManager
+from base.workbench_recording_archive import WorkbenchRecordingArchive
 from base.workbench_recording_protocol import WorkbenchRecordingCompletion
 from consts import ui_style_const
 from consts.model_consts import DATABASE_PATH
@@ -29,11 +30,13 @@ from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
 from ui.sequence.motor_workbench_controller import MotorWorkbenchController, WorkbenchRecordingPorts
 from ui.sequence.sequence_widget import SequenceWindow
 from ui.vkinging_presentation import device_display_name, ve_failure_text
+from ui.workbench_recording_archive_bridge import WorkbenchRecordingArchiveBridge
 
 
 class MainWindow(QMainWindow):
     workbench_analysis_input_ready = pyqtSignal(object)
     workbench_recording_completed = pyqtSignal(WorkbenchRecordingCompletion)
+    _workbench_archive_close_check = pyqtSignal()
 
     def __init__(self, *, ve_prewarm_lifetime=None, recording_bridge=None,
                  raw_audio_csv_bridge=None,
@@ -187,6 +190,10 @@ class MainWindow(QMainWindow):
         controller = self.workbench_controller
         sequence = self.sequence_window
         device = self.workbench_recording_device
+        self._workbench_archive_bridge = WorkbenchRecordingArchiveBridge(WorkbenchRecordingArchive(DATABASE_PATH), self)
+        self._workbench_archive_close_state = "new"
+        self._workbench_archive_close_check.connect(self._finish_workbench_archive_close_check, Qt.QueuedConnection)
+        self._workbench_archive_bridge.idle.connect(self._resume_close_after_workbench_archive)
         controller.bind_recording(WorkbenchRecordingPorts(
             bridge=self.recording_bridge, device=device,
             hardware_available=lambda snapshot: (
@@ -197,6 +204,8 @@ class MainWindow(QMainWindow):
             notify_error=lambda detail: QMessageBox.warning(self, "工作台录制", detail),
             completed=self.workbench_recording_completed.emit,
             notify_cleanup_error=lambda detail: self.statusBar().showMessage(detail),
+            submit_archive=self._workbench_archive_bridge.submit,
+            notify_archive_error=lambda detail: self.statusBar().showMessage(detail),
             is_closing=lambda: getattr(self, "_closing", False),
             ve_calibration_store=self.ve_calibration_store,
         ))
@@ -1115,6 +1124,16 @@ class MainWindow(QMainWindow):
                 bridge.shutdown(self._finish_recording_shutdown)
             return
 
+        archive = getattr(self, "_workbench_archive_bridge", None)
+        if archive is not None:
+            if self._workbench_archive_close_state == "new":
+                # Published recording completions can still be queued for GUI delivery.
+                self._workbench_archive_close_state = "queued"
+                self._workbench_archive_close_check.emit()
+            if self._workbench_archive_close_state != "drained" or archive.pending:
+                event.ignore()
+                return
+
         csv_bridge = getattr(self, "raw_audio_csv_bridge", None)
         if csv_bridge is not None and not csv_bridge.service_closed:
             self._show_raw_audio_csv_close_status()
@@ -1131,6 +1150,14 @@ class MainWindow(QMainWindow):
 
         self._exit_cleanup_complete = True
         event.accept()
+
+    def _finish_workbench_archive_close_check(self):
+        self._workbench_archive_close_state = "drained"
+        self.close()
+
+    def _resume_close_after_workbench_archive(self):
+        if getattr(self, "_closing", False) and self._workbench_archive_close_state == "drained":
+            self.close()
 
     def _on_raw_audio_csv_close_event(self, event):
         if not self.raw_audio_csv_bridge.service_closed:

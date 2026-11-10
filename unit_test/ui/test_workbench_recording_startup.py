@@ -11,8 +11,10 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 import main_window
 from base import hardware_selection, recording_service
+from base.db_manager import DataSave
 from base.recording_process_protocol import FrozenConfig, SoundcardPrepareResult
 from base.recording_service import RecordingWorkerStatus
+from consts import error_code
 from main_window_Launcher import MainWindowLauncher
 from ui import recording_service_bridge, vkinging_hardware_controls
 from ui.video_controller import VideoController
@@ -112,6 +114,14 @@ class Discovery:
 @pytest.fixture
 def startup(ui_qapp, monkeypatch, tmp_path):
     path = tmp_path / "hardware.json"
+    database_path = tmp_path / "audio_data.db"
+    database = DataSave(str(database_path))
+    try:
+        code, detail = database.create_table()
+        assert code == error_code.OK, detail
+    finally:
+        database.close()
+    monkeypatch.setattr(main_window, "DATABASE_PATH", str(database_path))
     bridge = RecordingBridge()
     mic = {"name": "Default", "index": 0, "hostapi": 0, "hostapi_name": "WASAPI", "max_input_channels": 3}
     manager = hardware_selection.SoundDeviceManager
@@ -157,7 +167,7 @@ def startup(ui_qapp, monkeypatch, tmp_path):
         assert application.window.recording_bridge is bridge
         return application.window
 
-    yield SimpleNamespace(launch=launch, login=login, path=path, bridge=bridge, mic=mic)
+    yield SimpleNamespace(launch=launch, login=login, path=path, bridge=bridge, mic=mic, database_path=database_path)
     for window in windows:
         if not sip.isdeleted(window):
             window.close()

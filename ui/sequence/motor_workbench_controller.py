@@ -8,7 +8,7 @@ configuration editors own writes and send commit notifications to the caller.
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime
 from uuid import uuid4
 
 from base.workbench_config_values import WorkbenchChannel, WorkbenchCondition
@@ -31,10 +31,12 @@ class WorkbenchRecordingPorts:
     bridge: RecordingServiceBridge
     device: WorkbenchRecordingDevice
     hardware_available: Callable[[WorkbenchRecordingDeviceSnapshot], bool]
-    set_button_state: Callable[[bool, str], None]
+    set_button_state: Callable[[bool, str, bool], None]
     notify_error: Callable[[str], None]
     completed: Callable[[WorkbenchRecordingCompletion], None]
     notify_cleanup_error: Callable[[str], None]
+    submit_archive: Callable[[WorkbenchRecordingCompletion, str, date, Callable[[str, Exception | None], None]], None]
+    notify_archive_error: Callable[[str], None]
     is_closing: Callable[[], bool] = lambda: False
     ve_calibration_store: object = None
 
@@ -44,7 +46,10 @@ class _InFlightRecording:
     request_id: str
     configuration_revision: int
     condition_name: str
+    product_name: str
+    recorded_on: date
     analysis_context: AnalysisRecordingContext | None = None
+    archiving: bool = False
 
 
 class MotorWorkbenchController:
@@ -139,8 +144,11 @@ class MotorWorkbenchController:
         ports = self._recording
         if ports.is_closing():
             return None, "应用正在退出。"
-        if self._in_flight is not None:
-            return None, f"正在录制或保存工况「{self._in_flight.condition_name}」的音频。"
+        attempt = self._in_flight
+        if attempt is not None:
+            if attempt.archiving:
+                return None, f"正在将工况「{attempt.condition_name}」的音频入库。"
+            return None, f"正在录制或保存工况「{attempt.condition_name}」的音频。"
         if not self._configuration_valid:
             return None, "工作台配置不可用，请检查产品和测试队列配置。"
         config = self._applied_config
@@ -161,22 +169,25 @@ class MotorWorkbenchController:
     def refresh_recording_state(self) -> None:
         if self._recording is not None:
             snapshot, detail = self._recording_admission()
-            self._recording.set_button_state(snapshot is not None, detail)
+            self._recording.set_button_state(snapshot is not None, detail, self._in_flight is not None)
 
     def start_recording(self) -> None:
-        """Submit one frozen condition, leaving the cursor until publication succeeds."""
+        """Submit one frozen condition and hold the cursor through archival."""
         recorded_at = datetime.now()
         ports = self._recording
         if ports is None:
             return
         snapshot, detail = self._recording_admission()
         if snapshot is None:
-            ports.set_button_state(False, detail)
+            ports.set_button_state(False, detail, self._in_flight is not None)
             return
         config = self._applied_config
         analysis_version = self._analysis_version
         condition = config.recording.context.conditions[self._condition_index]
-        attempt = _InFlightRecording(uuid4().hex, self._configuration_revision, condition.condition_name)
+        attempt = _InFlightRecording(
+            uuid4().hex, self._configuration_revision, condition.condition_name,
+            config.recording.context.project_name, recorded_at.date(),
+        )
         self._in_flight = attempt
         self.refresh_recording_state()
         try:
@@ -228,22 +239,57 @@ class MotorWorkbenchController:
         if not self._recording.is_closing():
             self._recording.notify_error(detail)
 
-    def _take_recording_terminal(self, session, result):
+    def _matching_recording_terminal(self, session, result):
         attempt = self._in_flight
-        if attempt is None or attempt.request_id != session.request.request_id:
+        if attempt is None or attempt.archiving or attempt.request_id != session.request.request_id:
             return None
         if attempt.request_id != result.request_id:
             return None
-        self._in_flight = None
+        return attempt
+
+    def _take_recording_terminal(self, session, result):
+        attempt = self._matching_recording_terminal(session, result)
+        if attempt is not None:
+            self._in_flight = None
         return attempt
 
     def _recording_completed(self, session, result):
-        attempt = self._take_recording_terminal(session, result)
+        attempt = self._matching_recording_terminal(session, result)
         if attempt is None:
             return
+        archiving = replace(attempt, archiving=True)
+        self._in_flight = archiving
+        self.refresh_recording_state()
+        try:
+            self._recording.submit_archive(
+                result, attempt.product_name, attempt.recorded_on,
+                lambda request_id, error: self._recording_archived(request_id, result, error),
+            )
+        except Exception as error:
+            if self._in_flight is not archiving:
+                # A synchronous callback already finished archival. Preserve consumer errors.
+                raise
+            logging.getLogger("core").exception("Could not submit workbench archive %s", result.request_id)
+            self._recording_archived(result.request_id, result, error)
+
+    def _recording_archived(self, request_id, result, error):
+        attempt = self._in_flight
+        if attempt is None or not attempt.archiving or attempt.request_id != request_id:
+            return
+        self._in_flight = None
         if attempt.configuration_revision == self._configuration_revision:
             self._condition_index = (self._condition_index + 1) % len(self._applied_config.recording.context.conditions)
         self.refresh_recording_state()
+        if error is not None:
+            logging.getLogger("core").warning(
+                "Workbench archive %s failed for %s: %s", request_id,
+                [station.path for station in result.stations], error,
+            )
+            if not self._recording.is_closing():
+                reason = " ".join(str(error).split())[:160] or type(error).__name__
+                self._recording.notify_archive_error(
+                    f"工况「{attempt.condition_name}」音频已保存，入库失败：{reason}"
+                )
         self._recording.completed(result)
         if self._analysis_input_ready is not None and not self._recording.is_closing():
             self._analysis_input_ready(WorkbenchAnalysisInput(attempt.analysis_context, result))

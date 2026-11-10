@@ -271,7 +271,8 @@ class SequenceWidgetUiOpsMixin:
         self.condition_mode_combobox.currentTextChanged.connect(self.on_condition_mode_combobox_changed)
         self._sync_condition_mode_combobox_from_count_board()
 
-    def set_workbench_recording_state(self, enabled, detail):
+    def set_workbench_recording_state(self, enabled, detail, busy=False):
+        self.toolsbar.set_recording_busy(busy)
         self.player_btn.setEnabled(enabled)
         self.player_btn.setToolTip(detail)
         self.player_btn.setAccessibleDescription(detail)
