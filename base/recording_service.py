@@ -15,7 +15,6 @@ from collections import deque
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, replace
 import ctypes
-from ctypes import wintypes
 import errno
 import logging
 import math
@@ -99,26 +98,6 @@ def _require_absent(path):
     except FileNotFoundError:
         return
     raise FileExistsError(errno.EEXIST, "recording group path already exists", path)
-
-
-def _windows_component_limit(path):
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    volume_path = kernel.GetVolumePathNameW
-    volume_path.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
-    volume_path.restype = wintypes.BOOL
-    volume_information = kernel.GetVolumeInformationW
-    volume_information.argtypes = (
-        wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD, wintypes.LPDWORD,
-        wintypes.LPDWORD, wintypes.LPDWORD, wintypes.LPWSTR, wintypes.DWORD,
-    )
-    volume_information.restype = wintypes.BOOL
-    root = ctypes.create_unicode_buffer(32768)
-    limit = wintypes.DWORD()
-    if not (volume_path(path, root, len(root))
-            and volume_information(root.value, None, 0, None, ctypes.byref(limit), None, None, 0)):
-        error = ctypes.get_last_error()
-        raise OSError(0, ctypes.FormatError(error).strip(), path, error)
-    return limit.value
 
 
 def _is_reparse_point(info):
@@ -739,7 +718,7 @@ class RecordingService:
         return used
 
     @staticmethod
-    def _allocate_flat_wavs(request, used_names, occupied, *, component_limit=None):
+    def _allocate_flat_wavs(request, used_names, occupied, *, validate_length):
         group = request.station_group
         used_names.add(os.path.basename(request.path).casefold())
         stations = []
@@ -747,9 +726,9 @@ class RecordingService:
             number = 1
             while True:
                 filename = station.wav_name.filename_for(number)
-                if component_limit is not None:
+                if validate_length:
                     try:
-                        validate_station_wav_length(filename, component_limit)
+                        validate_station_wav_length(filename)
                     except ValueError as exc:
                         raise ValueError(f"station {station.station_id!r} WAV {filename!r}: {exc}") from exc
                 candidate = os.path.join(group.final_path, filename)
@@ -820,7 +799,9 @@ class RecordingService:
                     used_names = self._flat_leased_names(group.final_path, self._other_lease_paths(None))
                     request = self._allocate_flat_wavs(
                         request, used_names,
-                        lambda path: self._lexical_path_lease(self._path_key(path), enclosing=True))
+                        lambda path: self._lexical_path_lease(self._path_key(path), enclosing=True),
+                        validate_length=False,
+                    )
                 elif group.allocate_final_path:
                     request = self._allocate_workbench_final(request)
                 paths = tuple(self._workbench_paths(request))
@@ -1638,7 +1619,6 @@ class RecordingService:
         with stage_fs.verified_stage_directory(parent, (info.st_dev, info.st_ino), pin=True) as directory:
             info = os.fstat(directory)
             session._stage_parent_identity = (info.st_dev, info.st_ino)
-            limit = _windows_component_limit(parent)
             with os.scandir(parent) as entries:
                 existing = {entry.name.casefold() for entry in entries}
             while True:
@@ -1664,7 +1644,7 @@ class RecordingService:
                         return True
                     return False
 
-                allocated = self._allocate_flat_wavs(request, used_names, occupied, component_limit=limit)
+                allocated = self._allocate_flat_wavs(request, used_names, occupied, validate_length=True)
                 paths = tuple(self._workbench_paths(allocated))
                 with self._lock:
                     if session.cancel_requested or self._closing:
