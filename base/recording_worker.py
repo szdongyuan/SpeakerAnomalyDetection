@@ -1,11 +1,13 @@
 """Spawn entry point. Capture, control sends and preview sends never share a wait."""
 import importlib
 import multiprocessing
+import os
 import queue
 import threading
 import time
 from dataclasses import dataclass, field, replace
 from contextlib import ExitStack
+from typing import Callable
 
 from base.log_manager import LogManager
 from base.log_exit import exit_with_log_drain
@@ -14,10 +16,14 @@ from base.recording_input_device import resolve_input_device, validate_input_dev
 from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_process_protocol import (
     CaptureSlotReleased,
+    FrozenConfig,
     RecordingEvent,
     RecordingFailure,
     RecordingProgress,
     RecordingResult,
+    SOUNDCARD_PREPARE,
+    SOUNDCARD_PREPARE_RESULT,
+    SoundcardPrepareResult,
     VE_PREWARM_COMMAND,
     VE_PREWARM_DETACHING,
     VE_PREWARM_PROGRESS,
@@ -27,12 +33,13 @@ from base.recording_process_protocol import (
     VePrewarmResult,
     VePrewarmStarted,
     VeReleaseOutcome,
-    WorkerFatal,
+    WorkerFatal, WorkbenchFilesOwned, WORKBENCH_FILES_ACK, WORKBENCH_FILES_OWNED,
     VE_RESOURCE_RETRY,
 )
 from base.recording_worker_pipeline import WorkerCapturePipeline
 from base.vkinging_resource import VeResourceController, VeResourceFault
 from base.vkinging_sdk import VkDaqClient
+from consts.recording_result_consts import WORKBENCH_RETRY_CLEANUP_STAGE
 from consts.vkinging_consts import VE_BACKEND
 
 
@@ -126,6 +133,54 @@ class _WorkerPrewarm:
     fault_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
+@dataclass
+class _StageOwnershipHandshake:
+    attempt: int
+    timeout: float
+    send: Callable
+    _ready: threading.Event = field(default_factory=threading.Event)
+
+    def publish(self, files):
+        if not self.send(files):
+            raise OSError("station file ownership proof could not be sent")
+        if not self._ready.wait(self.timeout):
+            raise TimeoutError("station file ownership acknowledgement timed out")
+
+    def acknowledge(self, attempt):
+        if attempt == self.attempt:
+            self._ready.set()
+
+    def cancel(self):
+        self._ready.set()
+
+
+def _probe_soundcard(backend, request, generation):
+    if request.name is None:
+        current = backend.query_devices(backend.default._default_device[0])
+    else:
+        # Only the stable names are authoritative. No parent-side device index
+        # or channel limit takes part in selection in this process.
+        identity = {"name": request.name, "hostapi_name": request.hostapi_name, "hostapi": None}
+        resolved = resolve_input_device(backend, identity, (0,))
+        current = backend.query_devices(resolved["index"])
+    hostapi_name = backend.query_hostapis(current["hostapi"])["name"]
+    if request.name is not None and (current["name"], hostapi_name, current["index"]) != (
+            request.name, request.hostapi_name, resolved["index"]):
+        raise ValueError("input device identity changed during preparation; reselect the input device")
+    maximum = current["max_input_channels"]
+    if type(maximum) is not int or maximum <= 0:
+        raise ValueError("selected device has no valid input channel count")
+    rate = current["default_samplerate"]
+    if (type(rate) not in (int, float) or rate <= 0
+            or (type(rate) is float and not rate.is_integer())):
+        raise ValueError(f"invalid default input sample rate: {rate!r}")
+    device = FrozenConfig.snapshot({
+        "backend": "sounddevice", "index": current["index"], "name": current["name"],
+        "hostapi": current["hostapi"], "hostapi_name": hostapi_name, "max_input_channels": maximum,
+    })
+    return SoundcardPrepareResult(request.probe_id, generation, device, tuple(range(maximum)), int(rate))
+
+
 def recording_worker(control, preview, generation, backend_factory, backend_options,
                      cancel_timeout=5.0, preview_interval=.05):
     """Own one VE controller plus a request-keyed two-slot child pipeline."""
@@ -155,6 +210,22 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
     diagnostics = RecordingDiagnostics(logger, generation=generation, categories=(
         "consume", "write", "waveform_lock_wait", "waveform_lock_hold", "snapshot",
         "close_stream", "close_wav", "final_drain", "control_send", "preview_send"))
+
+    def initialize_audio():
+        nonlocal audio_backend, audio_initialized
+        audio_backend = sounddevice_backend()
+        audio_initialized = True
+
+    def refresh_audio():
+        nonlocal audio_initialized, audio_cleanup_failed
+        # A partial reset leaves library ownership uncertain. Suppress further
+        # resets and exit without another native termination in that case.
+        audio_initialized = False
+        audio_cleanup_failed = True
+        audio_backend._terminate()
+        audio_backend._initialize()
+        audio_initialized = True
+        audio_cleanup_failed = False
 
     def parent_watch():
         while not finished.wait(.05):
@@ -199,6 +270,14 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         control_wake.set()
         return True
 
+    def emit_stage_files(request_id, attempt, files):
+        return emit(WORKBENCH_FILES_OWNED, request_id,
+                    WorkbenchFilesOwned(request_id, generation, files, attempt))
+
+    def stage_ownership(request_id, attempt):
+        return _StageOwnershipHandshake(
+            attempt, cancel_timeout, lambda files: emit_stage_files(request_id, attempt, files))
+
     def clear_progress():
         try:
             progress_out.get_nowait()
@@ -225,7 +304,6 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         pipeline.mark_terminal(state.request_id)
 
     def retry_native_start(state):
-        nonlocal audio_initialized, audio_cleanup_failed
         capture = state.capture
         if (stopping is not None or broken.is_set() or state.started
                 or audio_backend is None or audio_cleanup_failed or prewarm is not None
@@ -248,8 +326,22 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
         if command_processed:
             return True
         if state.retry_input_device is not None:
+            try:
+                capture.verify_retry_station_files()
+            except OSError as exc:
+                capture.outcome = replace(capture.outcome, stage=WORKBENCH_RETRY_CLEANUP_STAGE,
+                                          message=f"device retry station cleanup failed: {exc}")
+                return False
+            retry_dependencies = dict(dependencies)
+            if capture.request.station_group is not None:
+                # Require a fresh open proof while the supervisor retains the reservations.
+                if not emit_stage_files(state.request_id, 2, ()):
+                    return True
+                retry_dependencies["stage_identity"] = capture.stage_identity
+                retry_dependencies["stage_ownership"] = stage_ownership(state.request_id, 2)
+                retry_dependencies["stage_reservations"] = capture.stage_reservations
             replacement = RecordingCapture(
-                capture.request, ve_stream_factory=controller.stream, **dependencies)
+                capture.request, ve_stream_factory=controller.stream, **retry_dependencies)
             replacement._backend = audio_backend
             replacement.input_device = state.retry_input_device
             state.retry_input_device = None
@@ -263,18 +355,14 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                     snapshot.get("hostapi_name", snapshot["hostapi"]), snapshot["index"],
                     capture.outcome.message)
         state.input_refresh_used = True
-        audio_initialized = False
         try:
-            audio_backend._terminate()
-            audio_backend._initialize()
+            refresh_audio()
         except Exception as exc:
             # Native reset boundary: initialization/termination can fail with any
             # backend exception. Joined capture has released handles; retire after
             # its final failure and never terminate this uncertain library again.
             logger.exception("Audio refresh failed for %s", request.request_id)
-            audio_cleanup_failed = True
-            capture.outcome = RecordingFailure(request.request_id, "device", request.path,
-                                               str(exc), handles_released=True)
+            capture.outcome = replace(capture.outcome, message=str(exc))
             emit("failed", state.request_id, capture.outcome)
             pipeline.mark_terminal(state.request_id)
             for request_id in tuple(pipeline.pending_result_acks):
@@ -282,17 +370,15 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
             emit_worker_fatal("device", exc, ordered=True)
             broken.set()
             return True
-        audio_initialized = True
         try:
             state.retry_input_device = resolve_input_device(audio_backend, snapshot, request.channels)
         except Exception as exc:
             # Refreshed native enumeration is an external boundary with no open
             # capture handles. Preserve one actionable request failure.
-            capture.outcome = RecordingFailure(
-                request.request_id, "device", request.path,
-                f"Input {snapshot['name']!r} on HostAPI "
-                f"{snapshot.get('hostapi_name', snapshot['hostapi'])!r}: "
-                f"{exc}; reselect the input device.", handles_released=True)
+            capture.outcome = replace(
+                capture.outcome, message=(f"Input {snapshot['name']!r} on HostAPI "
+                                          f"{snapshot.get('hostapi_name', snapshot['hostapi'])!r}: "
+                                          f"{exc}; reselect the input device."))
             return False
         logger.info("Resolved input for retry %s: selected=%r HostAPI=%r index=%s -> %s",
                     request.request_id, snapshot["name"],
@@ -498,6 +584,42 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                     cancel_prewarm("VE prewarm cancelled by shutdown")
                 elif stopping is not None:
                     continue
+                elif command.kind == SOUNDCARD_PREPARE:
+                    if pipeline.active is not None or prewarm is not None:
+                        protocol_fatal(SOUNDCARD_PREPARE, "soundcard preparation overlaps active capture")
+                        continue
+                    if (audio_cleanup_failed or any(
+                            not state.capture.stream_closed for state in pipeline.shutdown_snapshot()
+                            if state.capture.request.device.get("backend") != VE_BACKEND)):
+                        emit_worker_fatal("device", "Cannot refresh input devices: previous audio "
+                                          "stream ownership is uncertain.", ordered=True)
+                        broken.set()
+                        continue
+                    try:
+                        if audio_backend is None:
+                            initialize_audio()
+                        else:
+                            refresh_audio()
+                    except Exception as exc:
+                        # Import/reset is a native boundary. Only uncertain
+                        # ownership after a partial reset requires retirement.
+                        logger.exception("Audio preparation failed for %s", command.request_id)
+                        if audio_cleanup_failed:
+                            emit_worker_fatal("device", exc, ordered=True)
+                            broken.set()
+                        else:
+                            emit(SOUNDCARD_PREPARE_RESULT, command.request_id, SoundcardPrepareResult(
+                                command.request_id, generation, detail=str(exc) or type(exc).__name__))
+                        continue
+                    try:
+                        result = _probe_soundcard(audio_backend, command.payload, generation)
+                    except Exception as exc:
+                        # Enumeration is an external boundary. It has opened no
+                        # stream, so a bad or absent device can be probed again.
+                        logger.info("Input probe %s failed: %s", command.request_id, exc)
+                        result = SoundcardPrepareResult(
+                            command.request_id, generation, detail=str(exc) or type(exc).__name__)
+                    emit(SOUNDCARD_PREPARE_RESULT, command.request_id, result)
                 elif command.kind == "start":
                     logger.info("Recording timing request=%s process=child stage=start_receive", command.request_id)
                     if prewarm is not None:
@@ -506,6 +628,14 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                         continue
                     last_terminal_prewarm = None
                     capture_dependencies = dict(dependencies)
+                    if command.stage_identity is not None:
+                        capture_dependencies["stage_identity"] = command.stage_identity
+                        capture_dependencies["stage_ownership"] = stage_ownership(command.request_id, 1)
+                        capture_dependencies["stage_reservations"] = {
+                            os.path.join(command.payload.path, station.filename): identity
+                            for station, identity in zip(command.payload.station_group.stations,
+                                                         command.stage_file_identities, strict=True)
+                        }
                     if command.payload.device.get("backend") == VE_BACKEND:
                         diagnostics.start_sampler()
                         capture_dependencies["diagnostics"] = diagnostics
@@ -533,8 +663,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                             try:
                                 # Import only after admission: the control thread
                                 # owns PortAudio across all ordinary captures.
-                                audio_backend = sounddevice_backend()
-                                audio_initialized = True
+                                initialize_audio()
                             except Exception as exc:
                                 # Native import/initialization is an external boundary.
                                 logger.exception("Audio initialization failed for %s",
@@ -568,12 +697,8 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                                             snapshot["index"], exc)
                             if stale:
                                 state.input_refresh_used = True
-                                # Even failed termination leaves native state
-                                # uncertain. Never retry it in shutdown/atexit.
-                                audio_initialized = False
                                 try:
-                                    audio_backend._terminate()
-                                    audio_backend._initialize()
+                                    refresh_audio()
                                 except Exception as exc:
                                     # Native reset can raise arbitrary backend
                                     # errors. Retire the generation after releasing
@@ -583,9 +708,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                                     initialization_failure = RecordingFailure(
                                         command.request_id, "device", command.payload.path,
                                         str(exc), handles_released=True)
-                                    audio_cleanup_failed = True
                                 else:
-                                    audio_initialized = True
                                     try:
                                         capture.input_device = resolve_input_device(
                                             audio_backend, snapshot, command.payload.channels)
@@ -694,6 +817,12 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                         protocol_fatal(
                             "cancel", f"unknown cancel request ID: {command.request_id}")
                         continue
+                elif command.kind == WORKBENCH_FILES_ACK:
+                    state = pipeline.active
+                    if state is not None and state.request_id == command.request_id:
+                        ownership = state.capture.stage_ownership
+                        if ownership is not None:
+                            ownership.acknowledge(command.payload)
                 elif command.kind == "preview_ack":
                     state = pipeline.active
                     if (state is not None and state.request_id == command.request_id

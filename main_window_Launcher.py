@@ -18,7 +18,9 @@ class MainWindowLauncher(object):
         self.ve_prewarm_lifetime = VePrewarmLifetime()
         self.recording_service = RecordingService()
         self.recording_bridge = RecordingServiceBridge(self.recording_service, self.app)
+        self.app._recording_bridge = self.recording_bridge
         self.app.aboutToQuit.connect(self.recording_bridge.shutdown)
+        self.recording_bridge.ensure_resident()
         self.raw_audio_csv_service = RawAudioCsvService()
         self.raw_audio_csv_bridge = RawAudioCsvServiceBridge(self.raw_audio_csv_service, self.app)
         self.app.aboutToQuit.connect(self.raw_audio_csv_bridge.begin_shutdown)

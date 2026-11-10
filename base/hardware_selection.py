@@ -267,7 +267,8 @@ def resolve_ve_input(device, channels, discovered_devices, *, profile_store,
         return unavailable
 
 
-def restore_or_default(*, path=None, soundcard_only=False, apply_defaults=True) -> Tuple[
+def restore_or_default(*, path=None, soundcard_only=False, apply_defaults=True,
+                       on_soundcard_identity=None) -> Tuple[
     Optional[Dict[str, Any]],
     Optional[Dict[str, Any]],
     List[int],
@@ -278,6 +279,8 @@ def restore_or_default(*, path=None, soundcard_only=False, apply_defaults=True) 
     Saved output fields are inert. Explicit VE choices never fall back to or
     mutate ordinary input. soundcard_only restores the retained input backup;
     apply_defaults=False resolves a draft without changing audio defaults.
+    on_soundcard_identity receives the saved (name, HostAPI) or None from the
+    same read, even if the legacy input falls back to a different device.
     """
     try:
         SoundDeviceManager.refresh_available_device()
@@ -288,6 +291,12 @@ def restore_or_default(*, path=None, soundcard_only=False, apply_defaults=True) 
     if (soundcard_only and isinstance(saved, dict) and "input_selection" in saved
             and isinstance(saved.get("soundcard_selection"), dict)):
         saved = saved["soundcard_selection"]
+    explicit_ve = not soundcard_only and isinstance(saved, dict) and "input_selection" in saved
+    if on_soundcard_identity is not None:
+        identity = None
+        if not explicit_ve and isinstance(saved, dict) and "mic_name" in saved:
+            identity = saved.get("mic_name"), saved.get("api_name")
+        on_soundcard_identity(identity)
     devices_by_api = _enumerate_devices()
     api_name = _resolve_api_name(saved, devices_by_api)
 
@@ -297,7 +306,7 @@ def restore_or_default(*, path=None, soundcard_only=False, apply_defaults=True) 
         (saved or {}).get("mic_name") if isinstance(saved, dict) else None,
         "mic",
     )
-    if not soundcard_only and isinstance(saved, dict) and "input_selection" in saved:
+    if explicit_ve:
         mic_device = unavailable_ve_selection(saved["input_selection"])
         if saved.get("input_selection_error"):
             mic_device["selection_error"] = saved["input_selection_error"]

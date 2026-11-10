@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QStyleOptionComboBox, QToolTip, QVBoxLayout, QWidget,
 )
 
-from consts.ui_style_const import COLOR_BORDER, COMBO_DOWN_ARROW_ICON, toolbar_combobox_style
+from consts.ui_style_const import COLOR_BORDER, COMBO_DOWN_ARROW_ICON, MAIN_UI_SMALL_FONT_FAMILY_NAME, toolbar_combobox_style
 
 from ui.sequence.station_plot_cell import StationPlotCell
 from ui.sequence import station_plot_grid
@@ -18,7 +18,7 @@ from ui.sequence.station_plot_grid import StationPlotGrid
 
 
 @pytest.fixture
-def grid(qt_app):
+def grid(qt_app, main_ui_font):
     widget = StationPlotGrid()
     widget.resize(1100, 650)
     widget.show()
@@ -49,7 +49,7 @@ def test_title_and_station_colors_are_actually_painted(grid):
     title = grid.findChild(QLabel, 'stationPlotTitle')
     assert title.height() >= 36
     assert (title.font().family(), title.font().pixelSize(), title.font().bold()) == (
-        "Microsoft YaHei UI", 20, True,
+        MAIN_UI_SMALL_FONT_FAMILY_NAME, 20, True,
     )
     title_image = title.grab().toImage()
     assert title_image.pixelColor(title.width() - 3, 3).name() == '#3e75ac'
@@ -105,7 +105,7 @@ def test_station_names_and_mark_buttons_use_main_font(grid):
     header = controls(grid, 0)
     assert header.name.font().pixelSize() == 20
     for widget in (header.name, header.ok, header.ng):
-        assert widget.font().family() == "Microsoft YaHei UI"
+        assert widget.font().family() == MAIN_UI_SMALL_FONT_FAMILY_NAME
 
 
 def test_title_header_and_cells_form_a_continuous_grid(grid, qt_app):
@@ -596,7 +596,7 @@ def test_actual_keyboard_and_popup_selection_emit_once(grid, qt_app):
     spy = QSignalSpy(grid.column_selection_changed)
     box = combo(grid, 2)
     closed_width = box.width()
-    assert (box.font().family(), box.font().pixelSize()) == ("Microsoft YaHei UI", 12)
+    assert (box.font().family(), box.font().pixelSize()) == (MAIN_UI_SMALL_FONT_FAMILY_NAME, 12)
     assert closed_width == 48
     box.setFocus()
     QTest.keyClick(box, Qt.Key_Down)
@@ -606,7 +606,7 @@ def test_actual_keyboard_and_popup_selection_emit_once(grid, qt_app):
     for _ in range(2):
         box.showPopup()
         qt_app.processEvents()
-        assert (view.font().family(), view.font().pixelSize()) == ("Microsoft YaHei UI", 12)
+        assert (view.font().family(), view.font().pixelSize()) == (MAIN_UI_SMALL_FONT_FAMILY_NAME, 12)
         viewport = view.viewport()
         text_width = max(view.fontMetrics().horizontalAdvance(text) for text, _ in options)
         assert viewport.width() >= text_width + 2

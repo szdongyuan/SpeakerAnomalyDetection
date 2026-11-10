@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import hashlib
 import math
 import os
+import stat
 import sys
 import threading
 import time
@@ -26,13 +27,17 @@ from base.recording_process_protocol import (
     RecordingCancelled, RecordingFailure, RecordingPreview, RecordingRequest, RecordingResult,
     RecordingFinalizationTiming, RecordingFinalEnvelope, RecordingQualityEvidence,
 )
-from base.streaming_file_writer import StreamingWavWriter
+from base.station_wav_output import StationWavOutput
+from base.streaming_file_writer import (
+    SoundFileVirtualIO, StreamingWavWriter, WavWriterInitializationError, verify_wav_file,
+)
 from base.wav_calibration_metadata import (
     WavCalibrationMetadataAppendResult,
     WavCalibrationMetadataReadStatus,
     append_owned_recording_calibration_metadata_result,
     inspect_wav_calibration_metadata,
     normalize_wav_calibration_metadata,
+    verify_recording_wav_identity,
 )
 from consts.recording_preview_consts import (
     MAIN_RECORDING_LIVE_MAX_POINTS,
@@ -45,7 +50,7 @@ from consts.recording_result_consts import RECORDING_SAMPLE_DIGEST_ALGORITHM, RE
 from consts.wav_format_consts import WAV_PCM24_SUBTYPE
 
 
-def capture_queue_capacity(sample_rate, channels, *, blocksize=2048, seconds=2.0):
+def capture_queue_capacity(sample_rate, channels, *, blocksize=2048, seconds=7.0):
     """Return (frames, bytes), excluding at most one consumer-owned callback block."""
     if sample_rate <= 0 or channels <= 0 or blocksize <= 0 or not math.isfinite(seconds) or seconds <= 0:
         raise ValueError("queue dimensions and duration must be positive")
@@ -85,8 +90,12 @@ class RecordingCapture:
                  ve_stream_factory=None, startup_budget=None, on_retry=None,
                  writer_factory=StreamingWavWriter,
                  metadata_appender=append_owned_recording_calibration_metadata_result,
-                 blocksize=2048, queue_seconds=None, diagnostics=None):
+                 blocksize=2048, queue_seconds=None, diagnostics=None, stage_identity=None,
+                 stage_ownership=None, stage_reservations=None):
         self.request = request
+        self.stage_identity = stage_identity
+        self.stage_ownership = stage_ownership
+        self.stage_reservations = stage_reservations
         self.input_device = request.device
         self._backend = backend
         self._is_ve = request.device.get("backend") == VE_BACKEND
@@ -104,10 +113,9 @@ class RecordingCapture:
         self._writer_factory = writer_factory
         self._metadata_appender = metadata_appender
         self._blocksize = blocksize
-        if queue_seconds is None:
-            queue_seconds = 2.0
+        queue_options = {} if queue_seconds is None else {"seconds": queue_seconds}
         self.queue_capacity_frames, self.queue_capacity_bytes = capture_queue_capacity(
-            request.sample_rate, len(request.channels), blocksize=blocksize, seconds=queue_seconds)
+            request.sample_rate, len(request.channels), blocksize=blocksize, **queue_options)
         self.started = threading.Event()
         self.done = threading.Event()
         self.capture_slot_released = threading.Event()
@@ -132,7 +140,11 @@ class RecordingCapture:
         self._stream = None
         self._native_start_failed = False
         self._writer = None
-        self._writer_finalization_log = None
+        self._station_output = None
+        self._station_file_identities = {}
+        self._writer_finalization_logs = []
+        self._cleanup_errors = []
+        self._stream_close_diagnostics = ()
         self._stream_close_attempted = False
         self._writer_close_attempted = False
         self._adapter_released = False
@@ -140,6 +152,7 @@ class RecordingCapture:
         self._handles_released = True
         self._unreleased_finalization_handles = []
         self._owned_temporary_paths = set()
+        self._owned_temporary_identities = {}
         self._stage = "starting"
         self._warnings = []
         self._status_warning = None
@@ -155,7 +168,7 @@ class RecordingCapture:
         self._quality = None
         self._display_error = None
         self._envelope_seconds = 0.0
-        if request.purpose == "main":
+        if request.purpose == "main" and request.station_group is None:
             self._quality = RecordingQualityAccumulator(
                 len(request.channels),
                 request.device["input_config"]["range_max"] if self._is_ve else None)
@@ -218,6 +231,8 @@ class RecordingCapture:
         self._cancelled.set()
         self._stop_requested.set()
         self._wake.set()
+        if self.stage_ownership is not None:
+            self.stage_ownership.cancel()
 
     def wait(self, timeout=None):
         if not self.done.wait(timeout):
@@ -246,6 +261,17 @@ class RecordingCapture:
                 and self.raw_frames == self.written_frames == 0
                 and self.stream_closed and self._writer is None
                 and self._writer_released)
+
+    def verify_retry_station_files(self):
+        """The next attempt can reset only the same reserved WAVs after all closes."""
+        if self.request.station_group is None:
+            return
+        if (not self.retryable_device_failure or not self.stage_reservations
+                or self._station_file_identities != self.stage_reservations):
+            raise OSError("recording attempt cannot prove ownership of all station WAVs")
+        self._verify_stage_identity()
+        for path, identity in self.stage_reservations.items():
+            verify_wav_file(path, identity)
 
     def snapshot(self, *, generation, sequence):
         """Copy only the selected bounded envelope; skip a busy consumer."""
@@ -425,19 +451,71 @@ class RecordingCapture:
                         # Optional logging cannot stop healthy capture or replace its failure.
                         pass
 
+    def _create_writer(self, path, *, sample_rate, channels):
+        options = {}
+        if self.stage_reservations is not None:
+            options["reserved_identity"] = self.stage_reservations[path]
+        elif self.request.station_group is not None and self._writer_factory is StreamingWavWriter:
+            # Preserve the path-based injected factory signature. The default
+            # grouped writer takes exclusive ownership at the filesystem.
+            options["exclusive"] = True
+        try:
+            writer = self._writer_factory(path, sample_rate=sample_rate, channels=channels, **options)
+        except WavWriterInitializationError as exc:
+            if exc.file_identity is not None and self.request.station_group is not None:
+                self._station_file_identities[path] = exc.file_identity
+            if exc.handles:
+                self._handles_released = False
+                self._unreleased_finalization_handles.extend((exc.path, handle) for handle in exc.handles)
+            raise
+        if self.request.station_group is not None:
+            identity = getattr(writer, "file_identity", None)
+            if identity is not None:
+                self._station_file_identities[path] = identity
+        if isinstance(writer, StreamingWavWriter):
+            # Capture reports writer failures after closing all files. The
+            # base policy does not dispatch to optional subclass diagnostics.
+            StreamingWavWriter.defer_finalization_log(writer)
+        return writer
+
+    def _verify_stage_identity(self):
+        if self.stage_identity is None:
+            return
+        path = self.request.path
+        info = os.lstat(path)
+        attributes = getattr(info, "st_file_attributes", 0)
+        if (not stat.S_ISDIR(info.st_mode) or attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                or (info.st_dev, info.st_ino) != self.stage_identity):
+            raise OSError(f"station staging directory identity changed: {path}")
+
+    def _open_writer(self):
+        req = self.request
+        self._stage = "open_wav"
+        started = time.perf_counter()
+        self._logger.info("Recording timing request=%s process=child stage=wav_open event=begin", req.request_id)
+        if req.station_group is None:
+            self._writer = self._create_writer(req.path, sample_rate=req.sample_rate, channels=len(req.channels))
+        else:
+            self._verify_stage_identity()
+            range_max = req.device["input_config"]["range_max"] if self._is_ve else None
+            self._station_output = StationWavOutput(req, range_max)
+            self._station_output.open(self._create_writer, self._cancelled.is_set,
+                                      reserved=self.stage_reservations is not None)
+        self._logger.info("Recording timing request=%s process=child stage=wav_open event=end seconds=%.6f",
+                          req.request_id, time.perf_counter() - started)
+        if self.stage_ownership is not None and not self._cancelled.is_set():
+            self.stage_ownership.publish(self.stage_file_evidence(include_temporary=False))
+        self._stage = "device"
+
     def _open(self):
         req = self.request
         self._stage = "device"
         if self._is_ve:
             from base.vkinging_capture import VkingingInputStream
 
-            self._stage = "open_wav"
-            started = time.perf_counter()
-            self._logger.info("Recording timing request=%s process=child stage=wav_open event=begin", req.request_id)
-            self._writer = self._writer_factory(req.path, sample_rate=req.sample_rate, channels=len(req.channels))
-            self._logger.info("Recording timing request=%s process=child stage=wav_open event=end seconds=%.6f",
-                              req.request_id, time.perf_counter() - started)
-            self._stage = "device"
+            self._open_writer()
+            if self._cancelled.is_set():
+                return
             factory = self._ve_stream_factory or VkingingInputStream
             startup_options = {}
             if self._startup_budget is not None:
@@ -462,13 +540,9 @@ class RecordingCapture:
         if self._backend is None:
             self._backend = sounddevice_backend()
         self.input_device = validate_input_device(self._backend, self.input_device, req.channels)
-        self._stage = "open_wav"
-        started = time.perf_counter()
-        self._logger.info("Recording timing request=%s process=child stage=wav_open event=begin", req.request_id)
-        self._writer = self._writer_factory(req.path, sample_rate=req.sample_rate, channels=len(req.channels))
-        self._logger.info("Recording timing request=%s process=child stage=wav_open event=end seconds=%.6f",
-                          req.request_id, time.perf_counter() - started)
-        self._stage = "device"
+        self._open_writer()
+        if self._cancelled.is_set():
+            return
         config = dict(samplerate=req.sample_rate, dtype="float32", blocksize=self._blocksize)
         try:
             started = time.perf_counter()
@@ -538,19 +612,22 @@ class RecordingCapture:
             if self.written_frames == 0:
                 self._logger.info("Recording timing request=%s process=child stage=first_data",
                                   self.request.request_id)
+            writer = self._station_output if self._station_output is not None else self._writer
             if lane is None:
-                quantized = self._writer.write_chunk(retained)
+                quantized = writer.write_chunk(retained)
             else:
                 # Publish an immutable current phase; count complete blocks
                 # once in _consume, not a dictionary counter per sub-stage.
                 lane.active = phase = ("write", lane.perf_ns())
                 try:
-                    quantized = self._writer.write_chunk(retained)
+                    quantized = writer.write_chunk(retained)
                 finally:
                     intervals.append((phase, lane.perf_ns()))
                     lane.active = consume_phase
             self.written_frames += len(retained)
             self._final_frames = self.written_frames
+            if self._station_output is not None:
+                return
             if (not isinstance(quantized, np.ndarray) or quantized.dtype != np.float32
                     or quantized.shape != retained.shape):
                 raise ValueError("writer must return saved float32 samples with the retained shape")
@@ -615,8 +692,8 @@ class RecordingCapture:
                 # still attempt close after stop fails, and forbid successful delivery.
                 self._handles_released = False
                 released = False
-                self._logger.exception("Stream cleanup failed for %s", self.request.request_id)
                 self._fail("close_stream", str(exc))
+                self._cleanup_errors.append(("Stream cleanup failed for %s", (self.request.request_id,), exc))
         if self._is_ve:
             if stream.handles_released:
                 try:
@@ -624,8 +701,8 @@ class RecordingCapture:
                 except Exception as exc:
                     released = False
                     self._handles_released = False
-                    self._logger.exception("Stream cleanup failed for %s", self.request.request_id)
                     self._fail("close_stream", str(exc))
+                    self._cleanup_errors.append(("Stream cleanup failed for %s", (self.request.request_id,), exc))
             else:
                 released = False
                 self._handles_released = False
@@ -636,51 +713,75 @@ class RecordingCapture:
                 # still cleaning up. Keep ownership unconfirmed, but preserve
                 # cancellation so the parent can protect older finalizers and
                 # defer retirement. Actual native failures still win above.
-            for diagnostic in stream.diagnostics:
-                self._logger.warning("VE capture %s: %s", self.request.request_id, diagnostic)
+            self._stream_close_diagnostics = tuple(stream.diagnostics)
             self._adapter_released = released and stream.handles_released
         if released:
             self._stream = None
 
     def _close_writer(self):
-        writer = self._writer
-        if writer is None or self._writer_close_attempted:
+        if ((self._writer is None and self._station_output is None)
+                or self._writer_close_attempted):
             return
         self._writer_close_attempted = True
-        if isinstance(writer, StreamingWavWriter):
-            writer.defer_finalization_log()
-        finalized = False
-        try:
-            self._diagnostic_milestone("close_wav_begin")
-            with self._diagnostic_phase("close_wav"):
+
+        def close_one(writer, path, label=""):
+            try:
                 writer.finalize()
-            finalized = True
-            self._writer_released = True
-            self._writer = None
+            except Exception as exc:
+                # Record uncertain release now. Report errors only after every
+                # writer had a chance to close, even if the sink blocks.
+                self._handles_released = False
+                self._unreleased_finalization_handles.append((path, writer))
+                self._fail("close_wav", f"{label}{exc}")
+                self._cleanup_errors.append(("WAV close failed for %s (%s)", (self.request.request_id, path), exc))
+                return False
             if isinstance(writer, StreamingWavWriter):
-                self._writer_finalization_log = writer
-        except Exception as exc:
-            # Writer boundary: normalize a failed close once; handle release is
-            # unknown and the worker owner must retire the process before reuse.
-            self._handles_released = False
-            self._unreleased_finalization_handles.append((self.request.path, writer))
-            self._logger.exception("WAV close failed for %s", self.request.request_id)
-            self._fail("close_wav", str(exc))
-            return
+                self._writer_finalization_logs.append(writer)
+            return True
+
+        self._diagnostic_milestone("close_wav_begin")
+        try:
+            with self._diagnostic_phase("close_wav"):
+                if self._station_output is not None:
+                    released = self._station_output.finalize(close_one)
+                    self._writer_released = released and not self._unreleased_finalization_handles
+                else:
+                    self._writer_released = close_one(self._writer, self.request.path)
+                    if self._writer_released:
+                        self._writer = None
         finally:
             self._diagnostic_milestone("close_wav_end", status=(
-                "success" if finalized else "error"), finalize_returned=finalized)
+                "success" if self._writer_released else "error"), finalize_returned=self._writer_released)
 
-    def _emit_writer_finalization_log(self):
-        writer = self._writer_finalization_log
-        self._writer_finalization_log = None
-        if writer is not None:
+    def _log_terminal_error(self, message, *args, exc):
+        try:
+            self._logger.error(message, *args, exc_info=exc)
+        except Exception as log_error:
+            # Terminal state is already latched. Preserve the primary error
+            # and include the failed delivery in the returned diagnosis.
+            with self._queue_lock:
+                stage, failure = self._failure
+                self._failure = (stage, f"{failure} (capture diagnostic failed: {log_error})")
+
+    def _emit_cleanup_diagnostics(self):
+        errors, self._cleanup_errors = self._cleanup_errors, []
+        for message, args, exc in errors:
+            self._log_terminal_error(message, *args, exc=exc)
+        diagnostics, self._stream_close_diagnostics = self._stream_close_diagnostics, ()
+        for diagnostic in diagnostics:
+            try:
+                self._logger.warning("VE capture %s: %s", self.request.request_id, diagnostic)
+            except Exception as exc:
+                # The diagnostic sink cannot change the stream's release proof.
+                self._warnings.append(f"VE stream cleanup diagnostic failed: {type(exc).__name__}: {exc}"[:512])
+        writers = self._writer_finalization_logs
+        self._writer_finalization_logs = []
+        for writer in writers:
             try:
                 writer.emit_finalization_log()
             except Exception as exc:
                 # External optional logger boundary, after proven physical close.
-                # Retain one bounded warning; never turn diagnostic failure into
-                # unknown file ownership or recursively write another log.
+                # Retain one bounded warning per writer without a recursive log.
                 self._warnings.append(f"WAV finalization log failed: {type(exc).__name__}: {exc}"[:512])
 
     def _publish_capture_slot(self):
@@ -708,6 +809,7 @@ class RecordingCapture:
             self._queued_frames = 0
 
     def _run(self):
+        capture_error = None
         try:
             if not self._cancelled.is_set():
                 self._open()
@@ -726,7 +828,7 @@ class RecordingCapture:
             self._diagnostic_milestone("final_drain_begin")
             try:
                 with self._diagnostic_phase("final_drain"):
-                    while self._writer is not None:
+                    while self._writer is not None or self._station_output is not None:
                         block = self._pop_block()
                         if block is None:
                             break
@@ -739,7 +841,7 @@ class RecordingCapture:
             self._publish_capture_slot()
             if self._target_sample_arrival is not None and self._file_closed_at is None:
                 self._file_closed_at = file_closed_at
-            self._emit_writer_finalization_log()
+            self._emit_cleanup_diagnostics()
             if (self._file_closed_at is not None and self._failure is None
                     and not self._cancelled.is_set()):
                 # Cancellation has a bounded worker shutdown deadline. Avoid
@@ -753,9 +855,8 @@ class RecordingCapture:
         except Exception as exc:
             # Capture thread's external device/file boundary. Unexpected backend,
             # writer and validator faults become one diagnostic failure, never success.
-            self._logger.exception("Capture %s failed during %s (%s)",
-                                   self.request.request_id, self._stage, self.request.path)
             self._fail(self._stage, str(exc))
+            capture_error = exc
         finally:
             self._stop_requested.set()
             self._close_stream()
@@ -763,22 +864,34 @@ class RecordingCapture:
                 self._discard_failed_blocks()
             self._close_writer()
             self._publish_capture_slot()
-            self._emit_writer_finalization_log()
+            self._emit_cleanup_diagnostics()
+            if capture_error is not None:
+                self._log_terminal_error("Capture %s failed during %s (%s)",
+                                         self.request.request_id, self._stage, self.request.path,
+                                         exc=capture_error)
             if self._failure is not None:
                 stage, message = self._failure
                 self.outcome = RecordingFailure(self.request.request_id, stage, self.request.path,
                                                 message, self.raw_frames, self.written_frames,
                                                 self._handles_released,
-                                                cleanup_paths=tuple(sorted(self._owned_temporary_paths)))
+                                                cleanup_paths=tuple(sorted(self._owned_temporary_paths)),
+                                                owned_stage_files=self.stage_file_evidence())
             elif self._cancelled.is_set():
                 self.outcome = RecordingCancelled(self.request.request_id, self.request.path,
                                                   self.raw_frames, self._final_frames,
                                                   handles_released=self._handles_released,
-                                                  cleanup_paths=tuple(sorted(self._owned_temporary_paths)))
+                                                  cleanup_paths=tuple(sorted(self._owned_temporary_paths)),
+                                                  owned_stage_files=self.stage_file_evidence())
             self.done.set()
             if self._consume_lane is not None:
                 self._consume_lane.close()
             self._diagnostic_tail_summary()
+
+    def stage_file_evidence(self, *, include_temporary=True):
+        identities = self._station_file_identities
+        if include_temporary:
+            identities = self._owned_temporary_identities | identities
+        return tuple((path, *identity) for path, identity in identities.items())
 
     def _finish_audio(self):
         req = self.request
@@ -792,76 +905,37 @@ class RecordingCapture:
         if self.raw_frames != req.target_samples:
             raise ValueError("recording ended before its target sample count")
         quality = None
-        if self._quality is not None:
-            self._stage = "quality"
-            quality = self._quality.finish(req.validation_thresholds.to_dict())
-            if quality.status == "failed":
-                self._logger.warning("audio_validation_failed %s", quality.detail)
-                raise ValueError(f"{quality.reason} {quality.detail}")
+        station_files = ()
+        files = ((req.path, len(req.channels), req.calibration_metadata, ""),)
+        if self._station_output is not None:
+            stations = self._station_output.files
+            station_files = tuple(station.descriptor for station in stations)
+            files = tuple(
+                (station.descriptor.path, len(station.columns), station.metadata, station.label)
+                for station in stations
+            )
+            for station in stations:
+                self._check_quality(station.quality, station.label)
+        elif self._quality is not None:
+            quality = self._check_quality(self._quality)
         self._stage = "read_wav"
-        with self._finalization_file(req.path) as source:
-            if (source.subtype != WAV_PCM24_SUBTYPE or source.samplerate != req.sample_rate
-                    or source.channels != len(req.channels) or len(source) != self.written_frames):
-                raise ValueError("saved WAV shape, rate or PCM24 format differs from request")
+        for path, channel_count, _, label in files:
+            self._check_wav(path, channel_count, label)
         if req.purpose == "main" and req.trim_samples >= self.raw_frames:
             self._warnings.append("startup trim skipped: trim is not smaller than recorded audio")
-        metadata_appended = False
         if self._cancelled.is_set():
             return
         metadata_started = time.monotonic()
+        metadata_appended = req.purpose == "main"
         if req.purpose == "main":
             self._stage = "metadata"
-            metadata = req.calibration_metadata.to_dict() if req.calibration_metadata is not None else None
-            metadata_result = self._metadata_appender(req.path, metadata, logger=self._logger)
-            if isinstance(metadata_result, WavCalibrationMetadataAppendResult):
-                self._owned_temporary_paths.update(metadata_result.cleanup_paths)
-                self._unreleased_finalization_handles.extend(metadata_result.retained_handles)
-                self._warnings.extend(metadata_result.close_errors)
-                self._warnings.extend(metadata_result.rollback_errors)
-                if (not metadata_result.handles_released
-                        or metadata_result.retained_handles):
-                    self._handles_released = False
-                    self._fail("metadata", metadata_result.primary_error or "; ".join(metadata_result.close_errors)
-                               or "WAV metadata file handles were not released")
+            for path, channel_count, metadata, label in files:
+                if self._cancelled.is_set():
                     return
-                if metadata_result.rollback_succeeded is False:
-                    self._fail("metadata", "; ".join(filter(None, (
-                        metadata_result.primary_error, *metadata_result.rollback_errors)))
-                        or "WAV metadata rollback could not be confirmed")
+                appended = self._append_metadata(path, channel_count, metadata, label)
+                if appended is None:
                     return
-                if self._is_ve and metadata_result.primary_error is not None:
-                    self._fail("metadata", metadata_result.primary_error)
-                    return
-                metadata_appended = metadata_result.appended
-            else:
-                # Compatibility for explicitly injected bool-only test appenders.
-                metadata_appended = bool(metadata_result)
-            if not metadata_appended:
-                if self._is_ve:
-                    raise ValueError("required VE WAV calibration metadata was not appended")
-                self._warnings.append("WAV calibration metadata was not appended")
-            # Optional metadata failure is a warning only while audio remains readable.
-            with self._finalization_file(req.path) as source:
-                if (len(source) != self.written_frames or source.channels != len(req.channels)
-                        or source.subtype != WAV_PCM24_SUBTYPE or source.samplerate != req.sample_rate):
-                    raise ValueError("WAV audio became invalid during metadata finalization")
-            if metadata_appended:
-                diagnostic = inspect_wav_calibration_metadata(req.path, logger=self._logger)
-                self._unreleased_finalization_handles.extend(diagnostic.retained_handles)
-                self._warnings.extend(diagnostic.close_errors)
-                if not diagnostic.handles_released or diagnostic.retained_handles:
-                    self._handles_released = False
-                    self._fail("metadata", diagnostic.primary_error or "; ".join(diagnostic.close_errors)
-                               or "WAV metadata reader handle was not released")
-                    return
-                if diagnostic.primary_error is not None:
-                    self._fail("metadata", diagnostic.primary_error)
-                    return
-                expected = normalize_wav_calibration_metadata(metadata)
-                if (diagnostic.status is not WavCalibrationMetadataReadStatus.VALID
-                        or expected is None or diagnostic.metadata != expected
-                        or (self._is_ve and diagnostic.declared_backend != VE_BACKEND)):
-                    raise ValueError("final WAV calibration metadata differs from frozen request")
+                metadata_appended = metadata_appended and appended
         # Metadata append/readback may outlast a cancellation request. Preserve
         # its ownership and error checks above, then avoid optional success I/O
         # while the worker is completing bounded cancellation cleanup.
@@ -904,7 +978,91 @@ class RecordingCapture:
                                        cleanup_paths=tuple(sorted(self._owned_temporary_paths)),
                                        digest_algorithm=(RECORDING_SAMPLE_DIGEST_ALGORITHM if self._sample_digest is not None else None),
                                        sample_digest=(self._sample_digest.hexdigest() if self._sample_digest is not None else None),
-                                       finalization_timing=timing, final_envelope=final_envelope)
+                                       finalization_timing=timing, final_envelope=final_envelope,
+                                       station_files=station_files,
+                                       owned_stage_files=self.stage_file_evidence())
+
+    def _check_quality(self, accumulator, label=""):
+        self._stage = "quality"
+        quality = accumulator.finish(self.request.validation_thresholds.to_dict())
+        if quality.status == "failed":
+            raise ValueError(f"{label}{quality.reason} {quality.detail}")
+        return quality
+
+    def _check_wav(self, path, channel_count, label, *, after_metadata=False):
+        with self._finalization_file(path) as source:
+            if (source.subtype != WAV_PCM24_SUBTYPE or source.samplerate != self.request.sample_rate
+                    or source.channels != channel_count or len(source) != self.written_frames
+                    or (self._station_output is not None and source.format != "WAV")):
+                message = ("WAV audio became invalid during metadata finalization" if after_metadata
+                           else "saved WAV shape, rate or PCM24 format differs from request")
+                raise ValueError(f"{label}{message}")
+
+    def _append_metadata(self, path, channel_count, snapshot, label):
+        metadata = snapshot.to_dict() if snapshot is not None else None
+        expected_identity = self._station_file_identities.get(path)
+        identity_options = {} if expected_identity is None else {"expected_file_identity": expected_identity}
+        append_options = (
+            identity_options if self._metadata_appender is append_owned_recording_calibration_metadata_result else {}
+        )
+        metadata_result = self._metadata_appender(path, metadata, logger=self._logger, **append_options)
+        if isinstance(metadata_result, WavCalibrationMetadataAppendResult):
+            self._owned_temporary_paths.update(metadata_result.cleanup_paths)
+            if self.request.station_group is not None:
+                for temporary, device, inode in metadata_result.cleanup_file_identities:
+                    if temporary in metadata_result.cleanup_paths:
+                        self._owned_temporary_identities[temporary] = (device, inode)
+            self._unreleased_finalization_handles.extend(metadata_result.retained_handles)
+            self._warnings.extend(metadata_result.close_errors)
+            self._warnings.extend(metadata_result.rollback_errors)
+            if (not metadata_result.handles_released
+                    or metadata_result.retained_handles):
+                self._handles_released = False
+                self._fail("metadata", label + (
+                    metadata_result.primary_error or "; ".join(metadata_result.close_errors)
+                    or "WAV metadata file handles were not released"))
+                return
+            if metadata_result.target_identity_verified is False:
+                self._fail("metadata", label + (
+                    metadata_result.primary_error or "WAV metadata target identity was not verified"))
+                return
+            if metadata_result.rollback_succeeded is False:
+                self._fail("metadata", label + (
+                    "; ".join(filter(None, (metadata_result.primary_error, *metadata_result.rollback_errors)))
+                    or "WAV metadata rollback could not be confirmed"))
+                return
+            if self._is_ve and metadata_result.primary_error is not None:
+                self._fail("metadata", label + metadata_result.primary_error)
+                return
+            metadata_appended = metadata_result.appended
+        else:
+            # Compatibility for explicitly injected bool-only test appenders.
+            metadata_appended = bool(metadata_result)
+        if not metadata_appended:
+            if self._is_ve:
+                raise ValueError(f"{label}required VE WAV calibration metadata was not appended")
+            self._warnings.append(f"{label}WAV calibration metadata was not appended")
+        # Optional metadata failure is a warning only while audio remains readable.
+        self._check_wav(path, channel_count, label, after_metadata=True)
+        if metadata_appended:
+            diagnostic = inspect_wav_calibration_metadata(path, logger=self._logger, **identity_options)
+            self._unreleased_finalization_handles.extend(diagnostic.retained_handles)
+            self._warnings.extend(diagnostic.close_errors)
+            if not diagnostic.handles_released or diagnostic.retained_handles:
+                self._handles_released = False
+                self._fail("metadata", label + (
+                    diagnostic.primary_error or "; ".join(diagnostic.close_errors)
+                    or "WAV metadata reader handle was not released"))
+                return
+            if diagnostic.primary_error is not None:
+                self._fail("metadata", label + diagnostic.primary_error)
+                return
+            expected = normalize_wav_calibration_metadata(metadata)
+            if (diagnostic.status is not WavCalibrationMetadataReadStatus.VALID
+                    or expected is None or diagnostic.metadata != expected
+                    or (self._is_ve and diagnostic.declared_backend != VE_BACKEND)):
+                raise ValueError(f"{label}final WAV calibration metadata differs from frozen request")
+        return metadata_appended
 
     def _close_finalization_handle(self, handle, path, close):
         try:
@@ -919,17 +1077,34 @@ class RecordingCapture:
 
     @contextmanager
     def _finalization_file(self, path, **kwargs):
-        source = sf.SoundFile(path, **kwargs)
+        expected_identity = self._station_file_identities.get(path)
+        if expected_identity is None:
+            with self._hold_finalization_handle(path, sf.SoundFile(path, **kwargs)) as source:
+                yield source
+            return
+
+        with self._hold_finalization_handle(path, open(path, "rb")) as raw:
+            verify_recording_wav_identity(raw, path, expected_identity)
+            virtual_io = SoundFileVirtualIO(raw)
+            try:
+                with self._hold_finalization_handle(path, sf.SoundFile(virtual_io, **kwargs)) as source:
+                    virtual_io.check_error()
+                    yield source
+            finally:
+                virtual_io.check_error()
+
+    @contextmanager
+    def _hold_finalization_handle(self, path, handle):
         try:
-            yield source
+            yield handle
         finally:
             original = sys.exception()
             try:
-                self._close_finalization_handle(source, path, source.close)
+                self._close_finalization_handle(handle, path, handle.close)
             except OSError as cleanup:
                 # The close helper already retains uncertain file ownership.
-                # For VE, preserve a prior processing error and attach cleanup
-                # diagnostics to its traceback rather than replacing its cause.
-                if not self._is_ve or original is None:
+                # Preserve earlier VE and grouped processing errors in the
+                # terminal outcome while retaining secondary close diagnostics.
+                if original is None or (not self._is_ve and path not in self._station_file_identities):
                     raise
                 original.add_note(str(cleanup))

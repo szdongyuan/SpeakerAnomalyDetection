@@ -1,12 +1,57 @@
 from unittest import mock
 import logging
+import sys
+import wave
 
 import numpy as np
 import soundfile as sf
 
 import pytest
 
+from base import streaming_file_writer
 from base.streaming_file_writer import StreamingWavWriter
+
+
+def test_reserved_writer_rejects_foreign_raw_handle_without_truncating(tmp_path, monkeypatch):
+    reserved = tmp_path / "reserved.wav"
+    reserved.touch()
+    info = reserved.stat()
+    foreign = tmp_path / "foreign.wav"
+    foreign.write_bytes(b"foreign contents")
+    opened = []
+
+    def substitute(path, mode):
+        assert path == str(reserved) and mode == "r+b"
+        stream = open(foreign, mode)
+        opened.append(stream)
+        return stream
+
+    monkeypatch.setattr(streaming_file_writer, "open", substitute, raising=False)
+    with pytest.raises(OSError, match="open recording stage file identity is unverified"):
+        StreamingWavWriter(str(reserved), reserved_identity=(info.st_dev, info.st_ino))
+
+    stream, = opened
+    assert stream.closed
+    assert foreign.read_bytes() == b"foreign contents"
+    assert reserved.read_bytes() == b""
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_reserved_writer_resets_contents_and_keeps_identity(tmp_path, monkeypatch, fallback):
+    if fallback:
+        monkeypatch.setitem(sys.modules, "soundfile", None)
+    reserved = tmp_path / "reserved.wav"
+    reserved.write_bytes(b"previous attempt" * 100)
+    info = reserved.stat()
+    identity = (info.st_dev, info.st_ino)
+
+    with StreamingWavWriter(str(reserved), reserved_identity=identity) as writer:
+        writer.write_chunk(np.array([.25, .5], dtype=np.float32))
+
+    current = reserved.stat()
+    assert writer.file_identity == (current.st_dev, current.st_ino) == identity
+    assert current.st_size < info.st_size
+    np.testing.assert_array_equal(sf.read(str(reserved), dtype="float32")[0], [.25, .5])
 
 
 @pytest.mark.parametrize("deferred", [False, True])
@@ -145,3 +190,57 @@ def test_pcm24_writer_rejects_channel_shape_mismatch(tmp_path, monkeypatch, fall
         with pytest.raises(ValueError, match="shape"):
             writer.write_chunk(np.zeros(shape, dtype=np.float32))
         assert writer.total_frames == 0
+
+
+@pytest.mark.parametrize("rollback_fails", [False, True])
+def test_wave_initialization_setup_failure_accounts_for_physical_file(tmp_path, monkeypatch, rollback_fails):
+    import base.streaming_file_writer as module
+
+    monkeypatch.setitem(sys.modules, "soundfile", None)
+    path = str(tmp_path / "setup.wav")
+    opened_files, wave_writers, rollback_attempts = [], [], []
+    real_open, real_wave_open = open, wave.open
+
+    def track_open(file, *args, **kwargs):
+        handle = real_open(file, *args, **kwargs)
+        if file == path:
+            opened_files.append((handle, handle.close))
+            if rollback_fails:
+                def fail_close():
+                    rollback_attempts.append(handle)
+                    raise OSError("injected wave rollback fault")
+
+                monkeypatch.setattr(handle, "close", fail_close)
+        return handle
+
+    def track_wave_open(*args, **kwargs):
+        writer = real_wave_open(*args, **kwargs)
+        wave_writers.append(writer)
+        return writer
+
+    def fail_rate(self, _rate):
+        raise wave.Error("injected wave initialization fault")
+
+    monkeypatch.setattr(module, "open", track_open, raising=False)
+    monkeypatch.setattr("builtins.open", track_open)
+    monkeypatch.setattr(wave, "open", track_wave_open)
+    monkeypatch.setattr(wave.Wave_write, "setframerate", fail_rate)
+    try:
+        with pytest.raises(OSError if rollback_fails else wave.Error, match="injected wave initialization fault") as failure:
+            StreamingWavWriter(path, channels=1)
+        (handle, _), = opened_files
+        if rollback_fails:
+            assert not handle.closed and rollback_attempts == [handle]
+            assert failure.value.handles == (handle,) and failure.value.path == path
+            assert "injected wave rollback fault" in str(failure.value)
+        else:
+            assert handle.closed
+    finally:
+        for writer in wave_writers:
+            try:
+                writer.close()
+            except (OSError, wave.Error):
+                # The broken baseline may still own an incomplete WAV.
+                pass
+        for _, close in opened_files:
+            close()

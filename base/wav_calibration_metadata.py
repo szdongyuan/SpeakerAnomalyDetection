@@ -85,6 +85,8 @@ class WavCalibrationMetadataAppendResult:
     primary_error: Optional[str] = None
     rollback_succeeded: Optional[bool] = None
     rollback_errors: tuple[str, ...] = ()
+    target_identity_verified: Optional[bool] = None
+    cleanup_file_identities: tuple[tuple[str, int, int], ...] = ()
 
 
 class _AppendFileOwnership:
@@ -229,12 +231,20 @@ def append_wav_calibration_metadata_result(path, metadata, logger=None) -> WavCa
     )
 
 
+def verify_recording_wav_identity(wav_file, path, expected_file_identity):
+    """Check the exact open file against the recorded device and inode."""
+    info = os.fstat(wav_file.fileno())
+    if (info.st_dev, info.st_ino) != expected_file_identity:
+        raise OSError(f"WAV target identity changed: {path}")
+
+
 def append_owned_recording_calibration_metadata_result(
-    path, metadata, logger=None,
+    path, metadata, logger=None, *, expected_file_identity=None,
 ) -> WavCalibrationMetadataAppendResult:
     """Append without audio copying to a caller-owned, unpublished new recording.
 
     The caller must own the path exclusively and have closed its WAV/PCM24 writer.
+    If provided, expected_file_identity identifies the writer's actual open file.
     Only its 16-byte integer PCM24 fmt header is eligible for this fast path.
     Existing/imported WAV editing must use append_wav_calibration_metadata_result.
     No file is deleted here. Uncertain rollback or close requires the owner to
@@ -245,6 +255,7 @@ def append_owned_recording_calibration_metadata_result(
     ownership = _AppendFileOwnership()
     rollback_succeeded = None
     rollback_errors = []
+    target_identity_verified = None
     appended = False
     try:
         normalized = normalize_wav_calibration_metadata(metadata)
@@ -259,6 +270,10 @@ def append_owned_recording_calibration_metadata_result(
         list_chunk = _build_chunk(LIST_ID, INFO_ID + _build_chunk(ICMT_ID, payload))
         target_path = os.path.abspath(os.fspath(path))
         with ownership.hold(open(target_path, "r+b")) as wav_file:
+            if expected_file_identity is not None:
+                target_identity_verified = False
+                verify_recording_wav_identity(wav_file, target_path, expected_file_identity)
+                target_identity_verified = True
             wav_file.seek(0, os.SEEK_END)
             original_size = wav_file.tell()
             wav_file.seek(0)
@@ -315,6 +330,7 @@ def append_owned_recording_calibration_metadata_result(
         primary_error=ownership.primary_error,
         rollback_succeeded=rollback_succeeded,
         rollback_errors=tuple(rollback_errors),
+        target_identity_verified=target_identity_verified,
     )
 
 
@@ -473,10 +489,12 @@ def _append_wav_calibration_metadata(path, metadata, logger, ownership) -> bool:
 def inspect_wav_calibration_metadata(
     path,
     logger=None,
+    *,
+    expected_file_identity=None,
 ) -> WavCalibrationMetadataReadResult:
     """Preserve read status/provenance and transfer any uncertain reader handle."""
     ownership = _AppendFileOwnership()
-    result = _inspect_wav_calibration_metadata(path, logger, ownership)
+    result = _inspect_wav_calibration_metadata(path, logger, ownership, expected_file_identity)
     for detail in ownership.close_errors:
         _log_metadata_issue(logger, "WAV metadata cleanup failed", detail)
     return replace(result, handles_released=ownership.handles_released,
@@ -485,10 +503,12 @@ def inspect_wav_calibration_metadata(
                    primary_error=ownership.primary_error)
 
 
-def _inspect_wav_calibration_metadata(path, logger, ownership):
+def _inspect_wav_calibration_metadata(path, logger, ownership, expected_file_identity):
     scan_state = _MetadataScanState()
     try:
         with ownership.hold(open(path, "rb"), path=path, use_context=True) as wav_file:
+            if expected_file_identity is not None:
+                verify_recording_wav_identity(wav_file, path, expected_file_identity)
             if not _is_riff_wave_file(wav_file):
                 _log_metadata_issue(logger, "Unsupported WAV file", "file is not a RIFF/WAVE file")
                 return WavCalibrationMetadataReadResult(

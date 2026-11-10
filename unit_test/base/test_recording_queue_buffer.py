@@ -38,9 +38,9 @@ def request(path, backend, *, target_samples=9, trim_samples=0, sample_rate=None
 
 
 @pytest.mark.parametrize("backend,sample_rate,frames,byte_count", [
-    ("ve", 44100, 88200, 1764000),
-    ("ve", 51200, 102400, 2048000),
-    ("soundcard", 100, 200, 1600),
+    ("ve", 44100, 308700, 6174000),
+    ("ve", 51200, 358400, 7168000),
+    ("soundcard", 100, 700, 5600),
 ])
 @pytest.mark.parametrize("options", [{}, {"queue_seconds": None}], ids=["omitted", "none"])
 def test_backend_default_capacity(tmp_path, backend, sample_rate, frames, byte_count, options):
@@ -49,9 +49,9 @@ def test_backend_default_capacity(tmp_path, backend, sample_rate, frames, byte_c
     assert (capture.queue_capacity_frames, capture.queue_capacity_bytes) == (frames, byte_count)
 
 
-def test_capacity_helper_keeps_two_second_default():
-    assert capture_queue_capacity(44100, 5) == (88200, 1764000)
-    assert capture_queue_capacity(100, 2, blocksize=300) == (300, 2400)
+def test_capacity_helper_uses_seven_second_default():
+    assert capture_queue_capacity(44100, 5) == (308700, 6174000)
+    assert capture_queue_capacity(100, 2, blocksize=800) == (800, 6400)
 
 
 @pytest.mark.parametrize("backend", ["ve", "soundcard"])
@@ -107,9 +107,9 @@ class ManualVeStream:
 
 
 @contextmanager
-def blocked_capture(req):
+def blocked_capture(req, **options):
     writer = ControlledWriter(pause=True)
-    capture = RecordingCapture(req, ve_stream_factory=ManualVeStream, writer_factory=writer)
+    capture = RecordingCapture(req, ve_stream_factory=ManualVeStream, writer_factory=writer, **options)
     capture.start()
     try:
         assert capture.started.wait(3)
@@ -157,14 +157,18 @@ def test_ve_recovers_one_second_of_backlog_with_exact_wav_content(tmp_path):
     np.testing.assert_array_equal(saved, quantize_pcm24(audio[trim:]))
 
 
-@pytest.mark.parametrize("sample_rate,byte_count", [(44100, 1764000), (51200, 2048000)])
-def test_ve_accepts_exact_two_second_capacity_then_fails_one_frame_over(
-        tmp_path, sample_rate, byte_count):
-    initial_frames, capacity = 2048, 2 * sample_rate
+@pytest.mark.parametrize("sample_rate,seconds,options,byte_count", [
+    (44100, 7, {}, 6174000),
+    (51200, 7, {}, 7168000),
+    (44100, 2, {"queue_seconds": 2}, 1764000),
+])
+def test_ve_accepts_exact_capacity_then_fails_one_frame_over(
+        tmp_path, sample_rate, seconds, options, byte_count):
+    initial_frames, capacity = 2048, seconds * sample_rate
     req = request(tmp_path / "overflow.wav", "ve", sample_rate=sample_rate,
                   target_samples=initial_frames + capacity + 1, trim_samples=0)
     block = np.zeros((2048, 5), dtype=np.float32)
-    with blocked_capture(req) as (capture, stream, writer):
+    with blocked_capture(req, **options) as (capture, stream, writer):
         stream.feed(block)
         assert writer.entered.wait(3)
         assert capture.queued_frames == 0

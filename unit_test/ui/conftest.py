@@ -37,3 +37,25 @@ def _close_test_windows(windows):
         window.close()
         window.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+
+@pytest.fixture
+def main_ui_font(qt_app):
+    """Load the configured main UI font for offscreen geometry and paint tests."""
+    from pathlib import Path
+    from PyQt5.QtGui import QFontDatabase
+    from consts.ui_style_const import MAIN_UI_SMALL_FONT_FAMILY_NAME
+
+    if MAIN_UI_SMALL_FONT_FAMILY_NAME in QFontDatabase().families():
+        yield
+        return
+    font_path = Path('C:/Windows/Fonts/simsun.ttc')
+    if not font_path.is_file():
+        pytest.skip(f'{MAIN_UI_SMALL_FONT_FAMILY_NAME} is required for the tick layout regression')
+    font_id = QFontDatabase.addApplicationFont(str(font_path))
+    assert font_id >= 0
+    assert MAIN_UI_SMALL_FONT_FAMILY_NAME in QFontDatabase().families()
+    try:
+        yield
+    finally:
+        QFontDatabase.removeApplicationFont(font_id)

@@ -34,10 +34,16 @@ class VEDiscoveryBridge(QObject):
     def refresh(self):
         return self.start()
 
+    @property
+    def pending(self):
+        return self._generation is not None
+
     def cancel(self):
+        was_pending = self.pending
         self._generation = None
         if self.service is not None:
             self.service.cancel()
+        return was_pending
 
     def close(self):
         if self._closed:
@@ -49,7 +55,8 @@ class VEDiscoveryBridge(QObject):
 
     @pyqtSlot(object)
     def _deliver(self, event):
-        if not self._closed and event.generation == self._generation:
+        if not self._closed and self.pending and event.generation == self._generation:
+            self._generation = None
             self.result_ready.emit(event)
 
 

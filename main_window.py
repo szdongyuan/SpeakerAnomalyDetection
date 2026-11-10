@@ -6,7 +6,7 @@ if __name__ == "__main__":
     from multiprocessing import freeze_support
     freeze_support()
 
-from PyQt5.QtCore import Qt, QPoint, QUrl
+from PyQt5.QtCore import Qt, QPoint, QUrl, pyqtSignal
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QDesktopServices
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
 from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox
@@ -16,6 +16,7 @@ from base.db_manager import DataSave
 from base.hardware_selection import restore_or_default
 from base.motor_workbench_config import MotorWorkbenchConfigRepository
 from base.sound_device_manager import SoundDeviceManager
+from base.workbench_recording_protocol import WorkbenchRecordingCompletion
 from consts import ui_style_const
 from consts.model_consts import DATABASE_PATH
 from consts.running_consts import DEFAULT_DIR
@@ -25,12 +26,14 @@ from ui.hardware_window import open_hardware_selection_window
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
 from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
-from ui.sequence.motor_workbench_controller import MotorWorkbenchController
+from ui.sequence.motor_workbench_controller import MotorWorkbenchController, WorkbenchRecordingPorts
 from ui.sequence.sequence_widget import SequenceWindow
 from ui.vkinging_presentation import device_display_name, ve_failure_text
 
 
 class MainWindow(QMainWindow):
+    workbench_analysis_input_ready = pyqtSignal(object)
+    workbench_recording_completed = pyqtSignal(WorkbenchRecordingCompletion)
 
     def __init__(self, *, ve_prewarm_lifetime=None, recording_bridge=None,
                  raw_audio_csv_bridge=None,
@@ -52,9 +55,21 @@ class MainWindow(QMainWindow):
         self.default_logger = LogManager.set_log_handler("core")
         self.ve_prewarm_lifetime = ve_prewarm_lifetime
         if recording_bridge is None:
-            from base.recording_service import RecordingService
-            from ui.recording_service_bridge import RecordingServiceBridge
-            recording_bridge = RecordingServiceBridge(RecordingService(), self)
+            recording_bridge = getattr(app, "_recording_bridge", None)
+            if recording_bridge is None or recording_bridge.service.closed.is_set():
+                from base.recording_service import RecordingService
+                from ui.recording_service_bridge import RecordingServiceBridge
+                recording_bridge = RecordingServiceBridge(RecordingService(), app)
+                app._recording_bridge = recording_bridge
+                app.aboutToQuit.connect(recording_bridge.shutdown)
+        elif recording_bridge is not getattr(app, "_recording_bridge", None):
+            from PyQt5.QtCore import Qt
+
+            try:
+                app.aboutToQuit.connect(recording_bridge.shutdown, Qt.UniqueConnection)
+            except TypeError as exc:
+                if str(exc) != "connection is not unique":
+                    raise
         self.recording_bridge = recording_bridge
         self._owns_raw_audio_csv_service = raw_audio_csv_bridge is None
         if raw_audio_csv_bridge is None:
@@ -71,7 +86,6 @@ class MainWindow(QMainWindow):
         self.hardware_selection_path = hardware_selection_path
         self._hardware_analysis_sync_pending = False
         self.ve_discovery = None
-        QApplication.instance().aboutToQuit.connect(self.recording_bridge.shutdown)
         # set up statusbar object data
         self.user_name = None
         self.access_lvl = None
@@ -81,12 +95,14 @@ class MainWindow(QMainWindow):
         # from current hardware falls back to OS default + In1 only
         # (PaError-9998 safety). Explicit VE choices remain unavailable until
         # asynchronous discovery and profile validation confirm the identity.
+        restored_soundcard = []
         (
             self.mic,
             _,
             self.mic_channels,
             _,
-        ) = restore_or_default(path=self.hardware_selection_path)
+        ) = restore_or_default(path=self.hardware_selection_path, on_soundcard_identity=restored_soundcard.append)
+        self._restored_soundcard_identity = restored_soundcard[0] if restored_soundcard else None
 
         # set mouse drog date
         self.resize_direction = None
@@ -132,11 +148,10 @@ class MainWindow(QMainWindow):
         QApplication.instance().aboutToQuit.connect(self.video_controller.shutdown)
 
         self.init_ui()
-        # Discovery starts only after sequence_window exists. Constructor-time
-        # restores deliberately retain unavailable VE choices without probing.
-        self._init_ve_hardware_runtime()
+        if self.ve_discovery is None:
+            self._init_ve_hardware_runtime()
 
-    def _init_ve_hardware_runtime(self):
+    def _init_ve_hardware_runtime(self, *, prepare_workbench=False):
         from PyQt5.QtCore import QTimer
         from ui.vkinging_hardware_controls import VEDiscoveryBridge
         self.sequence_window.ve_profile_store = self.ve_profile_store
@@ -148,8 +163,46 @@ class MainWindow(QMainWindow):
         self._hardware_busy_timer.setInterval(100)
         self._hardware_busy_timer.timeout.connect(self._update_hardware_busy_state)
         self._hardware_busy_timer.start()
-        if (self.mic or {}).get("backend") == "vkinging":
+        is_ve = (self.mic or {}).get("backend") == "vkinging"
+        if prepare_workbench:
+            from ui.workbench_recording_device import WorkbenchRecordingDevice
+
+            self.workbench_recording_device = WorkbenchRecordingDevice(
+                self, bridge=self.recording_bridge, lifetime=self.ve_prewarm_lifetime,
+                load_ve_profile=lambda device: self.ve_profile_store.load(device, self.ve_calibration_store),
+                prewarm_ve=self._try_start_ve_prewarm, rediscover_ve=self.ve_discovery.start,
+                logger=self.default_logger)
+            self._bind_workbench_recording()
+            if self.recording_bridge.ensure_resident() == "closing":
+                self.workbench_recording_device.close()
+                return
+            if is_ve:
+                self.workbench_recording_device.select_ve()
+            else:
+                self.workbench_recording_device.select_soundcard(self._restored_soundcard_identity)
+        if is_ve:
             self.ve_discovery.start()
+
+    def _bind_workbench_recording(self):
+        controller = self.workbench_controller
+        sequence = self.sequence_window
+        device = self.workbench_recording_device
+        controller.bind_recording(WorkbenchRecordingPorts(
+            bridge=self.recording_bridge, device=device,
+            hardware_available=lambda snapshot: (
+                self.ve_prewarm_lifetime.admission_for(snapshot.ve_signature) == "allowed"
+                and not self._hardware_busy()
+            ),
+            set_button_state=sequence.set_workbench_recording_state,
+            notify_error=lambda detail: QMessageBox.warning(self, "工作台录制", detail),
+            completed=self.workbench_recording_completed.emit,
+            notify_cleanup_error=lambda detail: self.statusBar().showMessage(detail),
+            is_closing=lambda: getattr(self, "_closing", False),
+            ve_calibration_store=self.ve_calibration_store,
+        ))
+        controller.bind_analysis_input(self.workbench_analysis_input_ready.emit)
+        sequence.player_btn.clicked.connect(controller.start_recording)
+        device.changed.connect(controller.refresh_recording_state)
 
     def _hardware_busy(self):
         bridge = getattr(self, "recording_bridge", None)
@@ -232,7 +285,7 @@ class MainWindow(QMainWindow):
             refresh_recording()
         self._update_hardware_busy_state()
 
-    def _try_start_ve_prewarm(self, device, channels, source):
+    def _try_start_ve_prewarm(self, device, channels, source, *, request=None):
         """Validate and atomically consume the process's one prewarm chance."""
         from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
         if (device or {}).get("backend") != "vkinging":
@@ -243,23 +296,23 @@ class MainWindow(QMainWindow):
         from base.recording_process_protocol import VePrewarmRequest
 
         token = f"ve-selection-{uuid4().hex}"
-        warmup_id = f"ve-prewarm-{uuid4().hex}"
-        try:
-            device = SequenceWidgetConfigOpsMixin._current_ve_recording_device(
-                self.sequence_window, device)
-            request = VePrewarmRequest.create(
-                warmup_id, device, channels, device["input_config"]["sample_rate"], attempt=1)
-        except (TypeError, ValueError, OSError) as exc:
-            self.default_logger.error(
-                "VE prewarm configuration failed machine_id=%s: %s",
-                device.get("machine_id"), exc)
-            self._show_ve_prewarm_status(ve_failure_text("configuration"))
-            return "invalid"
+        if request is None:
+            try:
+                device = SequenceWidgetConfigOpsMixin._current_ve_recording_device(
+                    self.sequence_window, device)
+                request = VePrewarmRequest.create(
+                    f"ve-prewarm-{uuid4().hex}", device, channels, device["input_config"]["sample_rate"], attempt=1)
+            except (TypeError, ValueError, OSError) as exc:
+                self.default_logger.error(
+                    "VE prewarm configuration failed machine_id=%s: %s",
+                    device.get("machine_id"), exc)
+                self._show_ve_prewarm_status(ve_failure_text("configuration"))
+                return "invalid"
         signature = request.signature
         if not self.ve_prewarm_lifetime.claim(token, signature):
             return "consumed"
 
-        context = (token, warmup_id, signature)
+        context = (token, request.warmup_id, signature)
         self._ve_prewarm_context = context
         self._refresh_ve_admission_controls()
         if self._hardware_busy():
@@ -347,9 +400,12 @@ class MainWindow(QMainWindow):
 
         # Shutdown terminals still consume the opportunity, but must never
         # mutate visible UI or raise a modal while the window is closing.
-        if (getattr(self, "_recording_close_requested", False)
-                or self._ve_prewarm_signature(
-                    self.mic, self.mic_channels) != signature):
+        if getattr(self, "_closing", False) or getattr(self, "_recording_close_requested", False):
+            return
+        workbench_device = getattr(self, "workbench_recording_device", None)
+        current_signature = (workbench_device.ve_signature if workbench_device is not None
+                             else self._ve_prewarm_signature(self.mic, self.mic_channels))
+        if current_signature != signature:
             return
         if completion.success:
             self.statusBar().clearMessage()
@@ -385,6 +441,10 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "VE 资源回收", message)
 
     def _update_hardware_busy_state(self):
+        workbench_device = getattr(self, "workbench_recording_device", None)
+        if workbench_device is not None:
+            workbench_device.refresh()
+            self.workbench_controller.refresh_recording_state()
         privileged = self.access_lvl in ("Engineer", "Admin")
         self.hardware_action_selection.setEnabled(
             self._hardware_selection_admission_available() and privileged)
@@ -392,12 +452,12 @@ class MainWindow(QMainWindow):
             self._calibration_admission_available() and privileged)
 
     def _on_ve_discovery_result(self, event):
-        if (self.mic or {}).get("backend") != "vkinging":
+        if getattr(self, "_closing", False) or (self.mic or {}).get("backend") != "vkinging":
             return
         from base.hardware_selection import resolve_ve_input
         diagnostic = "; ".join(event.result.diagnostics)
-        # Physical availability survives an invalid queue or unreadable fallback
-        # profile. Prewarm/admission resolve the queue and report its own error.
+        # Keep physical discovery independent from acquisition configuration.
+        # Workbench preparation loads the device profile, and legacy capture resolves its queue.
         self.mic = resolve_ve_input(self.mic, self.mic_channels,
             event.result.devices if event.handles_released else (),
             profile_store=self.ve_profile_store, calibration_store=self.ve_calibration_store,
@@ -413,8 +473,11 @@ class MainWindow(QMainWindow):
         self.sequence_window.mic_channels = list(self.mic_channels)
         self.update_statusbar()
         self.sequence_window.refresh_channel_windows()
-        self._try_start_ve_prewarm(
-            self.mic, self.mic_channels, "startup discovery")
+        workbench_device = getattr(self, "workbench_recording_device", None)
+        if workbench_device is None:
+            self._try_start_ve_prewarm(self.mic, self.mic_channels, "startup discovery")
+        else:
+            workbench_device.prepare_ve(self.mic, "startup discovery")
 
     def _close_ve_discovery(self):
         if self.ve_discovery is not None:
@@ -430,6 +493,7 @@ class MainWindow(QMainWindow):
         self.sequence_window.close()
         self.on_access_lvl_changed()
         self.show_statusbar_layout()
+        self._init_ve_hardware_runtime(prepare_workbench=True)
         self.showMaximized()
         self.on_login_window_init()
         self.sequence_window.refresh_channel_windows()
@@ -798,8 +862,13 @@ class MainWindow(QMainWindow):
 
     def on_login_window_init(self):
         # check the user info, if the user info is correct, then show the main window
+        workbench_device = getattr(self, "workbench_recording_device", None)
+        if workbench_device is not None:
+            workbench_device.set_login_ready(False)
         dlg = LoginWindow()
         access_lvl, user_name = dlg.on_exec()
+        if getattr(self, "_closing", False):
+            return
         if access_lvl is not None:
             self.access_lvl, self.user_name = access_lvl, user_name
             self.video_controller.start_preview()
@@ -807,6 +876,8 @@ class MainWindow(QMainWindow):
             self.sequence_window.show()
             self.update_statusbar()
         self.on_access_lvl_changed()
+        if workbench_device is not None:
+            workbench_device.set_login_ready(self.access_lvl is not None)
 
     @staticmethod
     def on_add_account_window_init():
@@ -829,7 +900,9 @@ class MainWindow(QMainWindow):
         previous_input = recording_input_selection_key(self.mic, self.mic_channels)
         old_was_ve = (self.mic or {}).get("backend") == "vkinging"
         old_ve_machine_id = (self.mic or {}).get("machine_id") if old_was_ve else None
-        old_ve_signature = self._ve_signature(self.mic, self.mic_channels)
+        workbench_device = getattr(self, "workbench_recording_device", None)
+        old_ve_signature = (workbench_device.ve_signature if workbench_device is not None
+                            else self._ve_signature(self.mic, self.mic_channels))
         # 将当前驱动/设备/通道作为初始值回填到硬件选择窗口
         driver_name = None
         try:
@@ -839,13 +912,14 @@ class MainWindow(QMainWindow):
             driver_name = None
 
         options = {}
+        canceled_discovery = False
         if hasattr(self, "ve_profile_store"):
             options = dict(profile_store=self.ve_profile_store,
                 calibration_store=self.ve_calibration_store,
                 discovery_factory=self.ve_discovery_factory,
                 selection_path=self.hardware_selection_path,
                 busy_check=lambda: not self._hardware_selection_admission_available())
-            self.ve_discovery.cancel()
+            canceled_discovery = self.ve_discovery.cancel()
         accepted, _, _, mic, mic_channels = open_hardware_selection_window(
             driver=driver_name,
             mic_device=self.mic,
@@ -856,11 +930,25 @@ class MainWindow(QMainWindow):
         # disk state, even when the JSON is currently missing/corrupt and
         # the in-memory state differs from what is on disk.
         if not accepted:
-            if (self.mic or {}).get("backend") == "vkinging" and not self.mic.get("available"):
+            needs_workbench_refresh = (canceled_discovery and workbench_device is not None
+                                       and workbench_device.snapshot is None)
+            if ((self.mic or {}).get("backend") == "vkinging"
+                    and (not self.mic.get("available") or needs_workbench_refresh)
+                    and not getattr(self.ve_discovery, "pending", False)):
                 self.ve_discovery.start()
             return
         # Both backends persist successfully before the dialog accepts.
+        # Worker recovery may have started a scan for the old selection inside the dialog.
+        discovery = getattr(self, "ve_discovery", None)
+        if getattr(discovery, "pending", False):
+            discovery.cancel()
         self.mic, self.mic_channels = mic, mic_channels
+        is_ve = (mic or {}).get("backend") == "vkinging"
+        if workbench_device is not None:
+            if is_ve:
+                workbench_device.select_ve()
+            else:
+                workbench_device.invalidate_selection()
         self.update_statusbar()
         self.sequence_window.mic = self.mic
         self.sequence_window.mic_channels = self.mic_channels
@@ -872,15 +960,18 @@ class MainWindow(QMainWindow):
             self._hardware_analysis_sync_pending = (
                 not self.sequence_window.synchronize_hardware_analysis_channels()
             )
-        new_ve_signature = self._ve_signature(self.mic, self.mic_channels)
         prewarm_owns_transition = False
-        if (self.mic or {}).get("backend") == "vkinging":
-            prewarm_status = self._try_start_ve_prewarm(
-                self.mic, self.mic_channels, "hardware confirmation")
+        if is_ve:
+            if workbench_device is None:
+                prewarm_status = self._try_start_ve_prewarm(self.mic, self.mic_channels, "hardware confirmation")
+            else:
+                prewarm_status = workbench_device.prepare_ve(self.mic, "hardware confirmation")
             prewarm_owns_transition = prewarm_status in (
                 "accepted", "skipped_busy", "closing")
+        new_ve_signature = (workbench_device.ve_signature if workbench_device is not None and is_ve
+                            else self._ve_signature(self.mic, self.mic_channels))
         if (old_was_ve and (
-                (self.mic or {}).get("backend") != "vkinging"
+                not is_ve
                 or old_ve_signature is None
                 or new_ve_signature is None
                 or old_ve_signature != new_ve_signature)
@@ -889,6 +980,9 @@ class MainWindow(QMainWindow):
                 new_ve_signature,
                 lambda status, diagnostics: self._on_ve_hardware_release_complete(
                     status, diagnostics, machine_id=old_ve_machine_id))
+        if workbench_device is not None and not is_ve:
+            accepted_mic = mic or {}
+            workbench_device.select_soundcard((accepted_mic.get("name"), accepted_mic.get("hostapi_name")))
 
     def on_calibration_window_init(self):
         if not self._calibration_admission_available():
@@ -977,6 +1071,9 @@ class MainWindow(QMainWindow):
             return
         if not getattr(self, "_closing", False):
             self._closing = True
+            workbench_device = getattr(self, "workbench_recording_device", None)
+            if workbench_device is not None:
+                workbench_device.close()
             begin_close = getattr(sequence, "_begin_raw_audio_csv_close", None)
             if callable(begin_close):
                 begin_close(application_exit=True)
