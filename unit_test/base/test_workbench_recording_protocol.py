@@ -11,7 +11,9 @@ from base.workbench_recording_protocol import (
     StationRecordingPlan,
     StationWav,
     StationWavChannel,
+    StationWavName,
     WorkbenchRecordingCompletion,
+    validate_station_wav_length,
 )
 from consts.recording_preview_consts import PREVIEW_TIME_MODE_CUMULATIVE
 from unit_test.base.vkinging_fakes import device_info, wav_metadata
@@ -89,6 +91,123 @@ def test_group_request_pickles_station_order_and_owns_its_inputs(grouped_request
         first.channels[0].wav_channel_index = 1
     with pytest.raises(TypeError):
         first.calibration_metadata["recorded_channels"][0]["physical_input_channel"] = 3
+
+
+def test_flat_group_freezes_safe_station_names_and_placement(grouped_request, tmp_path):
+    original = grouped_request.station_group
+    first_name = StationWavName("工位_高速_M-02_007", "SN_008")
+    second_name = StationWavName("工位_高速_m-02_007", "SN_008")
+    first, second = original.stations
+    stations = [replace(first, wav_name=first_name), replace(second, wav_name=second_name)]
+    final_path = tmp_path / "电机配置"
+    staging_path = final_path / ".take.staging"
+    group = replace(original, final_path=str(final_path), stations=stations, publish_into_parent=True)
+    request = replace(grouped_request, path=str(staging_path), station_group=group)
+
+    stations.reverse()
+    restored = pickle.loads(pickle.dumps(request))
+
+    assert restored == request
+    assert restored.path == str(staging_path)
+    restored_group = restored.station_group
+    assert restored_group.final_path == str(final_path)
+    assert restored_group.publish_into_parent is True
+    assert restored_group.allocate_final_path is False
+    assert tuple(station.station_id for station in restored_group.stations) == ("left", "right")
+    assert tuple(station.wav_name for station in restored_group.stations) == (first_name, second_name)
+    assert tuple(station.filename for station in restored_group.stations) == ("01-left.wav", "02-right.wav")
+    with pytest.raises(FrozenInstanceError):
+        restored_group.stations[0].wav_name.stem = "changed"
+
+    legacy = pickle.loads(pickle.dumps(grouped_request))
+    assert legacy == grouped_request
+    assert legacy.station_group.publish_into_parent is False
+    assert all(station.wav_name is None for station in legacy.station_group.stations)
+    assert os.path.dirname(legacy.path) == os.path.dirname(legacy.station_group.final_path)
+
+
+@pytest.mark.parametrize(("publish_into_parent", "stage_parts", "message"), [
+    (False, ("电机配置", ".take.staging"), "distinct siblings"),
+    (True, (".take.staging",), "direct child"),
+    (True, ("电机配置",), "direct child"),
+    (True, ("电机配置", "nested", ".take.staging"), "direct child"),
+])
+def test_flat_group_rejects_invalid_placement(
+    grouped_request, tmp_path, publish_into_parent, stage_parts, message,
+):
+    original = grouped_request.station_group
+    name = StationWavName("工位_高速_M-02_007")
+    group = replace(
+        original, final_path=str(tmp_path / "电机配置"), publish_into_parent=publish_into_parent,
+        stations=tuple(replace(station, wav_name=name) for station in original.stations),
+    )
+    with pytest.raises(ValueError, match=message):
+        replace(grouped_request, path=str(tmp_path.joinpath(*stage_parts)), station_group=group)
+
+
+@pytest.mark.parametrize(("mode_changes", "has_all_candidates", "message"), [
+    ({"publish_into_parent": True, "allocate_final_path": True}, True, "allocate_final_path"),
+    ({"publish_into_parent": True}, False, "WAV name candidate"),
+    ({"publish_into_parent": "yes"}, True, "publish_into_parent"),
+])
+def test_flat_group_rejects_invalid_publication_mode(
+    grouped_request, mode_changes, has_all_candidates, message,
+):
+    original = grouped_request.station_group
+    first, second = original.stations
+    name = StationWavName("工位_高速_M-02_007")
+    stations = (
+        replace(first, wav_name=name),
+        replace(second, wav_name=name if has_all_candidates else None),
+    )
+    with pytest.raises(ValueError, match=message):
+        replace(original, stations=stations, **mode_changes)
+
+
+def test_station_wav_name_keeps_sn_last_when_numbered():
+    stem = "2026-11-10_14-03-16-123_工位_A_高速_M-02_007"
+    with_sn = StationWavName(stem, "SN_008")
+    without_sn = StationWavName(stem)
+
+    assert with_sn.filename_for(1) == f"{stem}_SN_008.wav"
+    assert with_sn.filename_for(2) == f"{stem}_2_SN_008.wav"
+    assert without_sn.filename_for(2) == f"{stem}_2.wav"
+
+
+@pytest.mark.parametrize(("stem", "serial_number", "message"), [
+    ("", "", "stem"),
+    (7, "", "stem"),
+    ("station", None, "serial number"),
+    ("subdir/station", "", "plain WAV filename"),
+    ("station", r"SN\008", "plain WAV filename"),
+])
+def test_station_wav_name_rejects_invalid_candidate(stem, serial_number, message):
+    with pytest.raises(ValueError, match=message):
+        StationWavName(stem, serial_number)
+
+
+@pytest.mark.parametrize("number", [0, -1, True, 2.0])
+def test_station_wav_name_rejects_invalid_collision_number(number):
+    with pytest.raises(ValueError, match="collision number"):
+        StationWavName("station_007").filename_for(number)
+
+
+def test_station_wav_name_rejects_untyped_plan_candidate(grouped_request):
+    with pytest.raises(ValueError, match="WAV name candidate"):
+        replace(grouped_request.station_group.stations[0], wav_name="station_007")
+
+
+def test_station_wav_name_length_counts_utf16_code_units():
+    name = StationWavName("工😀_007", "SN_008")
+    basic = name.filename_for(1)
+    numbered = name.filename_for(2)
+
+    validate_station_wav_length(basic, max_units=18)
+    with pytest.raises(ValueError, match=r"20.*18"):
+        validate_station_wav_length(numbered, max_units=18)
+    validate_station_wav_length("A" * 251 + ".wav")
+    with pytest.raises(ValueError, match=r"256.*255"):
+        validate_station_wav_length("A" * 252 + ".wav")
 
 
 @pytest.mark.parametrize(("changes", "message"), [

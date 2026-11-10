@@ -150,6 +150,8 @@ def test_main_window_two_conditions_publish_eight_analysis_tasks(startup, tmp_pa
     startup.login(login)
     try:
         window = main_window.MainWindow(recording_bridge=bridge)
+        window.sequence_window.lineedit_type.setText("M-02")
+        window.sequence_window.toolsbar.sample_number_lineedit.setText("007")
         completions, inputs = [], []
         window.workbench_recording_completed.connect(completions.append)
 

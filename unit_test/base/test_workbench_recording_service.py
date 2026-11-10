@@ -1,6 +1,7 @@
 """Service publication boundaries exercised with a real spawned recording worker."""
 from dataclasses import replace
 import ctypes
+import errno
 import json
 from multiprocessing.connection import wait
 import os
@@ -18,7 +19,7 @@ from base.recording_process_protocol import (
     RecordingCancelled, VePrewarmRequest, WORKBENCH_FILES_ACK, WORKBENCH_FILES_OWNED,
 )
 from base.recording_service import RecordingCallbacks, RecordingService
-from base.workbench_recording_protocol import StationWav
+from base.workbench_recording_protocol import StationWav, StationWavName
 from consts.recording_result_consts import WORKBENCH_RETRY_CLEANUP_STAGE
 from unit_test.base.test_recording_service import eventually
 from unit_test.base.test_station_wav_capture import request as capture_request
@@ -87,6 +88,358 @@ def assert_published(request, events):
         info = sf.info(station.path)
         assert (info.frames, info.channels, info.samplerate, info.subtype) == (
             6, len(plan.channels), request.sample_rate, "PCM_24")
+
+
+@pytest.fixture
+def flat_request(tmp_path):
+    if os.name != "nt":
+        pytest.skip("Windows shared product recording")
+
+    def make(*, product=None, take="take", stems=("Station_A_007", "Station_B_007"),
+             backend="soundcard"):
+        request = grouped_request(tmp_path, backend)
+        product = tmp_path / "product" if product is None else product
+        stations = tuple(replace(station, wav_name=StationWavName(stem, "SN_008"))
+                         for station, stem in zip(request.station_group.stations, stems))
+        group = replace(request.station_group, final_path=str(product), stations=stations,
+                        publish_into_parent=True)
+        return replace(request, request_id=take, path=str(product / f".{take}.staging"),
+                       station_group=group)
+
+    return make
+
+
+def test_flat_group_publishes_actual_paths_and_releases_file_leases(
+        tmp_path, service_factory, flat_request):
+    service = service_factory(manual=True)
+    request = flat_request()
+    product, stage = Path(request.station_group.final_path), Path(request.path)
+    events, callbacks = collect(service)
+    started = threading.Event()
+    session = service.start(request, replace(callbacks, started=lambda _: started.set()))
+    eventually(lambda: started.is_set() or bool(events))
+    assert started.is_set()
+    plans = session.request.station_group.stations
+    assert [plan.filename for plan in plans] == ["Station_A_007_SN_008.wav", "Station_B_007_SN_008.wav"]
+    paths = [stage, *(root / plan.filename for root in (product, stage) for plan in plans)]
+    assert all(service.is_path_leased(path) for path in paths)
+    assert not service.is_path_leased(product)
+    assert not service.is_path_leased(product / "unrelated.wav")
+    assert not any((product / plan.filename).exists() for plan in plans)
+    for index in range(3):
+        (tmp_path / f"feed-{index}").touch()
+    eventually(lambda: len(events) == 2)
+    assert_published(session.request, events)
+    assert all(not service.is_path_leased(path) for path in paths)
+
+
+@pytest.mark.parametrize("namespace", ["direct", "volume-guid"])
+def test_flat_group_allocates_around_existing_files_and_leases(
+        tmp_path, service_factory, flat_request, namespace):
+    product = tmp_path / "product"
+    product.mkdir()
+    existing = product / "STRASSE_007_SN_008.wav"
+    existing.write_bytes(b"existing recording")
+    paused = ("Straße_007_2_SN_008", "straße_007_4_SN_008")
+    service = service_factory("persistent_ve_worker_dependencies", pause_finalizers=paused)
+    first = flat_request(product=product, stems=("Straße_007", "STRASSE_007"), backend="ve")
+    first_events, first_callbacks = collect(service)
+    first_session = service.start(first, first_callbacks)
+    try:
+        first_gate = tmp_path / f"finalizer-{paused[0]}-entered"
+        eventually(lambda: first_gate.exists() or bool(first_events))
+        assert first_gate.exists()
+        eventually(lambda: service.can_start_recording)
+        second_product = product if namespace == "direct" else windows_recording_alias(product, namespace)
+        second = flat_request(product=second_product, take="next", stems=("straße_007", "strasse_007"),
+                              backend="ve")
+        second_events, second_callbacks = collect(service)
+        second_session = service.start(second, second_callbacks)
+        second_gate = tmp_path / f"finalizer-{paused[1]}-entered"
+        eventually(lambda: second_gate.exists() or bool(second_events))
+        assert second_gate.exists()
+        first_names = [plan.filename for plan in first_session.request.station_group.stations]
+        second_names = [plan.filename for plan in second_session.request.station_group.stations]
+        assert first_names == ["Straße_007_2_SN_008.wav", "STRASSE_007_3_SN_008.wav"]
+        assert second_names == ["straße_007_4_SN_008.wav", "strasse_007_5_SN_008.wav"]
+        assert all(service.is_path_leased(product / name) for name in first_names + second_names)
+        assert not service.is_path_leased(product)
+    finally:
+        for stem in paused:
+            (tmp_path / f"release-finalizer-{stem}").touch()
+    eventually(lambda: len(first_events) == len(second_events) == 2)
+    assert_published(first_session.request, first_events)
+    assert_published(second_session.request, second_events)
+    assert existing.read_bytes() == b"existing recording"
+
+
+def test_flat_group_checks_aliased_parent_lease_before_creating_directories(
+        tmp_path, service_factory, flat_request):
+    service = service_factory("persistent_ve_worker_dependencies", pause_finalizers=("A",))
+    first = grouped_request(tmp_path, "ve")
+    parent = windows_recording_alias(Path(first.path), "volume-guid") / "nested"
+    second = flat_request(product=parent, backend="ve", take="second")
+    first_events, first_callbacks = collect(service)
+    service.start(first, first_callbacks)
+    try:
+        eventually((tmp_path / "finalizer-A-entered").exists)
+        eventually(lambda: service.can_start_recording)
+        second_events, second_callbacks = collect(service)
+        rejected = service.start(second, second_callbacks)
+        eventually(lambda: len(second_events) == 2)
+        assert second_events == [("failed", "stage"), ("released",)]
+        assert "still leased" in rejected.failure.message
+        assert not parent.exists()
+    finally:
+        (tmp_path / "release-finalizer-A").touch()
+    eventually(lambda: len(first_events) == 2)
+    assert_published(first, first_events)
+
+
+@pytest.mark.parametrize("failure", ["access", "length"])
+def test_flat_group_rejects_stage_setup_before_capture(
+        service_factory, flat_request, monkeypatch, failure):
+    service = service_factory()
+    stem = "x" * (255 - len("_SN_008.wav"))
+    request = flat_request(stems=(stem, stem))
+    events, callbacks = collect(service)
+    if failure == "access":
+        def deny_stage(path, identity):
+            raise PermissionError(errno.EACCES, "test denied stage creation", path)
+
+        monkeypatch.setattr(stage_filesystem, "create_stage_directory", deny_stage)
+        request = flat_request()
+    session = service.start(request, callbacks)
+    eventually(lambda: len(events) == 2)
+    assert events == [("failed", "stage"), ("released",)]
+    if failure == "access":
+        assert "test denied stage creation" in session.failure.message
+        assert repr(request.path) in session.failure.message
+    else:
+        assert "station 'B'" in session.failure.message
+        assert f"{stem}_2_SN_008.wav" in session.failure.message
+        assert "exceeds limit" in session.failure.message
+    assert session.worker_pid is None
+    assert not Path(request.path).exists()
+
+
+def test_flat_group_rejects_incomplete_stage_manifest_before_moving(
+        service_factory, flat_request, monkeypatch):
+    service = service_factory()
+    request = flat_request()
+    product, stage = Path(request.station_group.final_path), Path(request.path)
+    events, callbacks = collect(service)
+    listdir = os.listdir
+    publish = stage_filesystem.publish_verified_wav
+    moves = []
+
+    def report_incomplete_stage(path):
+        names = listdir(path)
+        return names[:-1] if Path(path) == stage else names
+
+    def observe_move(fd, parent, target):
+        moves.append(target)
+        publish(fd, parent, target)
+
+    monkeypatch.setattr(service_module.os, "listdir", report_incomplete_stage)
+    monkeypatch.setattr(stage_filesystem, "publish_verified_wav", observe_move)
+    session = service.start(request, callbacks)
+    eventually(lambda: len(events) == 2)
+    assert events == [("failed", "protocol"), ("released",)]
+    assert "does not match requested manifest" in session.failure.message
+    assert not moves
+    assert not list(product.iterdir()) and not service.is_path_leased(stage)
+
+
+@pytest.mark.parametrize("error", [errno.ENOSPC, errno.EACCES, errno.EEXIST])
+def test_flat_group_rolls_back_when_second_move_fails(
+        service_factory, flat_request, monkeypatch, error):
+    service = service_factory()
+    request = flat_request()
+    product = Path(request.station_group.final_path)
+    first, second = (product / plan.wav_name.filename_for(1) for plan in request.station_group.stations)
+    events, callbacks = collect(service)
+    publish = stage_filesystem.publish_verified_wav
+    moved = []
+
+    def fail_second_move(fd, parent, target):
+        if Path(target) == second:
+            raise OSError(error, "test failure moving second WAV", target)
+        publish(fd, parent, target)
+        moved.append(Path(target))
+
+    monkeypatch.setattr(stage_filesystem, "publish_verified_wav", fail_second_move)
+    session = service.start(request, callbacks)
+    eventually(lambda: len(events) == 2)
+    assert events == [("failed", "publish"), ("released",)]
+    assert moved == [first]
+    assert "test failure moving second WAV" in session.failure.message
+    assert repr(str(second)) in session.failure.message
+    assert not first.exists() and not second.exists() and not Path(request.path).exists()
+    assert not service.is_path_leased(first) and not service.is_path_leased(second)
+
+
+@pytest.mark.parametrize("outcome", ["cancel", "worker-death"])
+def test_flat_group_respects_cancel_and_worker_death(
+        service_factory, flat_request, monkeypatch, outcome):
+    service = service_factory()
+    request = flat_request()
+    events, callbacks = collect(service)
+    second = request.station_group.stations[1].wav_name.filename_for(1)
+    entered, proceed = threading.Event(), threading.Event()
+    publish = stage_filesystem.publish_verified_wav
+
+    def pause_after_second_move(fd, parent, target):
+        publish(fd, parent, target)
+        if Path(target).name == second:
+            entered.set()
+            assert proceed.wait(10)
+
+    monkeypatch.setattr(stage_filesystem, "publish_verified_wav", pause_after_second_move)
+    session = service.start(request, callbacks)
+    try:
+        eventually(lambda: entered.is_set() or bool(events))
+        assert entered.is_set()
+        if outcome == "cancel":
+            session.cancel()
+        else:
+            worker = service._worker
+            worker.process.terminate()
+            worker.process.join(5)
+            assert not worker.process.is_alive()
+    finally:
+        proceed.set()
+    eventually(lambda: len(events) == 2)
+    terminal = ("cancelled",) if outcome == "cancel" else ("failed", "worker")
+    assert events == [terminal, ("released",)]
+    assert list(Path(request.station_group.final_path).iterdir()) == []
+
+
+@pytest.mark.parametrize("cleanup", ["permission-error", "already-removed"])
+def test_flat_group_distinguishes_failed_and_completed_cleanup(
+        service_factory, flat_request, monkeypatch, cleanup):
+    service = service_factory()
+    request = flat_request()
+    product, stage = Path(request.station_group.final_path), Path(request.path)
+    first, second = (product / plan.wav_name.filename_for(1) for plan in request.station_group.stations)
+    product.mkdir()
+    unrelated = product / "keep.wav"
+    unrelated.write_bytes(b"unrelated recording")
+    events, callbacks = collect(service)
+    publish = stage_filesystem.publish_verified_wav
+    delete = stage_filesystem.delete_stage_file
+
+    def fail_second_move(fd, parent, target):
+        if Path(target) == second:
+            raise OSError(errno.ENOSPC, "test failure moving second WAV", target)
+        publish(fd, parent, target)
+
+    def inject_delete_outcome(directory, target, identity):
+        if Path(target) != first:
+            return delete(directory, target, identity)
+        if cleanup == "permission-error":
+            raise PermissionError(errno.EACCES, "test cleanup permission denied", target)
+        delete(directory, target, identity)
+        raise FileNotFoundError(errno.ENOENT, "test target already removed", target)
+
+    monkeypatch.setattr(stage_filesystem, "publish_verified_wav", fail_second_move)
+    monkeypatch.setattr(stage_filesystem, "delete_stage_file", inject_delete_outcome)
+    session = service.start(request, callbacks)
+    eventually(lambda: len(events) == 2)
+    assert events[0] == ("failed", "publish")
+    assert unrelated.read_bytes() == b"unrelated recording"
+    assert not stage.exists() and not second.exists()
+    assert not service.is_path_leased(product) and not service.is_path_leased(unrelated)
+    if cleanup == "permission-error":
+        assert events[1][0] == "release_failed"
+        assert str(first) in events[1][1]
+        assert "test cleanup permission denied" in events[1][1]
+        assert first.exists() and service.is_path_leased(first)
+        assert not session.released.is_set()
+    else:
+        assert events[1] == ("released",)
+        assert not first.exists() and not service.is_path_leased(first)
+        assert session.released.is_set()
+
+
+def test_flat_group_rolls_back_when_removing_empty_stage_fails(
+        service_factory, flat_request, monkeypatch):
+    service = service_factory()
+    request = flat_request()
+    product, stage = Path(request.station_group.final_path), Path(request.path)
+    final_paths = tuple(product / plan.wav_name.filename_for(1) for plan in request.station_group.stations)
+    product.mkdir()
+    existing = product / "keep.wav"
+    existing.write_bytes(b"existing recording")
+    events, callbacks = collect(service)
+    remove = stage_filesystem.delete_stage_directory
+    removal_attempts = []
+
+    def fail_once(directory, path, parent_identity):
+        removal_attempts.append(path)
+        if len(removal_attempts) == 1:
+            assert all(target.is_file() for target in final_paths)
+            assert not list(stage.iterdir())
+            raise OSError(errno.EACCES, "test failure removing empty stage", path)
+        remove(directory, path, parent_identity)
+
+    monkeypatch.setattr(stage_filesystem, "delete_stage_directory", fail_once)
+    session = service.start(request, callbacks)
+    eventually(lambda: len(events) == 2)
+    assert events == [("failed", "publish"), ("released",)]
+    assert removal_attempts == [request.path, request.path]
+    assert "test failure removing empty stage" in session.failure.message
+    assert not stage.exists() and not any(path.exists() for path in final_paths)
+    assert existing.read_bytes() == b"existing recording"
+    assert all(not service.is_path_leased(path) for path in (*final_paths, stage))
+
+
+@pytest.mark.parametrize("moved_first", [False, True])
+def test_flat_group_cleans_stage_when_product_handle_is_unavailable(
+        service_factory, flat_request, monkeypatch, moved_first):
+    service = service_factory()
+    request = flat_request()
+    product, stage = Path(request.station_group.final_path), Path(request.path)
+    first, second = (product / plan.wav_name.filename_for(1) for plan in request.station_group.stations)
+    product.mkdir()
+    existing = product / "keep.wav"
+    existing.write_bytes(b"existing recording")
+    events, callbacks = collect(service)
+    verified_parent = service._verified_flat_parent
+    publish = stage_filesystem.publish_verified_wav
+    open_attempts = []
+
+    def open_product(session):
+        open_attempts.append(session.request.station_group.final_path)
+        if not moved_first or len(open_attempts) == 2:
+            raise OSError(0, "test product sharing violation", str(product), 32)
+        return verified_parent(session)
+
+    def fail_second_move(fd, parent, target):
+        if Path(target) == second:
+            raise OSError(errno.ENOSPC, "test failure moving second WAV", target)
+        publish(fd, parent, target)
+
+    monkeypatch.setattr(service, "_verified_flat_parent", open_product)
+    monkeypatch.setattr(stage_filesystem, "publish_verified_wav", fail_second_move)
+    session = service.start(request, callbacks)
+    eventually(lambda: len(events) == 2)
+    assert events[0] == ("failed", "publish")
+    assert not stage.exists() and not second.exists()
+    assert existing.read_bytes() == b"existing recording"
+    if moved_first:
+        assert open_attempts == [str(product)] * 2
+        assert events[1][0] == "release_failed"
+        assert str(product) in events[1][1] and "test product sharing violation" in events[1][1]
+        assert first.exists() and service.is_path_leased(first)
+        assert not session.released.is_set()
+    else:
+        assert open_attempts == [str(product)]
+        assert "test product sharing violation" in session.failure.message
+        assert events[1] == ("released",)
+        assert not first.exists()
+        assert session.released.is_set()
+        assert all(not service.is_path_leased(path) for path in (first, second, stage))
 
 
 def test_spawn_publishes_all_stations_once_and_releases_all_paths(tmp_path, service_factory):
@@ -1604,6 +1957,49 @@ def test_stage_junction_substitution_before_child_dispatch_writes_nothing_outsid
     assert marker.read_bytes() == b"outside file"
     assert service.is_path_leased(stage)
     assert not Path(request.station_group.final_path).exists()
+
+
+def entry_identity(path):
+    info = path.stat()
+    return info.st_dev, info.st_ino
+
+
+def verified_directory(path, **options):
+    return stage_filesystem.verified_stage_directory(str(path), entry_identity(path), **options)
+
+
+@pytest.fixture
+def wav_publication(tmp_path):
+    if os.name != "nt":
+        pytest.skip("Windows verified WAV handles")
+    product = tmp_path / "product"
+    stage = product / ".take.staging"
+    stage.mkdir(parents=True)
+    source, target = stage / "A.wav", product / "A.wav"
+    source.write_bytes(b"owned station audio")
+    return product, stage, source, target
+
+
+def test_verified_wav_move_never_replaces_existing_target(wav_publication):
+    product, stage, source, target = wav_publication
+    identity = entry_identity(source)
+    target.write_bytes(b"existing station audio")
+
+    with (
+        verified_directory(product, pin=True) as parent,
+        verified_directory(stage, pin=True) as directory,
+        stage_filesystem.verified_wav_source(directory, source, identity) as fd,
+    ):
+        with pytest.raises(FileExistsError):
+            stage_filesystem.publish_verified_wav(fd, parent, target)
+        assert target.read_bytes() == b"existing station audio"
+        assert entry_identity(source) == identity
+
+        target.unlink()
+        stage_filesystem.publish_verified_wav(fd, parent, target)
+        assert not source.exists()
+        assert entry_identity(target) == identity
+    assert target.read_bytes() == b"owned station audio"
 
 
 def blocked_station_native_start(*, block_at, **options):
