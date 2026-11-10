@@ -15,6 +15,7 @@ from collections import deque
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, replace
 import ctypes
+from ctypes import wintypes
 import errno
 import logging
 import math
@@ -54,7 +55,9 @@ from base.streaming_file_writer import verify_wav_file
 from base.vkinging_capture_timing import VeCaptureDeadline
 from base.vkinging_input import ve_acquisition_signature
 from base.ve_startup_policy import VeStartupBudget
-from base.workbench_recording_protocol import StationWav, WorkbenchRecordingCompletion
+from base.workbench_recording_protocol import (
+    StationWav, WorkbenchRecordingCompletion, validate_station_wav_length,
+)
 from consts.recording_timeout_consts import (
     VE_CAPTURE_RELEASE_SLOW_SECONDS, VE_CAPTURE_RELEASE_TIMEOUT_SECONDS,
 )
@@ -96,6 +99,26 @@ def _require_absent(path):
     except FileNotFoundError:
         return
     raise FileExistsError(errno.EEXIST, "recording group path already exists", path)
+
+
+def _windows_component_limit(path):
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    volume_path = kernel.GetVolumePathNameW
+    volume_path.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+    volume_path.restype = wintypes.BOOL
+    volume_information = kernel.GetVolumeInformationW
+    volume_information.argtypes = (
+        wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD, wintypes.LPDWORD,
+        wintypes.LPDWORD, wintypes.LPDWORD, wintypes.LPWSTR, wintypes.DWORD,
+    )
+    volume_information.restype = wintypes.BOOL
+    root = ctypes.create_unicode_buffer(32768)
+    limit = wintypes.DWORD()
+    if not (volume_path(path, root, len(root))
+            and volume_information(root.value, None, 0, None, ctypes.byref(limit), None, None, 0)):
+        error = ctypes.get_last_error()
+        raise OSError(0, ctypes.FormatError(error).strip(), path, error)
+    return limit.value
 
 
 def _is_reparse_point(info):
@@ -229,6 +252,8 @@ class RecordingSession:
         self._preview_disabled = False
         self._temporary_dir = None
         self._stage_created = False
+        self._stage_removed = False
+        self._published_wavs = {}
         self._stage_identity = None
         self._stage_parent_identity = None
         self._stage_rollback_error = None
@@ -697,32 +722,76 @@ class RecordingService:
                 return replace(request, station_group=replace(group, final_path=candidate))
             number += 1
 
+    def _other_lease_paths(self, session):
+        """Snapshot live reservations while holding the lifecycle lock."""
+        return tuple((key, owner, owner._lease_paths[key]) for key, owner in self._leases.items()
+                     if owner is not session)
+
+    def _flat_leased_names(self, parent, leases, *, parent_identity=None, identities=None):
+        key = self._path_key(parent)
+        used = set()
+        for _, _, path in leases:
+            directory, filename = os.path.split(path)
+            if (self._path_key(directory) == key
+                    or (parent_identity is not None
+                        and self._directory_identity(Path(directory), identities) == parent_identity)):
+                used.add(filename.casefold())
+        return used
+
+    @staticmethod
+    def _allocate_flat_wavs(request, used_names, occupied, *, component_limit=None):
+        group = request.station_group
+        used_names.add(os.path.basename(request.path).casefold())
+        stations = []
+        for station in group.stations:
+            number = 1
+            while True:
+                filename = station.wav_name.filename_for(number)
+                if component_limit is not None:
+                    try:
+                        validate_station_wav_length(filename, component_limit)
+                    except ValueError as exc:
+                        raise ValueError(f"station {station.station_id!r} WAV {filename!r}: {exc}") from exc
+                candidate = os.path.join(group.final_path, filename)
+                if filename.casefold() not in used_names and not occupied(candidate):
+                    used_names.add(filename.casefold())
+                    stations.append(replace(station, filename=filename))
+                    break
+                number += 1
+        return replace(request, station_group=replace(group, stations=tuple(stations)))
+
     @classmethod
     def _canonical_workbench_request(cls, request):
         group = request.station_group
         stage, final = (os.path.normpath(path) for path in (request.path, group.final_path))
-        for path in (stage, final):
-            _require_absent(path)
+        _require_absent(stage)
+        if not group.publish_into_parent:
+            _require_absent(final)
         parent = os.path.realpath(os.path.dirname(stage))
-        final_parent = os.path.realpath(os.path.dirname(final))
+        final_parent = os.path.realpath(final if group.publish_into_parent else os.path.dirname(final))
         if cls._path_key(parent) != cls._path_key(final_parent):
             raise ValueError("recording group paths must share a resolved parent")
         stage = os.path.join(parent, os.path.basename(stage))
-        final = os.path.join(parent, os.path.basename(final))
+        final = parent if group.publish_into_parent else os.path.join(parent, os.path.basename(final))
         return replace(request, path=stage, station_group=replace(group, final_path=final))
 
     @staticmethod
     def _workbench_directories(request):
         group = request.station_group
-        return (request.path, group.final_path) if group is not None else ()
+        if group is None:
+            return ()
+        return (request.path,) if group.publish_into_parent else (request.path, group.final_path)
 
-    @classmethod
-    def _workbench_paths(cls, request):
+    @staticmethod
+    def _workbench_paths(request):
         group = request.station_group
-        for path in cls._workbench_directories(request):
-            yield path
+        if group is None:
+            return
+        for directory in (request.path, group.final_path):
+            if directory == request.path or not group.publish_into_parent:
+                yield directory
             for station in group.stations:
-                yield os.path.join(path, station.filename)
+                yield os.path.join(directory, station.filename)
 
     @staticmethod
     def _prepared_worker_matches(worker, generation):
@@ -745,7 +814,14 @@ class RecordingService:
                 )
             if group is not None:
                 allocation_base = group.final_path
-                if group.allocate_final_path:
+                if group.publish_into_parent:
+                    if self._lexical_path_lease(self._path_key(group.final_path)) is not None:
+                        raise RuntimeError("recording group parent is still leased")
+                    used_names = self._flat_leased_names(group.final_path, self._other_lease_paths(None))
+                    request = self._allocate_flat_wavs(
+                        request, used_names,
+                        lambda path: self._lexical_path_lease(self._path_key(path), enclosing=True))
+                elif group.allocate_final_path:
                     request = self._allocate_workbench_final(request)
                 paths = tuple(self._workbench_paths(request))
             else:
@@ -1546,8 +1622,74 @@ class RecordingService:
             raise OSError(f"recording stage identity changed: {path}")
         return path
 
+    @staticmethod
+    def _verified_flat_parent(session):
+        return stage_fs.verified_stage_directory(
+            session.request.station_group.final_path, session._stage_parent_identity, pin=True)
+
+    def _prepare_flat_workbench_stage(self, session):
+        request = self._canonical_workbench_request(session.request)
+        parent = request.station_group.final_path
+        stage = request.path
+        if self._find_path_lease(parent, ignore=session, include_legacy=True):
+            raise OSError(f"recording group parent is still leased: {parent}")
+        self._ensure_workbench_parent(parent)
+        info = os.lstat(parent)
+        with stage_fs.verified_stage_directory(parent, (info.st_dev, info.st_ino), pin=True) as directory:
+            info = os.fstat(directory)
+            session._stage_parent_identity = (info.st_dev, info.st_ino)
+            limit = _windows_component_limit(parent)
+            with os.scandir(parent) as entries:
+                existing = {entry.name.casefold() for entry in entries}
+            while True:
+                with self._lock:
+                    if session.cancel_requested or self._closing:
+                        return
+                    leases = self._other_lease_paths(session)
+                identities = {Path(parent): session._stage_parent_identity}
+                if (self._find_path_lease(parent, ignore=session, include_legacy=True, identities=identities)
+                        or self._find_path_lease(stage, ignore=session, include_legacy=True,
+                                                 identities=identities, enclosing=True)):
+                    raise OSError(f"recording group stage or parent is still leased: {stage}")
+                used_names = existing | self._flat_leased_names(
+                    parent, leases, parent_identity=session._stage_parent_identity, identities=identities)
+
+                def occupied(path):
+                    if self._find_path_lease(path, ignore=session, include_legacy=True,
+                                             identities=identities, enclosing=True):
+                        return True
+                    try:
+                        _require_absent(path)
+                    except FileExistsError:
+                        return True
+                    return False
+
+                allocated = self._allocate_flat_wavs(request, used_names, occupied, component_limit=limit)
+                paths = tuple(self._workbench_paths(allocated))
+                with self._lock:
+                    if session.cancel_requested or self._closing:
+                        return
+                    # Recheck the snapshot before swapping. Even a newly added
+                    # alias or case-folded reservation requires reallocation.
+                    if self._other_lease_paths(session) != leases:
+                        continue
+                    for key in session._lease_paths:
+                        del self._leases[key]
+                    session._lease_paths.clear()
+                    session._lease_directories.clear()
+                    self._reserve_paths(session, paths, directories=(stage,))
+                    session.request = allocated
+                    break
+            self._create_workbench_stage(session)
+            # Creating the stage may have assigned a new Windows short alias.
+            for station in allocated.station_group.stations:
+                _require_absent(os.path.join(parent, station.filename))
+
     def _prepare_workbench_stage(self, session):
         request = session.request
+        if request.station_group.publish_into_parent:
+            self._prepare_flat_workbench_stage(session)
+            return
         if request.station_group.allocate_final_path:
             request = self._allocate_workbench_final(
                 request, base=session._allocation_base, session=session, filesystem=True)
@@ -1577,17 +1719,27 @@ class RecordingService:
             if session.cancel_requested or self._closing:
                 return
         parent = os.path.dirname(request.path)
+        self._ensure_workbench_parent(parent)
+        final = request.station_group.final_path
+        _require_absent(final)
+        info = os.lstat(parent)
+        session._stage_parent_identity = (info.st_dev, info.st_ino)
+        self._create_workbench_stage(session)
+        # A new long name may acquire the proposed final name as its 8.3 alias.
+        _require_absent(final)
+
+    def _ensure_workbench_parent(self, parent):
         if self._path_key(os.path.realpath(parent)) != self._path_key(parent):
             raise OSError(f"recording group parent changed: {parent}")
         os.makedirs(parent, exist_ok=True)
         if self._path_key(os.path.realpath(parent, strict=True)) != self._path_key(parent):
             raise OSError(f"recording group parent changed: {parent}")
-        final = request.station_group.final_path
-        _require_absent(final)
-        info = os.lstat(parent)
-        session._stage_parent_identity = (info.st_dev, info.st_ino)
+
+    @staticmethod
+    def _create_workbench_stage(session):
         try:
-            session._stage_identity = stage_fs.create_stage_directory(request.path, session._stage_parent_identity)
+            session._stage_identity = stage_fs.create_stage_directory(
+                session.request.path, session._stage_parent_identity)
         except stage_fs.StageCreationError as exc:
             session._stage_created = True
             session._stage_identity = exc.identity
@@ -1595,8 +1747,6 @@ class RecordingService:
                 session._stage_rollback_error = str(exc)
             raise
         session._stage_created = True
-        # A new long name may acquire the proposed final name as its 8.3 alias.
-        _require_absent(final)
 
     def _reserve_station_wavs(self, session, stage):
         with stage_fs.stage_reservation_opener(stage, session._stage_identity) as opener:
@@ -2815,6 +2965,56 @@ class RecordingService:
                     raise OSError(f"invalid renamed recording stage: {exc}") from exc
             return True
 
+    def _flat_commit_blocker(self, worker, session):
+        """Check the lifecycle while holding the lock."""
+        if (session._terminal or self._session(session.request.request_id) is not session
+                or worker is not self._worker or worker.retiring
+                or session.generation != worker.generation):
+            return "stale"
+        if session.cancel_requested or self._closing:
+            return "cancelled"
+        if not worker.process.is_alive():
+            return "dead"
+        return None
+
+    def _commit_flat_workbench(self, worker, session, stage, completion):
+        with self._verified_flat_parent(session) as parent:
+            with stage_fs.verified_stage_directory(stage, session._stage_identity, delete=True, pin=True) as directory:
+                with self._lock:
+                    blocked = self._flat_commit_blocker(worker, session)
+                if blocked:
+                    return blocked
+                for station, final in zip(session.descriptor.station_files, completion.stations):
+                    identity = session._owned_stage_files[station.path]
+                    with stage_fs.verified_wav_source(directory, station.path, identity) as fd:
+                        stage_fs.publish_verified_wav(fd, parent, final.path)
+                        session._published_wavs[final.path] = identity
+                with self._measured("cleanup_tempdir", session, lifecycle=True):
+                    stage_fs.delete_stage_directory(directory, stage, session._stage_parent_identity)
+            session._stage_removed = True
+        with self._lock:
+            blocked = self._flat_commit_blocker(worker, session)
+            if blocked:
+                return blocked
+            session._terminal = True
+            session.state = "completed"
+            session._deadline = None
+        return "completed"
+
+    def _publish_flat_workbench(self, worker, session, stage, completion):
+        try:
+            outcome = self._commit_flat_workbench(worker, session, stage, completion)
+        except OSError as exc:
+            self._fail(session, "publish", f"recording WAV publication failed: {exc}")
+            return
+        if outcome == "cancelled":
+            self._cancelled(session)
+        elif outcome == "dead":
+            self._retire_terminal_fault(
+                worker, session, "recording worker exited before group publication", stage="worker")
+        elif outcome == "completed":
+            self._finish_workbench_commit(worker, session, completion)
+
     def _publish_workbench(self, worker, session):
         request, descriptor = session.request, session.descriptor
         group = request.station_group
@@ -2840,6 +3040,9 @@ class RecordingService:
             descriptor.final_frames, tuple(
                 StationWav(station.station_id, os.path.join(group.final_path, station.filename),
                            station.channels) for station in group.stations))
+        if group.publish_into_parent:
+            self._publish_flat_workbench(worker, session, stage, completion)
+            return
         checking_manifest = False
         try:
             with self._lock:
@@ -2955,6 +3158,29 @@ class RecordingService:
             with self._measured("cleanup_tempdir", session, lifecycle=True):
                 stage_fs.delete_stage_directory(directory, stage, session._stage_parent_identity)
 
+    def _cleanup_flat_workbench(self, session):
+        errors = []
+        if session._published_wavs:
+            try:
+                with self._verified_flat_parent(session) as directory:
+                    for path, identity in session._published_wavs.items():
+                        try:
+                            with self._measured("cleanup_unlink", session, lifecycle=True):
+                                stage_fs.delete_stage_file(directory, path, identity)
+                        except FileNotFoundError:
+                            continue
+                        except OSError as exc:
+                            errors.append(f"{path}: {exc}")
+            except OSError as exc:
+                errors.append(f"{session.request.station_group.final_path}: {exc}")
+        if not session._stage_removed:
+            try:
+                self._cleanup_workbench_stage(session)
+            except OSError as exc:
+                errors.append(f"{session.request.path}: {exc}")
+        if errors:
+            raise OSError("\n".join(errors))
+
     def _release(self, session):
         if (not session._terminal or not session._child_released or not session._reader_released
                 or session.released.is_set() or session._cleanup_failed):
@@ -2975,7 +3201,10 @@ class RecordingService:
         try:
             if grouped:
                 if session._stage_created:
-                    self._cleanup_workbench_stage(session)
+                    if session.request.station_group.publish_into_parent:
+                        self._cleanup_flat_workbench(session)
+                    else:
+                        self._cleanup_workbench_stage(session)
             else:
                 for path in session._cleanup_paths:
                     if self._leases.get(self._path_key(path)) is not session:

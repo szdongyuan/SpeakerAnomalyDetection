@@ -169,8 +169,7 @@ if os.name == "nt":
         return _open_relative_entry(directory, path, access, _FILE_OPEN, _FILE_NON_DIRECTORY_FILE,
                                     share=share)
 
-    def rename_stage_directory(directory, parent, target):
-        """Rename this directory handle to a new sibling without replacement."""
+    def _rename_entry(fd, parent, target):
         name = os.path.basename(target).encode("utf-16-le")
         offset = _RenameInformation.name.offset
         size = max(ctypes.sizeof(_RenameInformation), offset + len(name))
@@ -180,10 +179,14 @@ if os.name == "nt":
         info.length = len(name)
         ctypes.memmove(ctypes.addressof(buffer) + offset, name, len(name))
         io_status = _IoStatusBlock()
-        status = _set_nt_information(msvcrt.get_osfhandle(directory), ctypes.byref(io_status),
+        status = _set_nt_information(msvcrt.get_osfhandle(fd), ctypes.byref(io_status),
                                      buffer, size, _FILE_RENAME_INFORMATION)
         if status < 0:
             raise _windows_error(_status_to_winerror(status), target)
+
+    def rename_stage_directory(directory, parent, target):
+        """Rename this directory handle to a new sibling without replacement."""
+        _rename_entry(directory, parent, target)
 
     def _mark_delete(handle, path):
         delete = ctypes.c_ubyte(1)
@@ -200,6 +203,22 @@ if os.name == "nt":
                                      ctypes.byref(info), ctypes.sizeof(info)):
             raise _windows_error(ctypes.get_last_error(), path)
         return info.change_time
+
+    @contextmanager
+    def verified_wav_source(directory, path, identity):
+        """Hold the verified source so its move can be recorded before close."""
+        if identity is None:
+            raise OSError(f"missing recording WAV identity: {path}")
+        fd = _open_file_entry(directory, path, delete=True)
+        try:
+            _verify_entry(fd, path, is_directory=False, identity=identity)
+            yield fd
+        finally:
+            os.close(fd)
+
+    def publish_verified_wav(source_fd, parent, target):
+        """Rename the verified WAV handle relative to its destination directory."""
+        _rename_entry(source_fd, parent, target)
 
 else:
     def _open_directory(path, *, delete=False, pin=False):
@@ -275,13 +294,17 @@ def create_stage_directory(stage, parent_identity):
 def verified_stage_file_stamp(directory, path, identity):
     fd = _open_file_entry(directory, path)
     try:
-        info = _verify_entry(fd, path, is_directory=False, identity=identity)
-        # Windows st_ctime describes creation time. Native ChangeTime records
-        # changes even if the file's last-write timestamp has been restored.
-        change_time = _file_change_time(fd, path) if os.name == "nt" else info.st_ctime_ns
-        return info.st_size, info.st_mtime_ns, change_time
+        return _verified_file_stamp(fd, path, identity)
     finally:
         os.close(fd)
+
+
+def _verified_file_stamp(fd, path, identity):
+    info = _verify_entry(fd, path, is_directory=False, identity=identity)
+    # Windows st_ctime describes creation time. Native ChangeTime records
+    # changes even if the file's last-write timestamp has been restored.
+    change_time = _file_change_time(fd, path) if os.name == "nt" else info.st_ctime_ns
+    return info.st_size, info.st_mtime_ns, change_time
 
 
 def delete_stage_file(directory, path, identity):

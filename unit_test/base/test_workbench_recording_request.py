@@ -56,12 +56,100 @@ def recording_with(recording, **changes):
     return replace(recording, context=replace(recording.context, conditions=(condition,), **context_changes))
 
 
-def request_for(recording, stations, device, request_id, *, project_name=None, recorded_at=None, **kwargs):
+def request_for(recording, stations, device, request_id, *, project_name=None, recorded_at=None,
+                product_model="M-02", sample_number="007", **kwargs):
     from base.workbench_recording_request import build_recording_request
     context = replace(recording.context, stations=stations,
                       project_name=recording.context.project_id if project_name is None else project_name)
     return build_recording_request(replace(recording, context=context), context.conditions[0].condition_id,
-                                   device, request_id, recorded_at=recorded_at or datetime(2026, 11, 9), **kwargs)
+                                   device, request_id, recorded_at=recorded_at or datetime(2026, 11, 9),
+                                   product_model=product_model, sample_number=sample_number, **kwargs)
+
+
+def test_flat_wav_name_uses_click_fields_and_reference_sanitizer(recording_config):
+    recording, stations, device = recording_config
+    recording = recording_with(recording, condition_name="3000 rpm")
+    first, second = stations
+    stations = (replace(first, station_name="工位 A/B"), replace(second, station_name="工位 A:B"))
+    request = request_for(
+        recording, stations, device, "take-1", project_name="产品 配置",
+        recorded_at=datetime(2026, 11, 10, 14, 3, 16, 123999), serial_number="SN:008?",
+        ve_calibration_store=ChangingCalibrationStore(),
+    )
+    group = request.station_group
+    assert Path(group.final_path) == Path(recording.context.result_root_directory) / "产品 配置"
+    assert Path(request.path).parent == Path(group.final_path)
+    assert group.publish_into_parent and not group.allocate_final_path
+    assert [station.filename for station in group.stations] == [
+        "2026-11-10_14-03-16-123_工位_A_B_3000_rpm_M-02_007_SN_008_.wav",
+        "2026-11-10_14-03-16-123_工位_A_B_3000_rpm_M-02_007_2_SN_008_.wav",
+    ]
+    assert group.stations[0].wav_name == group.stations[1].wav_name
+
+
+@pytest.mark.parametrize("serial_number", ["", " \t "])
+def test_flat_wav_name_preserves_internal_dots_and_replaces_each_invalid_character(recording_config, serial_number):
+    recording, stations, device = recording_config
+    first, second = stations
+    stations = (replace(first, station_name=" ..工.位\t\x01//A.. "), second)
+    recording = recording_with(recording, condition_name=" 低\t速 ")
+    request = request_for(
+        recording, stations, device, "take", sample_number=" .00.7:. ", serial_number=serial_number,
+        ve_calibration_store=ChangingCalibrationStore(),
+    )
+    assert request.station_group.stations[0].filename == "2026-11-09_00-00-00-000_工.位____A_低_速_M-02_00.7_.wav"
+
+
+@pytest.mark.parametrize(("field", "value", "diagnostic"), [
+    ("product_model", " \t ", "型号"),
+    ("product_model", "M_02", "型号"),
+    ("sample_number", " \t ", "样本编号"),
+    ("sample_number", " ... ", "样本编号"),
+    ("serial_number", " ... ", "S/N"),
+    ("station_name", " ... ", "工位.*的名称"),
+    ("condition_name", " ... ", "工况名称"),
+])
+def test_flat_wav_name_rejects_unusable_fields_before_calibration(recording_config, field, value, diagnostic):
+    from base.workbench_recording_request import WorkbenchRecordingRequestError
+
+    recording, stations, device = recording_config
+    calibration = ChangingCalibrationStore()
+    kwargs = {}
+    if field == "condition_name":
+        recording = recording_with(recording, condition_name=value)
+    elif field == "station_name":
+        stations = (replace(stations[0], station_name=value), stations[1])
+    else:
+        kwargs[field] = value
+    with pytest.raises(WorkbenchRecordingRequestError, match=diagnostic):
+        request_for(recording, stations, device, "take", ve_calibration_store=calibration, **kwargs)
+    assert calibration.reads == 0
+
+
+@pytest.mark.parametrize("field", ["sample_number", "serial_number"])
+def test_flat_wav_name_checks_utf16_component_length_before_calibration(recording_config, field):
+    from base.workbench_recording_request import WorkbenchRecordingRequestError
+
+    recording, stations, device = recording_config
+    calibration = ChangingCalibrationStore()
+    with pytest.raises(WorkbenchRecordingRequestError, match=r"工位.*WAV filename length \d+ exceeds limit 255"):
+        request_for(recording, stations, device, "take", ve_calibration_store=calibration, **{field: "🚗" * 120})
+    assert calibration.reads == 0
+
+
+def test_flat_wav_name_checks_length_after_numbering_duplicate_station(recording_config):
+    from base.workbench_recording_request import WorkbenchRecordingRequestError
+
+    recording, stations, device = recording_config
+    recording = recording_with(recording, condition_name="C")
+    first, second = stations
+    stations = (replace(first, station_name="A"), replace(second, station_name="a"))
+    # The unnumbered name uses exactly 255 UTF-16 units. The second needs "_2".
+    sample = "0" * (255 - len("2026-11-09_00-00-00-000_A_C_M-02_.wav"))
+    calibration = ChangingCalibrationStore()
+    with pytest.raises(WorkbenchRecordingRequestError, match=r"工位.*NUL.*WAV filename length 257 exceeds limit 255"):
+        request_for(recording, stations, device, "take", sample_number=sample, ve_calibration_store=calibration)
+    assert calibration.reads == 0
 
 
 def test_uses_device_rate_and_one_full_calibration_snapshot(recording_config, tmp_path, monkeypatch):
@@ -81,14 +169,15 @@ def test_uses_device_rate_and_one_full_calibration_snapshot(recording_config, tm
     assert request.validation_thresholds["min_peak"] == 0.7
     group = request.station_group
     assert group.prepared_generation == device.generation
-    assert Path(request.path).parent == Path(group.final_path).parent == Path(recording.context.result_root_directory) / "产品甲" / recording.context.conditions[0].condition_name
-    assert Path(group.final_path).name == "2026-11-09_13-14-15-123"
+    assert Path(request.path).parent == Path(group.final_path) == Path(recording.context.result_root_directory) / "产品甲"
     assert request.path != group.final_path
     assert not Path(request.path).parent.exists()
     first, second = group.stations
     assert (first.station_id, second.station_id) == ("../s:3", "NUL")
-    assert first.filename == stations[0].station_name + ".wav"
-    assert second.filename == stations[1].station_name + ".wav"
+    assert [plan.filename for plan in (first, second)] == [
+        "2026-11-09_13-14-15-123_工位三_工况_c2_M-02_007.wav",
+        "2026-11-09_13-14-15-123_工位一_工况_c2_M-02_007.wav",
+    ]
     assert [(c.physical_channel_index, c.wav_channel_index) for c in first.channels] == [(1, 0), (7, 1)]
     assert [(c.physical_channel_index, c.wav_channel_index) for c in second.channels] == [(7, 0)]
     assert calibration.reads == 1
@@ -117,8 +206,8 @@ def test_repeated_timestamp_has_unique_staging_and_product_root(recording_config
     )
     assert first.path != retry.path
     assert first.station_group.final_path == retry.station_group.final_path
-    assert Path(first.path).parent == Path(recording.context.result_root_directory) / "产品甲" / recording.context.conditions[0].condition_name
-    assert first.station_group.allocate_final_path is True
+    assert Path(first.path).parent == Path(recording.context.result_root_directory) / "产品甲"
+    assert first.station_group.publish_into_parent is True
     assert not (tmp_path / "default").exists()
 
 
@@ -134,16 +223,20 @@ def test_invalid_product_root_never_falls_back(recording_config, root):
 
 def test_windows_safe_names_and_case_insensitive_suffix_clashes(recording_config):
     recording, stations, device = recording_config
-    names = ["工位", "工位", "工位_2", "A", "a", "a_2", "x/y", "x:y", "NUL", "COM1.txt", "...", "尾部. "]
+    names = ["工位", "工位", "工位_2", "A", "a", "a_2", "x/y", "x:y", "NUL", "COM1.txt", "尾部. "]
     stations = tuple(replace(stations[0], station_id=str(index), station_name=name)
                      for index, name in enumerate(names))
     recording = recording_with(recording, condition_name="CON", applicable_station_ids=tuple(s.station_id for s in stations))
     request = request_for(recording, stations, device, "take", project_name="../产品:甲",
                                                ve_calibration_store=ChangingCalibrationStore())
-    assert Path(request.station_group.final_path).parent.parts[-2:] == ("_产品_甲", "_CON")
+    assert Path(request.station_group.final_path).name == "_产品_甲"
     assert [s.filename for s in request.station_group.stations] == [
-        "工位.wav", "工位_2.wav", "工位_2_2.wav", "A.wav", "a_2.wav", "a_2_2.wav",
-        "x_y.wav", "x_y_2.wav", "_NUL.wav", "_COM1.txt.wav", "工位_3.wav", "尾部.wav",
+        f"2026-11-09_00-00-00-000_{name}.wav" for name in [
+            "工位_CON_M-02_007", "工位_CON_M-02_007_2", "工位_2_CON_M-02_007",
+            "A_CON_M-02_007", "a_CON_M-02_007_2", "a_2_CON_M-02_007",
+            "x_y_CON_M-02_007", "x_y_CON_M-02_007_2", "NUL_CON_M-02_007",
+            "COM1.txt_CON_M-02_007", "尾部_CON_M-02_007",
+        ]
     ]
 
 

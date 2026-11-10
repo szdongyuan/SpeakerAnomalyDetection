@@ -31,6 +31,7 @@ class WorkbenchRecordingPorts:
     bridge: RecordingServiceBridge
     device: WorkbenchRecordingDevice
     hardware_available: Callable[[WorkbenchRecordingDeviceSnapshot], bool]
+    read_wav_identity: Callable[[], tuple[str, str, str]]
     set_button_state: Callable[[bool, str, bool], None]
     notify_error: Callable[[str], None]
     completed: Callable[[WorkbenchRecordingCompletion], None]
@@ -184,6 +185,7 @@ class MotorWorkbenchController:
         config = self._applied_config
         analysis_version = self._analysis_version
         condition = config.recording.context.conditions[self._condition_index]
+        product_model, sample_number, serial_number = ports.read_wav_identity()
         attempt = _InFlightRecording(
             uuid4().hex, self._configuration_revision, condition.condition_name,
             config.recording.context.project_name, recorded_at.date(),
@@ -193,7 +195,8 @@ class MotorWorkbenchController:
         try:
             request = build_recording_request(
                 config.recording, condition.condition_id, snapshot, attempt.request_id,
-                recorded_at=recorded_at,
+                recorded_at=recorded_at, product_model=product_model, sample_number=sample_number,
+                serial_number=serial_number,
                 preview_time_mode=config.ui.preview_time_modes.get(condition.test_queue),
                 ve_calibration_store=ports.ve_calibration_store,
             )

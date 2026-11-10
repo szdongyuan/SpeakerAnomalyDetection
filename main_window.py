@@ -200,6 +200,11 @@ class MainWindow(QMainWindow):
                 self.ve_prewarm_lifetime.admission_for(snapshot.ve_signature) == "allowed"
                 and not self._hardware_busy()
             ),
+            read_wav_identity=lambda: (
+                sequence.lineedit_type.text(),
+                sequence.toolsbar.sample_number_lineedit.text(),
+                sequence.lineedit_s_or_n.text() if sequence.barcode_scanner_box.isChecked() else "",
+            ),
             set_button_state=sequence.set_workbench_recording_state,
             notify_error=lambda detail: QMessageBox.warning(self, "工作台录制", detail),
             completed=self.workbench_recording_completed.emit,

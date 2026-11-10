@@ -36,6 +36,7 @@ def test_device_rate_and_fixed_streaming_from_loaded_recording(loaded, device):
     assert not hasattr(recording, "sample_rate") and not hasattr(recording, "use_streaming_recording")
     request = build_recording_request(
         recording, "c1", device, "take-1", recorded_at=datetime(2026, 11, 9, 13, 14, 15, 123999),
+        product_model="M-02", sample_number="007",
         ve_calibration_store=ChangingCalibrationStore(),
     )
     assert request.sample_rate == 48000
@@ -112,7 +113,8 @@ def test_recording_key_tracks_ordered_work_and_channel_mapping(loaded, change):
 def test_preview_mode_is_separate_ui_input_with_request_default(loaded, device):
     from base.workbench_recording_request import build_recording_request
 
-    kwargs = {"recorded_at": datetime(2026, 11, 9), "ve_calibration_store": ChangingCalibrationStore()}
+    kwargs = {"recorded_at": datetime(2026, 11, 9), "ve_calibration_store": ChangingCalibrationStore(),
+              "product_model": "M-02", "sample_number": "007"}
     default = build_recording_request(loaded.recording, "c1", device, "default", **kwargs)
     supplied = build_recording_request(
         loaded.recording, "c1", device, "supplied", **kwargs,
@@ -132,20 +134,26 @@ def test_readable_paths_collision_allocation_and_one_calibration_snapshot(loaded
     calibration = ChangingCalibrationStore()
     now = datetime(2026, 11, 9, 13, 14, 15, 123999)
     first, second = (
-        build_recording_request(recording, "c2", device, take, recorded_at=now, ve_calibration_store=calibration)
+        build_recording_request(
+            recording, "c2", device, take, recorded_at=now, ve_calibration_store=calibration,
+            product_model="M-02", sample_number="007",
+        )
         for take in ("take-1", "take-2")
     )
     assert calibration.reads == 2
     group = first.station_group
-    assert Path(group.final_path) == Path(context.result_root_directory) / "电机" / "工况2" / "2026-11-09_13-14-15-123"
+    assert Path(group.final_path) == Path(context.result_root_directory) / "电机"
     assert first.path != second.path
-    assert Path(first.path).parent == Path(group.final_path).parent
+    assert Path(first.path).parent == Path(group.final_path)
     assert Path(first.path).name.endswith("-take-1.staging")
     assert group.final_path == second.station_group.final_path
-    assert group.allocate_final_path is True
+    assert group.publish_into_parent is True
     assert group.prepared_generation == 3
     assert not Path(context.result_root_directory).exists()
-    assert [station.filename for station in group.stations] == ["工位.wav", "工位_2.wav"]
+    assert [station.filename for station in group.stations] == [
+        "2026-11-09_13-14-15-123_工位_工况2_M-02_007.wav",
+        "2026-11-09_13-14-15-123_工位_工况2_M-02_007_2.wav",
+    ]
     assert [[(c.physical_channel_index, c.wav_channel_index) for c in station.channels]
             for station in group.stations] == [[(3, 0), (2, 1)], [(7, 0), (6, 1)]]
     metadata = group.stations[1].calibration_metadata.to_dict()
@@ -161,6 +169,7 @@ def test_trim_and_disabled_quality_keep_existing_resolver_semantics(loaded, devi
     recording = with_parameters(loaded.recording, startup_trim_ms=trim,
                                 audio_validation={"enabled": False, "min_peak": "bad"})
     request = build_recording_request(recording, "c1", device, "take", recorded_at=datetime(2026, 11, 9),
+                                      product_model="M-02", sample_number="007",
                                       ve_calibration_store=ChangingCalibrationStore())
     assert request.trim_samples == expected
     assert request.target_samples == 120000 + expected
@@ -182,6 +191,7 @@ def test_invalid_quality_is_comparable_but_diagnosed_on_start(loaded, device, th
     calibration = ChangingCalibrationStore()
     with pytest.raises(WorkbenchRecordingRequestError, match=r"audio_validation\.min_peak") as caught:
         build_recording_request(recording, "c1", device, "take", recorded_at=datetime(2026, 11, 9),
+                                product_model="M-02", sample_number="007",
                                 ve_calibration_store=calibration)
     assert "motor" in str(caught.value) and "工况1" in str(caught.value)
     assert calibration.reads == 0
@@ -212,6 +222,7 @@ def test_request_boundary_diagnoses_identity_mapping_and_paths(loaded, device, p
         build_recording_request(
             replace(recording, context=context), "missing" if problem == "unknown" else "c1", device,
             "../unsafe" if problem == "id" else "take", recorded_at=datetime(2026, 11, 9),
+            product_model="M-02", sample_number="007",
             ve_calibration_store=calibration,
         )
     assert "motor" in str(caught.value)

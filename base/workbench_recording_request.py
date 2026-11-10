@@ -8,12 +8,16 @@ from collections.abc import Mapping
 from datetime import datetime
 from pathlib import PureWindowsPath
 
+from base.file_ops import FileOps
 from base.play_and_record import resolve_startup_trim_samples
+from base.product_model_validation import validate_product_model
 from base.recording_calibration_snapshot import build_recording_wav_calibration_metadata
 from base.recording_process_protocol import RecordingRequest
 from base.recording_settings import resolve_audio_validation_thresholds, resolve_startup_trim_ms
 from base.soundcard_calibration_manager import MicCalibrationError
-from base.workbench_recording_protocol import StationRecordingGroup, StationRecordingPlan, StationWavChannel
+from base.workbench_recording_protocol import (
+    StationRecordingGroup, StationRecordingPlan, StationWavChannel, StationWavName, validate_station_wav_length,
+)
 
 
 class WorkbenchRecordingRequestError(ValueError):
@@ -132,8 +136,47 @@ def _calibration_snapshot(device, channels, ve_calibration_store, condition_labe
         return None
 
 
+def _required_wav_component(value, label):
+    if not isinstance(value, str):
+        raise ValueError(f"{label}必须为文本。")
+    component = FileOps.sanitize_file_name_component(value)
+    if not component:
+        raise ValueError(f"{label}为空或无法用于 WAV 文件名，请修正。")
+    return component
+
+
+def _station_wav_names(stations, timestamp, condition_name, *, product_model, sample_number, serial_number):
+    if not isinstance(product_model, str):
+        raise ValueError("型号必须为文本。")
+    model = _required_wav_component(validate_product_model(product_model), "型号")
+    sample = _required_wav_component(sample_number, "样本编号")
+    if not isinstance(serial_number, str):
+        raise ValueError("S/N 必须为文本。")
+    serial = FileOps.sanitize_file_name_component(serial_number)
+    if serial_number.strip() and not serial:
+        raise ValueError("S/N 无法用于 WAV 文件名，请修正或清空 S/N。")
+    condition = _required_wav_component(condition_name, "工况名称")
+    used_names = set()
+    for station in stations:
+        label = f"工位「{station.station_name}」({station.station_id})"
+        station_name = _required_wav_component(station.station_name, label + "的名称")
+        candidate = StationWavName("_".join((timestamp, station_name, condition, model, sample)), serial)
+        number = 1
+        filename = candidate.filename_for(number)
+        while filename.casefold() in used_names:
+            number += 1
+            filename = candidate.filename_for(number)
+        try:
+            validate_station_wav_length(filename)
+        except ValueError as exc:
+            raise ValueError(f"{label} {exc}") from exc
+        used_names.add(filename.casefold())
+        yield filename, candidate
+
+
 def build_recording_request(recording, condition_id, device_snapshot, recording_id, *,
-                            recorded_at, ve_calibration_store=None, preview_time_mode=None):
+                            recorded_at, product_model, sample_number, serial_number="",
+                            ve_calibration_store=None, preview_time_mode=None):
     """Build from recording-only parameters and the prepared device snapshot."""
     context = recording.context
     condition = context.get_condition(condition_id)
@@ -145,13 +188,15 @@ def build_recording_request(recording, condition_id, device_snapshot, recording_
         condition, context.stations, _plain_detail(recording.parameters_for(condition_id)),
         device_snapshot, recording_id, project_id=context.project_id,
         project_name=context.project_name, result_root_directory=context.result_root_directory,
-        recorded_at=recorded_at, ve_calibration_store=ve_calibration_store,
+        recorded_at=recorded_at, product_model=product_model, sample_number=sample_number,
+        serial_number=serial_number, ve_calibration_store=ve_calibration_store,
         preview_time_mode=preview_time_mode,
     )
 
 
 def _build_recording_request(condition, stations, detail, device_snapshot, recording_id, *,
                              project_id, project_name, result_root_directory, recorded_at,
+                             product_model, sample_number, serial_number,
                              ve_calibration_store, preview_time_mode=None):
     """Freeze the full capture and each station's ordered PCM24 WAV mapping."""
     label = f"产品 {project_id} 工况「{condition.condition_name}」({condition.condition_id})"
@@ -170,8 +215,12 @@ def _build_recording_request(condition, stations, detail, device_snapshot, recor
         root = os.path.join(
             _recording_root(result_root_directory),
             _safe_name(project_name, "产品"),
-            _safe_name(condition.condition_name, "工况"),
         )
+        timestamp = recorded_at.strftime("%Y-%m-%d_%H-%M-%S-") + f"{recorded_at.microsecond // 1000:03d}"
+        names = tuple(_station_wav_names(
+            applicable, timestamp, condition.condition_name, product_model=product_model,
+            sample_number=sample_number, serial_number=serial_number,
+        ))
         thresholds = _workbench_validation_thresholds(detail)
         mappings = tuple(_channel_mappings(applicable, device_snapshot.physical_to_column))
         device = device_snapshot.device.to_dict()
@@ -180,8 +229,7 @@ def _build_recording_request(condition, stations, detail, device_snapshot, recor
             entry["physical_input_channel"]: entry for entry in metadata["recorded_channels"]
         }
         plans = []
-        used_names = set()
-        for station, channels in mappings:
+        for (station, channels), (filename, candidate) in zip(mappings, names, strict=True):
             station_metadata = None if metadata is None else {
                 **metadata,
                 "recorded_channels": [
@@ -189,25 +237,17 @@ def _build_recording_request(condition, stations, detail, device_snapshot, recor
                     for channel in channels
                 ],
             }
-            name = _safe_name(station.station_name, "工位")
-            filename = name + ".wav"
-            suffix = 2
-            while filename.casefold() in used_names:
-                filename = f"{name}_{suffix}.wav"
-                suffix += 1
-            used_names.add(filename.casefold())
             plans.append(StationRecordingPlan(station.station_id, filename,
-                                             channels, station_metadata))
-        name = recorded_at.strftime("%Y-%m-%d_%H-%M-%S-") + f"{recorded_at.microsecond // 1000:03d}"
+                                             channels, station_metadata, wav_name=candidate))
         group = StationRecordingGroup(
-            project_id, condition.condition_id, os.path.join(root, name), tuple(plans),
+            project_id, condition.condition_id, root, tuple(plans),
             prepared_generation=device_snapshot.generation,
-            allocate_final_path=True,
+            publish_into_parent=True,
         )
         preview_options = {} if preview_time_mode is None else {"preview_time_mode": preview_time_mode}
         return RecordingRequest(
             recording_id, "main", sample_rate, kept_frames + trim_samples, device_snapshot.channels,
-            device, os.path.join(root, f".{name}-{recording_id}.staging"), True, trim_samples, {}, None,
+            device, os.path.join(root, f".{timestamp}-{recording_id}.staging"), True, trim_samples, {}, None,
             thresholds, station_group=group, **preview_options,
         )
     except (ValueError, OverflowError, OSError) as exc:

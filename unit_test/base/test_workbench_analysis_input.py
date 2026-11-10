@@ -39,6 +39,7 @@ def capture(tmp_path):
         request = build_recording_request(
             config.recording, condition, device, request_id,
             recorded_at=datetime(2026, 11, 9, 13, 14, 15),
+            product_model="M-02", sample_number="007",
             ve_calibration_store=ChangingCalibrationStore(),
         )
         if return_request:

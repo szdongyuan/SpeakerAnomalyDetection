@@ -90,6 +90,33 @@ def _validate_wav_filename(name, station_id):
         raise ValueError(f"station {station_id!r} requires a plain WAV filename")
 
 
+def validate_station_wav_length(filename: str, max_units: int = 255) -> None:
+    """Check a complete filename against a Windows component limit in UTF-16 units."""
+    units = len(filename.encode("utf-16-le")) // 2
+    if units > max_units:
+        raise ValueError(f"WAV filename length {units} exceeds limit {max_units}")
+
+
+@dataclass(frozen=True)
+class StationWavName:
+    stem: str
+    serial_number: str = ""
+
+    def __post_init__(self):
+        _identity("WAV name stem", self.stem)
+        if type(self.serial_number) is not str:
+            raise ValueError("WAV serial number must be a string")
+        _validate_wav_filename(self.filename_for(1), self.stem)
+
+    def filename_for(self, number: int) -> str:
+        if type(number) is not int or number < 1:
+            raise ValueError("WAV collision number must be positive")
+        stem = self.stem if number == 1 else f"{self.stem}_{number}"
+        if self.serial_number:
+            stem = f"{stem}_{self.serial_number}"
+        return f"{stem}.wav"
+
+
 @dataclass(frozen=True)
 class StationWavChannel:
     channel_id: str
@@ -127,6 +154,7 @@ class StationRecordingPlan:
     filename: str
     channels: tuple[StationWavChannel, ...]
     calibration_metadata: Mapping | None = None
+    wav_name: StationWavName | None = None
 
     def __post_init__(self):
         # FrozenConfig is also the snapshot type of the enclosing recording request.
@@ -135,6 +163,8 @@ class StationRecordingPlan:
         _identity("station_id", self.station_id)
         _identity("filename", self.filename)
         _validate_wav_filename(self.filename, self.station_id)
+        if self.wav_name is not None and not isinstance(self.wav_name, StationWavName):
+            raise ValueError(f"station {self.station_id!r} requires a typed WAV name candidate")
         object.__setattr__(self, "channels", _station_channels(self.channels, self.station_id))
 
         if self.calibration_metadata is not None:
@@ -157,6 +187,7 @@ class StationRecordingGroup:
     stations: tuple[StationRecordingPlan, ...]
     prepared_generation: int | None = None
     allocate_final_path: bool = False
+    publish_into_parent: bool = False
 
     def __post_init__(self):
         generation = self.prepared_generation
@@ -176,12 +207,23 @@ class StationRecordingGroup:
             raise ValueError("station filename must be unique within the station group")
         if len({channel.device_ref for station in stations for channel in station.channels}) != 1:
             raise ValueError("all station channels must share one device_ref")
+        if type(self.publish_into_parent) is not bool:
+            raise ValueError("publish_into_parent must be a boolean")
+        if self.publish_into_parent:
+            if self.allocate_final_path is not False:
+                raise ValueError("publish_into_parent requires allocate_final_path=False")
+            for station in stations:
+                if station.wav_name is None:
+                    raise ValueError(f"station {station.station_id!r} requires a WAV name candidate")
         object.__setattr__(self, "stations", stations)
 
     def validate_request(self, staging_path, channels):
         staging = _directory_key(staging_path)
         final = _directory_key(self.final_path)
-        if staging == final or os.path.dirname(staging) != os.path.dirname(final):
+        if self.publish_into_parent:
+            if os.path.dirname(staging) != final:
+                raise ValueError("staging directory must be a direct child of the shared final directory")
+        elif staging == final or os.path.dirname(staging) != os.path.dirname(final):
             raise ValueError("staging and final directories must be distinct siblings")
         available = set(channels)
         for station in self.stations:

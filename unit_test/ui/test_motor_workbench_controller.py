@@ -448,6 +448,7 @@ def recording_workbench(workbench, config):
     cleanup_problems, archive_problems, archive_submissions = [], [], []
     service = SimpleNamespace(can_start_recording=True)
     outcome = SimpleNamespace(error=None, on_start=None, hardware_available=True, on_archive=None)
+    identity = SimpleNamespace(model="M-02", sample="007", serial="SN-008")
 
     def start(request, lifecycle):
         requests.append(request)
@@ -473,6 +474,7 @@ def recording_workbench(workbench, config):
     controller.bind_recording(WorkbenchRecordingPorts(
         bridge=SimpleNamespace(start=start, service=service),
         device=device, hardware_available=lambda snapshot: outcome.hardware_available,
+        read_wav_identity=lambda: (identity.model, identity.sample, identity.serial),
         set_button_state=lambda *state: states.append(state),
         notify_error=problems.append, completed=completions.append,
         notify_cleanup_error=cleanup_problems.append,
@@ -501,6 +503,7 @@ def recording_workbench(workbench, config):
 
     return SimpleNamespace(
         controller=controller, repository=workbench.repository, config=config, requests=requests,
+        identity=identity,
         device=device, service=service, outcome=outcome, states=states, problems=problems,
         completions=completions, complete=complete, callbacks=callbacks,
         cleanup_problems=cleanup_problems, archive_problems=archive_problems,
@@ -558,12 +561,14 @@ def test_archive_and_analysis_keep_start_snapshot_across_midnight_and_product_sw
     w.controller.start_recording()
 
     clock.now = lambda: datetime(2026, 11, 10, 0, 0, 1)
+    w.identity.model, w.identity.sample, w.identity.serial = "M-03", "009", "SN-010"
     w.repository.result = configuration_with(w.config, project_id="new-product", project_name="新产品")
     w.controller.refresh_configuration()
     w.complete()
     (result, product_name, recorded_on, archive_finished), = w.archive_submissions
     assert product_name == w.config.recording.context.project_name
     assert recorded_on.isoformat() == "2026-11-09"
+    assert Path(result.stations[0].path).name == "2026-11-09_23-59-59-000_右工位_热机_M-02_007_SN-008.wav"
     archive_finished(result.request_id, None)
     assert w.completions == [result]
     assert inputs[0].context.analysis is w.config.analysis
@@ -571,6 +576,7 @@ def test_archive_and_analysis_keep_start_snapshot_across_midnight_and_product_sw
     assert (w.requests[-1].station_group.project_id, w.requests[-1].station_group.condition_id) == (
         "new-product", "warm",
     )
+    assert w.requests[-1].station_group.stations[0].filename == "2026-11-10_00-00-01-000_右工位_热机_M-03_009_SN-010.wav"
 
 
 @pytest.mark.parametrize("outcome", ["failure", "cancelled"])
@@ -673,7 +679,10 @@ def test_old_completion_is_delivered_without_advancing_new_configuration(recordi
 
 
 @pytest.mark.parametrize("changed", ["root", "product", "condition", "station"])
-def test_applied_output_changes_freeze_active_paths_and_restart_cursor(recording_workbench, tmp_path, changed):
+def test_applied_output_changes_freeze_active_paths_and_restart_cursor(recording_workbench, tmp_path, changed, monkeypatch):
+    from ui.sequence import motor_workbench_controller as module
+
+    monkeypatch.setattr(module, "datetime", SimpleNamespace(now=lambda: datetime(2026, 11, 9)))
     w = recording_workbench
     w.controller.start_recording()
     original = w.requests[0]
@@ -694,13 +703,15 @@ def test_applied_output_changes_freeze_active_paths_and_restart_cursor(recording
     w.controller.refresh_configuration()
     w.complete()
     assert w.requests[0] is original
-    assert Path(w.completions[0].stations[0].path) == Path(original.station_group.final_path) / "右工位.wav"
-    assert Path(original.station_group.final_path).parent == Path(w.config.recording.context.result_root_directory) / "电机" / "热机"
+    assert Path(w.completions[0].stations[0].path).name == "2026-11-09_00-00-00-000_右工位_热机_M-02_007_SN-008.wav"
+    assert Path(original.station_group.final_path) == Path(w.config.recording.context.result_root_directory) / "电机"
     w.controller.start_recording()
     current = w.requests[-1]
     assert current.station_group.condition_id == "warm"
-    assert Path(current.station_group.final_path).parent == Path(root) / product / conditions[0].condition_name
-    assert current.station_group.stations[0].filename == stations[0].station_name + ".wav"
+    assert Path(current.station_group.final_path) == Path(root) / product
+    assert current.station_group.stations[0].filename == (
+        f"2026-11-09_00-00-00-000_{stations[0].station_name}_{conditions[0].condition_name}_M-02_007_SN-008.wav"
+    )
 
 
 def test_recording_timestamp_is_captured_before_request_preparation(recording_workbench, monkeypatch):
@@ -712,11 +723,37 @@ def test_recording_timestamp_is_captured_before_request_preparation(recording_wo
 
     def delayed_build(*args, **kwargs):
         assert kwargs["recorded_at"] == instant
+        assert (kwargs["product_model"], kwargs["sample_number"], kwargs["serial_number"]) == ("M-02", "007", "SN-008")
         return build(*args, **kwargs)
 
     monkeypatch.setattr(module, "build_recording_request", delayed_build)
     recording_workbench.controller.start_recording()
-    assert Path(recording_workbench.requests[0].station_group.final_path).name == "2026-11-09_13-14-15-123"
+    assert recording_workbench.requests[0].station_group.stations[0].filename == (
+        "2026-11-09_13-14-15-123_右工位_热机_M-02_007_SN-008.wav"
+    )
+
+
+def test_workbench_rejects_empty_sample_before_submitting_recording(recording_workbench):
+    w = recording_workbench
+    assert w.states[-1][0::2] == (True, False)
+    w.identity.sample = "  "
+    w.controller.start_recording()
+    assert not w.requests
+    assert "样本编号" in w.problems[-1]
+    assert w.states[-1][0::2] == (True, False)
+
+    w.identity.sample = "007"
+    w.controller.start_recording()
+    assert w.requests[0].station_group.condition_id == "warm"
+
+
+def test_workbench_rejects_overlong_wav_name_before_submitting_recording(recording_workbench):
+    w = recording_workbench
+    w.identity.sample = "0" * 255
+    w.controller.start_recording()
+    assert not w.requests
+    assert "右工位" in w.problems[-1] and "WAV filename length" in w.problems[-1]
+    assert w.states[-1][0::2] == (True, False)
 
 
 def test_invalid_product_root_notifies_ui_without_submission(recording_workbench):
