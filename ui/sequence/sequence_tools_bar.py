@@ -224,6 +224,13 @@ class SequenceToolsBar(QWidget):
             "ui/ui_pic/sequence_pic/play.png",
             QSize(35, 35),
         )
+        self._recording_start_icon = self.player_btn.icon()
+        pause_pixmap = QPixmap(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png")
+        self._recording_busy_icon = QIcon(pause_pixmap)
+        self._recording_busy_icon.addPixmap(pause_pixmap, QIcon.Disabled)
+
+    def set_recording_busy(self, busy):
+        self.player_btn.setIcon(self._recording_busy_icon if busy else self._recording_start_icon)
 
     def set_replay_btn(self):
         self._configure_icon_button(

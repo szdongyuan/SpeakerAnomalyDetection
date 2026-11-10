@@ -1,6 +1,12 @@
 import os
+import shutil
+import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+from datetime import date
+from pathlib import Path
 from unittest.mock import Mock
 from zipfile import ZipFile
 
@@ -13,9 +19,12 @@ from PyQt5.QtWidgets import QApplication, QFileDialog, QLabel, QMessageBox
 
 from base.audio_record_filter import parse_audio_filter_metadata
 from base.audio_record_package import PACKAGE_KINDS
+from base.db_manager import DataSave
 from base.file_ops import FileOps
 from base.recording_management import RecordingManager
-from consts import error_code
+from base.workbench_recording_archive import WorkbenchRecordingArchive
+from base.workbench_recording_protocol import StationWav, StationWavChannel, WorkbenchRecordingCompletion
+from consts import error_code, model_consts
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from ui.archive_audio_filter_dialog import ArchiveAudioFilterDialog
 from ui.archive_audio_package_dialog import ArchiveAudioPackageDialog
@@ -68,7 +77,14 @@ def test_unavailable_types_disabled_and_cancel_returns_rejected(qapp):
 
 
 @pytest.fixture
-def archive(qapp, tmp_path, monkeypatch):
+def audio_database_path(tmp_path, monkeypatch):
+    path = tmp_path / "database #" / "audio_data.db"
+    monkeypatch.setattr(model_consts, "DATABASE_PATH", str(path))
+    return path
+
+
+@pytest.fixture
+def archive(qapp, audio_database_path, tmp_path, monkeypatch):
     first = make_recording(tmp_path / "results")
     second = make_recording(tmp_path / "results", project="ProjectB")
     rows = [
@@ -90,8 +106,44 @@ def archive(qapp, tmp_path, monkeypatch):
     instance.close()
 
 
+@pytest.fixture
+def audio_database(audio_database_path):
+    path = audio_database_path
+    path.parent.mkdir()
+    database = DataSave(path)
+    try:
+        code, message = database.create_table()
+        assert code == error_code.OK, message
+    finally:
+        database.close()
+    return path
+
+
+def seed_audio_rows(database_path, count):
+    with closing(sqlite3.connect(database_path)) as database, database:
+        database.executemany(
+            "INSERT INTO audio_data_table VALUES (?, ?, 'Existing product', 48000, '2026-11-09', "
+            "'not_labeled', NULL, NULL)",
+            ((f"{index:036}", f"C:/existing recordings/{index:08}/{'x' * 110}.wav")
+             for index in range(count)),
+        )
+
+
+def read_audio_rows(database_path):
+    with closing(sqlite3.connect(database_path)) as database:
+        assert database.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+        return database.execute("SELECT * FROM audio_data_table ORDER BY file_path").fetchall()
+
+
+def read_zipped_audio_rows(output, tmp_path):
+    with ZipFile(output) as zipped:
+        return read_audio_rows(zipped.extract("audio_data.db", tmp_path / "extracted"))
+
+
 @pytest.mark.parametrize("kinds", [{"wav"}, {"raw_csv", "analysis_csv"}, set(PACKAGE_KINDS)])
-def test_filtered_selection_exports_only_selected_recording_and_types(archive, tmp_path, monkeypatch, kinds):
+def test_filtered_selection_exports_only_selected_recording_and_types(
+    archive, audio_database, tmp_path, monkeypatch, kinds,
+):
     window, files = archive
     def execute(dialog):
         for kind, box in dialog.checkboxes.items():
@@ -100,25 +152,66 @@ def test_filtered_selection_exports_only_selected_recording_and_types(archive, t
     monkeypatch.setattr(ArchiveAudioPackageDialog, "exec", execute)
     output = tmp_path / "export.zip"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(output), ""))
-    # Redirect only the legacy database attachment into a disposable fixture.
-    database = tmp_path / "database" / "audio_data.db"
-    database.parent.mkdir()
-    database.write_bytes(b"unchanged database attachment")
-    writer = FileOps.create_zip_with_files
-    captured = []
-    def write(paths, output_path, **kwargs):
-        captured.extend(paths)
-        return writer(paths, output_path, base_dir=str(tmp_path), **kwargs)
-    monkeypatch.setattr(FileOps, "create_zip_with_files", write)
+    seed_audio_rows(audio_database, 1)
     window.on_clicked_package_btn()
     wait_for_package(window)
     with ZipFile(output) as zipped:
         assert set(zipped.namelist()) == {
             files[kind].relative_to(tmp_path / "results").as_posix() for kind in kinds
         } | {"audio_data.db"}
-        assert zipped.read("audio_data.db") == database.read_bytes()
-    assert set(captured) == {str(files[kind]) for kind in kinds} | {"database/audio_data.db"}
+    assert read_zipped_audio_rows(output, tmp_path) == read_audio_rows(audio_database)
     assert not window.select_wave_data
+
+
+def test_export_database_is_consistent_during_station_commit(archive, audio_database, tmp_path, monkeypatch):
+    window, _ = archive
+    output = tmp_path / "export.zip"
+    monkeypatch.setattr(ArchiveAudioPackageDialog, "exec", lambda self: self.Accepted)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(output), ""))
+    warning = Mock()
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+    seed_audio_rows(audio_database, 201)
+    before = read_audio_rows(audio_database)
+    channel = StationWavChannel("ch", "声音", "audio", "default", 0, 0)
+    stations = tuple(
+        StationWav(f"station-{index}", str(tmp_path / f"station-{index}.wav"), (channel,))
+        for index in range(2)
+    )
+    completion = WorkbenchRecordingCompletion("recording", "project", "condition", 48000, 64, stations)
+    first_chunk_read = threading.Event()
+    committed = threading.Event()
+    copyfileobj = shutil.copyfileobj
+
+    def copy_with_commit(source, target, length):
+        if Path(source.name).name == "audio_data.db":
+            chunk = source.read(length)
+            assert len(chunk) == length and audio_database.stat().st_size > length
+            target.write(chunk)
+            first_chunk_read.set()
+            assert committed.wait(5), "the station transaction did not finish during the ZIP read"
+        return copyfileobj(source, target, length)
+
+    def save_stations():
+        try:
+            assert first_chunk_read.wait(5), "the ZIP worker did not start streaming the database"
+            WorkbenchRecordingArchive(audio_database).save(completion, "New product", date(2026, 11, 10))
+        finally:
+            committed.set()
+
+    with monkeypatch.context() as patch, ThreadPoolExecutor(max_workers=1) as executor:
+        patch.setattr(shutil, "copyfileobj", copy_with_commit)
+        station_commit = executor.submit(save_stations)
+        window.on_clicked_package_btn()
+        wait_for_package(window)
+        station_commit.result(timeout=5)
+
+    warning.assert_not_called()
+    after = read_audio_rows(audio_database)
+    assert len(after) == len(before) + len(stations)
+    assert {row[1] for row in after if row[2] == "New product"} == {
+        RecordingManager.normalize_audio_path_for_db(station.path) for station in stations
+    }
+    assert read_zipped_audio_rows(output, tmp_path) in (before, after)
 
 
 @pytest.mark.parametrize("cancel_stage", ["contents", "save"])
@@ -171,24 +264,37 @@ def test_missing_wav_is_explained_without_counting_duplicate_records_as_missing(
     assert summaries[-1] == "已选2条录音，1个 WAV 未找到"
 
 
-def test_no_selected_recordings_keeps_existing_database_only_export(archive, tmp_path, monkeypatch):
+@pytest.mark.parametrize("missing", [False, True])
+def test_no_selected_recordings_keeps_existing_database_only_export(
+    archive, audio_database, tmp_path, monkeypatch, missing,
+):
     window, _ = archive
+    if missing:
+        audio_database.unlink()
+    else:
+        seed_audio_rows(audio_database, 1)
     window.set_all_checkboxes_checked([0], False)
     window.raw_audio_csv_service = Mock()
     monkeypatch.setattr(QMessageBox, "exec_", lambda self: 0)
     monkeypatch.setattr(QMessageBox, "clickedButton", lambda self: self.buttons()[0])
     contents_dialog = Mock()
     monkeypatch.setattr(ArchiveAudioPackageDialog, "exec", contents_dialog)
-    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(tmp_path / "db.zip"), ""))
-    writer = Mock()
-    monkeypatch.setattr(FileOps, "create_zip_with_files", writer)
+    output = tmp_path / "db.zip"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(output), ""))
+    progress = Mock(wraps=window.update_packaging_progress)
+    monkeypatch.setattr(window, "update_packaging_progress", progress)
     window.on_clicked_package_btn()
     wait_for_package(window)
     contents_dialog.assert_not_called()
     window.raw_audio_csv_service.try_acquire_mutation.assert_not_called()
     window.raw_audio_csv_service.release_mutation.assert_not_called()
-    assert writer.call_args.args[0] == ("database/audio_data.db",)
-    assert writer.call_args.kwargs["archive_names"] == {"database/audio_data.db": "audio_data.db"}
+    progress.assert_called_once_with(1, 1)
+    with ZipFile(output) as zipped:
+        assert zipped.namelist() == ([] if missing else ["audio_data.db"])
+    if missing:
+        assert not audio_database.exists()
+    else:
+        assert read_zipped_audio_rows(output, tmp_path) == read_audio_rows(audio_database)
 
 
 def test_worker_keeps_gui_responsive_and_blocks_duplicate_close_and_delete(archive, tmp_path, monkeypatch):
@@ -264,12 +370,21 @@ def test_worker_keeps_gui_responsive_and_blocks_duplicate_close_and_delete(archi
     assert window.close()
 
 
-def test_worker_failure_is_reported_on_gui_and_can_retry(archive, tmp_path, monkeypatch):
+def test_worker_failure_is_reported_on_gui_and_can_retry(archive, audio_database, tmp_path, monkeypatch):
     window, _ = archive
     selected = dict(window.select_wave_data)
     monkeypatch.setattr(ArchiveAudioPackageDialog, "exec", lambda self: self.Accepted)
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(tmp_path / "retry.zip"), ""))
-    writer = Mock(side_effect=PermissionError("disk unavailable"))
+    snapshots = []
+
+    def write(paths, output, **kwargs):
+        snapshot = Path(paths[-1])
+        assert snapshot != audio_database and snapshot.is_file()
+        snapshots.append(snapshot)
+        if len(snapshots) == 1:
+            raise PermissionError("disk unavailable")
+
+    writer = Mock(side_effect=write)
     monkeypatch.setattr(FileOps, "create_zip_with_files", writer)
     warnings = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append((threading.get_ident(), args[2])))
@@ -279,11 +394,49 @@ def test_worker_failure_is_reported_on_gui_and_can_retry(archive, tmp_path, monk
     assert window.select_wave_data == selected
     assert window.packaging_progress is None
     assert window.package_btn.isEnabled()
-    writer.side_effect = None
+    assert not snapshots[0].parent.exists()
     window.on_clicked_package_btn()
     wait_for_package(window)
     assert writer.call_count == 2
+    assert not snapshots[1].parent.exists()
     assert not window.select_wave_data
+
+
+def test_export_reports_corrupt_database_before_writing_zip(archive, audio_database, tmp_path, monkeypatch):
+    window, _ = archive
+    audio_database.write_bytes(b"invalid SQLite database")
+    selected = dict(window.select_wave_data)
+    monkeypatch.setattr(ArchiveAudioPackageDialog, "exec", lambda self: self.Accepted)
+    output = tmp_path / "broken.zip"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(output), ""))
+    warning = Mock()
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+    window.on_clicked_package_btn()
+    wait_for_package(window)
+    warning.assert_called_once()
+    assert "file is not a database" in warning.call_args.args[2]
+    assert not output.exists()
+    assert window.select_wave_data == selected
+    assert window.package_btn.isEnabled()
+
+
+def test_export_reports_database_that_remains_locked(archive, audio_database, tmp_path, monkeypatch):
+    window, _ = archive
+    selected = dict(window.select_wave_data)
+    monkeypatch.setattr(ArchiveAudioPackageDialog, "exec", lambda self: self.Accepted)
+    output = tmp_path / "locked.zip"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(output), ""))
+    warning = Mock()
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+    with closing(sqlite3.connect(audio_database)) as database:
+        database.execute("BEGIN EXCLUSIVE")
+        window.on_clicked_package_btn()
+        wait_until(lambda: window._package_thread is None, timeout=10)
+    warning.assert_called_once()
+    assert "database is locked" in warning.call_args.args[2]
+    assert not output.exists()
+    assert window.select_wave_data == selected
+    assert window.package_btn.isEnabled()
 
 
 def test_worker_copies_input_manifest(qapp, monkeypatch, tmp_path):
@@ -304,7 +457,6 @@ def test_worker_copies_input_manifest(qapp, monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('outcome', ['success', 'failure', 'startup', 'setup'])
 def test_package_recollects_after_dialog_and_holds_all_companion_paths(archive, tmp_path, monkeypatch, outcome):
-    from pathlib import Path
     from base.raw_audio_csv_tasks import CsvTaskLedger
     window, files = archive
     ledger = window.raw_audio_csv_service = CsvTaskLedger()
@@ -388,7 +540,6 @@ def test_package_cannot_read_inputs_during_real_zip_stage(archive, tmp_path, mon
 
 @pytest.mark.parametrize('alias', ['exact', 'normalized', 'hardlink_zip', 'hardlink_wav'])
 def test_package_output_cannot_alias_selected_input(archive, tmp_path, monkeypatch, alias):
-    from pathlib import Path
     from base.raw_audio_csv_tasks import CsvTaskLedger
     window, files = archive
     ledger = window.raw_audio_csv_service = CsvTaskLedger()

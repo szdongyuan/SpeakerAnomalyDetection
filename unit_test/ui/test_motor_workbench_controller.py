@@ -10,6 +10,7 @@ from PyQt5.QtTest import QSignalSpy, QTest
 from PyQt5.QtWidgets import QAbstractButton, QComboBox, QLabel
 
 from base.workbench_config_values import WorkbenchChannel, WorkbenchHardwareChannel, WorkbenchCondition, WorkbenchContext, WorkbenchStation
+from base.workbench_recording_archive import WorkbenchRecordingArchiveError
 from base.workbench_configuration_loader import WorkbenchConfiguration, WorkbenchConfigurationError
 from base.workbench_recording_config import WorkbenchRecordingConfig
 from base.workbench_analysis_config import WorkbenchAnalysisConfig, AnalysisTestQueue
@@ -444,9 +445,9 @@ def recording_workbench(workbench, config):
         }), (0, 1), 48000),
     )
     requests, callbacks, states, problems, completions = [], [], [], [], []
-    cleanup_problems = []
+    cleanup_problems, archive_problems, archive_submissions = [], [], []
     service = SimpleNamespace(can_start_recording=True)
-    outcome = SimpleNamespace(error=None, on_start=None, hardware_available=True)
+    outcome = SimpleNamespace(error=None, on_start=None, hardware_available=True, on_archive=None)
 
     def start(request, lifecycle):
         requests.append(request)
@@ -458,6 +459,13 @@ def recording_workbench(workbench, config):
             raise outcome.error
         return SimpleNamespace(request=request)
 
+    def submit_archive(completion, product_name, recorded_on, callback):
+        archive_submissions.append((completion, product_name, recorded_on, callback))
+        if outcome.on_archive is None:
+            callback(completion.request_id, None)
+        else:
+            outcome.on_archive(completion, callback)
+
     controller = MotorWorkbenchController(
         workbench.repository, workbench.panel, workbench.grid, workbench.products.append,
         lambda: None,
@@ -468,6 +476,7 @@ def recording_workbench(workbench, config):
         set_button_state=lambda *state: states.append(state),
         notify_error=problems.append, completed=completions.append,
         notify_cleanup_error=cleanup_problems.append,
+        submit_archive=submit_archive, notify_archive_error=archive_problems.append,
     ))
     controller.refresh_configuration()
 
@@ -494,8 +503,116 @@ def recording_workbench(workbench, config):
         controller=controller, repository=workbench.repository, config=config, requests=requests,
         device=device, service=service, outcome=outcome, states=states, problems=problems,
         completions=completions, complete=complete, callbacks=callbacks,
-        cleanup_problems=cleanup_problems,
+        cleanup_problems=cleanup_problems, archive_problems=archive_problems,
+        archive_submissions=archive_submissions,
     )
+
+
+def test_recording_stays_busy_until_current_archive_result_is_delivered_once(recording_workbench):
+    w = recording_workbench
+    inputs = []
+    w.controller.bind_analysis_input(inputs.append)
+    w.outcome.on_archive = lambda *_: None
+    w.controller.start_recording()
+    assert w.states[-1][0::2] == (False, True)
+    request, = w.requests
+    w.complete()
+    w.complete()
+    w.complete(outcome="failure")
+    w.complete(outcome="cancelled")
+    (result, _, _, archive_finished), = w.archive_submissions
+    archive_finished("older-request", None)
+    w.callbacks[0].released(SimpleNamespace(request=request))
+    w.controller.refresh_configuration()
+    w.controller.start_recording()
+    assert w.requests == [request]
+    assert w.states[-1][0::2] == (False, True)
+    assert "入库" in w.states[-1][1]
+    assert w.completions == inputs == w.problems == []
+
+    w.service.can_start_recording = False
+    archive_finished(request.request_id, None)
+    assert w.states[-1][0::2] == (False, False)
+    assert w.completions == [result]
+    assert [value.completion for value in inputs] == [result]
+    w.service.can_start_recording = True
+    w.callbacks[0].released(SimpleNamespace(request=request))
+    assert w.states[-1][0::2] == (True, False)
+    w.controller.start_recording()
+    assert w.requests[-1].station_group.condition_id == "cold"
+    w.complete()
+    archive_finished(request.request_id, None)
+    assert w.completions == [result]
+    assert w.states[-1][0::2] == (False, True)
+
+
+def test_archive_and_analysis_keep_start_snapshot_across_midnight_and_product_switch(recording_workbench, monkeypatch):
+    from ui.sequence import motor_workbench_controller as module
+
+    w = recording_workbench
+    clock = SimpleNamespace(now=lambda: datetime(2026, 11, 9, 23, 59, 59))
+    monkeypatch.setattr(module, "datetime", clock)
+    inputs = []
+    w.controller.bind_analysis_input(inputs.append)
+    w.outcome.on_archive = lambda *_: None
+    w.controller.start_recording()
+
+    clock.now = lambda: datetime(2026, 11, 10, 0, 0, 1)
+    w.repository.result = configuration_with(w.config, project_id="new-product", project_name="新产品")
+    w.controller.refresh_configuration()
+    w.complete()
+    (result, product_name, recorded_on, archive_finished), = w.archive_submissions
+    assert product_name == w.config.recording.context.project_name
+    assert recorded_on.isoformat() == "2026-11-09"
+    archive_finished(result.request_id, None)
+    assert w.completions == [result]
+    assert inputs[0].context.analysis is w.config.analysis
+    w.controller.start_recording()
+    assert (w.requests[-1].station_group.project_id, w.requests[-1].station_group.condition_id) == (
+        "new-product", "warm",
+    )
+
+
+@pytest.mark.parametrize("outcome", ["failure", "cancelled"])
+def test_unpublished_recording_bypasses_archive_and_retries_condition(recording_workbench, outcome):
+    w = recording_workbench
+    w.controller.start_recording()
+    w.complete(outcome=outcome)
+    assert w.archive_submissions == w.completions == w.archive_problems == []
+    assert w.states[-1][0::2] == (True, False)
+    w.controller.start_recording()
+    assert w.requests[-1].station_group.condition_id == "warm"
+
+
+@pytest.mark.parametrize("submit_fails", [False, True])
+def test_archive_failure_delivers_recording_and_advances_condition(recording_workbench, caplog, submit_fails):
+    w = recording_workbench
+    inputs = []
+    w.controller.bind_analysis_input(inputs.append)
+    error = WorkbenchRecordingArchiveError("database\nlocked")
+
+    def fail_archive(completion, callback):
+        if submit_fails:
+            raise error
+        callback(completion.request_id, error)
+
+    w.outcome.on_archive = fail_archive
+    w.controller.start_recording()
+    w.complete()
+    w.complete()
+    result, = w.completions
+    assert [value.completion for value in inputs] == [result]
+    assert w.archive_problems == ["工况「热机」音频已保存，入库失败：database locked"]
+    assert not w.problems
+    warning, = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert result.request_id in warning.getMessage()
+    assert [station.path for station in result.stations] == warning.args[1]
+    assert warning.args[2] is error
+    if submit_fails:
+        assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    assert w.states[-1][0::2] == (True, False)
+    w.controller.start_recording()
+    assert w.requests[-1].station_group.condition_id == "cold"
 
 
 def test_recording_retries_failures_and_wraps_in_declared_order(recording_workbench):

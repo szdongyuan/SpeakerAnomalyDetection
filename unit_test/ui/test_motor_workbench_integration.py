@@ -3,9 +3,11 @@
 import json
 import logging
 import os
+import sqlite3
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
-from threading import Thread
+from threading import Event, Thread
 from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -14,6 +16,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 from PyQt5.QtCore import QCoreApplication, QEvent, QObject, QThread, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QLabel, QMainWindow, QMenuBar, QMessageBox, QWidget
 
@@ -22,16 +25,18 @@ from base import hardware_analysis_channel_sync, load_config, recording_calibrat
 from base.config_deletion import ConfigDeletionService
 from base.motor_workbench_config import MotorWorkbenchConfigRepository
 from base.product_test_project_config import ProductTestProjectConfigManager
+from base.recording_management import RecordingManager
 from base.recording_process_protocol import RecordingFailure
 from base.recording_service import RecordingService
 from base.streaming_file_writer import StreamingWavWriter
 from base.wav_calibration_metadata import read_wav_calibration_metadata
+from base.workbench_recording_archive import WorkbenchRecordingArchive, WorkbenchRecordingArchiveError
 from base.workbench_recording_protocol import StationWav, WorkbenchRecordingCompletion
-from consts import error_code
+from consts import error_code, running_consts
 from main_window import MainWindow
 from ui.config_delete_dialog import ConfigDeleteDialog
 from ui.recording_service_bridge import RecordingServiceBridge
-from ui.sequence import sequence_widget, sequence_widget_serial_trigger_ops
+from ui.sequence import sequence_tools_bar, sequence_widget, sequence_widget_serial_trigger_ops
 from ui.sequence.sequence_widget import SequenceWindow
 from ui.video_controller import VideoController
 from unit_test.base.recording_process_fakes import generated_audio
@@ -714,9 +719,37 @@ def test_settings_click_reaches_only_the_workbench_controller_and_reuses_dialog(
         window.video_controller.probe_devices.assert_called_once_with()
 
 
+@pytest.fixture
+def recording_icon_colors(qt_app, monkeypatch, tmp_path):
+    icon_dir = tmp_path / "ui/ui_pic/sequence_pic"
+    icon_dir.mkdir(parents=True)
+    play_color, pause_color = QColor("green"), QColor("blue")
+    for name, color in (("play", play_color), ("pause", pause_color)):
+        pixmap = QPixmap(35, 35)
+        pixmap.fill(color)
+        assert pixmap.save(str(icon_dir / f"{name}.png"))
+    monkeypatch.setattr(sequence_tools_bar, "DEFAULT_DIR", tmp_path.as_posix() + "/")
+    return play_color, pause_color
+
+
+def _icon_color(button, mode=QIcon.Normal):
+    return button.icon().pixmap(button.iconSize(), mode).toImage().pixelColor(0, 0)
+
+
 def test_real_toolbar_waits_for_login_and_resource_admission_then_delivers_group_on_gui_thread(
-    startup, config_files, qt_app, monkeypatch, tmp_path,
+    startup, config_files, qt_app, monkeypatch, tmp_path, recording_icon_colors,
 ):
+    play_color, pause_color = recording_icon_colors
+    archive_entered, archive_release = Event(), Event()
+    save_archive = WorkbenchRecordingArchive.save
+
+    def hold_archive(archive, *args):
+        archive_entered.set()
+        if not archive_release.wait(5):
+            raise TimeoutError("test did not release the archive writer")
+        save_archive(archive, *args)
+
+    monkeypatch.setattr(WorkbenchRecordingArchive, "save", hold_archive)
     _write_plot_program(config_files, custom_layout=True)
     product = json.loads(config_files["product"].read_text(encoding="utf-8"))
     first, second = product["stations"]
@@ -761,6 +794,7 @@ def test_real_toolbar_waits_for_login_and_resource_admission_then_delivers_group
         assert window.workbench_recording_device.snapshot is not None
         button = window.sequence_window.player_btn
         assert not button.isEnabled()
+        assert _icon_color(button) == play_color
         button.clicked.emit()
         assert submissions == []
         return "Engineer", "test"
@@ -802,6 +836,7 @@ def test_real_toolbar_waits_for_login_and_resource_admission_then_delivers_group
     assert request.sample_rate == 51200
     assert request.target_samples == 128000
     assert not button.isEnabled()
+    assert _icon_color(button, QIcon.Disabled) == pause_color
     group = request.station_group
     assert (group.project_id, group.condition_id) == ("motor", "c1")
     payload = WorkbenchRecordingCompletion(request.request_id, group.project_id, group.condition_id,
@@ -820,7 +855,16 @@ def test_real_toolbar_waits_for_login_and_resource_admission_then_delivers_group
     worker.join(timeout=5)
     assert not worker.is_alive()
     assert completions == []
-    qt_app.processEvents()
+    try:
+        _wait_for_qt(archive_entered.is_set)
+        assert not button.isEnabled()
+        assert _icon_color(button, QIcon.Disabled) == pause_color
+        button.clicked.emit()
+        assert len(submissions) == 1
+        assert completions == analysis_inputs == []
+    finally:
+        archive_release.set()
+        _wait_for_qt(lambda: completions)
     assert completions == [(qt_app.thread(), payload)]
     assert len(analysis_inputs) == 1
     assert analysis_inputs[0].completion is payload
@@ -839,6 +883,7 @@ def test_real_toolbar_waits_for_login_and_resource_admission_then_delivers_group
         ("input1", 7, 0),
     ]
     assert button.isEnabled()
+    assert _icon_color(button) == play_color
     QTest.mouseClick(button, Qt.LeftButton)
     second_session, second_callbacks = submissions[1]
     second_request = second_session.request
@@ -912,6 +957,7 @@ def test_active_switch_refreshes_recording_with_in_flight_snapshot(
         return session
 
     def finish():
+        expected_count = len(completed) + 1
         session, callbacks = submissions[-1]
         request = session.request
         group = request.station_group
@@ -923,6 +969,7 @@ def test_active_switch_refreshes_recording_with_in_flight_snapshot(
             ),
         )
         callbacks.workbench_completed(session, result)
+        _wait_for_qt(lambda: len(completed) == expected_count)
 
     def login(_):
         bridge.change_worker(1)
@@ -998,6 +1045,119 @@ def _wait_for_qt(predicate, timeout=12):
         QTest.qWait(10)
 
 
+def _archive_row_count(database_path):
+    with closing(sqlite3.connect(database_path)) as database:
+        return database.execute("SELECT COUNT(*) FROM audio_data_table").fetchone()[0]
+
+
+def _archive_rows(database_path):
+    manager = RecordingManager()
+    manager.db_path = database_path
+    code, rows = manager.get_record_audio_data()
+    assert code == error_code.OK, rows
+    return {path: tuple(metadata) for _, path, *metadata in rows}
+
+
+@pytest.mark.parametrize("delivery", ["queued", "writing", "writing-fails"])
+def test_close_drains_workbench_archive(startup, config_files, tmp_path, monkeypatch, caplog, delivery):
+    _recording_program(config_files, tmp_path / "audio", monkeypatch)
+    bridge = startup.bridge
+    qt_delivery = RecordingServiceBridge(bridge.service)
+    submissions = []
+
+    def service_start(request, callbacks):
+        session = SimpleNamespace(request=request)
+        submissions.append((session, callbacks))
+        return session
+
+    bridge.service.start = service_start
+    bridge.service.shutdown = bridge.shutdown
+    bridge.start = qt_delivery.start
+    bridge.shutdown = qt_delivery.shutdown
+
+    archive_entered, release_archive = Event(), Event()
+    save_archive = WorkbenchRecordingArchive.save
+
+    def save(archive, completion, product_name, recorded_on):
+        archive_entered.set()
+        if not release_archive.wait(12):
+            raise TimeoutError("test did not release the archive writer")
+        if delivery == "writing-fails":
+            raise WorkbenchRecordingArchiveError("shutdown archive test failure")
+        save_archive(archive, completion, product_name, recorded_on)
+
+    monkeypatch.setattr(WorkbenchRecordingArchive, "save", save)
+
+    def login(_):
+        bridge.change_worker(1)
+        bridge.answer_probe()
+        return "Engineer", "test"
+
+    window = startup.launch(login)
+    window.show()
+    completions, analysis_inputs = [], []
+    window.workbench_recording_completed.connect(completions.append)
+    window.workbench_analysis_input_ready.connect(analysis_inputs.append)
+
+    # Drain other shutdown dependencies so they cannot consume the recording
+    # bridge's Qt events before the close path reaches the archive check.
+    window.video_controller.shutdown()
+    window.raw_audio_csv_bridge.begin_shutdown()
+    _wait_for_qt(lambda: window.video_controller.is_shutdown_complete and window.raw_audio_csv_bridge.service_closed)
+    QTest.mouseClick(window.sequence_window.player_btn, Qt.LeftButton)
+    (session, callbacks), = submissions
+    request = session.request
+    group = request.station_group
+    final_dir = Path(group.final_path)
+    final_dir.mkdir(parents=True)
+    stations = tuple(StationWav(station.station_id, str(final_dir / station.filename), station.channels)
+                     for station in group.stations)
+    for station in stations:
+        sf.write(station.path, np.zeros((8, len(station.channels))), request.sample_rate)
+    result = WorkbenchRecordingCompletion(request.request_id, group.project_id, group.condition_id,
+                                          request.sample_rate, 8, stations)
+
+    def publish():
+        callbacks.workbench_completed(session, result)
+        callbacks.released(session)
+        if delivery == "queued":
+            bridge.service.closed.set()
+
+    publisher = Thread(target=publish)
+    publisher.start()
+    publisher.join(timeout=5)
+    assert not publisher.is_alive()
+    try:
+        if delivery == "queued":
+            assert bridge.service.closed.is_set() and not archive_entered.is_set()
+        else:
+            _wait_for_qt(archive_entered.is_set)
+            assert not bridge.service.closed.is_set()
+        assert not window.close()
+        _wait_for_qt(lambda: archive_entered.is_set() and window._workbench_archive_close_state == "drained")
+        assert bridge.service.closed.is_set()
+        assert window.isVisible()
+        assert _archive_row_count(startup.database_path) == 0
+        assert completions == analysis_inputs == []
+        assert not window.sequence_window.player_btn.isEnabled()
+    finally:
+        release_archive.set()
+        _wait_for_qt(lambda: archive_entered.is_set() and not window._workbench_archive_bridge.pending)
+
+    assert not window.isVisible()
+    assert completions == [result]
+    assert analysis_inputs == []
+    if delivery == "writing-fails":
+        assert _archive_row_count(startup.database_path) == 0
+        failure, = (record for record in caplog.records if "shutdown archive test failure" in record.getMessage())
+        request_id, paths, _ = failure.args
+        assert request_id == request.request_id
+        assert paths == [station.path for station in stations]
+        assert "入库失败" not in window.statusBar().currentMessage()
+    else:
+        assert _archive_row_count(startup.database_path) == len(stations)
+
+
 def test_real_toolbar_reports_uncreatable_product_root_without_fallback(startup, config_files, tmp_path, monkeypatch):
     root = tmp_path / "blocked-root"
     root.write_bytes(b"existing file")
@@ -1037,7 +1197,9 @@ def test_real_toolbar_reports_uncreatable_product_root_without_fallback(startup,
 def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
     startup, config_files, tmp_path, monkeypatch, qt_app,
 ):
-    audio_root = tmp_path / "audio"
+    application_root = tmp_path / "application"
+    monkeypatch.setattr(running_consts, "DEFAULT_DIR", str(application_root))
+    audio_root = application_root / "audio"
     _recording_program(config_files, audio_root, monkeypatch)
     from ui.sequence import motor_workbench_controller as controller_module
     monkeypatch.setattr(controller_module, "datetime", SimpleNamespace(
@@ -1069,10 +1231,11 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
     try:
         window = main_module.MainWindow(recording_bridge=bridge)
         button = window.sequence_window.player_btn
-        completions = []
+        completions, analysis_inputs = [], []
         window.workbench_recording_completed.connect(
             lambda result: completions.append((QThread.currentThread(), result)),
         )
+        window.workbench_analysis_input_ready.connect(analysis_inputs.append)
         assert button.isEnabled()
         QTest.mouseClick(button, Qt.LeftButton)
         button.clicked.emit()
@@ -1081,23 +1244,45 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
             (tmp_path / f"feed-{index}").touch()
         _wait_for_qt(lambda: len(completions) == 1 and button.isEnabled())
         first_paths = set(audio_root.rglob("*.wav"))
+        first_rows = _archive_rows(startup.database_path)
+        assert set(first_rows) == {path.relative_to(application_root).as_posix() for path in first_paths}
 
         (tmp_path / "fail-next-write").touch()
         QTest.mouseClick(button, Qt.LeftButton)
         _wait_for_qt(lambda: QMessageBox.warning.called and button.isEnabled())
         assert "injected workbench write failure" in QMessageBox.warning.call_args.args[-1]
-        assert len(completions) == 1 and set(audio_root.rglob("*.wav")) == first_paths
+        assert len(completions) == len(analysis_inputs) == 1
+        assert set(audio_root.rglob("*.wav")) == first_paths
+        assert _archive_rows(startup.database_path) == first_rows
         QTest.mouseClick(button, Qt.LeftButton)
         _wait_for_qt(lambda: len(completions) == 2 and button.isEnabled())
+
+        archived_before_failure = _archive_rows(startup.database_path)
+        with closing(sqlite3.connect(startup.database_path)) as database, database:
+            database.execute("""
+                CREATE TRIGGER fail_workbench_archive BEFORE INSERT ON audio_data_table
+                WHEN NEW.file_path LIKE '%/工况1/%/工位2.wav'
+                BEGIN SELECT RAISE(ABORT, 'injected workbench archive failure'); END
+            """)
         QTest.mouseClick(button, Qt.LeftButton)
         _wait_for_qt(lambda: len(completions) == 3 and button.isEnabled())
+        message = window.statusBar().currentMessage()
+        assert "工况1" in message and "音频已保存，入库失败" in message
+        assert "injected workbench archive failure" in message
+        assert QMessageBox.warning.call_count == 1
+        assert _archive_rows(startup.database_path) == archived_before_failure
+        assert analysis_inputs[-1].completion is completions[-1][1]
+        QTest.mouseClick(button, Qt.LeftButton)
+        _wait_for_qt(lambda: len(completions) == 4 and button.isEnabled())
 
-        assert [request.station_group.condition_id for request in submissions] == ["c1", "c2", "c2", "c1"]
+        assert [request.station_group.condition_id for request in submissions] == ["c1", "c2", "c2", "c1", "c2"]
         assert all(request.channels == (0, 1, 2) and request.sample_rate == 48000 for request in submissions)
-        assert len({path.parent for path in audio_root.rglob("*.wav")}) == 3
-        assert not (tmp_path / "queue-output").exists()
+        assert len({path.parent for path in audio_root.rglob("*.wav")}) == 4
+        assert not (application_root / "queue-output").exists()
         trace = json.loads((tmp_path / "trace.json").read_text(encoding="utf-8"))
         assert trace["capture_pid"] == trace["writer_pid"] != os.getpid()
+        assert [analysis.completion for analysis in analysis_inputs] == [result for _, result in completions]
+        expected_rows = {}
         for index, ((thread, completed), request) in enumerate(zip(completions, (submissions[0], *submissions[2:]))):
             group = request.station_group
             first = completed.condition_id == "c1"
@@ -1112,7 +1297,7 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
             ]
             final = Path(completed.stations[0].path).parent
             assert final.parent == audio_root / "电机" / ("工况1" if first else "工况2")
-            assert final.name == "2026-11-09_13-14-15-123" + ("_2" if index == 2 else "")
+            assert final.name == "2026-11-09_13-14-15-123" + ("_2" if index >= 2 else "")
             assert len(completed.stations) == len(expected)
             assert not Path(request.path).exists()
             assert sorted(path.name for path in final.iterdir()) == [entry[1] for entry in expected]
@@ -1125,6 +1310,9 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
                 assert (info.frames, info.channels, info.samplerate, info.subtype) == (
                     frames, len(columns), 48000, "PCM_24",
                 )
+                if index != 2:
+                    relative_path = Path(station.path).relative_to(application_root).as_posix()
+                    expected_rows[relative_path] = ("电机", info.samplerate, "2026-11-09", "not_labeled", None, None)
                 audio, _ = sf.read(station.path, dtype="float32", always_2d=True)
                 np.testing.assert_array_equal(audio, generated_audio(2, frames)[:, columns])
                 metadata = read_wav_calibration_metadata(station.path)
@@ -1132,6 +1320,115 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
                         for channel in metadata["recorded_channels"]] == [
                     (wav, physical, 2.5 if physical == 2 else None) for wav, physical in enumerate(columns)
                 ]
+        assert _archive_rows(startup.database_path) == expected_rows
     finally:
         bridge.shutdown()
         assert service.closed.wait(10)
+
+
+def test_real_toolbar_archives_click_snapshot_across_midnight_and_product_switch(
+    startup, config_files, tmp_path, monkeypatch, recording_icon_colors,
+):
+    play_color, pause_color = recording_icon_colors
+    monkeypatch.setattr(running_consts, "DEFAULT_DIR", str(tmp_path / "application"))
+    old_root, new_root = tmp_path / "external" / "old", tmp_path / "external" / "new"
+    product = _recording_program(config_files, old_root, monkeypatch)
+    from ui.sequence import motor_workbench_controller as controller_module
+    now = datetime(2026, 11, 9, 23, 59, 59)
+    monkeypatch.setattr(controller_module, "datetime", SimpleNamespace(now=lambda: now))
+
+    archive_entered, release_archive = Event(), Event()
+    save_archive = WorkbenchRecordingArchive.save
+
+    def save(archive, *args):
+        archive_entered.set()
+        if not release_archive.wait(12):
+            raise TimeoutError("test did not release the archive writer")
+        save_archive(archive, *args)
+
+    monkeypatch.setattr(WorkbenchRecordingArchive, "save", save)
+    service = RecordingService(
+        backend_factory="unit_test.base.recording_process_fakes:workbench_soundcard_dependencies",
+        backend_options={"trace_dir": str(tmp_path), "frames": 12, "chunk_frames": 4, "pause_finalize": True},
+    )
+    bridge = RecordingServiceBridge(service)
+    trace = tmp_path / "trace.json"
+    release_finalize = tmp_path / "release-finalize"
+
+    def finalizer_is_waiting():
+        return trace.is_file() and json.loads(trace.read_text(encoding="utf-8")).get("finalize_waiting_for_release")
+
+    def login(window):
+        _wait_for_qt(lambda: window.workbench_recording_device.snapshot is not None)
+        button = window.sequence_window.player_btn
+        assert not button.isEnabled() and _icon_color(button) == play_color
+        return "Engineer", "test"
+
+    startup.login(login)
+    window = None
+    try:
+        window = main_module.MainWindow(recording_bridge=bridge)
+        completions = []
+        window.workbench_recording_completed.connect(completions.append)
+        button = window.sequence_window.player_btn
+        assert button.isEnabled() and _icon_color(button) == play_color
+        QTest.mouseClick(button, Qt.LeftButton)
+        assert not button.isEnabled() and _icon_color(button, QIcon.Disabled) == pause_color
+
+        _wait_for_qt(finalizer_is_waiting)
+        assert not button.isEnabled() and _icon_color(button, QIcon.Disabled) == pause_color
+        assert not completions and _archive_row_count(startup.database_path) == 0
+
+        now = datetime(2026, 11, 10, 0, 0, 1)
+        manager = ProductTestProjectConfigManager(
+            program_dir=str(config_files["programs"].parent), registry_path=str(config_files["programs"]),
+            queue_registry_path=str(config_files["queues"]),
+        )
+        second_file = config_files["product"].with_name("second.json")
+        write_json(second_file, dict(product, project_id="second", project_name="第二产品",
+                                     result_root_directory=str(new_root), conditions=product["conditions"][::-1]))
+        registry = manager.load_registry()
+        registry["configs"].append({"file": second_file.name, "project_name": "第二产品"})
+        registry["active_file"] = second_file.name
+        assert manager.save_registry(registry)
+        window.on_workbench_configuration_committed()
+        assert window.sequence_window.using_file_combobox.currentText() == "第二产品"
+        assert not button.isEnabled() and _icon_color(button, QIcon.Disabled) == pause_color
+        release_finalize.touch()
+
+        _wait_for_qt(archive_entered.is_set)
+        old_batch = old_root / "电机" / "工况1" / "2026-11-09_23-59-59-000"
+        assert {path.name for path in old_batch.glob("*.wav")} == {"工位1.wav", "工位2.wav"}
+        assert not button.isEnabled() and _icon_color(button, QIcon.Disabled) == pause_color
+        assert not completions and _archive_row_count(startup.database_path) == 0
+        release_archive.set()
+
+        _wait_for_qt(lambda: len(completions) == 1 and button.isEnabled())
+        assert _icon_color(button) == play_color
+        first = completions[0]
+        assert (first.project_id, first.condition_id) == ("motor", "c1")
+        old_paths = {old_batch / "工位1.wav", old_batch / "工位2.wav"}
+        assert {Path(station.path) for station in first.stations} == old_paths
+        expected_rows = {path.as_posix(): ("电机", sf.info(path).samplerate, "2026-11-09", "not_labeled", None, None)
+                         for path in old_paths}
+        assert _archive_rows(startup.database_path) == expected_rows
+
+        QTest.mouseClick(button, Qt.LeftButton)
+        _wait_for_qt(lambda: len(completions) == 2 and button.isEnabled())
+        second = completions[1]
+        assert (second.project_id, second.condition_id) == ("second", "c2")
+        new_path = new_root / "第二产品" / "工况2" / "2026-11-10_00-00-01-000" / "工位2.wav"
+        assert tuple(Path(station.path) for station in second.stations) == (new_path,)
+        expected_rows[new_path.as_posix()] = ("第二产品", sf.info(new_path).samplerate, "2026-11-10",
+                                             "not_labeled", None, None)
+        assert _archive_rows(startup.database_path) == expected_rows
+        assert _icon_color(button) == play_color
+    finally:
+        release_finalize.touch()
+        release_archive.set()
+        if window is None:
+            bridge.shutdown()
+            assert service.closed.wait(10)
+        else:
+            window.close()
+            _wait_for_qt(lambda: getattr(window, "_exit_cleanup_complete", False))

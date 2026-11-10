@@ -640,8 +640,9 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
                 package_files = select_audio_package_files(grouped, selected_kinds)
             file_path_list = [entry.source for entry in package_files]
             archive_names = {entry.source: entry.archive_name for entry in package_files}
-            file_path_list.append("database/audio_data.db")
-            archive_names["database/audio_data.db"] = "audio_data.db"
+            database_path = os.path.abspath(self.recording_manager.db_path)
+            file_path_list.append(database_path)
+            archive_names[database_path] = "audio_data.db"
             # Opening the output ZIP truncates it before any source is read.
             # Keep this check inside the input permit, including hardlink aliases.
             output_key = os.path.normcase(os.path.abspath(file_path))
@@ -651,7 +652,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
                         or (os.path.exists(file_path) and os.path.exists(source_path)
                             and os.path.samefile(file_path, source_path))):
                     raise ValueError("输出压缩文件不能与待打包文件相同，请选择其他保存位置。")
-            self._start_audio_package(file_path_list, file_path, archive_names)
+            self._start_audio_package(file_path_list, file_path, archive_names, database_path=database_path)
             # Qt finished delivery is queued, so ownership transfers before it runs.
             self._package_mutation_permit = permit
             permit = None
@@ -662,8 +663,8 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             if permit is not None:
                 self.raw_audio_csv_service.release_mutation(permit)
 
-    def _start_audio_package(self, file_paths, output_path, archive_names):
-        thread = AudioPackageThread(file_paths, output_path, archive_names, self)
+    def _start_audio_package(self, file_paths, output_path, archive_names, *, database_path):
+        thread = AudioPackageThread(file_paths, output_path, archive_names, self, database_path=database_path)
         progress = None
         try:
             # Qt object creation/setup and QThread launch can fail before any
