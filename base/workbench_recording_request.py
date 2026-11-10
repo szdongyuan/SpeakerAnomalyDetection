@@ -215,7 +215,7 @@ def _build_recording_request(condition, stations, detail, device_snapshot, recor
         wav_directory = os.path.join(
             _recording_root(result_root_directory),
             _safe_name(project_name, "产品"),
-            "wav",
+            "audio",
         )
         timestamp = recorded_at.strftime("%Y-%m-%d_%H-%M-%S-") + f"{recorded_at.microsecond // 1000:03d}"
         names = tuple(_station_wav_names(

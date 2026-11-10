@@ -885,7 +885,7 @@ def test_real_toolbar_waits_for_login_and_resource_admission_then_delivers_group
     assert len(build_analysis_payload(analysis_inputs)["tasks"]) == len(payload.stations)
     first_wav, second_wav = completions[0][1].stations
     assert (first_wav.station_id, second_wav.station_id) == ("s1", "s2")
-    wav_dir = Path(product["result_root_directory"]) / "电机" / "wav"
+    wav_dir = Path(product["result_root_directory"]) / "电机" / "audio"
     assert Path(group.final_path) == Path(request.path).parent == wav_dir
     assert Path(first_wav.path) == wav_dir / "2026-11-10_14-03-16-123_工位1_工况1_M-02_007.wav"
     assert Path(second_wav.path) == wav_dir / "2026-11-10_14-03-16-123_工位2_工况1_M-02_007.wav"
@@ -1219,7 +1219,7 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
     audio_root = application_root / "audio"
     _recording_program(config_files, audio_root, monkeypatch)
     product_dir = audio_root / "电机"
-    wav_dir = product_dir / "wav"
+    wav_dir = product_dir / "audio"
     from ui.sequence import motor_workbench_controller as controller_module
     monkeypatch.setattr(controller_module, "datetime", SimpleNamespace(
         now=lambda: datetime(2026, 11, 9, 13, 14, 15, 123999)))
@@ -1312,7 +1312,7 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
         with closing(sqlite3.connect(startup.database_path)) as database, database:
             database.execute("""
                 CREATE TRIGGER fail_workbench_archive BEFORE INSERT ON audio_data_table
-                WHEN NEW.file_path = 'audio/电机/wav/2026-11-09_13-14-15-123_工位2_工况1_M-02_007_2_SN-008.wav'
+                WHEN NEW.file_path = 'audio/电机/audio/2026-11-09_13-14-15-123_工位2_工况1_M-02_007_2_SN-008.wav'
                 BEGIN SELECT RAISE(ABORT, 'injected workbench archive failure'); END
             """)
         QTest.mouseClick(button, Qt.LeftButton)
@@ -1459,7 +1459,7 @@ def test_real_toolbar_archives_click_snapshot_across_midnight_and_product_switch
         release_finalize.touch()
 
         _wait_for_qt(archive_entered.is_set)
-        old_dir = old_root / "电机" / "wav"
+        old_dir = old_root / "电机" / "audio"
         old_paths = {
             old_dir / f"2026-11-09_23-59-59-000_{station}_工况1_M-02_007_SN-OLD.wav"
             for station in ("工位1", "工位2")
@@ -1483,7 +1483,7 @@ def test_real_toolbar_archives_click_snapshot_across_midnight_and_product_switch
         second = completions[1]
         assert (second.project_id, second.condition_id) == ("second", "c2")
         assert sequence.barcode_scanner_box.isChecked()
-        new_path = new_root / "第二产品" / "wav" / "2026-11-10_00-00-01-000_工位2_工况2_M-03_009.wav"
+        new_path = new_root / "第二产品" / "audio" / "2026-11-10_00-00-01-000_工位2_工况2_M-03_009.wav"
         assert tuple(Path(station.path) for station in second.stations) == (new_path,)
         expected_rows[new_path.as_posix()] = ("第二产品", sf.info(new_path).samplerate, "2026-11-10",
                                              "not_labeled", None, None)

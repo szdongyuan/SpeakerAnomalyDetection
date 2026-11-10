@@ -142,7 +142,7 @@ def test_readable_paths_collision_allocation_and_one_calibration_snapshot(loaded
     )
     assert calibration.reads == 2
     group = first.station_group
-    assert Path(group.final_path) == Path(context.result_root_directory) / "电机" / "wav"
+    assert Path(group.final_path) == Path(context.result_root_directory) / "电机" / "audio"
     assert first.path != second.path
     assert Path(first.path).parent == Path(group.final_path)
     assert Path(first.path).name.endswith("-take-1.staging")
