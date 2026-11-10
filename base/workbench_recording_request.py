@@ -212,9 +212,10 @@ def _build_recording_request(condition, stations, detail, device_snapshot, recor
         if kept_frames < 1:
             raise ValueError(f"录制时长在设备采样率 {sample_rate} Hz 下不足一帧。")
         trim_samples = resolve_startup_trim_samples(detail, sample_rate)
-        root = os.path.join(
+        wav_directory = os.path.join(
             _recording_root(result_root_directory),
             _safe_name(project_name, "产品"),
+            "wav",
         )
         timestamp = recorded_at.strftime("%Y-%m-%d_%H-%M-%S-") + f"{recorded_at.microsecond // 1000:03d}"
         names = tuple(_station_wav_names(
@@ -240,14 +241,15 @@ def _build_recording_request(condition, stations, detail, device_snapshot, recor
             plans.append(StationRecordingPlan(station.station_id, filename,
                                              channels, station_metadata, wav_name=candidate))
         group = StationRecordingGroup(
-            project_id, condition.condition_id, root, tuple(plans),
+            project_id, condition.condition_id, wav_directory, tuple(plans),
             prepared_generation=device_snapshot.generation,
             publish_into_parent=True,
         )
         preview_options = {} if preview_time_mode is None else {"preview_time_mode": preview_time_mode}
         return RecordingRequest(
             recording_id, "main", sample_rate, kept_frames + trim_samples, device_snapshot.channels,
-            device, os.path.join(root, f".{timestamp}-{recording_id}.staging"), True, trim_samples, {}, None,
+            device, os.path.join(wav_directory, f".{timestamp}-{recording_id}.staging"),
+            True, trim_samples, {}, None,
             thresholds, station_group=group, **preview_options,
         )
     except (ValueError, OverflowError, OSError) as exc:

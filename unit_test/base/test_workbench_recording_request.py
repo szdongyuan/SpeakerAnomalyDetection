@@ -77,7 +77,7 @@ def test_flat_wav_name_uses_click_fields_and_reference_sanitizer(recording_confi
         ve_calibration_store=ChangingCalibrationStore(),
     )
     group = request.station_group
-    assert Path(group.final_path) == Path(recording.context.result_root_directory) / "产品 配置"
+    assert Path(group.final_path) == Path(recording.context.result_root_directory) / "产品 配置" / "wav"
     assert Path(request.path).parent == Path(group.final_path)
     assert group.publish_into_parent and not group.allocate_final_path
     assert [station.filename for station in group.stations] == [
@@ -169,7 +169,7 @@ def test_uses_device_rate_and_one_full_calibration_snapshot(recording_config, tm
     assert request.validation_thresholds["min_peak"] == 0.7
     group = request.station_group
     assert group.prepared_generation == device.generation
-    assert Path(request.path).parent == Path(group.final_path) == Path(recording.context.result_root_directory) / "产品甲"
+    assert Path(request.path).parent == Path(group.final_path) == Path(recording.context.result_root_directory) / "产品甲" / "wav"
     assert request.path != group.final_path
     assert not Path(request.path).parent.exists()
     first, second = group.stations
@@ -194,7 +194,7 @@ def test_uses_device_rate_and_one_full_calibration_snapshot(recording_config, tm
     assert second_meta["recorded_channels"][0]["v2pa_factor"] == 10
 
 
-def test_repeated_timestamp_has_unique_staging_and_product_root(recording_config, tmp_path, monkeypatch):
+def test_repeated_timestamp_has_unique_staging_in_product_wav_directory(recording_config, tmp_path, monkeypatch):
     recording, stations, device = recording_config
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(model_consts, "STORED_RECORDED_PATH", "default")
@@ -206,7 +206,7 @@ def test_repeated_timestamp_has_unique_staging_and_product_root(recording_config
     )
     assert first.path != retry.path
     assert first.station_group.final_path == retry.station_group.final_path
-    assert Path(first.path).parent == Path(recording.context.result_root_directory) / "产品甲"
+    assert Path(first.path).parent == Path(recording.context.result_root_directory) / "产品甲" / "wav"
     assert first.station_group.publish_into_parent is True
     assert not (tmp_path / "default").exists()
 
@@ -229,7 +229,7 @@ def test_windows_safe_names_and_case_insensitive_suffix_clashes(recording_config
     recording = recording_with(recording, condition_name="CON", applicable_station_ids=tuple(s.station_id for s in stations))
     request = request_for(recording, stations, device, "take", project_name="../产品:甲",
                                                ve_calibration_store=ChangingCalibrationStore())
-    assert Path(request.station_group.final_path).name == "_产品_甲"
+    assert Path(request.station_group.final_path) == Path(recording.context.result_root_directory) / "_产品_甲" / "wav"
     assert [s.filename for s in request.station_group.stations] == [
         f"2026-11-09_00-00-00-000_{name}.wav" for name in [
             "工位_CON_M-02_007", "工位_CON_M-02_007_2", "工位_2_CON_M-02_007",
