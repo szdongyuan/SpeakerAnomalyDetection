@@ -18,7 +18,7 @@ from base.workbench_analysis_input import (
     AnalysisRecordingContext, WorkbenchAnalysisInput, WorkbenchAnalysisInputError,
     build_analysis_payload, make_analysis_recording_context,
 )
-from ui.sequence.workbench_ui_projection import build_ui_projection, _PlotBindings
+from ui.sequence.workbench_ui_projection import build_ui_projection, WorkbenchUiProjection, _PlotBindings
 from base.recording_service import RecordingCallbacks
 from base.workbench_recording_protocol import WorkbenchRecordingCompletion
 from base.workbench_recording_request import (
@@ -44,6 +44,16 @@ class WorkbenchRecordingPorts:
     notify_archive_error: Callable[[str], None]
     is_closing: Callable[[], bool] = lambda: False
     ve_calibration_store: object = None
+
+
+@dataclass(frozen=True)
+class WorkbenchProductSelectionPorts:
+    product_manager: object
+    show_catalog: Callable[[tuple[tuple[str, str], ...], str], None]
+    set_enabled: Callable[[bool], None]
+    is_busy: Callable[[], bool]
+    is_closing: Callable[[], bool]
+    notify_error: Callable[[str], None]
 
 
 @dataclass(frozen=True)
@@ -79,6 +89,9 @@ class MotorWorkbenchController:
         self._show_video_settings = show_video_settings
         self._initialized = False
         self._applied_config: WorkbenchConfiguration | None = None
+        self._applied_source_identity = ""
+        self._product_selection: WorkbenchProductSelectionPorts | None = None
+        self._product_catalog: tuple[tuple[str, str], ...] = ()
         self._plot_bindings: tuple[tuple[_PlotBindings, ...], ...] = ()
         self._recording: WorkbenchRecordingPorts | None = None
         self._configuration_valid = False
@@ -95,6 +108,9 @@ class MotorWorkbenchController:
         self._condition_index = 0
         self._in_flight: _InFlightRecording | None = None
 
+    def set_toolbar_mode(self, mode: str) -> None:
+        self._plot_grid.set_mark_buttons_visible(mode == "mark")
+
     def refresh_configuration(self) -> None:
         """Read the active configuration and replace both displays if it changed."""
         if not self._initialized:
@@ -109,8 +125,88 @@ class MotorWorkbenchController:
             self.refresh_recording_state()
             return
 
-        if config != self._applied_config:
+        source_identity = self._repository.source_identity if config is not None else ""
+        source_changed = self._product_selection is not None and source_identity != self._applied_source_identity
+        if config != self._applied_config or source_changed:
             self._apply_configuration(config)
+        else:
+            self._applied_source_identity = source_identity
+        self._configuration_valid = True
+        self.refresh_product_catalog()
+        self._refresh_recording_configuration()
+        self._sync_analysis_stations()
+
+    def bind_product_selection(self, ports: WorkbenchProductSelectionPorts) -> None:
+        self._product_selection = ports
+        self.refresh_product_catalog()
+
+    def _selected_product_file(self) -> str:
+        return Path(self._applied_source_identity).name if self._applied_source_identity else ""
+
+    def _product_selection_allowed(self) -> bool:
+        ports = self._product_selection
+        return (
+            ports is not None and self._in_flight is None
+            and not ports.is_closing() and not ports.is_busy()
+        )
+
+    def refresh_product_selection_state(self) -> None:
+        if self._product_selection is not None:
+            self._product_selection.set_enabled(self._product_selection_allowed())
+
+    def _publish_product_selection(self) -> None:
+        if self._product_selection is not None:
+            self._product_selection.show_catalog(self._product_catalog, self._selected_product_file())
+            self.refresh_product_selection_state()
+
+    def _report_product_selection_error(self, message: str) -> None:
+        logging.getLogger("core").warning("Workbench product selection: %s", message)
+        self._publish_product_selection()
+        self._product_selection.notify_error(message)
+
+    def refresh_product_catalog(self) -> None:
+        if self._product_selection is None:
+            return
+        try:
+            catalog = self._repository.load_product_catalog()
+        except WorkbenchConfigurationError as error:
+            self._report_product_selection_error(str(error))
+            return
+        self._product_catalog = catalog
+        self._publish_product_selection()
+
+    def select_product(self, file_name: str) -> None:
+        """Prepare one candidate, persist its selection, then publish that snapshot."""
+        if not self._product_selection_allowed():
+            self._publish_product_selection()
+            return
+        try:
+            catalog = self._repository.load_product_catalog()
+            if not any(file == file_name for file, _ in catalog):
+                raise WorkbenchConfigurationError(f"产品配置 {file_name!r} 已不在配置列表中")
+            self._product_catalog = catalog
+            if file_name == self._selected_product_file():
+                self._publish_product_selection()
+                return
+            candidate = self._repository.load_candidate(file_name)
+            projection = build_ui_projection(candidate.ui, candidate.analysis)
+        except WorkbenchConfigurationError as error:
+            self._report_product_selection_error(str(error))
+            return
+        if not self._product_selection_allowed():
+            self._publish_product_selection()
+            return
+        try:
+            saved, message = self._product_selection.product_manager.set_active_product(file_name)
+        except (OSError, ValueError) as error:
+            self._report_product_selection_error(str(error))
+            return
+        if not saved:
+            self._report_product_selection_error(message)
+            return
+        self._repository.accept_product_source(file_name)
+        self._apply_configuration(candidate, projection)
+        self._initialized = True
         self._configuration_valid = True
         self._refresh_recording_configuration()
         self._sync_analysis_stations()
@@ -211,20 +307,25 @@ class MotorWorkbenchController:
 
     def _refresh_recording_configuration(self):
         if self._recording is None:
+            self.refresh_recording_state()
             return
         config = self._applied_config
-        key = recording_config_key(config.recording, source_identity=self._repository.source_identity) if config is not None else None
+        key = recording_config_key(config.recording, source_identity=self._applied_source_identity) if config is not None else None
         if key != self._recording_key:
             self._recording_key = key
             self._configuration_revision += 1
             self._condition_index = 0
         self.refresh_recording_state()
 
-    def _apply_configuration(self, config: WorkbenchConfiguration | None) -> None:
+    def _apply_configuration(
+        self, config: WorkbenchConfiguration | None, projection: WorkbenchUiProjection | None = None,
+    ) -> None:
+        source_identity = self._repository.source_identity if config is not None else ""
         if config is None:
             stations, names, cells, bindings, product_name = (), (), (), (), ""
         else:
-            projection = build_ui_projection(config.ui, config.analysis)
+            if projection is None:
+                projection = build_ui_projection(config.ui, config.analysis)
             stations = projection.stations
             names, cells, bindings = projection.column_names, projection.cells, projection.bindings
             product_name = config.recording.context.project_name
@@ -232,16 +333,21 @@ class MotorWorkbenchController:
         previous = self.get_analysis_config()
         analysis = config.analysis if config is not None else None
         analysis_version = self._analysis_version
-        if analysis != previous:
+        source_changed = self._product_selection is not None and source_identity != self._applied_source_identity
+        if analysis != previous or source_changed:
             analysis_version = uuid4().hex if analysis is not None else None
             self._latest_analysis_tasks.clear()
 
+        logging.getLogger("core").info("Applying workbench configuration from %s", source_identity)
         self._station_panel.show_workbench_stations(stations)
         self._plot_grid.show_workbench_layout(names, cells)
-        self._set_active_product(product_name)
+        if self._product_selection is None:
+            self._set_active_product(product_name)
         self._applied_config = config
+        self._applied_source_identity = source_identity
         self._analysis_version = analysis_version
         self._plot_bindings = bindings
+        self._publish_product_selection()
 
     def _recording_admission(self):
         ports = self._recording
@@ -278,6 +384,7 @@ class MotorWorkbenchController:
         return snapshot, f"开始录制工况「{config.recording.context.conditions[self._condition_index].condition_name}」"
 
     def refresh_recording_state(self) -> None:
+        self.refresh_product_selection_state()
         if self._recording is not None:
             snapshot, detail = self._recording_admission()
             self._recording.set_button_state(snapshot is not None, detail, self._in_flight is not None)

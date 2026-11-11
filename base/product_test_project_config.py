@@ -60,6 +60,21 @@ class ProductTestProjectConfigManager:
     def save_registry(self, registry):
         return LoadUiConfig.save_data_to_json(registry, self.registry_path)
 
+    def set_active_product(self, file_name) -> tuple[bool, str]:
+        try:
+            registry = self.load_registry()
+            if not self._is_safe_file_name(file_name) or not any(
+                item["file"] == file_name for item in registry["configs"]
+            ):
+                return False, "目标产品配置已不在配置列表中"
+            updated = copy.deepcopy(registry)
+            updated["active_file"] = file_name
+            if not self.save_registry(updated):
+                return False, "当前配置记录保存失败，请检查配置目录权限"
+        except (OSError, ValueError) as error:
+            return False, str(error)
+        return True, file_name
+
     def load_project(self, file_name):
         if not self._is_safe_file_name(file_name):
             return error_code.INVALID_DATA_LOADING, "配置文件名无效"

@@ -136,8 +136,9 @@ class AnalysisStatusButton(QPushButton):
 
 class SequenceToolsBar(QWidget):
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, workbench_mode=False):
         super().__init__(parent)
+        self._workbench_mode = workbench_mode
         self.setObjectName("sequenceToolsBar")
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -151,10 +152,16 @@ class SequenceToolsBar(QWidget):
         # 元数据、进度恢复和重置仍使用轮次值；不再作为可见输入项。
         self.current_round_spinbox = ElidingSpinBox(self)
         self.current_round_spinbox.hide()
-        # 历史模式同步仍依赖该对象；仅从操作界面隐藏。
         self.condition_mode_combobox = QComboBox(self)
-        self.condition_mode_combobox.addItems(["测试", "标记"])
-        self.condition_mode_combobox.hide()
+        self.condition_mode_combobox.addItem("测试", "test")
+        self.condition_mode_combobox.addItem("标记", "mark")
+        if workbench_mode:
+            self.condition_mode_combobox.setCurrentIndex(1)
+            self.condition_mode_combobox.setAccessibleName("工作台显示模式")
+            self.condition_mode_combobox.setFixedHeight(35)
+            self.condition_mode_combobox.setStyleSheet(ui_style_const.toolbar_combobox_style)
+        else:
+            self.condition_mode_combobox.hide()
         self.lineedit_type = ModelLineEdit()
         self.lineedit_count = QLineEdit()
         self.lineedit_s_or_n = ElidingLineEdit()
@@ -210,7 +217,19 @@ class SequenceToolsBar(QWidget):
             layout.add_control(label, "label")
             layout.add_control(widget, "input", 55, preferred)
             layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
-        layout.add_control(self.reset_round_button, "fixed", 52, 52)
+        if self._workbench_mode:
+            self.reset_round_button.hide()
+            combo = self.condition_mode_combobox
+            label = ToolbarFieldLabel("模式：", "模式：")
+            label.setFixedHeight(40)
+            label.setStyleSheet(ui_style_const.toolbar_field_label_style)
+            label.setBuddy(combo)
+            layout.add_control(label, "label")
+            combo.ensurePolished()
+            width = max(55, combo.sizeHint().width()) + 20
+            layout.add_control(combo, "fixed", width, width)
+        else:
+            layout.add_control(self.reset_round_button, "fixed", 52, 52)
         layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
         layout.add_control(self.barcode_scanner_box, "switch")
         layout.add_control(self.lineedit_s_or_n, "sn", 125, 320)
@@ -300,7 +319,7 @@ class SequenceToolsBar(QWidget):
         self.current_round_spinbox.setAccessibleName("当前测试轮次")
         self.current_round_spinbox.setAccessibleDescription("请输入当前测试轮次")
         self.current_round_spinbox.setStyleSheet(ui_style_const.toolbar_spinbox_style)
-        self.reset_round_button = QPushButton("重置")
+        self.reset_round_button = QPushButton("重置", self)
         self.reset_round_button.setObjectName("resetCurrentRoundButton")
         self.reset_round_button.setFixedSize(52, 35)
         self.reset_round_button.setToolTip("重置当前轮次")

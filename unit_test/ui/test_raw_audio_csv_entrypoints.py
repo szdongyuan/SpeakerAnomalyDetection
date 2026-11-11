@@ -5,7 +5,7 @@ import sys
 from unittest.mock import Mock
 
 import pytest
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QComboBox, QWidget
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -81,10 +81,14 @@ def test_main_owns_fallback_and_shares_with_sequence(ui_qapp, monkeypatch, injec
         sequence.left_panel = Mock()
         sequence.plot_grid = Mock()
         sequence.set_workbench_active_product = Mock()
+        sequence.show_workbench_products = Mock()
+        sequence.set_workbench_product_selection_enabled = Mock()
+        sequence.using_file_combobox = QComboBox(sequence)
         sequence.update_v2pa_factor = Mock()
         factory = Mock(return_value=sequence)
         monkeypatch.setattr(module, "SequenceWindow", factory)
         monkeypatch.setattr(module, "MotorWorkbenchController", Mock())
+        monkeypatch.setattr(window, "_bind_workbench_toolbar_mode", Mock())
         monkeypatch.setattr(window, "init_menu", lambda: QWidget())
         monkeypatch.setattr(window, "set_title", lambda: QWidget())
         monkeypatch.setattr(window, "_create_menu_row", lambda menu: QWidget())

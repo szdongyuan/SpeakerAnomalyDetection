@@ -120,6 +120,122 @@ def repository(config_files):
     )
 
 
+def register_candidate(config_files):
+    candidate = config_files["product"].with_name("second.json")
+    product = json.loads(config_files["product"].read_text(encoding="utf-8"))
+    product["project_id"] = "second"
+    write_json(candidate, product)
+    registry = json.loads(config_files["programs"].read_text(encoding="utf-8"))
+    registry["configs"].append({"file": candidate.name, "project_name": "电机"})
+    write_json(config_files["programs"], registry)
+    return candidate
+
+
+def test_product_catalog_preserves_order_and_file_identity(repository, config_files):
+    repository.load_active()
+    source = repository.source_identity
+    candidate = register_candidate(config_files)
+    before = {path: path.read_bytes() for path in (*config_files.values(), candidate)}
+
+    assert repository.load_product_catalog() == (("motor.json", "电机"), ("second.json", "电机"))
+    assert repository.source_identity == source
+    assert before == {path: path.read_bytes() for path in before}
+
+
+def test_active_and_candidate_load_without_layout_preserve_business_data(repository, config_files):
+    candidate = register_candidate(config_files)
+    expected = repository.load_active()
+    source = repository.source_identity
+    config_files["layout"].unlink()
+
+    active = repository.load_active()
+    snapshot = repository.load_candidate(candidate.name)
+
+    assert active.ui.layout is snapshot.ui.layout is None
+    assert active.recording == expected.recording
+    assert active.analysis == expected.analysis
+    assert snapshot.recording.context.project_id == "second"
+    assert snapshot.analysis.test_queues == expected.analysis.test_queues
+    assert repository.source_identity == source
+    assert not config_files["layout"].exists()
+
+
+@pytest.mark.parametrize("active_file", ["motor.json", None, "unregistered.json"])
+def test_candidate_load_is_validated_without_accepting_source(repository, config_files, active_file):
+    repository.load_active()
+    source = repository.source_identity
+    candidate = register_candidate(config_files)
+    registry = json.loads(config_files["programs"].read_text(encoding="utf-8"))
+    registry["active_file"] = active_file
+    write_json(config_files["programs"], registry)
+    before = {path: path.read_bytes() for path in (*config_files.values(), candidate)}
+
+    snapshot = repository.load_candidate(candidate.name)
+
+    assert snapshot.recording.context.project_id == "second"
+    assert snapshot.recording.parameters_for("c2")["total_time"] == 2.5
+    assert snapshot.analysis.test_queues["Shared"].analysis_config["display_sequence"] == ("B", "A")
+    assert snapshot.ui.layout.columns == 4
+    assert repository.source_identity == source
+    assert before == {path: path.read_bytes() for path in before}
+    repository.accept_product_source(candidate.name)
+    assert repository.source_identity == str(candidate)
+
+
+@pytest.mark.parametrize(("target", "entry", "diagnostic"), [
+    ("unknown.json", None, "not registered"),
+    (r"C:\outside.json", {"file": r"C:\outside.json", "project_name": "电机"}, "plain JSON filename"),
+    ("../outside.json", {"file": "../outside.json", "project_name": "电机"}, "plain JSON filename"),
+    ("CON.json", {"file": "CON.json", "project_name": "电机"}, "plain JSON filename"),
+    ("second.json", [], "must be an object"),
+    ("second.json", {"file": "second.json", "project_name": ""}, "nonempty string"),
+    ("motor.json", {"file": "motor.json", "project_name": "电机"}, "duplicate"),
+])
+def test_candidate_load_rejects_unknown_and_unsafe_files(
+    repository, config_files, target, entry, diagnostic,
+):
+    repository.load_active()
+    source = repository.source_identity
+    if entry is not None:
+        registry = json.loads(config_files["programs"].read_text(encoding="utf-8"))
+        registry["configs"].append(entry)
+        write_json(config_files["programs"], registry)
+    before = config_files["programs"].read_bytes()
+
+    with pytest.raises(WorkbenchConfigurationError, match=diagnostic):
+        repository.load_candidate(target)
+    if entry is not None:
+        with pytest.raises(WorkbenchConfigurationError, match=diagnostic):
+            repository.load_product_catalog()
+
+    assert repository.source_identity == source
+    assert config_files["programs"].read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", ["missing product", "bad product", "bad queue", "bad layout"])
+def test_candidate_load_failure_preserves_source(repository, config_files, failure):
+    repository.load_active()
+    source = repository.source_identity
+    candidate = register_candidate(config_files)
+    if failure == "missing product":
+        candidate.unlink()
+        broken_path = candidate
+    else:
+        broken_path = {
+            "bad product": candidate, "bad queue": config_files["shared"],
+            "bad layout": config_files["layout"],
+        }[failure]
+        write_json(broken_path, {})
+    before = config_files["programs"].read_bytes()
+
+    with pytest.raises(WorkbenchConfigurationError) as caught:
+        repository.load_candidate(candidate.name)
+
+    assert str(broken_path) in str(caught.value)
+    assert repository.source_identity == source
+    assert config_files["programs"].read_bytes() == before
+
+
 def test_load_active_preserves_order_and_parameters(repository, config_files):
     config = repository.load_active()
 
@@ -270,7 +386,6 @@ def test_active_product_accepts_empty_conditions(repository, config_files):
     ("queues", "encoding", UnicodeDecodeError),
     ("product", "missing", FileNotFoundError),
     ("layout", "json", json.JSONDecodeError),
-    ("layout", "missing", FileNotFoundError),
     ("shared", "missing", FileNotFoundError),
 ])
 def test_file_errors_have_path_and_cause(repository, config_files, file_key, breakage, cause):

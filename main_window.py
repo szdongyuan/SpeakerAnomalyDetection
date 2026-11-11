@@ -15,6 +15,7 @@ from base.log_manager import LogManager
 from base.db_manager import DataSave
 from base.hardware_selection import restore_or_default
 from base.motor_workbench_config import MotorWorkbenchConfigRepository
+from base.product_test_project_config import ProductTestProjectConfigManager
 from base.sound_device_manager import SoundDeviceManager
 from base.workbench_recording_archive import WorkbenchRecordingArchive
 from base.workbench_recording_protocol import WorkbenchRecordingCompletion
@@ -27,7 +28,10 @@ from ui.hardware_window import open_hardware_selection_window
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
 from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
-from ui.sequence.motor_workbench_controller import MotorWorkbenchController, WorkbenchRecordingPorts
+from ui.sequence import workbench_toolbar_preferences
+from ui.sequence.motor_workbench_controller import (
+    MotorWorkbenchController, WorkbenchProductSelectionPorts, WorkbenchRecordingPorts,
+)
 from ui.sequence.sequence_widget import SequenceWindow
 from ui.vkinging_presentation import device_display_name, ve_failure_text
 from ui.workbench_recording_archive_bridge import WorkbenchRecordingArchiveBridge
@@ -517,6 +521,7 @@ class MainWindow(QMainWindow):
         workbench_device = getattr(self, "workbench_recording_device", None)
         if workbench_device is not None:
             workbench_device.refresh()
+        if getattr(self, "workbench_controller", None) is not None:
             self.workbench_controller.refresh_recording_state()
         privileged = self.access_lvl in ("Engineer", "Admin")
         self.hardware_action_selection.setEnabled(
@@ -681,6 +686,31 @@ class MainWindow(QMainWindow):
             self.video_controller.show_settings,
         )
         card.settings_requested.connect(self.workbench_controller.open_video_settings)
+        self._bind_workbench_toolbar_mode()
+        controller = self.workbench_controller
+        controller.bind_product_selection(WorkbenchProductSelectionPorts(
+            product_manager=ProductTestProjectConfigManager(),
+            show_catalog=sequence.show_workbench_products,
+            set_enabled=sequence.set_workbench_product_selection_enabled,
+            is_busy=lambda: (
+                sequence._product_configuration_refresh_busy()
+                or bool(getattr(getattr(self, "analysis_service", None), "pending_task_count", 0))
+                or bool(getattr(self.recording_bridge, "hardware_busy", False))
+                or bool(getattr(getattr(self.recording_bridge, "service", None), "busy", False))
+            ),
+            is_closing=lambda: (
+                getattr(self, "_closing", False) or getattr(self, "_recording_close_requested", False)
+            ),
+            notify_error=lambda detail: QMessageBox.warning(self, "工作台产品配置", detail),
+        ))
+        combo = sequence.using_file_combobox
+        combo.before_show_popup = controller.refresh_product_catalog
+
+        def select_product(index):
+            if index >= 0:
+                controller.select_product(combo.itemData(index))
+
+        combo.currentIndexChanged.connect(select_product)
         self.workbench_controller.refresh_configuration()
         menu_bar = self.init_menu()
         title_bar = self.set_title()
@@ -699,6 +729,20 @@ class MainWindow(QMainWindow):
         self.sequence_window.mic_channels = self.mic_channels
         if (self.mic or {}).get("backend") != "vkinging":
             self.sequence_window.update_v2pa_factor()
+
+    def _bind_workbench_toolbar_mode(self):
+        combo = self.sequence_window.condition_mode_combobox
+        mode = workbench_toolbar_preferences.load_mode(self.default_logger)
+        combo.setCurrentIndex(combo.findData(mode))
+        self.workbench_controller.set_toolbar_mode(mode)
+        combo.currentIndexChanged.connect(self._on_workbench_toolbar_mode_changed)
+
+    def _on_workbench_toolbar_mode_changed(self, index):
+        mode = self.sequence_window.condition_mode_combobox.itemData(index)
+        if mode is None:
+            return
+        self.workbench_controller.set_toolbar_mode(mode)
+        workbench_toolbar_preferences.save_mode(mode, self.default_logger)
 
     def _expand_sequence_workspace(self):
         """Let the logged-in workspace consume the remaining window height."""

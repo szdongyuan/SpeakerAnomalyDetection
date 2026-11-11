@@ -62,7 +62,7 @@ class SequenceWindow(
         self.data_struct = DataDealStruct()
         self.recorded_path = None
         self.count_board = None
-        self.toolsbar = SequenceToolsBar()
+        self.toolsbar = SequenceToolsBar(workbench_mode=self.workbench_mode)
 
         self.mic = None
         self.mic_channels = []

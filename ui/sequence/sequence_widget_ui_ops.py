@@ -39,6 +39,8 @@ class SequenceWidgetUiOpsMixin:
 
 
     def _sync_condition_mode_combobox_from_count_board(self):
+        if getattr(self, "workbench_mode", False):
+            return
         combo = getattr(getattr(self, "toolsbar", None), "condition_mode_combobox", None)
         if combo is None:
             return
@@ -217,7 +219,6 @@ class SequenceWidgetUiOpsMixin:
 
         if getattr(self, "workbench_mode", False):
             self.set_workbench_recording_state(False, "正在准备录制设备…")
-            self.using_file_combobox.setEnabled(False)
             self.using_file_combobox.setPlaceholderText("未选择产品")
         else:
             self.add_file_to_using_file_combobox()
@@ -268,8 +269,8 @@ class SequenceWidgetUiOpsMixin:
             if hasattr(self.using_file_combobox, "before_show_popup"):
                 self.using_file_combobox.before_show_popup = self.update_using_file_combobox
             self.using_file_combobox.currentTextChanged.connect(self.on_using_file_combobox_changed)
-        self.condition_mode_combobox.currentTextChanged.connect(self.on_condition_mode_combobox_changed)
-        self._sync_condition_mode_combobox_from_count_board()
+            self.condition_mode_combobox.currentTextChanged.connect(self.on_condition_mode_combobox_changed)
+            self._sync_condition_mode_combobox_from_count_board()
 
     def set_workbench_recording_state(self, enabled, detail, busy=False):
         self.toolsbar.set_recording_busy(busy)
@@ -285,6 +286,25 @@ class SequenceWidgetUiOpsMixin:
                 combo.addItem(product_name)
                 combo.setCurrentIndex(0)
         combo.setToolTip(f"<qt>{escape(product_name)}</qt>" if product_name else "")
+
+    def show_workbench_products(self, entries, selected_file):
+        combo = self.using_file_combobox
+        name_counts = {}
+        for _, name in entries:
+            name_counts[name] = name_counts.get(name, 0) + 1
+        with QSignalBlocker(combo):
+            combo.clear()
+            for file_name, name in entries:
+                label = f"{name}（{file_name}）" if name_counts[name] > 1 else name
+                combo.addItem(label, file_name)
+                combo.setItemData(combo.count() - 1, f"<qt>{escape(name)}<br>{escape(file_name)}</qt>", Qt.ToolTipRole)
+            combo.setPlaceholderText("未选择产品" if entries else "暂无配置")
+            combo.setCurrentIndex(combo.findData(selected_file))
+        hint = combo.itemData(combo.currentIndex(), Qt.ToolTipRole) or ""
+        combo.setToolTip(hint)
+
+    def set_workbench_product_selection_enabled(self, enabled):
+        self.using_file_combobox.setEnabled(enabled)
 
     def on_condition_mode_combobox_changed(self, text):
         target_mode = "mark" if str(text or "").strip() == "标记" else "test"

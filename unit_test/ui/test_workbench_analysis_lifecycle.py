@@ -66,6 +66,7 @@ def test_window_defers_activation_until_after_login_and_forwards_events(
         startup, monkeypatch, config, launcher):
     service = AnalysisServiceStub()
     repository = Mock(source_identity="isolated-product.json")
+    repository.load_product_catalog.return_value = ()
     repository.load_active.return_value = config
     monkeypatch.setattr(main_window, "MotorWorkbenchConfigRepository", lambda: repository)
     # The shared startup fixture injects this instance into both entry paths.
@@ -98,6 +99,7 @@ def test_close_waits_for_service_and_keeps_polling(startup, monkeypatch, config)
     service = startup.analysis_service
     service.allow_close = False
     repository = Mock(source_identity="isolated-product.json")
+    repository.load_product_catalog.return_value = ()
     repository.load_active.return_value = config
     monkeypatch.setattr(main_window, "MotorWorkbenchConfigRepository", lambda: repository)
     window = startup.launch(lambda _: (None, None))
@@ -118,6 +120,7 @@ def test_close_waits_for_service_and_keeps_polling(startup, monkeypatch, config)
 def test_close_before_first_tick_does_not_start_stations(startup, monkeypatch, config):
     service = startup.analysis_service
     repository = Mock(source_identity="isolated-product.json")
+    repository.load_product_catalog.return_value = ()
     repository.load_active.return_value = config
     monkeypatch.setattr(main_window, "MotorWorkbenchConfigRepository", lambda: repository)
     window = startup.launch(lambda _: (None, None))
@@ -135,6 +138,7 @@ def test_both_entrypoints_create_one_default_service(startup, monkeypatch, launc
     monkeypatch.setattr(service_module, "AnalysisService", factory)
     startup.analysis_service = None
     repository = Mock(source_identity="isolated-product.json")
+    repository.load_product_catalog.return_value = ()
     repository.load_active.return_value = None
     monkeypatch.setattr(main_window, "MotorWorkbenchConfigRepository", lambda: repository)
     window = startup.launch(lambda _: (None, None), launcher=launcher)
@@ -166,6 +170,7 @@ def test_invalid_initial_config_recovers_without_rebinding(workbench, config):
 def test_worker_failure_is_reported_and_does_not_stop_polling(startup, monkeypatch):
     service = startup.analysis_service
     repository = Mock(source_identity="isolated-product.json")
+    repository.load_product_catalog.return_value = ()
     repository.load_active.return_value = None
     monkeypatch.setattr(main_window, "MotorWorkbenchConfigRepository", lambda: repository)
     window = startup.launch(lambda _: (None, None))
@@ -211,6 +216,7 @@ def test_real_workers_reused_resized_and_closed_by_window(startup, monkeypatch, 
     original = configuration_with(config, stations=config.analysis.context.stations + (fourth,),
                                   plot_layout=layout)
     repository = Mock(source_identity="isolated-product.json")
+    repository.load_product_catalog.return_value = ()
     repository.load_active.return_value = original
     monkeypatch.setattr(main_window, "MotorWorkbenchConfigRepository", lambda: repository)
     window = startup.launch(lambda _: (None, None))

@@ -17,6 +17,96 @@ from consts import error_code
 from unit_test.product_config_fixtures import make_manager, make_project
 
 
+@pytest.fixture
+def registered_products(tmp_path):
+    manager = make_manager(tmp_path)
+    assert manager.save_project(None, make_project(tmp_path)) == (True, "电机A.json")
+    assert manager.save_project(None, make_project(tmp_path, project_name="电机B")) == (True, "电机B.json")
+    return manager
+
+
+def test_set_active_product_rereads_latest_registry_and_preserves_unknown_fields(registered_products):
+    manager = registered_products
+    earlier = manager.load_registry()
+    latest = copy.deepcopy(earlier)
+    latest["custom"] = {"nested": [1, {"value": "latest"}]}
+    latest["configs"][0]["custom"] = ["keep"]
+    latest["configs"].append({"file": "future.json", "project_name": "后续产品", "unknown": True})
+    assert manager.save_registry(latest)
+    before_products = {path: path.read_bytes() for path in Path(manager.program_dir).glob("电机*.json")}
+
+    assert manager.set_active_product("电机B.json") == (True, "电机B.json")
+
+    expected = copy.deepcopy(latest)
+    expected["active_file"] = "电机B.json"
+    assert manager.load_registry() == expected
+    assert earlier["active_file"] == "电机A.json"
+    assert before_products == {path: path.read_bytes() for path in before_products}
+
+
+def test_set_active_product_rejects_target_removed_before_commit(registered_products, monkeypatch):
+    manager = registered_products
+    assert any(item["file"] == "电机B.json" for item in manager.load_registry()["configs"])
+    latest = manager.load_registry()
+    latest["configs"] = [item for item in latest["configs"] if item["file"] != "电机B.json"]
+    assert manager.save_registry(latest)
+    before = {path: path.read_bytes() for path in Path(manager.program_dir).iterdir()}
+    monkeypatch.setattr(manager, "save_registry", lambda _: pytest.fail("must reject before saving"))
+
+    assert manager.set_active_product("电机B.json") == (False, "目标产品配置已不在配置列表中")
+    assert before == {path: path.read_bytes() for path in before}
+
+
+@pytest.mark.parametrize("file_name", ["unknown.json", "../电机B.json", r"C:\电机B.json", None])
+def test_set_active_product_rejects_unknown_or_unsafe_target(registered_products, file_name):
+    manager = registered_products
+    before = {path: path.read_bytes() for path in Path(manager.program_dir).iterdir()}
+
+    assert manager.set_active_product(file_name) == (False, "目标产品配置已不在配置列表中")
+    assert before == {path: path.read_bytes() for path in before}
+
+
+@pytest.mark.parametrize("failure", ["false", "save io", "load io", "load value"])
+def test_set_active_product_failure_preserves_registry_and_product_bytes(
+    registered_products, monkeypatch, failure,
+):
+    manager = registered_products
+    before = {path: path.read_bytes() for path in Path(manager.program_dir).iterdir()}
+
+    def fail(_=None):
+        if failure == "false":
+            return False
+        if failure == "load value":
+            raise ValueError("invalid registry")
+        raise PermissionError("registry access denied")
+
+    monkeypatch.setattr(manager, "load_registry" if failure.startswith("load") else "save_registry", fail)
+
+    saved, message = manager.set_active_product("电机B.json")
+
+    assert not saved
+    assert message == {
+        "false": "当前配置记录保存失败，请检查配置目录权限",
+        "save io": "registry access denied", "load io": "registry access denied",
+        "load value": "invalid registry",
+    }[failure]
+    assert before == {path: path.read_bytes() for path in before}
+
+
+def test_set_active_product_unexpected_error_propagates(registered_products, monkeypatch):
+    manager = registered_products
+    before = Path(manager.registry_path).read_bytes()
+
+    def fail(_):
+        raise RuntimeError("unexpected registry failure")
+
+    monkeypatch.setattr(manager, "save_registry", fail)
+
+    with pytest.raises(RuntimeError, match="unexpected registry failure"):
+        manager.set_active_product("电机B.json")
+    assert Path(manager.registry_path).read_bytes() == before
+
+
 def test_saved_station_configuration_loads_in_current_workbench(tmp_path):
     from base.motor_workbench_config import MotorWorkbenchConfigRepository
 

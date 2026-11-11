@@ -135,6 +135,7 @@ def test_submission_and_storage_failures_reach_main_window(startup, monkeypatch)
     import main_window
 
     repository = Mock(source_identity="isolated-product.json")
+    repository.load_product_catalog.return_value = ()
     repository.load_active.return_value = None
     monkeypatch.setattr(main_window, "MotorWorkbenchConfigRepository", lambda: repository)
     window = startup.launch(lambda _: (None, None))

@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 from PyQt5.QtGui import QCloseEvent
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QComboBox, QWidget
 
 import main_window as main_window_module
 from main_window import MainWindow
@@ -86,6 +86,9 @@ def test_sequence_initialization_keeps_prewarm_stores_and_video_panel(ui_qapp, m
     sequence.left_panel = SimpleNamespace(video_monitor_panel=panel, station_panel=object())
     sequence.plot_grid = object()
     sequence.set_workbench_active_product = Mock()
+    sequence.show_workbench_products = Mock()
+    sequence.set_workbench_product_selection_enabled = Mock()
+    sequence.using_file_combobox = QComboBox(sequence)
     sequence.update_v2pa_factor = Mock()
     factory = Mock(return_value=sequence)
     monkeypatch.setattr(main_window_module, "SequenceWindow", factory)
@@ -101,6 +104,7 @@ def test_sequence_initialization_keeps_prewarm_stores_and_video_panel(ui_qapp, m
         video_controller=SimpleNamespace(attach_panel=Mock(return_value=card), show_settings=Mock()),
         init_menu=Mock(return_value=QWidget()),
         set_title=Mock(return_value=QWidget()),
+        _bind_workbench_toolbar_mode=Mock(),
         _create_menu_row=Mock(return_value=QWidget()),
         setCentralWidget=Mock(),
         mic=None, speaker=None, mic_channels=[], speaker_channels=[],
@@ -117,6 +121,7 @@ def test_sequence_initialization_keeps_prewarm_stores_and_video_panel(ui_qapp, m
         assert sequence.ve_calibration_store is host.ve_calibration_store
         host.video_controller.attach_panel.assert_called_once_with(panel)
         card.settings_requested.connect.assert_called_once_with(workbench.open_video_settings)
+        host._bind_workbench_toolbar_mode.assert_called_once_with()
         workbench.refresh_configuration.assert_called_once_with()
         sequence.update_v2pa_factor.assert_called_once()
     finally:
