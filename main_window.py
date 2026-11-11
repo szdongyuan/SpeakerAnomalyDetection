@@ -6,7 +6,7 @@ if __name__ == "__main__":
     from multiprocessing import freeze_support
     freeze_support()
 
-from PyQt5.QtCore import Qt, QPoint, QUrl, pyqtSignal
+from PyQt5.QtCore import Qt, QPoint, QUrl, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QDesktopServices
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QStatusBar, QWidget, QVBoxLayout, QHBoxLayout
 from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, QMenuBar, QMessageBox
@@ -37,9 +37,10 @@ class MainWindow(QMainWindow):
     workbench_analysis_input_ready = pyqtSignal(object)
     workbench_recording_completed = pyqtSignal(WorkbenchRecordingCompletion)
     _workbench_archive_close_check = pyqtSignal()
+    workbench_analysis_event = pyqtSignal(object)
 
     def __init__(self, *, ve_prewarm_lifetime=None, recording_bridge=None,
-                 raw_audio_csv_bridge=None,
+                 raw_audio_csv_bridge=None, analysis_service=None,
                  ve_profile_store=None, ve_calibration_store=None,
                  discovery_factory=None, hardware_selection_path=None):
         from base.vkinging_prewarm_lifetime import VePrewarmLifetime
@@ -55,6 +56,8 @@ class MainWindow(QMainWindow):
         # Explicit launcher injection also becomes the fallback for later callers.
         app._ve_prewarm_lifetime = ve_prewarm_lifetime
         super().__init__()
+        self.analysis_service = analysis_service
+        self._analysis_timer = None
         self.default_logger = LogManager.set_log_handler("core")
         self.ve_prewarm_lifetime = ve_prewarm_lifetime
         if recording_bridge is None:
@@ -153,6 +156,62 @@ class MainWindow(QMainWindow):
         self.init_ui()
         if self.ve_discovery is None:
             self._init_ve_hardware_runtime()
+        if self._analysis_timer is not None:
+            # Schedule only after construction: the login dialog runs a nested loop.
+            QTimer.singleShot(0, self._activate_analysis_runtime)
+
+    def _init_analysis_runtime(self):
+        if self._analysis_timer is not None or getattr(self, "_closing", False):
+            return
+        if self.analysis_service is None:
+            from base.analysis.service import AnalysisService
+            self.analysis_service = AnalysisService()
+        self.workbench_controller.bind_analysis_service(
+            self.analysis_service, self._on_analysis_event)
+        self._analysis_timer = QTimer(self)
+        self._analysis_timer.setInterval(50)
+        self._analysis_timer.timeout.connect(self.workbench_controller.poll_analysis_events)
+
+    def _activate_analysis_runtime(self):
+        if self._analysis_timer.isActive() or getattr(self, "_closing", False):
+            return
+        self.workbench_controller.activate_analysis()
+        self._analysis_timer.start()
+
+    def _begin_analysis_shutdown(self):
+        self.workbench_controller.begin_analysis_shutdown()
+        # Closing before the first activation must still drive an empty service closed.
+        if not self.analysis_service.closed:
+            self._analysis_timer.start()
+
+    def _on_analysis_event(self, event):
+        kind = event["event_type"]
+        error = event["payload"].get("error")
+        if error:
+            detail = error["message"]
+            self.default_logger.warning("Analysis runtime: %s", error)
+            self.statusBar().showMessage(f"分析服务：{detail}")
+        elif kind == "submission_result" and not event["payload"]["accepted"]:
+            detail = "；".join(issue["message"] for issue in event["payload"]["issues"])
+            self.default_logger.warning("Analysis submission %s rejected: %s", event["request_id"], detail)
+            self.statusBar().showMessage(f"音频已保存，分析任务未提交：{detail}")
+        elif kind == "task_result":
+            result = event["payload"]
+            save_errors = [artifact["error"] for item in result.get("instance_results", [])
+                           for artifact in item["artifacts"] if artifact["status"] == "failed"]
+            if result.get("execution_status") != "分析完成" or save_errors:
+                self.default_logger.warning("Analysis task %s: %s; save errors: %s", event.get("task_id"),
+                                            result.get("execution_status"), save_errors)
+                self.statusBar().showMessage("分析未全部完成，请检查返回的分析或文件保存错误。")
+        elif kind == "station_status" and not getattr(self, "_closing", False):
+            states = self.analysis_service.station_states
+            ready = sum(state["state"] in {"ready", "busy"} for state in states.values())
+            self.statusBar().showMessage(f"分析进程就绪：{ready}/{len(states)}", 3000)
+        self.workbench_analysis_event.emit(event)
+        if kind == "service_closed":
+            self._analysis_timer.stop()
+            if getattr(self, "_closing", False):
+                self.close()
 
     def _init_ve_hardware_runtime(self, *, prepare_workbench=False):
         from PyQt5.QtCore import QTimer
@@ -511,6 +570,7 @@ class MainWindow(QMainWindow):
         self.showMaximized()
         self.on_login_window_init()
         self.sequence_window.refresh_channel_windows()
+        self._init_analysis_runtime()
 
     def set_title(self):
         # hide the window title bar and reset the window title bar
@@ -1085,6 +1145,8 @@ class MainWindow(QMainWindow):
             return
         if not getattr(self, "_closing", False):
             self._closing = True
+            if getattr(self, "_analysis_timer", None) is not None:
+                self._begin_analysis_shutdown()
             workbench_device = getattr(self, "workbench_recording_device", None)
             if workbench_device is not None:
                 workbench_device.close()
@@ -1142,6 +1204,13 @@ class MainWindow(QMainWindow):
         csv_bridge = getattr(self, "raw_audio_csv_bridge", None)
         if csv_bridge is not None and not csv_bridge.service_closed:
             self._show_raw_audio_csv_close_status()
+            event.ignore()
+            return
+
+        analysis = getattr(self, "analysis_service", None)
+        if analysis is not None and not analysis.closed:
+            self.statusBar().showMessage(
+                f"正在关闭分析进程（剩余任务 {analysis.pending_task_count} 个），等待资源释放后退出…")
             event.ignore()
             return
 

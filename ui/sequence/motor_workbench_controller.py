@@ -9,11 +9,15 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import date, datetime
+from pathlib import Path
 from uuid import uuid4
 
 from base.workbench_config_values import WorkbenchChannel, WorkbenchCondition
 from base.workbench_configuration_loader import WorkbenchConfiguration, WorkbenchConfigurationError
-from base.workbench_analysis_input import AnalysisRecordingContext, WorkbenchAnalysisInput, make_analysis_recording_context
+from base.workbench_analysis_input import (
+    AnalysisRecordingContext, WorkbenchAnalysisInput, WorkbenchAnalysisInputError,
+    build_analysis_payload, make_analysis_recording_context,
+)
 from ui.sequence.workbench_ui_projection import build_ui_projection, _PlotBindings
 from base.recording_service import RecordingCallbacks
 from base.workbench_recording_protocol import WorkbenchRecordingCompletion
@@ -80,6 +84,12 @@ class MotorWorkbenchController:
         self._configuration_valid = False
         self._analysis_version = None
         self._analysis_input_ready = None
+        self._analysis_service = None
+        self._analysis_event_received = None
+        self._analysis_active = False
+        self._analysis_closing = False
+        self._analysis_tasks = {}
+        self._latest_analysis_tasks = {}
         self._recording_key = None
         self._configuration_revision = 0
         self._condition_index = 0
@@ -103,6 +113,97 @@ class MotorWorkbenchController:
             self._apply_configuration(config)
         self._configuration_valid = True
         self._refresh_recording_configuration()
+        self._sync_analysis_stations()
+
+    def bind_analysis_service(self, service, event_received: Callable[[dict], None]) -> None:
+        """Attach the backend; activation waits until the main window is ready."""
+        if self._analysis_service is not None:
+            raise RuntimeError("Analysis service is already bound")
+        self._analysis_service = service
+        self._analysis_event_received = event_received
+        self.refresh_recording_state()
+
+    def activate_analysis(self) -> None:
+        if self._analysis_active or self._analysis_closing:
+            return
+        self._analysis_active = True
+        self._sync_analysis_stations()
+
+    def _sync_analysis_stations(self) -> None:
+        if not self._analysis_active or self._analysis_closing or not self._configuration_valid:
+            return
+        analysis = self.get_analysis_config()
+        station_ids = [station.station_id for station in analysis.context.stations] if analysis else []
+        receipt = self._analysis_service.sync_stations(station_ids)
+        if not receipt["accepted"]:
+            self._analysis_event_received({
+                "event_type": "configuration_rejected", "payload": receipt,
+            })
+        self.refresh_recording_state()
+
+    def poll_analysis_events(self) -> None:
+        """The host's sole timer drives the backend and delivers events on its thread."""
+        events = self._analysis_service.poll_events()
+        for event in events:
+            task_id = event.get("task_id")
+            context = self._analysis_tasks.get(task_id)
+            if context is not None:
+                key = context["station_id"], context["condition_id"]
+                current = (context["analysis_version"] == self._analysis_version
+                           and self._latest_analysis_tasks.get(key) == task_id)
+                event = {**event, **context, "is_current": current}
+                if event["event_type"] == "task_result":
+                    del self._analysis_tasks[task_id]
+                    if self._latest_analysis_tasks.get(key) == task_id:
+                        del self._latest_analysis_tasks[key]
+            self._analysis_event_received(event)
+        if events:
+            self.refresh_recording_state()
+
+    def _submit_saved_recording(self, item: WorkbenchAnalysisInput) -> None:
+        """Submit published file paths, never sample buffers or the current configuration."""
+        context = item.context
+        condition = context.analysis.context.get_condition(context.condition_id)
+        if not context.analysis.test_queues[condition.test_queue].analysis_config["display_sequence"]:
+            self._analysis_event_received({
+                "event_type": "analysis_skipped", "request_id": context.request_id,
+                "analysis_version": context.analysis_version, "payload": {"reason": "no_analysis_items"},
+            })
+            return
+        try:
+            # Published WAVs are under <project>/audio. Pass the project root;
+            # analysis owns the sibling csv/<WAV stem> output directory.
+            directories = {
+                (context.request_id, station.station_id): str(
+                    Path(station.path).parent.parent)
+                for station in item.completion.stations
+            }
+            payload = build_analysis_payload((item,), result_directories=directories)
+        except WorkbenchAnalysisInputError as error:
+            receipt = {"accepted": False, "accepted_task_ids": [], "issues": [{
+                "task_id": None, "field_path": "$input", "error_type": type(error).__name__,
+                "message": str(error),
+            }]}
+        else:
+            receipt = self._analysis_service.submit_batch(payload)
+            if receipt["accepted"]:
+                for task in payload["tasks"]:
+                    task_id = task["task_id"]
+                    self._analysis_tasks[task_id] = {
+                        "request_id": context.request_id, "analysis_version": context.analysis_version,
+                        "station_id": task["station_id"], "condition_id": task["condition_id"],
+                    }
+                    self._latest_analysis_tasks[task["station_id"], task["condition_id"]] = task_id
+        self._analysis_event_received({
+            "event_type": "submission_result", "request_id": context.request_id,
+            "analysis_version": context.analysis_version, "payload": receipt,
+        })
+
+    def begin_analysis_shutdown(self) -> None:
+        if self._analysis_closing:
+            return
+        self._analysis_closing = True
+        self._analysis_service.shutdown()
 
     def bind_recording(self, ports: WorkbenchRecordingPorts) -> None:
         self._recording = ports
@@ -133,6 +234,7 @@ class MotorWorkbenchController:
         analysis_version = self._analysis_version
         if analysis != previous:
             analysis_version = uuid4().hex if analysis is not None else None
+            self._latest_analysis_tasks.clear()
 
         self._station_panel.show_workbench_stations(stations)
         self._plot_grid.show_workbench_layout(names, cells)
@@ -157,6 +259,14 @@ class MotorWorkbenchController:
             return None, "没有活动产品，请先在产品测试配置中选择产品。"
         if not config.recording.context.conditions:
             return None, "当前产品没有工况，请先配置录制工况。"
+        condition = config.recording.context.conditions[self._condition_index]
+        if (self._analysis_service is not None
+                and config.analysis.test_queues[condition.test_queue].analysis_config["display_sequence"]):
+            states = self._analysis_service.station_states
+            waiting = [station.station_name for station in config.analysis.stations_for(condition.condition_id)
+                       if states.get(station.station_id, {}).get("state") not in {"ready", "busy"}]
+            if waiting:
+                return None, "分析进程尚未就绪：" + "、".join(waiting)
         device = ports.device
         if not device.login_ready:
             return None, "登录后可以开始录制。"
@@ -293,9 +403,13 @@ class MotorWorkbenchController:
                 self._recording.notify_archive_error(
                     f"工况「{attempt.condition_name}」音频已保存，入库失败：{reason}"
                 )
+        item = WorkbenchAnalysisInput(attempt.analysis_context, result)
+        if self._analysis_service is not None and not self._recording.is_closing():
+            # Submit before outward completion callbacks can start another round.
+            self._submit_saved_recording(item)
         self._recording.completed(result)
         if self._analysis_input_ready is not None and not self._recording.is_closing():
-            self._analysis_input_ready(WorkbenchAnalysisInput(attempt.analysis_context, result))
+            self._analysis_input_ready(item)
 
     def _recording_failed(self, session, failure):
         attempt = self._take_recording_terminal(session, failure)
@@ -352,7 +466,7 @@ class MotorWorkbenchController:
         return self._applied_config.ui if self._applied_config is not None else None
 
     def bind_analysis_input(self, callback: Callable[[WorkbenchAnalysisInput], None] | None) -> None:
-        """Deliver successful bound inputs without retaining a history or executing analysis."""
+        """Observe completed inputs; the bound service already owns task submission."""
         self._analysis_input_ready = callback
 
     def open_video_settings(self) -> None:

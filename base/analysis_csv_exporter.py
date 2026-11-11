@@ -5,9 +5,6 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 import math
-import os
-from pathlib import Path
-import tempfile
 
 import numpy as np
 
@@ -15,6 +12,7 @@ from base.analysis_artifact_paths import (
     build_csv_path,
     format_channel_name,
 )
+from base.csv_writer import write_csv_atomic as _write_csv_atomic
 from base.spl_csv_schema import overall_spl_csv_columns
 
 
@@ -83,7 +81,7 @@ def _build_tables(analysis_type, config, outputs, channel_labels):
         return _spl_tables(config, outputs, channel_labels)
     if analysis_type == "FBA":
         return (
-            _curve_table(
+            build_curve_csv_table(
                 "频段能量",
                 "X轴中心频率Hz",
                 "频段声压级_Y轴dB",
@@ -93,7 +91,7 @@ def _build_tables(analysis_type, config, outputs, channel_labels):
         )
     if analysis_type == "FFT":
         return (
-            _curve_table(
+            build_curve_csv_table(
                 "FFT频谱",
                 "X轴频率Hz",
                 "FFT_Y轴dB",
@@ -137,7 +135,7 @@ def _spl_tables(config, outputs, channel_labels):
             )
         tables.append(("总体声压级", header, rows))
     tables.append(
-        _curve_table(
+        build_curve_csv_table(
             "实时声压级",
             "X轴时间秒",
             "SPL_Y轴dB",
@@ -148,13 +146,14 @@ def _spl_tables(config, outputs, channel_labels):
     return tuple(tables)
 
 
-def _curve_table(
+def build_curve_csv_table(
     config_item_name,
     x_name,
     y_name,
     outputs,
     channel_labels,
 ):
+    """Build a curve table without choosing output paths or writing files."""
     reference = dict(outputs[0].get("csv_curve") or {})
     x_values = list(reference.get("x") or [])
     lower = list(reference.get("lower") or [])
@@ -192,36 +191,6 @@ def _curve_table(
         row.append(_csv_number(upper[index]) if upper else "")
         rows.append(tuple(row))
     return config_item_name, tuple(header), rows
-
-
-def _write_csv_atomic(path, header, rows):
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8-sig",
-            newline="",
-            dir=target.parent,
-            prefix=f".{target.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as stream:
-            temporary_path = Path(stream.name)
-            writer = csv.writer(stream)
-            writer.writerow(header)
-            writer.writerows(rows)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_path, target)
-        temporary_path = None
-    finally:
-        if temporary_path is not None:
-            try:
-                temporary_path.unlink()
-            except FileNotFoundError:
-                pass
 
 
 def _csv_number(value):

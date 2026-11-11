@@ -163,6 +163,7 @@ def test_main_window_two_conditions_publish_eight_analysis_tasks(startup, tmp_pa
 
         window.workbench_analysis_input_ready.connect(receive)
         button = window.sequence_window.player_btn
+        _wait_for_qt(button.isEnabled)
         for count in (1, 2):
             QTest.mouseClick(button, Qt.LeftButton)
             _wait_for_qt(lambda: len(completions) == count and button.isEnabled())
@@ -170,6 +171,10 @@ def test_main_window_two_conditions_publish_eight_analysis_tasks(startup, tmp_pa
         payload = build_analysis_payload(inputs)
         assert set(payload) == {'stations', 'conditions', 'test_queues', 'tasks'}
         assert len(payload['tasks']) == 8
+        assert len(startup.analysis_service.submissions) == 2
+        assert sum(len(batch['tasks']) for batch in startup.analysis_service.submissions) == 8
+        assert all(Path(task['wav_path']).is_file()
+                   for batch in startup.analysis_service.submissions for task in batch['tasks'])
         assert inputs[0].context.analysis_version == inputs[1].context.analysis_version
         expected_paths = {(result.condition_id, wav.station_id): wav.path
                           for result in completions for wav in result.stations}

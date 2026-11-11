@@ -65,9 +65,7 @@ def _calculate_spl(signal, sample_rate, config, v2pa_factor, **_context):
     from base.core_algorithm.harmonic_distortion.weighted import (
         apply_weighting_filter,
     )
-    from base.pre_processing.audio_thd_frequency_response_analysis import (
-        AudioThdFrequencyResponseAnalysis,
-    )
+    from base.core_algorithm.acoustic import spl_calculation
     from base.pre_processing.spl_runtime_config import (
         apply_spl_analysis_time_range,
         calculate_overall_spl,
@@ -99,7 +97,7 @@ def _calculate_spl(signal, sample_rate, config, v2pa_factor, **_context):
         reference_pressure,
         v2pa_factor=v2pa_factor,
     )
-    signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
+    signal_spl = spl_calculation(
         analysis_signal,
         reference_pressure,
         window_size=window_size,
@@ -417,14 +415,16 @@ def _calculate_fft(signal, sample_rate, config, v2pa_factor, **_context):
 
 
 def _calculate_spec(signal, sample_rate, config, _v2pa_factor, **_context):
+    full = _context.get("full_spectrogram", False)
     result = SpectrogramAnalyzer().analyze(
-        signal,
+        signal * _v2pa_factor if full else signal,
         fs=sample_rate,
         n_fft=int(config.get("n_fft", 2048)),
         hop_length=int(config.get("hop_length", 256)),
         window=str(config.get("window_func", "hann") or "hann"),
         scale=str(config.get("freq_scale_type", "linear") or "linear"),
-        max_time_bins=_MAX_SPEC_TIME_BINS,
+        max_time_bins=None if full else _MAX_SPEC_TIME_BINS,
+        top_db=None if full else 80.0,
     )
     levels = None
     if config.get("custom_limit"):
@@ -474,8 +474,15 @@ def calculate_analysis_instance(
     *,
     source,
     sequence_snapshot,
+    evaluate_limits=True,
+    full_spectrogram=False,
 ):
-    """Run one configured analysis channel and return plain calculation data."""
+    """Run one configured channel and return numerical data, without rendering.
+
+    Legacy callers retain combined judgement and bounded preview matrices.
+    The station executor disables judgement here and requests full calibrated
+    spectrogram magnitudes with no display-range clipping.
+    """
     try:
         handler = _HANDLERS[analysis_type]
     except KeyError as exc:
@@ -488,13 +495,17 @@ def calculate_analysis_instance(
         raise ValueError("分析通道没有音频数据")
     if int(sample_rate) <= 0:
         raise ValueError("采样率必须为正整数")
+    parameters = dict(config or {})
+    if not evaluate_limits:
+        parameters["limit_checked"] = False
     return handler(
         values,
         int(sample_rate),
-        dict(config or {}),
+        parameters,
         float(v2pa_factor),
         source=source,
         sequence_snapshot=sequence_snapshot or {},
+        full_spectrogram=full_spectrogram,
     )
 
 
