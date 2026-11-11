@@ -42,6 +42,14 @@ def calculation_payload(instance, calculation, start_time):
     metrics = dict(calculation["metrics"])
     config = instance.parameters
     kind = instance.analysis_type
+    if kind == "LOUD":
+        curve = calculation["curve"]
+        return metrics, {
+            "kind": "curve", "x": curve["x"], "y": curve["y"],
+            "upper": [], "lower": [], "x_unit": "s", "y_unit": metrics["unit"],
+            "reduction": "none", "time_reference": "wav_start",
+            "loudness_display": calculation["plot"],
+        }
     if kind == "Spec":
         plot = calculation["plot"]
         scale = str(config.get("freq_scale_type", "linear") or "linear").lower()

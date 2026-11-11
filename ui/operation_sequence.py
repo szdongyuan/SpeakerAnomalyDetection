@@ -63,6 +63,7 @@ SUPPORTED_ANALYSIS_ITEMS = [
     "频谱分析 (Spec) ",
     "频段能量 (FBA) ",
     "快速傅里叶变换 (FFT) ",
+    "响度 (LOUD) ",
 ]
 SUPPORTED_ANALYSIS_TYPES = {
     "SPL",

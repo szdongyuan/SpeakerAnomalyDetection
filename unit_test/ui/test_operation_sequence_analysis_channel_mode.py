@@ -42,7 +42,8 @@ class _Logger:
 def _option(mode, channels=(0, 2, 7)):
     return SimpleNamespace(
         mic_channels=list(channels),
-        config=[SimpleNamespace(mode=mode)],
+        wav_channels=None,
+        config=[SimpleNamespace(mode=mode, analysis_channel_basis="hardware")],
         default_logger=_Logger(),
     )
 
@@ -74,7 +75,7 @@ def test_analysis_catalog_only_shows_first_release_analysis_types(qapp):
         ]
         assert visible_entries == [
             "声压级 (SPL)", "频谱分析 (Spec)",
-            "频段能量 (FBA)", "快速傅里叶变换 (FFT)",
+            "频段能量 (FBA)", "快速傅里叶变换 (FFT)", "响度 (LOUD)",
         ]
     finally:
         container.close()
@@ -125,25 +126,27 @@ def test_new_spec_item_uses_code_defaults_when_default_file_is_missing(monkeypat
     assert config == {**SpecConfigWindow.DEFAULT_CONFIG, "type": "Spec"}
 
 
-def test_new_recorded_analysis_item_defaults_to_all_hardware_channels(monkeypatch):
+@pytest.mark.parametrize("analysis_type,label", [("SPL", "声压级"), ("LOUD", "响度")])
+def test_new_recorded_analysis_item_defaults_to_all_hardware_channels(monkeypatch, analysis_type, label):
     monkeypatch.setattr(
         LoadUiConfig,
         "load_data_from_json",
         lambda _path: (0, {"SPL": {}}),
     )
     option = SimpleNamespace(
-        config=[SimpleNamespace(mode="RECORD_ONLY", analysis_list={})],
+        config=[SimpleNamespace(mode="RECORD_ONLY", analysis_list={}, analysis_channel_basis="hardware")],
+        wav_channels=None,
         mic_channels=[0, 2, 7],
         default_logger=_Logger(),
     )
 
     OptionList.get_item_default_config(
         option,
-        "声压级 (SPL) ",
-        "声压级 (SPL) 1",
+        f"{label} ({analysis_type}) ",
+        f"{label} ({analysis_type}) 1",
     )
 
-    config = option.config[0].analysis_list["声压级 (SPL) 1"]
+    config = option.config[0].analysis_list[f"{label} ({analysis_type}) 1"]
     assert config["analysis_channel"] == 0
     assert config["analysis_channels"] == [0, 2, 7]
 

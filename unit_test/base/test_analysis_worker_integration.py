@@ -52,7 +52,8 @@ def test_manual_fba_output_preserves_discrete_band_plot_semantics():
     }
 
 
-def test_spawn_worker_runs_real_spl_and_writes_atomic_artifacts(tmp_path):
+@pytest.mark.parametrize("analysis_type", ["SPL", "LOUD"])
+def test_spawn_worker_runs_real_analysis_and_writes_atomic_artifacts(tmp_path, analysis_type):
     wav_path = tmp_path / "source.wav"
     time_axis = np.arange(12_000, dtype=np.float32) / 48_000.0
     audio = (0.01 * np.sin(2.0 * np.pi * 1000.0 * time_axis)).reshape(-1, 1)
@@ -92,7 +93,7 @@ def test_spawn_worker_runs_real_spl_and_writes_atomic_artifacts(tmp_path):
             "auto_analysis": True,
             "display_sequence": ["声压级"],
             "声压级": {
-                "type": "SPL",
+                "type": analysis_type,
                 "analysis_channels": [0],
                 "limit_checked": False,
                 "show_overall_spl": True,
@@ -149,11 +150,11 @@ def test_spawn_worker_runs_real_spl_and_writes_atomic_artifacts(tmp_path):
         record for record in logs if record.get("event") == "analysis_instance_finished"
     ]
     assert instance_logs[0]["config_key"] == "声压级"
-    assert instance_logs[0]["analysis_type"] == "SPL"
+    assert instance_logs[0]["analysis_type"] == analysis_type
     item_logs = [record for record in logs if record.get("event") == "analysis_item_finished"]
     assert len(item_logs) == 1
     assert item_logs[0]["config_key"] == "声压级"
-    assert item_logs[0]["analysis_type"] == "SPL"
+    assert item_logs[0]["analysis_type"] == analysis_type
     assert item_logs[0]["channel_count"] == 1
     assert item_logs[0]["duration_seconds"] >= instance_logs[0]["duration_seconds"]
 

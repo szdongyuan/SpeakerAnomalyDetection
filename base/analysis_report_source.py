@@ -24,7 +24,7 @@ from consts import model_consts
 from consts.running_consts import DEFAULT_DIR
 
 
-_SUPPORTED_TYPES = frozenset({"SPL", "Spec", "FBA", "FFT"})
+_SUPPORTED_TYPES = frozenset({"SPL", "Spec", "FBA", "FFT", "LOUD"})
 
 
 @dataclass(frozen=True, order=True)

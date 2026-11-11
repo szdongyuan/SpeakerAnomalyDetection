@@ -43,7 +43,7 @@ def _analysis_config(channels=(0, 2)):
             "type": "Spec",
             "analysis_channels": [channels[0]],
         },
-        "忽略项": {"type": "LOUD", "analysis_channels": [channels[0]]},
+        "忽略项": {"type": "LP", "analysis_channels": [channels[0]]},
     }
 
 
@@ -185,7 +185,7 @@ def test_builder_rejects_missing_file_and_empty_supported_scope(tmp_path):
             source="手动查看",
             sequence_config=[],
             analysis_config={
-                "display_sequence": ["响度"],
-                "响度": {"type": "LOUD"},
+                "display_sequence": ["未支持项"],
+                "未支持项": {"type": "LP"},
             },
         )

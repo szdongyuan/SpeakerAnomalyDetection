@@ -16,7 +16,7 @@ from .contracts import (
 
 
 # These existing calculation paths are acoustic, not generic vibration analyzers.
-_ACOUSTIC_ANALYSIS_TYPES = frozenset({"SPL", "FFT", "FBA", "Spec"})
+_ACOUSTIC_ANALYSIS_TYPES = frozenset({"SPL", "FFT", "FBA", "Spec", "LOUD"})
 
 
 def _fail(path, message, task_id=None, error_type="InvalidField"):
@@ -172,6 +172,12 @@ def _build_instances(config, channels, path, task_id):
         analysis_type = _text(item.get("type"), f"{item_path}.type", task_id)
         selected = _selected_channels(item, len(channels), item_path, task_id)
         _validate_time_range(item, item_path, task_id)
+        if analysis_type == "LOUD":
+            advanced_path = f"{item_path}.advanced"
+            _validate_time_range(
+                _mapping(item.get("advanced", {}), advanced_path, task_id),
+                advanced_path, task_id,
+            )
         parameters = _snapshot(item, item_path, task_id)
         for index in selected:
             instances.append(AnalysisInstance(key, analysis_type, index, deepcopy(parameters)))

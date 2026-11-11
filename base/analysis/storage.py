@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 from base.analysis_artifact_paths import sanitize_path_component
-from base.analysis_csv_exporter import build_curve_csv_table
+from base.analysis_csv_exporter import build_curve_csv_table, loudness_summary_csv_row
 from base.csv_writer import write_csv_atomic
 
 from .results import plain_data
@@ -73,6 +73,7 @@ def save_curve(task, instance, result):
         "SPL": ("时间(s)", "声压级"),
         "FFT": ("频率(Hz)", "幅值"),
         "FBA": ("中心频率(Hz)", "频段声压级"),
+        "LOUD": ("时间(s)", "响度"),
     }[instance.analysis_type]
     unit = _csv_unit(payload["y_unit"])
     _, _, rows = build_curve_csv_table(
@@ -82,4 +83,11 @@ def save_curve(task, instance, result):
     header = [x_name, f"{y_name}{unit}", f"下限{unit}", f"上限{unit}"]
     path = _csv_path(task, instance, "曲线")
     write_csv_atomic(path, header, rows)
+    return str(path)
+
+
+def save_loudness_summary(task, instance, result):
+    header, row = loudness_summary_csv_row(instance.parameters, result)
+    path = _csv_path(task, instance, "汇总")
+    write_csv_atomic(path, header, [row])
     return str(path)

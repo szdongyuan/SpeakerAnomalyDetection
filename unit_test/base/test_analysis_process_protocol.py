@@ -205,7 +205,7 @@ def test_task_level_failure_after_a_success_is_result_incomplete(tmp_path):
     assert result.final_judgement is None
 
 
-@pytest.mark.parametrize("analysis_type", ["LOUD", "LP", "RSC"])
+@pytest.mark.parametrize("analysis_type", ["LP", "RSC"])
 def test_first_release_rejects_types_outside_ui_scope(analysis_type):
     with pytest.raises(ValueError, match="analysis_type"):
         _instance_request(analysis_type=analysis_type)

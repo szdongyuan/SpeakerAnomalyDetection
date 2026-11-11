@@ -544,6 +544,18 @@ def _extract_output(instance_request, calculation, judgement, source, image_payl
                 "upper": upper_values.tolist(),
             },
         }
+    if analysis_type == "LOUD":
+        return {
+            "metrics": metrics,
+            "display_payload": {
+                "kind": "image",
+                "png_base64": base64.b64encode(image_payload).decode("ascii"),
+            } if source == "手动查看" else {},
+            "csv_curve": {
+                key: _array_value(curve.get(key)).tolist()
+                for key in ("x", "y", "lower", "upper")
+            },
+        }
     if analysis_type == "Spec":
         return {
             "metrics": {},
@@ -559,7 +571,7 @@ def _extract_output(instance_request, calculation, judgement, source, image_payl
 
 
 def _contributes_to_final(analysis_type, config):
-    if analysis_type in {"SPL", "FBA", "FFT"}:
+    if analysis_type in {"SPL", "FBA", "FFT", "LOUD"}:
         return bool((config or {}).get("limit_checked", False))
     return False
 
