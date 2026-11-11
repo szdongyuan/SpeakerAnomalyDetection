@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import QSizePolicy, QWidget, QRadioButton
 
 from base.calibration_precision import format_calibration_factor, normalize_calibration_factor
 from base.log_manager import LogManager
-from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
+from base.core_algorithm.response.spl_analyzer import spl_calculation
 from base.recording_process_protocol import FrozenConfig, RecordingRequest
 from base.recording_service import RecordingCallbacks, RecordingService
 from base.vkinging_calibration import verify_ve_calibration_result
@@ -1222,7 +1222,7 @@ class InputCalibration(QWidget):
             float: Average SPL value
         """
         step = len(recorded_data) // 3
-        spl_smooth = AudioThdFrequencyResponseAnalysis().spl_calculation(recorded_data, method="rms", window_size=1201)
+        spl_smooth = spl_calculation(recorded_data, method="rms", window_size=1201)
         spl_smooth_mid = len(spl_smooth) // 2
         spl_smooth_start = spl_smooth_mid - step
         spl_smooth_end = spl_smooth_mid + step
@@ -1267,7 +1267,7 @@ class InputCalibration(QWidget):
         rec_code, recorded_data = SoundcardAudioProcessor().sd_rec(recorded_dict)
         step = len(recorded_data) // 3
         if rec_code == error_code.OK:
-            spl_smooth = AudioThdFrequencyResponseAnalysis().spl_calculation(
+            spl_smooth = spl_calculation(
                 recorded_data, method="rms", window_size=1201
             )
             spl_smooth_mid = len(spl_smooth) // 2

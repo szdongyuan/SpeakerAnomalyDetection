@@ -6,6 +6,7 @@ from scipy import signal
 from scipy.signal import savgol_filter, medfilt, bessel, filtfilt
 import librosa
 
+from base.core_algorithm.response.spl_analyzer import spl_calculation
 from base.utils.plot_audio_features import PlotManager
 from base.core_algorithm.harmonic_distortion.harmonic_index_builder import HarmonicIndexBuilder
 from base.core_algorithm.harmonic_distortion.step_signal_hd import StepSignalHD
@@ -414,22 +415,6 @@ class AudioThdFrequencyResponseAnalysis(object):
         return f0, times
 
     @staticmethod
-    def compute_cqt(y, sr=44100, hop_length=128, n_fft=1024, fmin=None, fmax=None, bins_per_octave=None, n_bins=None):
-        from base.core_algorithm.response.cqt import compute_cqt
-
-        return compute_cqt(
-            y=y,
-            sr=sr,
-            hop_length=hop_length,
-            n_fft=n_fft,
-            fmin=fmin,
-            fmax=fmax,
-            bins_per_octave=bins_per_octave,
-            n_bins=n_bins,
-        )
-
-
-    @staticmethod
     def calculate_fr(reference_signal, recorded_signal, sr, is_smooth=True):
         """
             Calculate the frequency response (FR).
@@ -467,28 +452,6 @@ class AudioThdFrequencyResponseAnalysis(object):
         return fr[start_idx:stop_idx], frequency_list[start_idx:stop_idx]
 
     @staticmethod
-    def spl_calculation(recorded_signal,
-                        reference_pressure: float = 20e-6, 
-                        window_size: int = 1201, 
-                        method: str = "rms", 
-                        padding_mode: str = "zero", 
-                        padding_cval: Optional[float] = 0.0,
-                        v2pa_factor: Optional[float] = None,
-                        trim_edges: bool = False):
-        from base.core_algorithm.response.spl_analyzer import spl_calculation
-
-        return spl_calculation(
-            recorded_signal=recorded_signal,
-            reference_pressure=reference_pressure,
-            window_size=window_size,
-            method=method,
-            padding_mode=padding_mode,
-            padding_cval=padding_cval,
-            v2pa_factor=v2pa_factor,
-            trim_edges=trim_edges,
-        )
-
-    @staticmethod
     def calculate_loose_particle_spl(recorded_signal, cutoff, sr, kernel_size, v2pa_factor):
         """
             Calculate the sound pressure level of loose particles.
@@ -509,7 +472,7 @@ class AudioThdFrequencyResponseAnalysis(object):
         normal_cutoff = cutoff / nyquist
         b, a = bessel(4, normal_cutoff, btype='high', analog=False)
         analytic_signal = filtfilt(b, a, recorded_signal)
-        signal_spl = AudioThdFrequencyResponseAnalysis.spl_calculation(analytic_signal, v2pa_factor=float(v2pa_factor))
+        signal_spl = spl_calculation(analytic_signal, v2pa_factor=float(v2pa_factor))
         filtered_spl = medfilt(signal_spl, kernel_size)
         sum_squares = float()
         for i in range(len(filtered_spl)):

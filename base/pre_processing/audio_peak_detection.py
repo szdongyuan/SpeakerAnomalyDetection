@@ -4,7 +4,7 @@ import numpy as np
 from scipy.signal import find_peaks, peak_prominences, peak_widths
 
 from base.pre_processing.audio_equalizer import AudioEqualizer
-from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
+from base.core_algorithm.response.spl_analyzer import spl_calculation
 from base.utils.smooth import smooth as smooth_fn
 
 
@@ -151,7 +151,7 @@ def _compute_rms_spl_series(
         mean_sq = np.convolve(sq, kernel, mode="same")[pad:-pad]
         rms_envelope = np.sqrt(np.maximum(mean_sq, 1e-30))
 
-    spl_db_series = AudioThdFrequencyResponseAnalysis.spl_calculation(
+    spl_db_series = spl_calculation(
         recorded_signal=audio_signal,
         reference_pressure=ref_pressure,
         window_size=win,

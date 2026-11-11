@@ -103,9 +103,9 @@ def test_spl_constant_limit_covers_first_runtime_point(signal_module, qapp, monk
     widget.v2pa_factor = 1.0
     widget.analysis_config = _constant_upper_config(upper_db=8.0)
     monkeypatch.setattr(
-        signal_module.AudioThdFrequencyResponseAnalysis,
+        signal_module,
         "spl_calculation",
-        lambda self, *args, **kwargs: np.asarray([12.0, 5.0, 4.0]),
+        lambda *args, **kwargs: np.asarray([12.0, 5.0, 4.0]),
     )
 
     result = widget.calculate_spl()
@@ -140,9 +140,9 @@ def test_spl_runtime_ignores_legacy_correction_config(
         }
     )
     monkeypatch.setattr(
-        signal_module.AudioThdFrequencyResponseAnalysis,
+        signal_module,
         "spl_calculation",
-        lambda self, *args, **kwargs: np.asarray([12.0, 5.0, 4.0]),
+        lambda *args, **kwargs: np.asarray([12.0, 5.0, 4.0]),
     )
 
     result = widget.calculate_spl()
@@ -175,9 +175,9 @@ def test_spl_runtime_applies_analysis_time_range_and_preserves_source_time_axis(
     analyzed_signals = []
     plotted = []
     monkeypatch.setattr(
-        signal_module.AudioThdFrequencyResponseAnalysis,
+        signal_module,
         "spl_calculation",
-        lambda self, signal, *args, **kwargs: (
+        lambda signal, *args, **kwargs: (
             analyzed_signals.append(np.asarray(signal).copy())
             or np.asarray([40.0, 41.0, 42.0, 43.0])
         ),
@@ -278,9 +278,9 @@ def test_spl_invalid_constant_limits_show_warning(signal_module, qapp, monkeypat
     }
     warnings = []
     monkeypatch.setattr(
-        signal_module.AudioThdFrequencyResponseAnalysis,
+        signal_module,
         "spl_calculation",
-        lambda self, *args, **kwargs: np.asarray([4.0, 5.0, 6.0]),
+        lambda *args, **kwargs: np.asarray([4.0, 5.0, 6.0]),
     )
     monkeypatch.setattr(
         signal_module.QMessageBox,
@@ -303,9 +303,9 @@ def test_spl_manual_limits_drive_runtime_judgment(signal_module, qapp, monkeypat
     widget.v2pa_factor = 1.0
     widget.analysis_config = _manual_upper_config(end_x=0.2, upper_db=8.0)
     monkeypatch.setattr(
-        signal_module.AudioThdFrequencyResponseAnalysis,
+        signal_module,
         "spl_calculation",
-        lambda self, *args, **kwargs: np.asarray([5.0, 12.0, 4.0]),
+        lambda *args, **kwargs: np.asarray([5.0, 12.0, 4.0]),
     )
 
     result = widget.calculate_spl()
@@ -330,9 +330,9 @@ def test_spl_legacy_csv_without_limit_mode_still_works(signal_module, qapp, monk
         "limit_data": ([0.0, 0.1, 0.2], [8.0, 8.0, 8.0], [0.0, 0.0, 0.0]),
     }
     monkeypatch.setattr(
-        signal_module.AudioThdFrequencyResponseAnalysis,
+        signal_module,
         "spl_calculation",
-        lambda self, *args, **kwargs: np.asarray([5.0, 7.0, 4.0]),
+        lambda *args, **kwargs: np.asarray([5.0, 7.0, 4.0]),
     )
 
     result = widget.calculate_spl()
@@ -469,9 +469,9 @@ def test_spl_invalid_manual_segments_show_warning(signal_module, qapp, monkeypat
     widget.analysis_config = _manual_upper_config(end_x=0.0)
     warnings = []
     monkeypatch.setattr(
-        signal_module.AudioThdFrequencyResponseAnalysis,
+        signal_module,
         "spl_calculation",
-        lambda self, *args, **kwargs: np.asarray([5.0, 7.0, 4.0]),
+        lambda *args, **kwargs: np.asarray([5.0, 7.0, 4.0]),
     )
     monkeypatch.setattr(
         signal_module.QMessageBox,

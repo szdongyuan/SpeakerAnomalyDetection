@@ -36,6 +36,7 @@ from base.core_algorithm.sound_quality import run_sound_quality
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.load_audio import load_audio_simple
 from base.log_manager import LogManager
+from base.core_algorithm.response.spl_analyzer import spl_calculation
 from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
 from base.pre_processing.audio_peak_detection import peak_detection
 from base.pre_processing.audio_equalizer import AudioEqualizer
@@ -993,7 +994,7 @@ class Spl(AnalysisGraphWidget):
             reference_pressure,
             v2pa_factor=self.v2pa_factor,
         )
-        signal_spl = AudioThdFrequencyResponseAnalysis().spl_calculation(
+        signal_spl = spl_calculation(
             analysis_signal,
             reference_pressure,
             window_size=window_size,
@@ -2038,7 +2039,7 @@ class PeakDetection(AnalysisGraphWidget):
         self.analysis_plot.clear()
         spl_series = np.asarray(self.result.get("spl_db_series", []), dtype=float)
         if spl_series.size == 0:
-            spl_series = AudioThdFrequencyResponseAnalysis.spl_calculation(
+            spl_series = spl_calculation(
                 recorded_signal, v2pa_factor=self.v2pa_factor
             )
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
@@ -2378,7 +2379,7 @@ class PipelinePdPm(QWidget):
         if isinstance(pd_result, dict):
             spl_series = np.asarray(pd_result.get("spl_db_series", []), dtype=float)
         if spl_series is None or len(spl_series) == 0:
-            spl_series = AudioThdFrequencyResponseAnalysis.spl_calculation(
+            spl_series = spl_calculation(
                 recorded_signal, v2pa_factor=self.v2pa_factor
             )
         time_axis = np.linspace(0, len(spl_series) / sample_rate, len(spl_series))
