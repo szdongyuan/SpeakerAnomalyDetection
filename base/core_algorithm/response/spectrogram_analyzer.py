@@ -83,7 +83,7 @@ class SpectrogramAnalyzer:
     def _calculate_log(signal, sample_rate, *, n_fft, hop_length, max_time_bins, top_db):
         import librosa
 
-        from base.core_algorithm.acoustic import compute_cqt
+        from base.core_algorithm.response.cqt import compute_cqt
 
         complex_values, frequencies, times = (
             compute_cqt(
