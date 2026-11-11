@@ -65,7 +65,7 @@ def _calculate_spl(signal, sample_rate, config, v2pa_factor, **_context):
     from base.core_algorithm.harmonic_distortion.weighted import (
         apply_weighting_filter,
     )
-    from base.core_algorithm.acoustic import spl_calculation
+    from base.core_algorithm.response.spl_analyzer import spl_calculation
     from base.pre_processing.spl_runtime_config import (
         apply_spl_analysis_time_range,
         calculate_overall_spl,

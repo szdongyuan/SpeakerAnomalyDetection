@@ -415,7 +415,7 @@ class AudioThdFrequencyResponseAnalysis(object):
 
     @staticmethod
     def compute_cqt(y, sr=44100, hop_length=128, n_fft=1024, fmin=None, fmax=None, bins_per_octave=None, n_bins=None):
-        from base.core_algorithm.acoustic import compute_cqt
+        from base.core_algorithm.response.cqt import compute_cqt
 
         return compute_cqt(
             y=y,
@@ -475,7 +475,7 @@ class AudioThdFrequencyResponseAnalysis(object):
                         padding_cval: Optional[float] = 0.0,
                         v2pa_factor: Optional[float] = None,
                         trim_edges: bool = False):
-        from base.core_algorithm.acoustic import spl_calculation
+        from base.core_algorithm.response.spl_analyzer import spl_calculation
 
         return spl_calculation(
             recorded_signal=recorded_signal,
