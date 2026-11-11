@@ -30,7 +30,4 @@ def write_csv_atomic(path, header, rows):
         temporary_path = None
     finally:
         if temporary_path is not None:
-            try:
-                temporary_path.unlink()
-            except FileNotFoundError:
-                pass
+            temporary_path.unlink(missing_ok=True)

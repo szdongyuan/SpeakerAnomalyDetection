@@ -53,16 +53,16 @@ def _exchange(connection, outbound, inbound):
             try:
                 serialized = outbound.get_nowait()
             except Empty:
-                pass
-            else:
+                serialized = None
+            if serialized is not None:
                 connection.send_bytes(serialized)
-                del serialized
+            del serialized
             if connection.poll(0.02):
                 message = connection.recv()
                 inbound.put(("message", message))
                 del message
     except EOFError:
-        pass
+        return
     except Exception as error:
         inbound.put(("transport_error", runtime_error(
             "communication", type(error).__name__, error,
@@ -331,8 +331,13 @@ class AnalysisProcessManager:
         if not drained or not self._drain_transport(budget):
             return
         process.join(timeout=0)
-        if self._task is not None or not self._stopped_seen or process.exitcode != 0:
-            self._fail(self._failure or runtime_error(
+        if (
+            self._transport_error is not None
+            or self._task is not None
+            or not self._stopped_seen
+            or process.exitcode != 0
+        ):
+            self._fail(self._failure or self._transport_error or runtime_error(
                 "worker", "WorkerExit", f"Worker exited with code {process.exitcode}",
             ))
         process.close()
