@@ -61,9 +61,9 @@ def _exchange(connection, outbound, inbound):
                 message = connection.recv()
                 inbound.put(("message", message))
                 del message
-    except EOFError:
-        return
     except Exception as error:
+        if isinstance(error, EOFError):
+            return
         inbound.put(("transport_error", runtime_error(
             "communication", type(error).__name__, error,
         )))
