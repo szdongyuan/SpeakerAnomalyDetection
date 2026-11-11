@@ -32,6 +32,7 @@ class SpectrogramAnalyzer:
         window="hann",
         scale="linear",
         max_time_bins=DEFAULT_MAX_TIME_BINS,
+        top_db=80.0,
     ) -> SpectrogramAnalysisResult:
         sample_rate = int(fs)
         if sample_rate <= 0:
@@ -40,7 +41,9 @@ class SpectrogramAnalyzer:
         hop_length = int(hop_length)
         if n_fft <= 0 or hop_length <= 0 or hop_length > n_fft:
             raise ValueError("Spec 的 FFT 点数或帧移配置无效")
-        if type(max_time_bins) is not int or max_time_bins < 1:
+        if max_time_bins is not None and (
+            type(max_time_bins) is not int or max_time_bins < 1
+        ):
             raise ValueError("Spec 显示时间列上限必须是正整数")
 
         normalized_scale = str(scale or "linear").lower()
@@ -51,6 +54,7 @@ class SpectrogramAnalyzer:
                 n_fft=n_fft,
                 hop_length=hop_length,
                 max_time_bins=max_time_bins,
+                top_db=top_db,
             )
         else:
             normalized_scale = "linear"
@@ -65,7 +69,7 @@ class SpectrogramAnalyzer:
             values_db = _amplitude_to_db(
                 magnitude,
                 reference=20e-6,
-                top_db=80.0,
+                top_db=top_db,
             )
 
         return SpectrogramAnalysisResult(
@@ -76,15 +80,13 @@ class SpectrogramAnalyzer:
         )
 
     @staticmethod
-    def _calculate_log(signal, sample_rate, *, n_fft, hop_length, max_time_bins):
+    def _calculate_log(signal, sample_rate, *, n_fft, hop_length, max_time_bins, top_db):
         import librosa
 
-        from base.pre_processing.audio_thd_frequency_response_analysis import (
-            AudioThdFrequencyResponseAnalysis,
-        )
+        from base.core_algorithm.acoustic import compute_cqt
 
         complex_values, frequencies, times = (
-            AudioThdFrequencyResponseAnalysis().compute_cqt(
+            compute_cqt(
                 y=signal,
                 sr=sample_rate,
                 hop_length=hop_length,
@@ -100,7 +102,7 @@ class SpectrogramAnalyzer:
         return (
             frequencies,
             times,
-            librosa.amplitude_to_db(magnitude, ref=20e-6),
+            librosa.amplitude_to_db(magnitude, ref=20e-6, top_db=top_db),
         )
 
 
@@ -113,14 +115,16 @@ def _chunked_linear_spectrogram(
     window,
     max_time_bins,
 ):
-    """Calculate a bounded full-duration STFT without a full complex matrix."""
+    """Calculate STFT in chunks; None retains all time frames without pooling."""
     from scipy.fft import rfft
     from scipy.signal import get_window
 
     values = np.asarray(signal, dtype=np.float32).reshape(-1)
     if values.size == 0:
         raise ValueError("Spec 分析没有音频数据")
-    if type(max_time_bins) is not int or max_time_bins < 1:
+    if max_time_bins is not None and (
+        type(max_time_bins) is not int or max_time_bins < 1
+    ):
         raise ValueError("Spec 显示时间列上限必须是正整数")
 
     pad = n_fft // 2
@@ -133,7 +137,7 @@ def _chunked_linear_spectrogram(
         centered = np.pad(centered, (0, hop_length - remainder))
 
     frame_count = 1 + (centered.size - n_fft) // hop_length
-    time_bin_count = min(frame_count, max_time_bins)
+    time_bin_count = frame_count if max_time_bins is None else min(frame_count, max_time_bins)
     frequencies = np.fft.rfftfreq(n_fft, d=1.0 / float(sample_rate))
     pooled = np.full(
         (frequencies.size, time_bin_count),
@@ -176,7 +180,7 @@ def _pool_spectrogram_time(values, times, *, max_time_bins):
     time_values = np.asarray(times, dtype=np.float64).reshape(-1)
     if magnitude.ndim != 2 or magnitude.shape[1] != time_values.size:
         raise ValueError("Spec 频谱矩阵与时间轴长度不一致")
-    if time_values.size <= max_time_bins:
+    if max_time_bins is None or time_values.size <= max_time_bins:
         return magnitude, time_values
 
     pooled = np.empty(

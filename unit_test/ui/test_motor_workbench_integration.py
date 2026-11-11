@@ -817,7 +817,7 @@ def test_real_toolbar_waits_for_login_and_resource_admission_then_delivers_group
     sequence.barcode_scanner_box.setChecked(False)
     sequence.lineedit_s_or_n.setText("IGNORED")
     button = window.sequence_window.player_btn
-    assert button.isEnabled()
+    _wait_for_qt(button.isEnabled)
     assert not window.sequence_window.using_file_combobox.isEnabled()
     snapshot = window.workbench_recording_device.snapshot
 
@@ -994,6 +994,7 @@ def test_active_switch_refreshes_recording_with_in_flight_snapshot(
     window = startup.launch(login)
     _set_recording_identity(window)
     button = window.sequence_window.player_btn
+    _wait_for_qt(button.isEnabled)
     editor = _ConfigurationTeam()
     editor.committed.connect(window.on_workbench_configuration_committed)
     completed = []
@@ -1160,6 +1161,7 @@ def test_close_drains_workbench_archive(startup, config_files, tmp_path, monkeyp
         release_archive.set()
         _wait_for_qt(lambda: archive_entered.is_set() and not window._workbench_archive_bridge.pending)
 
+    _wait_for_qt(lambda: window.analysis_service.closed and getattr(window, "_exit_cleanup_complete", False))
     assert not window.isVisible()
     assert completions == [result]
     assert analysis_inputs == []
@@ -1198,6 +1200,7 @@ def test_real_toolbar_reports_uncreatable_product_root_without_fallback(startup,
         completions = []
         window.workbench_recording_completed.connect(completions.append)
         button = window.sequence_window.player_btn
+        _wait_for_qt(button.isEnabled)
         QTest.mouseClick(button, Qt.LeftButton)
         _wait_for_qt(lambda: QMessageBox.warning.called and button.isEnabled())
         message = QMessageBox.warning.call_args.args[-1]
@@ -1271,7 +1274,7 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
             lambda result: completions.append((QThread.currentThread(), result)),
         )
         window.workbench_analysis_input_ready.connect(analysis_inputs.append)
-        assert button.isEnabled()
+        _wait_for_qt(button.isEnabled)
         QTest.mouseClick(button, Qt.LeftButton)
         button.clicked.emit()
         assert len(submissions) == 1
@@ -1431,6 +1434,7 @@ def test_real_toolbar_archives_click_snapshot_across_midnight_and_product_switch
         completions = []
         window.workbench_recording_completed.connect(completions.append)
         button = window.sequence_window.player_btn
+        _wait_for_qt(button.isEnabled)
         assert button.isEnabled() and _icon_color(button) == play_color
         QTest.mouseClick(button, Qt.LeftButton)
         assert not button.isEnabled() and _icon_color(button, QIcon.Disabled) == pause_color

@@ -111,6 +111,42 @@ class Discovery:
             handles_released=True, result=SimpleNamespace(devices=devices, diagnostics=())))
 
 
+class AnalysisServiceStub:
+    """Keep hardware/startup tests independent of resident analysis processes."""
+
+    def __init__(self):
+        self.sync_calls = []
+        self.shutdown_calls = 0
+        self.poll_calls = 0
+        self.closed = False
+        self.allow_close = True
+        self.events = []
+        self.station_states = {}
+        self.pending_task_count = 0
+        self.submissions = []
+
+    def submit_batch(self, payload):
+        self.submissions.append(payload)
+        return {"accepted": True, "accepted_task_ids": [t["task_id"] for t in payload["tasks"]], "issues": []}
+
+    def sync_stations(self, station_ids):
+        self.sync_calls.append(tuple(station_ids))
+        self.station_states = {sid: {"state": "ready", "pid": index + 1}
+                               for index, sid in enumerate(station_ids)}
+        return {"accepted": True, "error": None}
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+
+    def poll_events(self):
+        self.poll_calls += 1
+        events, self.events = self.events, []
+        if self.shutdown_calls and self.allow_close and not self.closed:
+            self.closed = True
+            events.append({"event_type": "service_closed", "payload": {}})
+        return tuple(events)
+
+
 @pytest.fixture
 def startup(ui_qapp, monkeypatch, tmp_path):
     path = tmp_path / "hardware.json"
@@ -137,10 +173,12 @@ def startup(ui_qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(VideoController, "start_preview", lambda self: None)
     monkeypatch.setattr(main_window.MainWindow, "get_current_version", lambda self: "test")
     windows = []
+    state = SimpleNamespace(analysis_service=AnalysisServiceStub())
 
     class Window(main_window.MainWindow):
         def __init__(self, **kwargs):
             windows.append(self)
+            kwargs.setdefault("analysis_service", state.analysis_service)
             super().__init__(**kwargs)
 
     monkeypatch.setattr(main_window, "MainWindow", Window)
@@ -167,7 +205,9 @@ def startup(ui_qapp, monkeypatch, tmp_path):
         assert application.window.recording_bridge is bridge
         return application.window
 
-    yield SimpleNamespace(launch=launch, login=login, path=path, bridge=bridge, mic=mic, database_path=database_path)
+    state.launch, state.login, state.path, state.bridge, state.mic = launch, login, path, bridge, mic
+    state.database_path = database_path
+    yield state
     for window in windows:
         if not sip.isdeleted(window):
             window.close()
