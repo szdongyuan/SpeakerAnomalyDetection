@@ -17,7 +17,7 @@ import soundfile as sf
 
 from base.analysis.contracts import AnalysisChannel, AnalysisInstance, AnalysisTask
 from base.analysis.process_manager import AnalysisProcessManager
-from base.analysis.runtime_protocol import WorkerEvent
+from base.analysis.runtime_protocol import WorkerEvent, runtime_error
 
 
 def wait_for(manager, predicate, timeout=30):
@@ -189,6 +189,48 @@ def hang_worker(connection, station_id, generation):
 
 def exit_before_ready(connection, station_id, generation):
     connection.close()
+
+
+def malformed_result_worker(connection, station_id, generation):
+    connection.send(WorkerEvent("ready", station_id, generation))
+    connection.recv()
+    connection.send_bytes(b"not a pickle")
+    connection.close()
+
+
+@pytest.mark.parametrize("prior_failure", [False, True])
+def test_transport_error_survives_worker_exit_without_overwriting_prior_failure(task, prior_failure):
+    manager = AnalysisProcessManager(task.station_id, worker_target=malformed_result_worker)
+    try:
+        manager.start()
+        wait_ready(manager)
+        manager.submit(task)
+        # Force the exited-worker path: IPC decoding and child exit finish before polling.
+        manager._process.join(timeout=10)
+        manager._thread.join(timeout=10)
+        assert not manager._process.is_alive()
+        assert not manager._thread.is_alive()
+        assert manager._process.exitcode == 0
+        original_error = runtime_error("execution", "TaskTimeout", "task deadline exceeded")
+        if prior_failure:
+            manager._fail(original_error)
+
+        events = wait_for(manager, lambda events: manager.closed)
+        result, = [e["payload"] for e in events if e["event_type"] == "task_result"]
+        assert result["execution_status"] == "分析失败"
+        error = result["error"]
+        if prior_failure:
+            assert error == original_error
+        else:
+            assert error["stage"] == "communication"
+            assert error["type"] == "UnpicklingError"
+            assert "invalid load key" in error["message"]
+        closed, = [e for e in events if e["event_type"] == "station_status"
+                   and e["payload"]["state"] == "closed"]
+        assert closed["payload"]["error"] == error
+        assert manager.poll_events() == ()
+    finally:
+        manager.close(timeout=0.2)
 
 
 @pytest.mark.parametrize("target", [crash_worker, exit_before_ready])
