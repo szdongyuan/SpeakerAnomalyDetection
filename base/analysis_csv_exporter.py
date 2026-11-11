@@ -79,6 +79,17 @@ def export_item_csvs(
 def _build_tables(analysis_type, config, outputs, channel_labels):
     if analysis_type == "SPL":
         return _spl_tables(config, outputs, channel_labels)
+    if analysis_type == "LOUD":
+        unit = outputs[0]["metrics"]["unit"]
+        curve = build_curve_csv_table(
+            "响度时间曲线", "时间(s)", f"响度_{unit}", outputs, channel_labels,
+            limit_unit=unit,
+        )
+        rows = []
+        for output in outputs:
+            header, row = loudness_summary_csv_row(config, output)
+            rows.append((format_channel_name(int(output["raw_channel"]), channel_labels), *row))
+        return curve, ("响度汇总", ("通道", *header), rows)
     if analysis_type == "FBA":
         return (
             build_curve_csv_table(
@@ -100,6 +111,21 @@ def _build_tables(analysis_type, config, outputs, channel_labels):
             ),
         )
     return ()
+
+
+def loudness_summary_csv_row(config, result):
+    """Share summary columns between station and legacy multichannel exports."""
+    metrics = result["metrics"]
+    unit = metrics["unit"]
+    limit_unit = metrics.get("limit_unit", unit)
+    header = [f"稳态平均响度{unit}", f"最大瞬态响度{unit}", "判定指标",
+              f"下限{limit_unit}", f"上限{limit_unit}", "判定结果"]
+    enabled = bool(config.get("limit_checked"))
+    judgement = (result.get("judgement") or "判定失败") if enabled else "未启用"
+    row = [metrics[f"steady_state_average_{unit}"], metrics[f"max_transient_{unit}"],
+           metrics.get("limit_metric") if enabled else None,
+           metrics.get("overall_lower_limit"), metrics.get("overall_upper_limit"), judgement]
+    return header, row
 
 
 def _spl_tables(config, outputs, channel_labels):
@@ -152,6 +178,8 @@ def build_curve_csv_table(
     y_name,
     outputs,
     channel_labels,
+    *,
+    limit_unit="dB",
 ):
     """Build a curve table without choosing output paths or writing files."""
     reference = dict(outputs[0].get("csv_curve") or {})
@@ -164,7 +192,7 @@ def build_curve_csv_table(
             f"{format_channel_name(int(output['raw_channel']), channel_labels)}_"
             f"{y_name}"
         )
-    header.extend(("下限_Y轴dB", "上限_Y轴dB"))
+    header.extend((f"下限_Y轴{limit_unit}", f"上限_Y轴{limit_unit}"))
 
     curves = []
     for output in outputs:

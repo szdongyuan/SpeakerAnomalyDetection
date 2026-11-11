@@ -33,7 +33,7 @@ from base.spl_csv_schema import resolve_overall_spl_csv_columns
 _QT_APP = None
 _REPORT_FONT_FAMILY = None
 _REPORT_CONTENT_MODES = frozenset({"values_and_charts", "values_only"})
-CHART_ONLY_ANALYSIS_TYPES = frozenset({"Spec", "FFT", "FBA"})
+CHART_ONLY_ANALYSIS_TYPES = frozenset({"Spec", "FFT", "FBA", "LOUD"})
 _PDF_FOOTER_FONT_SIZE = 7
 _CHART_MAX_WIDTH = 600
 _CHART_MAX_HEIGHT = 340

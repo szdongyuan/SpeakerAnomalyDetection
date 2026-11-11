@@ -158,7 +158,7 @@ def build_analysis_task_request(
         )
     if not instances:
         raise AnalysisTaskBuildError(
-            "当前配置没有可执行的 SPL、Spec、FBA 或 FFT 分析项"
+            "当前配置没有可执行的 SPL、Spec、FBA、FFT 或 LOUD 分析项"
         )
 
     try:

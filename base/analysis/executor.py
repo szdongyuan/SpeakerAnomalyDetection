@@ -12,12 +12,12 @@ from .evaluation import evaluate_instance
 from .results import (
     calculation_payload, error_record, instance_result, plain_data, task_result,
 )
-from .storage import save_curve, save_overall_spl
+from .storage import save_curve, save_loudness_summary, save_overall_spl
 from .wav_input import load_task_wav, resolve_calibration, sample_window
 
 
 _LOGGER = logging.getLogger(__name__)
-_SUPPORTED_TYPES = frozenset({"SPL", "FFT", "FBA", "Spec"})
+_SUPPORTED_TYPES = frozenset({"SPL", "FFT", "FBA", "Spec", "LOUD"})
 
 
 def execute_task(task: AnalysisTask) -> dict:
@@ -67,7 +67,9 @@ def _execute_instance(task, instance, samples, sample_rate, metadata):
                 error_type="UnsupportedSignalType",
             )
             return result
-        first, stop = sample_window(instance.parameters, len(samples), sample_rate)
+        time_config = (instance.parameters.get("advanced", {})
+                       if instance.analysis_type == "LOUD" else instance.parameters)
+        first, stop = sample_window(time_config, len(samples), sample_rate)
         # SPL weighting runs before cropping, so invalid earlier samples matter.
         used = (
             samples[:stop, index] if instance.analysis_type == "SPL"
@@ -107,7 +109,9 @@ def _execute_instance(task, instance, samples, sample_rate, metadata):
     exports = []
     if instance.analysis_type == "SPL":
         exports.append(("overall_spl_csv", save_overall_spl))
-    if instance.analysis_type in {"SPL", "FFT", "FBA"}:
+    elif instance.analysis_type == "LOUD":
+        exports.append(("loudness_summary_csv", save_loudness_summary))
+    if instance.analysis_type in {"SPL", "FFT", "FBA", "LOUD"}:
         exports.append(("curve_csv", save_curve))
     for kind, save in exports:
         artifact = {"kind": kind, "status": "failed", "path": None, "error": None}
@@ -127,6 +131,11 @@ def _judge(instance, calculation, result):
         return
     try:
         evaluation = evaluate_instance(instance, calculation)
+        if instance.analysis_type == "LOUD":
+            result["metrics"].update(
+                limit_metric=instance.parameters.get("limit_metric", "curve_y"),
+                limit_unit=evaluation["unit"],
+            )
         if evaluation["scalar"]:
             for side in ("upper", "lower"):
                 value = evaluation[side][0]
@@ -134,8 +143,12 @@ def _judge(instance, calculation, result):
                     float(value) if np.isfinite(value) else None
                 )
         else:
-            for side in ("upper", "lower"):
-                result["display_payload"][side] = evaluation[side]
+            if instance.analysis_type == "LOUD":
+                result["display_payload"]["limit_unit"] = evaluation["unit"]
+            if (instance.analysis_type != "LOUD"
+                    or evaluation["unit"] == result["display_payload"]["y_unit"]):
+                for side in ("upper", "lower"):
+                    result["display_payload"][side] = evaluation[side]
         result.update(
             judgement_status="completed", judgement=evaluation["judgement"],
             violations=evaluation["violations"],

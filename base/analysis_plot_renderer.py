@@ -29,6 +29,8 @@ def render_analysis_png(plot_payload):
 
     payload = dict(plot_payload or {})
     kind = payload.get("kind")
+    if kind == "loudness":
+        return _render_loudness_png(plt, payload)
     figure, axis = plt.subplots(figsize=(12, 8), dpi=100)
     try:
         if kind == "curve":
@@ -47,6 +49,42 @@ def render_analysis_png(plot_payload):
         if "recording_time_range" in payload:
             axis.set_xlim(*payload["recording_time_range"])
         _draw_segment_annotations(axis, payload.get("segment_annotations", ()))
+        figure.tight_layout()
+        output = BytesIO()
+        figure.savefig(output, format="png", facecolor="white")
+        return output.getvalue()
+    finally:
+        plt.close(figure)
+
+
+def _render_loudness_png(plt, payload):
+    """Honor the existing loudness display choices in manual views and reports."""
+    curves = payload.get("curves", [])
+    heatmaps = payload.get("heatmaps", [])
+    figure, axes = plt.subplots(
+        max(1, len(curves) + len(heatmaps)), 1,
+        figsize=(12, max(4, 4 * (len(curves) + len(heatmaps)))), dpi=100,
+        squeeze=False,
+    )
+    try:
+        for axis, curve in zip(axes[:, 0], curves):
+            _render_curve(axis, curve)
+            if curve.get("zero_based"):
+                axis.set_ylim(bottom=0)
+        for axis, heatmap in zip(axes[len(curves):, 0], heatmaps):
+            mesh = axis.pcolormesh(
+                heatmap["x"], heatmap["y"], heatmap["z"], shading="auto",
+                cmap=heatmap.get("color_map", "viridis"),
+            )
+            figure.colorbar(mesh, ax=axis, label=heatmap["z_label"])
+            _finish_axis(axis, heatmap)
+        if not curves and not heatmaps:
+            axes[0, 0].axis("off")
+        cards = payload.get("summary_cards", [])
+        if cards:
+            figure.suptitle("  |  ".join(
+                f"{card['label']}: {card['value']:.3f} {card['unit']}" for card in cards
+            ))
         figure.tight_layout()
         output = BytesIO()
         figure.savefig(output, format="png", facecolor="white")

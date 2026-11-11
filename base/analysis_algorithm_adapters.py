@@ -13,6 +13,7 @@ import os
 
 import numpy as np
 
+from base.loudness_analysis_adapter import calculate_loudness
 from base.analysis_curve_style import resolve_curve_colors
 from base.analysis_limit_evaluation import (
     compare_with_limits as _compare_with_limits,
@@ -462,6 +463,7 @@ _HANDLERS = {
     "FBA": _calculate_fba,
     "FFT": _calculate_fft,
     "Spec": _calculate_spec,
+    "LOUD": calculate_loudness,
 }
 
 

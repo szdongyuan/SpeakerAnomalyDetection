@@ -9,6 +9,7 @@ from base.analysis_limit_evaluation import (
     resolve_limits,
     resolve_spl_overall_limits,
 )
+from base.loudness_analysis_adapter import loudness_limit_data
 
 
 def evaluate_instance(instance, calculation):
@@ -18,7 +19,10 @@ def evaluate_instance(instance, calculation):
     scalar = instance.analysis_type == "SPL" and str(
         config.get("limit_metric", "curve_y") or "curve_y"
     ).lower() == "overall_spl"
-    if scalar:
+    unit = "dB"
+    if instance.analysis_type == "LOUD":
+        x, y, upper, lower, scalar, unit = loudness_limit_data(config, calculation)
+    elif scalar:
         x = np.asarray([0.0])
         y = np.asarray([calculation["metrics"]["overall_spl"]])
         upper, lower = resolve_spl_overall_limits(config)
@@ -49,15 +53,16 @@ def evaluate_instance(instance, calculation):
     violations = _violations(
         x, y, upper, lower, valid, scalar=scalar,
         discrete=instance.analysis_type == "FBA",
-        x_unit="s" if instance.analysis_type == "SPL" else "Hz",
+        x_unit="s" if instance.analysis_type in {"SPL", "LOUD"} else "Hz",
+        y_unit=unit,
     )
     return {
         "judgement": "OK" if passed else "NG", "violations": violations,
-        "upper": upper, "lower": lower, "scalar": scalar,
+        "upper": upper, "lower": lower, "scalar": scalar, "unit": unit,
     }
 
 
-def _violations(x, y, upper, lower, valid, *, scalar, discrete, x_unit):
+def _violations(x, y, upper, lower, valid, *, scalar, discrete, x_unit, y_unit):
     records = []
     for side, limits, deviations in (
         ("above_upper", upper, y - upper),
@@ -78,6 +83,6 @@ def _violations(x, y, upper, lower, valid, *, scalar, discrete, x_unit):
                 "x_unit": None if scalar else x_unit,
                 "max_deviation_at": None if scalar else float(x[peak]),
                 "measured_value": float(y[peak]), "limit_value": float(limits[peak]),
-                "max_deviation": float(deviations[peak]), "deviation_unit": "dB",
+                "max_deviation": float(deviations[peak]), "deviation_unit": y_unit,
             })
     return records
