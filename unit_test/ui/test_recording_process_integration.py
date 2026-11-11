@@ -119,7 +119,7 @@ def test_calibration_child_captures_ten_seconds_and_saves_unchanged_json(
     from ui import calibration_window as calibration
     from ui.recording_service_bridge import RecordingServiceBridge
     from base import soundcard_calibration_manager as manager
-    from base.pre_processing.audio_thd_frequency_response_analysis import AudioThdFrequencyResponseAnalysis
+    from base.core_algorithm.response.spl_analyzer import spl_calculation
     from unit_test.base.recording_process_fakes import generated_audio
 
     service._backend_options.update(frames=441017, chunk_frames=4096)
@@ -146,7 +146,7 @@ def test_calibration_child_captures_ten_seconds_and_saves_unchanged_json(
         assert finished == [True]
         expected = generated_audio(0, 441000)[:, channel]
         np.testing.assert_array_equal(received[0], expected)
-        smooth = AudioThdFrequencyResponseAnalysis().spl_calculation(expected, method="rms", window_size=1201)
+        smooth = spl_calculation(expected, method="rms", window_size=1201)
         mid, step = len(smooth) // 2, len(expected) // 3
         factor = 10 ** (round(standard - np.mean(smooth[mid-step:mid+step]), 3) / 20)
         assert manager.get_mic_v2pa_factor(device_info(), [channel]) == pytest.approx(factor)

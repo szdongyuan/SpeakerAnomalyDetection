@@ -103,7 +103,7 @@ def test_overall_judgment_uses_rms_independently_of_curve_and_title(
         **limits,
     }
     monkeypatch.setattr(
-        signal_module.AudioThdFrequencyResponseAnalysis, "spl_calculation",
+        signal_module, "spl_calculation",
         lambda *_args, **_kwargs: np.array([curve_value, curve_value]),
     )
     titles = []
@@ -201,9 +201,9 @@ def test_spl_runtime_optionally_displays_overall_level(
         lambda signal, *args, **kwargs: signal,
     )
     monkeypatch.setattr(
-        signal_module.AudioThdFrequencyResponseAnalysis,
+        signal_module,
         "spl_calculation",
-        lambda self, *args, **kwargs: np.array([42.0, 43.0]),
+        lambda *args, **kwargs: np.array([42.0, 43.0]),
     )
     monkeypatch.setattr(widget, "plot_spl", lambda *args: None)
     monkeypatch.setattr(
@@ -254,9 +254,9 @@ def test_spl_runtime_ignores_legacy_corrections_for_curve_and_overall_level(
     plotted = []
 
     monkeypatch.setattr(
-        signal_module.AudioThdFrequencyResponseAnalysis,
+        signal_module,
         "spl_calculation",
-        lambda self, *args, **kwargs: np.array([42.0, 43.0]),
+        lambda *args, **kwargs: np.array([42.0, 43.0]),
     )
     monkeypatch.setattr(
         widget,
