@@ -104,6 +104,15 @@ def build_ui_projection(
     """Project validated settings into display values in product and queue order."""
     context = analysis_config.context
     layout = ui_config.layout
+    preview_time_modes = MappingProxyType({
+        condition.condition_id: ui_config.preview_time_modes[condition.test_queue]
+        for condition in context.conditions
+    })
+    if layout is None:
+        return WorkbenchUiProjection(
+            stations=_station_display(analysis_config), column_names=(), cells=(), bindings=(),
+            preview_time_modes=preview_time_modes,
+        )
     padding = layout.columns - len(context.stations)
     names = tuple(station.station_name for station in context.stations) + ("",) * padding
     station_conditions = tuple(
@@ -128,8 +137,5 @@ def build_ui_projection(
         column_names=names,
         cells=tuple(display_rows),
         bindings=tuple(binding_rows),
-        preview_time_modes=MappingProxyType({
-            condition.condition_id: ui_config.preview_time_modes[condition.test_queue]
-            for condition in context.conditions
-        }),
+        preview_time_modes=preview_time_modes,
     )

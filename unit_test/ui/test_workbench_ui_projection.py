@@ -51,6 +51,17 @@ def test_projection_preserves_layout_partial_associations_and_conflicting_units(
         projection.preview_time_modes["c1"] = "window"
 
 
+def test_absent_layout_projects_no_plots_but_keeps_stations_and_preview_modes(configuration):
+    expected = build_ui_projection(configuration.ui, configuration.analysis)
+    ui = replace(configuration.ui, layout=None)
+
+    projection = build_ui_projection(ui, configuration.analysis)
+
+    assert projection.stations == expected.stations
+    assert projection.preview_time_modes == expected.preview_time_modes
+    assert projection.column_names == projection.cells == projection.bindings == ()
+
+
 def test_missing_items_and_types_keep_condition_slots_and_custom_titles(configuration):
     # The first queue has an FFT item that is deliberately not in display order.
     test_queues = dict(configuration.analysis.test_queues)

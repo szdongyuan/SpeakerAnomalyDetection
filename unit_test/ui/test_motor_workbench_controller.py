@@ -31,6 +31,24 @@ class RepositoryStub:
         self.source_identity = "product.json"
         self.result = None
         self.calls = calls
+        self.catalog = (("product.json", "电机"), ("second.json", "另一电机"))
+        self.candidate = None
+
+    def load_product_catalog(self):
+        self.calls.append("catalog")
+        if isinstance(self.catalog, Exception):
+            raise self.catalog
+        return self.catalog
+
+    def load_candidate(self, file_name):
+        self.calls.append(("candidate", file_name))
+        if isinstance(self.candidate, Exception):
+            raise self.candidate
+        return self.candidate
+
+    def accept_product_source(self, file_name):
+        self.calls.append(("accept", file_name))
+        self.source_identity = str(Path("products") / file_name)
 
     def load_active(self):
         self.calls.append("load")
@@ -946,3 +964,304 @@ def test_inflight_success_does_not_advance_after_quality_limit_becomes_invalid(r
     w.controller.refresh_configuration()
     w.controller.start_recording()
     assert w.requests[1].station_group.condition_id == "warm"
+
+
+def bind_product_selection(workbench):
+    from ui.sequence.motor_workbench_controller import WorkbenchProductSelectionPorts
+
+    state = SimpleNamespace(busy=False, closing=False, saved=[], catalogs=[], enabled=[], errors=[], save_result=(True, ""))
+
+    def save(file_name):
+        workbench.repository.calls.append(("save", file_name))
+        state.saved.append(file_name)
+        if isinstance(state.save_result, Exception):
+            raise state.save_result
+        return state.save_result
+
+    state.manager = SimpleNamespace(set_active_product=save)
+    workbench.controller.bind_product_selection(WorkbenchProductSelectionPorts(
+        product_manager=state.manager,
+        show_catalog=lambda entries, selected: state.catalogs.append((entries, selected)),
+        set_enabled=state.enabled.append,
+        is_busy=lambda: state.busy,
+        is_closing=lambda: state.closing,
+        notify_error=state.errors.append,
+    ))
+    return state
+
+
+@pytest.fixture
+def selection_workbench(workbench, recording_workbench):
+    workbench.controller = recording_workbench.controller
+    workbench.products.clear()
+    state = bind_product_selection(workbench)
+    workbench.repository.candidate = configuration_with(recording_workbench.config, project_name="另一电机")
+    workbench.controller.refresh_configuration()
+    workbench.selection = state
+    return workbench
+
+
+def selection_snapshot(w):
+    controller = w.controller
+    return (
+        controller.get_recording_config(), controller.get_analysis_config(), controller.get_ui_config(),
+        controller._analysis_version, controller._configuration_revision, controller._condition_index,
+        controller._configuration_valid, w.repository.source_identity, controller._recording_key,
+        controller._recording_admission(),
+        w.panel.get_station_data(1),
+        tuple(plot_cells(w.grid)[0, 0].plot_widget.getPlotItem().listDataItems()),
+    )
+
+
+def populate_selection_results(w):
+    w.panel.set_station_results(1, "OK", "NG")
+    w.panel.set_station_cell(1, 0, 1, 12)
+    w.grid.set_curve_data(0, 0, [{"x": [1, 2], "y": [3, 4]}])
+    w.controller._condition_index = 1
+
+
+def test_product_selection_catalog_refresh_keeps_applied_source(selection_workbench):
+    w = selection_workbench
+    assert w.selection.catalogs[-1] == (w.repository.catalog, "product.json")
+    assert w.products == []
+    w.repository.catalog = (("second.json", "同名"), ("product.json", "同名"), ("third.json", "新增"))
+    w.controller.refresh_product_catalog()
+    assert w.selection.catalogs[-1] == (w.repository.catalog, "product.json")
+    assert w.selection.saved == []
+
+
+@pytest.mark.parametrize("equal_content", [False, True])
+def test_product_selection_prepares_once_before_save_and_resets_source(selection_workbench, monkeypatch, equal_content):
+    from ui.sequence import motor_workbench_controller as module
+
+    w = selection_workbench
+    populate_selection_results(w)
+    previous = selection_snapshot(w)
+    if equal_content:
+        w.repository.candidate = configuration_with(w.repository.result)
+    candidate = w.repository.candidate
+    projections = []
+    build = module.build_ui_projection
+
+    def prepare(ui, analysis):
+        w.calls.append("prepare")
+        projection = build(ui, analysis)
+        projections.append(projection)
+        return projection
+
+    monkeypatch.setattr(module, "build_ui_projection", prepare)
+    w.calls.clear()
+    w.controller.select_product("second.json")
+    assert w.calls == ["catalog", ("candidate", "second.json"), "prepare", ("save", "second.json"),
+                       ("accept", "second.json"), "panel", "grid"]
+    assert len(projections) == 1
+    assert w.plot_batches[-1][0] is projections[0].column_names
+    assert w.plot_batches[-1][1] is projections[0].cells
+    assert w.controller.get_recording_config() is candidate.recording
+    assert w.controller._plot_bindings is projections[0].bindings
+    assert w.repository.source_identity == str(Path("products") / "second.json")
+    assert w.controller._analysis_version != previous[3]
+    assert w.controller._configuration_revision > previous[4]
+    assert w.controller._condition_index == 0
+    assert w.panel.get_station_data(1)["forward"] == "--"
+    assert not plot_cells(w.grid)[0, 0].plot_widget.getPlotItem().listDataItems()
+    assert w.selection.catalogs[-1] == (w.repository.catalog, "second.json")
+    assert w.selection.enabled[-1] is True
+
+
+def test_product_selection_same_source_preserves_everything(selection_workbench):
+    w = selection_workbench
+    populate_selection_results(w)
+    previous = selection_snapshot(w)
+    w.calls.clear()
+    w.controller.select_product("product.json")
+    assert selection_snapshot(w) == previous
+    assert w.calls == ["catalog"]
+    assert w.selection.saved == []
+    assert w.selection.catalogs[-1][1] == "product.json"
+
+
+@pytest.mark.parametrize("failure", ["candidate", "projection", "save", "io", "removed", "catalog"])
+def test_product_selection_expected_failure_preserves_snapshot(selection_workbench, monkeypatch, failure):
+    from ui.sequence import motor_workbench_controller as module
+
+    w = selection_workbench
+    populate_selection_results(w)
+    previous = selection_snapshot(w)
+    if failure == "candidate":
+        w.repository.candidate = WorkbenchConfigurationError("second.json: invalid queue")
+    elif failure == "projection":
+        def fail_projection(*_):
+            raise WorkbenchConfigurationError("layout.json: invalid projection")
+        monkeypatch.setattr(module, "build_ui_projection", fail_projection)
+    elif failure == "save":
+        w.selection.save_result = (False, "registry.json: write failed")
+    elif failure == "io":
+        w.selection.save_result = OSError("registry.json: permission denied")
+    elif failure == "removed":
+        w.repository.catalog = (("product.json", "电机"),)
+    else:
+        w.repository.catalog = WorkbenchConfigurationError("registry.json: invalid registry")
+    w.calls.clear()
+    w.controller.select_product("second.json")
+    assert selection_snapshot(w) == previous
+    assert "panel" not in w.calls and "grid" not in w.calls
+    assert not any(isinstance(call, tuple) and call[0] == "accept" for call in w.calls)
+    assert len(w.selection.errors) == 1
+    assert w.selection.catalogs[-1][1] == "product.json"
+    assert w.selection.enabled[-1] is True
+
+
+@pytest.mark.parametrize("closing", [False, True])
+def test_product_selection_busy_entry_restores_before_reads(selection_workbench, closing):
+    w = selection_workbench
+    w.selection.closing = closing
+    w.selection.busy = not closing
+    w.calls.clear()
+    w.controller.select_product("second.json")
+    assert w.calls == []
+    assert w.selection.saved == []
+    assert w.selection.catalogs[-1][1] == "product.json"
+    assert w.selection.enabled[-1] is False
+    w.selection.closing = w.selection.busy = False
+    w.controller.refresh_recording_state()
+    assert w.selection.enabled[-1] is True
+
+
+def test_product_selection_rechecks_busy_after_preparation(selection_workbench, monkeypatch):
+    from ui.sequence import motor_workbench_controller as module
+
+    w = selection_workbench
+    previous = selection_snapshot(w)
+    build = module.build_ui_projection
+
+    def prepare(*args):
+        projection = build(*args)
+        w.selection.busy = True
+        return projection
+
+    monkeypatch.setattr(module, "build_ui_projection", prepare)
+    w.controller.select_product("second.json")
+    assert selection_snapshot(w) == previous
+    assert w.selection.saved == []
+    assert w.selection.enabled[-1] is False
+    assert w.selection.catalogs[-1][1] == "product.json"
+
+
+def test_product_selection_without_recording_refreshes_busy_state(workbench):
+    selection = bind_product_selection(workbench)
+    assert selection.catalogs[-1] == (workbench.repository.catalog, "")
+    assert selection.enabled[-1] is True
+    selection.busy = True
+    workbench.controller.refresh_recording_state()
+    assert selection.enabled[-1] is False
+    selection.busy = False
+    workbench.controller.refresh_recording_state()
+    assert selection.enabled[-1] is True
+    assert selection.saved == []
+
+
+def test_product_selection_catalog_failure_retains_entries_and_recovers(selection_workbench, caplog):
+    w = selection_workbench
+    previous = w.selection.catalogs[-1]
+    w.repository.catalog = WorkbenchConfigurationError("registry.json: unavailable")
+    w.controller.refresh_product_catalog()
+    assert w.selection.catalogs[-1] == previous
+    assert "registry.json: unavailable" in caplog.text
+    assert w.selection.errors == ["registry.json: unavailable"]
+    w.repository.catalog = (("product.json", "新名称"),)
+    w.controller.refresh_product_catalog()
+    assert w.selection.catalogs[-1] == (w.repository.catalog, "product.json")
+    assert w.selection.saved == []
+
+
+def test_product_selection_external_refresh_tracks_source_and_equal_notifications(selection_workbench):
+    w = selection_workbench
+    populate_selection_results(w)
+    previous_version = w.controller._analysis_version
+    w.repository.source_identity = str(Path("products") / "second.json")
+    w.controller.refresh_configuration()
+    assert w.controller._analysis_version != previous_version
+    assert w.controller._condition_index == 0
+    assert w.panel.get_station_data(1)["forward"] == "--"
+    assert w.selection.catalogs[-1][1] == "second.json"
+    populate_selection_results(w)
+    previous = selection_snapshot(w)
+    w.controller.refresh_configuration()
+    assert selection_snapshot(w) == previous
+    assert w.selection.saved == []
+
+
+def test_product_selection_editor_refresh_during_recording_keeps_attempt(recording_workbench):
+    w = recording_workbench
+    selection = bind_product_selection(w)
+    w.controller.start_recording()
+    attempt = w.controller._in_flight
+    w.repository.result = configuration_with(w.config, project_name="编辑后的产品")
+    w.repository.source_identity = str(Path("products") / "second.json")
+    w.controller.refresh_configuration()
+    assert w.controller._in_flight is attempt
+    assert w.controller.get_recording_config() is w.repository.result.recording
+    assert w.controller._analysis_version != attempt.analysis_context.analysis_version
+    assert selection.catalogs[-1][1] == "second.json"
+    assert selection.enabled[-1] is False
+    assert selection.saved == []
+    w.complete()
+    assert w.controller._condition_index == 0
+    assert selection.enabled[-1] is True
+
+
+@pytest.mark.parametrize("terminal", ["success", "failure", "cancelled", "rejected"])
+def test_product_selection_recording_archive_cleanup_and_analysis_recovery(recording_workbench, terminal):
+    w = recording_workbench
+    selection = bind_product_selection(w)
+    w.repository.candidate = w.config
+    w.outcome.on_archive = lambda *_: None
+    if terminal == "rejected":
+        w.outcome.error = RuntimeError("service busy")
+    w.controller.start_recording()
+    if terminal == "rejected":
+        assert selection.enabled[-1] is True
+        return
+    assert selection.enabled[-1] is False
+    w.repository.calls.clear()
+    w.controller.select_product("second.json")
+    assert w.repository.calls == []
+    w.service.can_start_recording = False
+    selection.busy = True  # recording resources are still being released
+    w.complete(outcome=terminal)
+    assert selection.enabled[-1] is False
+    if terminal == "success":
+        assert w.controller._in_flight.archiving
+        w.repository.calls.clear()
+        w.controller.select_product("second.json")
+        assert w.repository.calls == []
+        result, _, _, archived = w.archive_submissions[-1]
+        archived(result.request_id, None)
+        assert selection.enabled[-1] is False
+    w.service.can_start_recording = True
+    selection.busy = False
+    w.callbacks[-1].released(SimpleNamespace(request=w.requests[-1]))
+    assert selection.enabled[-1] is True
+    for phase in ("queued analysis", "active analysis"):
+        selection.busy = True
+        w.controller.refresh_recording_state()
+        assert selection.enabled[-1] is False, phase
+        selection.busy = False
+        w.controller.refresh_recording_state()
+        assert selection.enabled[-1] is True, phase
+
+
+def test_product_selection_unexpected_view_error_propagates_with_source(selection_workbench, monkeypatch, caplog):
+    w = selection_workbench
+    caplog.set_level("INFO", logger="core")
+
+    def fail(*_):
+        raise RuntimeError("view publication failed")
+
+    monkeypatch.setattr(w.panel, "show_workbench_stations", fail)
+    with pytest.raises(RuntimeError, match="view publication failed"):
+        w.controller.select_product("second.json")
+    assert w.selection.saved == ["second.json"]
+    assert "second.json" in caplog.text
+    assert w.selection.errors == []

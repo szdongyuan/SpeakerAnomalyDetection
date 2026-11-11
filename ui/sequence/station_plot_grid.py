@@ -8,7 +8,7 @@ from PyQt5.QtCore import QEvent, QSignalBlocker, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QSizePolicy, QStyle, QToolTip, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QStyle, QToolTip, QVBoxLayout, QWidget, QWIDGETSIZE_MAX,
 )
 
 from consts.running_consts import DEFAULT_DIR
@@ -120,13 +120,17 @@ class _ColumnControls(QWidget):
         self.combo = _ColumnComboBox(self)
         self.combo.setObjectName(f'stationOptions{column}')
         self.combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.combo.setStyleSheet(toolbar_combobox_style + '''
-            QComboBox {
-                min-width: 0px; max-width: 16777215px;
-                min-height: 0px; max-height: 16777215px;
+        # QSS maxima apply to content; padding and one-pixel borders must fit
+        # within Qt's widget limit while overriding inherited size constraints.
+        combo_max_width = QWIDGETSIZE_MAX - (3 + 18 + 2)
+        combo_max_height = QWIDGETSIZE_MAX - (3 + 3 + 2)
+        self.combo.setStyleSheet(toolbar_combobox_style + f'''
+            QComboBox {{
+                min-width: 0px; max-width: {combo_max_width}px;
+                min-height: 0px; max-height: {combo_max_height}px;
                 font-size: 12px; padding: 3px 18px 3px 3px;
-            }
-            QComboBox QAbstractItemView { font-size: 12px; }
+            }}
+            QComboBox QAbstractItemView {{ font-size: 12px; }}
         ''')
         self.combo.setEnabled(False)
         self.play = QPushButton(self)

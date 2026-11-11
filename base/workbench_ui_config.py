@@ -25,7 +25,7 @@ class WorkbenchPlotLayout(_SnapshotValue):
 
 @dataclass(frozen=True, eq=False)
 class WorkbenchUiConfig(_SnapshotValue):
-    layout: WorkbenchPlotLayout
+    layout: WorkbenchPlotLayout | None
     preview_time_modes: Mapping[str, str]
 
     def __post_init__(self):

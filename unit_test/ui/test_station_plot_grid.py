@@ -1,7 +1,7 @@
 import pyqtgraph as pg
 import pytest
 from PyQt5 import sip
-from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QSize, Qt
+from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QSize, Qt, qInstallMessageHandler
 from PyQt5.QtGui import QHelpEvent, QIcon, QImage, QPalette, QPixmap, QTextDocument, QWheelEvent
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtTest import QSignalSpy, QTest
@@ -43,6 +43,27 @@ def controls(grid, column):
 
 def curves(cell):
     return cell.plot_widget.getPlotItem().listDataItems()
+
+
+def test_creation_show_and_resize_do_not_exceed_qt_maximum_size(qt_app):
+    messages = []
+    previous = qInstallMessageHandler(lambda _kind, _context, message: messages.append(message))
+    widget = None
+    try:
+        widget = StationPlotGrid()
+        widget.resize(1100, 650)
+        widget.show()
+        qt_app.processEvents()
+        widget.resize(530, 330)
+        qt_app.processEvents()
+    finally:
+        if widget is not None:
+            widget.close()
+            widget.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        qInstallMessageHandler(previous)
+
+    assert not [message for message in messages if 'QWidget::setMaximumSize' in message]
 
 
 def test_title_and_station_colors_are_actually_painted(grid):

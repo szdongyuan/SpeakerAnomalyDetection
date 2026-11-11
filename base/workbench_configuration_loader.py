@@ -81,7 +81,7 @@ def _unique(values, path: Path, field: str):
         seen.add(value)
 
 
-def _active_product_filename(path: Path) -> str | None:
+def _read_product_registry(path: Path) -> dict:
     registry = _object(_read_json(path, "product registry"), path, "product registry")
     entries = _array(registry.get(REGISTRY_CONFIGS_KEY), path, REGISTRY_CONFIGS_KEY)
     filenames = []
@@ -99,13 +99,17 @@ def _active_product_filename(path: Path) -> str | None:
         _nonempty_string(entry.get(PROJECT_NAME_KEY), path, f"{field}.{PROJECT_NAME_KEY}")
         filenames.append(name)
     _unique(map(os.path.normcase, filenames), path, f"{REGISTRY_CONFIGS_KEY}.{REGISTRY_FILE_KEY}")
+    return registry
 
+
+def _active_product_filename(path: Path) -> str | None:
+    registry = _read_product_registry(path)
     if REGISTRY_ACTIVE_FILE_KEY not in registry:
         raise WorkbenchConfigurationError(f"{path}: missing {REGISTRY_ACTIVE_FILE_KEY}")
     active_file = registry[REGISTRY_ACTIVE_FILE_KEY]
     if active_file is not None:
         active_file = _nonempty_string(active_file, path, REGISTRY_ACTIVE_FILE_KEY)
-        if active_file not in filenames:
+        if not any(entry[REGISTRY_FILE_KEY] == active_file for entry in registry[REGISTRY_CONFIGS_KEY]):
             raise WorkbenchConfigurationError(
                 f"{path}: {REGISTRY_ACTIVE_FILE_KEY} {active_file!r} is not registered"
             )
@@ -131,8 +135,14 @@ def _load_plot_cell(data, path: Path, field: str) -> WorkbenchPlotCell:
     return WorkbenchPlotCell(title, analysis_item, analysis_type)
 
 
-def _load_plot_layout(path: Path) -> WorkbenchPlotLayout:
-    data = _object(_read_json(path, "plot layout"), path, "plot layout")
+def _load_plot_layout(path: Path) -> WorkbenchPlotLayout | None:
+    try:
+        data = _read_json(path, "plot layout")
+    except WorkbenchConfigurationError as exc:
+        if isinstance(exc.__cause__, FileNotFoundError):
+            return None
+        raise
+    data = _object(data, path, "plot layout")
     rows = _layout_dimension(data, path, "rows", 3)
     columns = _layout_dimension(data, path, "columns", 4)
     cell_data = _array(data.get("cells"), path, "cells")
@@ -358,7 +368,7 @@ def _load_active_configuration(program_registry_path, queue_registry_path, plot_
     station_data = _array(product.get("stations"), path, "stations")
     if not 1 <= len(station_data) <= 4:
         raise WorkbenchConfigurationError(f"{path}: stations must contain between 1 and 4 entries")
-    if len(station_data) > plot_layout.columns:
+    if plot_layout is not None and len(station_data) > plot_layout.columns:
         raise WorkbenchConfigurationError(
             f"{path}: {len(station_data)} stations "
             f"exceed the {plot_layout.columns} columns in {plot_layout_path}"

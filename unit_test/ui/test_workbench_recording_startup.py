@@ -172,6 +172,7 @@ def startup(ui_qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(vkinging_hardware_controls, "DiscoveryService", Discovery)
     monkeypatch.setattr(VideoController, "start_preview", lambda self: None)
     monkeypatch.setattr(main_window.MainWindow, "get_current_version", lambda self: "test")
+    monkeypatch.setattr(QtWidgets.QMessageBox, "warning", Mock())
     windows = []
     state = SimpleNamespace(analysis_service=AnalysisServiceStub())
 

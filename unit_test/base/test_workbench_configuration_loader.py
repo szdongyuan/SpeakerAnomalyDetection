@@ -77,6 +77,58 @@ def test_no_active_product_returns_none_without_reading_other_files(tmp_path):
     assert load(files) is None
 
 
+def test_absent_layout_preserves_business_snapshots_without_writing_a_replacement(tmp_path):
+    files = write_workbench_files(tmp_path)
+    expected = load(files)
+    layout = files["layout"].read_bytes()
+    files["layout"].unlink()
+    before = {path: path.read_bytes() for path in files.values() if path.exists()}
+
+    config = load(files)
+
+    assert config.ui.layout is None
+    assert config.recording == expected.recording
+    assert config.analysis == expected.analysis
+    assert config.ui.preview_time_modes == expected.ui.preview_time_modes
+    assert not files["layout"].exists()
+    assert before == {path: path.read_bytes() for path in before}
+    files["layout"].write_bytes(layout)
+    assert load(files) == expected
+
+
+@pytest.mark.parametrize("file_key", ["product", "queues", "测试队列A"])
+@pytest.mark.parametrize("breakage", ["missing", "json"])
+def test_absent_layout_does_not_hide_invalid_business_files(tmp_path, file_key, breakage):
+    files = write_workbench_files(tmp_path)
+    files["layout"].unlink()
+    path = files[file_key]
+    if breakage == "missing":
+        path.unlink()
+    else:
+        path.write_text("{", encoding="utf-8")
+
+    with pytest.raises(WorkbenchConfigurationError) as caught:
+        load(files)
+    assert str(path) in str(caught.value)
+    assert isinstance(caught.value.__cause__, FileNotFoundError if breakage == "missing" else json.JSONDecodeError)
+
+
+def test_existing_unreadable_layout_remains_an_error(tmp_path, monkeypatch):
+    files = write_workbench_files(tmp_path)
+    original = Path.read_text
+
+    def read_text(path, *args, **kwargs):
+        if path == files["layout"]:
+            raise PermissionError("layout access denied")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    with pytest.raises(WorkbenchConfigurationError) as caught:
+        load(files)
+    assert str(files["layout"]) in str(caught.value)
+    assert isinstance(caught.value.__cause__, PermissionError)
+
+
 def test_mixed_device_references_in_one_station_are_rejected(tmp_path):
     files = write_workbench_files(tmp_path)
     product = read(files["product"])
@@ -209,6 +261,7 @@ def test_no_conditions_does_not_need_queue_registry(tmp_path):
     ("queues", ("测试队列A",), "C:queue.json", "测试队列A"),
     ("queues", ("测试队列A",), "\\queue.json", "测试队列A"),
     ("layout", ("rows",), True, "rows"),
+    ("layout", (), None, "plot layout must be an object"),
     ("layout", ("rows",), 4, "rows"),
     ("layout", ("columns",), 0, "columns"),
     ("layout", ("columns",), 5, "columns"),
@@ -250,7 +303,8 @@ def test_invalid_inputs_have_file_and_field_diagnostics(tmp_path, file_key, keys
     ("programs", "json", json.JSONDecodeError),
     ("queues", "encoding", UnicodeDecodeError),
     ("product", "missing", FileNotFoundError),
-    ("layout", "missing", FileNotFoundError),
+    ("layout", "json", json.JSONDecodeError),
+    ("layout", "encoding", UnicodeDecodeError),
     ("测试队列A", "missing", FileNotFoundError),
 ])
 def test_file_errors_include_path_and_cause(tmp_path, file_key, breakage, cause):

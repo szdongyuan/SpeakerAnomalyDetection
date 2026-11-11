@@ -5,7 +5,7 @@ import pytest
 from PyQt5.QtCore import QEvent, QPoint, QRect, Qt
 from PyQt5.QtGui import QColor, QHelpEvent
 from PyQt5.QtTest import QSignalSpy, QTest
-from PyQt5.QtWidgets import QApplication, QFrame, QLabel, QMainWindow, QPushButton, QStyle, QStyleOptionButton, QToolTip, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QFrame, QLabel, QMainWindow, QPushButton, QStyle, QStyleOptionButton, QStyleOptionComboBox, QToolTip, QVBoxLayout, QWidget
 
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
 from unit_test.ui.test_toolbar_eliding_widgets import rendered_font
@@ -143,6 +143,97 @@ def test_round_field_removed_without_leaving_a_layout_slot(width, toolbar_host, 
     toolbar.reset_round_button.clicked.connect(lambda: round_value.setValue(1))
     QTest.mouseClick(toolbar.reset_round_button, Qt.LeftButton)
     assert round_value.value() == 1
+
+
+def test_workbench_toolbar_mode_replaces_reset_in_compact_row(toolbar_host, ui_qapp):
+    window, legacy_toolbar, _ = toolbar_host
+    legacy_row = legacy_toolbar.layout().itemAt(1).layout()
+    reset_index = legacy_row.indexOf(legacy_toolbar.reset_round_button)
+    toolbar = SequenceToolsBar(workbench_mode=True)
+    legacy_toolbar.parentWidget().layout().replaceWidget(legacy_toolbar, toolbar)
+    legacy_toolbar.hide()
+    toolbar.show()
+    ui_qapp.processEvents()
+
+    assert window.width() == 1030
+    assert toolbar.width() == 1028
+    assert toolbar.serial_trigger_btn.compact
+    combo = toolbar.condition_mode_combobox
+    row = toolbar.layout().itemAt(1).layout()
+    assert row.count() == legacy_row.count() + 1
+    assert row.indexOf(combo) == reset_index + 1
+    assert row.indexOf(toolbar.reset_round_button) == -1
+    assert toolbar.reset_round_button.isHidden()
+    assert toolbar.reset_round_button.parentWidget() is toolbar
+    assert row.itemAt(reset_index - 1).widget().frameShape() == QFrame.VLine
+    separator = row.itemAt(reset_index + 2).widget()
+    assert separator.frameShape() == QFrame.VLine
+    assert row.itemAt(reset_index + 3).widget() is toolbar.barcode_scanner_box
+    assert combo.geometry().right() < separator.x() < toolbar.barcode_scanner_box.x()
+    assert combo.isVisible()
+    assert combo.accessibleName() == "工作台显示模式"
+    assert combo.height() == 35
+    option = QStyleOptionComboBox()
+    combo.initStyleOption(option)
+    text_area = combo.style().subControlRect(QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, combo)
+    assert [combo.itemText(i) for i in range(combo.count())] == ["测试", "标记"]
+    assert all(combo.fontMetrics().horizontalAdvance(combo.itemText(i)) <= text_area.width()
+               for i in range(combo.count()))
+    assert combo.currentIndex() == 1
+    combo.setFocus()
+    QTest.keyClick(combo, Qt.Key_Up)
+    assert combo.currentIndex() == 0
+
+
+@pytest.mark.parametrize("width", [1030, 1920])
+@pytest.mark.parametrize("scale", [1, 1.25, 1.5])
+def test_workbench_mode_label_and_extra_width(width, scale, toolbar_host, ui_qapp, tmp_path, monkeypatch):
+    from consts import ui_style_const
+    from ui.sequence.toolbar_eliding_widgets import ToolbarFieldLabel
+
+    window, legacy, _ = toolbar_host
+    for name, style in vars(ui_style_const).items():
+        if name.startswith("toolbar_") and isinstance(style, str):
+            monkeypatch.setattr(ui_style_const, name, re.sub(
+                r"font-size:\s*(\d+)px",
+                lambda match: f"font-size: {round(int(match[1]) * scale)}px",
+                style,
+            ))
+    toolbar = SequenceToolsBar(workbench_mode=True)
+    legacy.parentWidget().layout().replaceWidget(legacy, toolbar)
+    legacy.hide()
+    toolbar.show()
+    combo = toolbar.condition_mode_combobox
+    window.resize(width, 760)
+    ui_qapp.processEvents()
+    row = toolbar.layout().itemAt(1).layout()
+    label = row.itemAt(row.indexOf(combo) - 1).widget()
+    assert isinstance(label, ToolbarFieldLabel)
+    assert label.text() == "模式：" and label.buddy() is combo
+    reference = field_labels(toolbar)[0]
+    assert label.styleSheet() == reference.styleSheet()
+    assert label.font() == reference.font()
+    assert label.height() == reference.height() == 40
+    assert combo.width() == max(55, combo.sizeHint().width()) + 20
+    assert label.x() + label.width() < combo.x()
+    controls = [row.itemAt(i).widget() for i in range(row.count())]
+    assert all(widget.isVisible() and toolbar.rect().contains(widget.geometry()) for widget in controls)
+    assert all(a.geometry().right() < b.x() for a, b in zip(controls, controls[1:]))
+    for item in [*field_labels(toolbar), label]:
+        text = item._display_text()
+        assert "…" not in text
+        assert item._text_rect().contains(item.fontMetrics().boundingRect(
+            item._text_rect(), int(item.alignment()) | Qt.TextSingleLine, text,
+        ))
+    assert toolbar.lineedit_s_or_n.width() >= 125
+    option = QStyleOptionComboBox()
+    combo.initStyleOption(option)
+    text_area = combo.style().subControlRect(QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, combo)
+    assert all(combo.fontMetrics().horizontalAdvance(combo.itemText(i)) <= text_area.width() for i in range(combo.count()))
+    assert toolbar.grab().save(str(tmp_path / f"workbench-toolbar-{width}-font{scale}.png"))
+    combo.setFocus()
+    QTest.keyClick(combo, Qt.Key_Up)
+    assert combo.currentData() == "test"
 
 
 @pytest.mark.parametrize("width", [1030, 1280, 1440, 1920])
