@@ -77,7 +77,9 @@ def test_plot_scrollbar_reference_pixels_native_controls_and_header_sync(grid, q
         for x in range(start, end):
             for y in range(image.height()):
                 color = image.pixelColor(x, y)
-                assert color.red() == color.green() == color.blue()  # no navigation icon colors
+                channels = (color.red(), color.green(), color.blue())
+                # Qt's triangle PNG has a slight neutral tint; navigation icons do not.
+                assert max(channels) - min(channels) <= 3
                 if color.red() < 128:
                     ink.append((x, y))
         assert ink

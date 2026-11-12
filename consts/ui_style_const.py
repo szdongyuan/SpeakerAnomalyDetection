@@ -84,18 +84,16 @@ QScrollBar#workbenchPlotHorizontalScrollBar::add-line:horizontal {
     subcontrol-origin: margin; subcontrol-position: right;
 }
 QScrollBar#workbenchPlotHorizontalScrollBar::left-arrow:horizontal {
-    image: url("@workbench-assets@workbench_scrollbar_left.svg");
-    width: 6px; height: 8px;
+    image: none;
 }
 QScrollBar#workbenchPlotHorizontalScrollBar::right-arrow:horizontal {
-    image: url("@workbench-assets@workbench_scrollbar_right.svg");
-    width: 6px; height: 8px;
+    image: none;
 }
 QScrollBar#workbenchPlotHorizontalScrollBar::sub-page:horizontal,
 QScrollBar#workbenchPlotHorizontalScrollBar::add-page:horizontal {
     background: #fafafa;
 }
-""".replace("@workbench-assets@", DEFAULT_DIR + "ui/sequence/assets/")
+"""
 
 
 def _get_font_scale() -> float:
