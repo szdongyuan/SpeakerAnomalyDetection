@@ -5,8 +5,11 @@ from itertools import product
 
 import pytest
 
+from base.analysis.contracts import AnalysisInstance
+from base.analysis.results import calculation_payload
 from base.motor_daily_records import DailyRecordStore
 from ui.sequence.workbench_result_state import WorkbenchResultState
+from ui.sequence.workbench_ui_projection import _plot_unit
 
 
 def instance(key="SPL", kind="SPL", judgement="OK", *, metrics=None,
@@ -59,13 +62,15 @@ def test_direction_status_aggregates_all_returned_judgements(values, expected):
     ("SPL", {"overall_spl": 62.3, "unit": "dB(A)"}, "分析完成", "62.30 dB(A)"),
     ("FBA", {"overall_weighted_db": 63.125, "unit": "dB(C)"}, "分析完成", "63.12 dB(C)"),
     ("SPL", {"overall_spl": 0, "unit": "dB(Z)"}, "分析完成", "0.00 dB(Z)"),
+    ("SPL", {"overall_spl": 63.13, "unit": "dBA"}, "分析完成", "63.13 dBA"),
+    ("FBA", {"overall_weighted_db": 63.13, "unit": "dB"}, "分析完成", "63.13 dB"),
     ("SPL", {"overall_spl": -2}, "分析完成", "-2.00"),
     ("FBA", {"overall_weighted_db": 1, "unit": None}, "分析完成", "1.00"),
-    ("FFT", {"peak_frequency_hz": 1000, "peak_db": 90, "overall_spl": 90}, "分析完成", "分析已完成"),
-    ("Spec", {"sample_rate": 44100}, "分析完成", "分析已完成"),
-    ("SPL", {}, "分析完成", "分析已完成"),
+    ("FFT", {"peak_frequency_hz": 1000, "peak_db": 90, "overall_spl": 90}, "分析完成", "分析完成"),
+    ("Spec", {"sample_rate": 44100}, "分析完成", "分析完成"),
+    ("SPL", {}, "分析完成", "分析完成"),
     ("SPL", {"overall_spl": 60}, "分析失败", "--"),
-] + [("SPL", {"overall_spl": value}, "分析完成", "分析已完成")
+] + [("SPL", {"overall_spl": value}, "分析完成", "分析完成")
      for value in (None, float("nan"), float("inf"), -float("inf"), True, "12")])
 def test_metric_projection_uses_only_completed_finite_overall_value(
         kind, metrics, execution_status, expected):
@@ -76,6 +81,39 @@ def test_metric_projection_uses_only_completed_finite_overall_value(
     result = state.receive("round-1", "station-a", "forward", payload(items=[item]))
     assert result.rows == [["SPL", expected, "--"], ["FFT", "--", "--"]]
     assert result.result == "--"  # Successful execution never implies OK.
+
+
+@pytest.mark.parametrize("kind,key", [("SPL", "overall_spl"), ("FBA", "overall_weighted_db")])
+@pytest.mark.parametrize("weighting,expected_unit", [
+    ("A", "dB(A)"), ("b", "dB(B)"), ("C", "dB(C)"), ("D", "dB(D)"),
+    ("Z", "dB(Z)"), (None, "dB(Z)"), ("None", "dB(Z)"), ("Z（None）", "dB(Z)"),
+])
+@pytest.mark.parametrize("old_unit", ["dBA", "dB"])
+def test_actual_weighting_overrides_legacy_unit_and_matches_plot(kind, key, weighting, expected_unit, old_unit):
+    state = WorkbenchResultState()
+    open_round(state)
+    item = instance(kind=kind, metrics={key: 63.13, "weighting": weighting, "unit": old_unit})
+    result = state.receive("round-1", "station-a", "forward", payload(items=[item]))
+    assert result.rows[0][1] == f"63.13 {expected_unit}"
+    assert expected_unit == _plot_unit({"weighting": weighting})
+
+
+@pytest.mark.parametrize("kind,key,weighting", [
+    ("SPL", "overall_spl", "Z"), ("SPL", "overall_spl", "B"),
+    ("FBA", "overall_weighted_db", "Z"), ("FBA", "overall_weighted_db", "D"),
+])
+def test_real_calculation_payload_displays_actual_weighting(kind, key, weighting):
+    analysis_instance = AnalysisInstance("SPL", kind, 0, {"weighting": weighting})
+    calculation = {"metrics": {key: 63.13}, "curve": {"x": [0], "y": [63.13]},
+                   "plot": {"labels": ["1000"]}}
+    metrics, display_payload = calculation_payload(analysis_instance, calculation, 0)
+    item = instance(kind=kind, metrics=metrics)
+    item["display_payload"] = display_payload
+    state = WorkbenchResultState()
+    open_round(state)
+    result = state.receive("round-1", "station-a", "forward", payload(items=[item]))
+    assert result.rows[0][1] == f"63.13 dB({weighting})"
+    assert result.rows[0][1] == f"63.13 {_plot_unit(analysis_instance.parameters)}"
 
 
 def test_values_and_judgements_survive_other_instance_and_task_failures():
@@ -156,7 +194,7 @@ def test_stations_rounds_and_recording_days_complete_independently():
     open_round(state, "round-2", stations=stations, recorded_at=datetime(2026, 11, 12),
                product_code="new", source_identity="new.json")
     current = state.receive("round-2", "station-a", "forward", payload(items=[instance()]))
-    assert current.reverse == "--" and current.rows == [["SPL", "分析已完成", "--"]]
+    assert current.reverse == "--" and current.rows == [["SPL", "分析完成", "--"]]
     old = state.receive("round-1", "station-a", "reverse", payload("reverse", [instance(judgement="NG")]))
     assert old.result == "NG"
     for direction in ("reverse", "forward"):

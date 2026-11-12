@@ -6,7 +6,7 @@ from PyQt5.QtCore import QEvent, QRect, Qt
 from PyQt5.QtGui import QBrush, QColor, QPainter
 from PyQt5.QtWidgets import (
     QAbstractItemView, QApplication, QHeaderView, QLabel, QPushButton, QScrollArea,
-    QSizePolicy, QStyle, QStyleOption, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QSizePolicy, QStyle, QStyleOption, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from consts.ui_style_const import MOTOR_STATION_PANEL_STYLE, MOTOR_STATION_STATUS_COLORS
@@ -95,8 +95,8 @@ class _StationHeader(_FourColumns, QPushButton):
     def set_results(self, forward, reverse, result):
         for label, status in zip(self._labels[1:], (forward, reverse, result)):
             label.setText(status)
-            # Local explicit colors override generic QWidget/QLabel ancestor styles.
-            label.setStyleSheet(f"color: {MOTOR_STATION_STATUS_COLORS[status]};")
+            # Local styles override ancestor rules and reset weight on every update.
+            label.setStyleSheet(f"color: {MOTOR_STATION_STATUS_COLORS[status]}; font-weight: 400;")
 
 
 class _DetailTable(QTableWidget):
@@ -115,7 +115,7 @@ class _DetailTable(QTableWidget):
         self.horizontalHeader().setFixedHeight(max(30, self.fontMetrics().height() + 12))
         for column in range(3):
             self.horizontalHeaderItem(column).setTextAlignment(
-                Qt.AlignVCenter | (Qt.AlignLeft if column == 0 else Qt.AlignRight)
+                Qt.AlignVCenter | (Qt.AlignLeft if column == 0 else Qt.AlignHCenter)
             )
         self.verticalHeader().setDefaultSectionSize(max(34, self.fontMetrics().height() + 14))
         self.setAlternatingRowColors(True)
@@ -128,11 +128,26 @@ class _DetailTable(QTableWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         width = self.viewport().width()
-        first, second = int(width * .46), int(width * .27)
+        first, second = int(width * .40), int(width * .30)
         for column, size in enumerate((first, second, width - first - second)):
             self.setColumnWidth(column, size)
+        self._update_height()
 
     def _update_height(self):
+        option = self.viewOptions()
+        option.features |= QStyleOptionViewItem.HasDisplay
+        text_margin = self.style().pixelMetric(QStyle.PM_FocusFrameHMargin, option, self)
+        for row in range(self.rowCount()):
+            height = self.verticalHeader().defaultSectionSize()
+            for column in range(self.columnCount()):
+                item = self.item(row, column)
+                option.rect = QRect(0, 0, self.columnWidth(column), height)
+                text_rect = self.style().subElementRect(QStyle.SE_ItemViewItemText, option, self)
+                text_rect.adjust(text_margin, 0, -text_margin, 0)
+                # The delegate adds text margins inside stylesheet padding; include the row border.
+                bounds = option.fontMetrics.boundingRect(text_rect, int(Qt.TextWordWrap), item.text())
+                height = max(height, bounds.height() + 1)
+            self.setRowHeight(row, height)
         self.setFixedHeight(self.horizontalHeader().height() + sum(self.rowHeight(row) for row in range(self.rowCount())))
 
     def show_rows(self, rows):
@@ -141,7 +156,7 @@ class _DetailTable(QTableWidget):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setFlags(Qt.ItemIsEnabled)
-                item.setTextAlignment(Qt.AlignVCenter | (Qt.AlignLeft if column == 0 else Qt.AlignRight))
+                item.setTextAlignment(Qt.AlignVCenter | (Qt.AlignLeft if column == 0 else Qt.AlignHCenter))
                 item.setForeground(QBrush(QColor("#293b4d")))
                 self.setItem(row, column, item)
         self._update_height()

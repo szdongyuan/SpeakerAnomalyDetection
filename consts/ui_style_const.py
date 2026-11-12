@@ -1354,7 +1354,8 @@ qtreeview_style = _style("""
 
 
 # Station presentation is independent from the legacy task/result palette.
-MOTOR_STATION_STATUS_COLORS = MappingProxyType({"--": "#617183", "OK": "#00824e", "NG": "#ca3245"})
+MOTOR_OK_COLOR = "#009900"
+MOTOR_STATION_STATUS_COLORS = MappingProxyType({"--": "#617183", "OK": MOTOR_OK_COLOR, "NG": "#ca3245"})
 MOTOR_STATION_PANEL_STYLE = _style("""
 QWidget#motorStationTestPanel {
     border: 1px solid #cddaea;
@@ -1364,7 +1365,7 @@ QWidget#motorStationTestPanel, QWidget#stationContent {
     background: #ffffff;
     color: #293b4d;
     font-family: $MAIN_UI_SMALL_FONT_FAMILY;
-    font-size: 13px;
+    font-size: 12px;
 }
 QLabel#stationTitle {
     border-top-left-radius: 2px;
@@ -1411,7 +1412,7 @@ QPushButton[stationHeader="true"] QLabel {
     background: transparent;
     border: none;
     font-family: $MAIN_UI_SMALL_FONT_FAMILY;
-    font-size: 13px;
+    font-size: 12px;
 }
 QTableWidget {
     background: #ffffff;
@@ -1420,10 +1421,10 @@ QTableWidget {
     border: none;
     gridline-color: #e0e7ef;
     font-family: $MAIN_UI_SMALL_FONT_FAMILY;
-    font-size: 13px;
+    font-size: 12px;
 }
 QTableWidget::item {
-    padding: 0 12px;
+    padding: 0 6px;
     border: none;
     border-bottom: 1px solid #e0e7ef;
 }
@@ -1432,7 +1433,7 @@ QTableWidget QHeaderView::section {
     color: #617183;
     border: none;
     border-bottom: 1px solid #e0e7ef;
-    padding: 0 12px;
+    padding: 0 6px;
     font-family: $MAIN_UI_SMALL_FONT_FAMILY;
     font-size: 12px;
     font-weight: normal;
@@ -1495,7 +1496,7 @@ QWidget#motorInformationSummaryPanel QLabel#summaryUnmarked {
     font-weight: 500;
     color: #617183;
 }
-QWidget#motorInformationSummaryPanel QLabel#summaryOk { color: #00824e; }
+QWidget#motorInformationSummaryPanel QLabel#summaryOk { color: $MOTOR_OK_COLOR; }
 QWidget#motorInformationSummaryPanel QLabel#summaryNg { color: #ca3245; }
 """)
 

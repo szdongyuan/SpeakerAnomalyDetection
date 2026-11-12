@@ -8,6 +8,7 @@ from base.workbench_analysis_config import WorkbenchAnalysisConfig
 from base.workbench_config_values import WorkbenchCondition
 from base.workbench_ui_config import WorkbenchPlotCell, WorkbenchUiConfig
 from ui.sequence.station_plot_grid import WorkbenchPlotCellDisplay
+from ui.sequence.workbench_units import format_workbench_spl_unit
 
 
 @dataclass(frozen=True)
@@ -41,10 +42,7 @@ def _station_display(
 
 
 def _plot_unit(analysis: Mapping[str, object]) -> str:
-    weighting = str(analysis.get("weighting") or "Z").upper()
-    if weighting in ("NONE", "Z（NONE）"):
-        weighting = "Z"
-    return f"dB({weighting})"
+    return format_workbench_spl_unit(analysis.get("weighting"))
 
 
 def _plot_cell(

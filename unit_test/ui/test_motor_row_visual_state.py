@@ -29,7 +29,7 @@ def panel(qt_app):
 def test_station_status_palette_and_real_text_pixels(panel, qt_app, tmp_path, forward, reverse):
     panel.set_station_results(1, forward, reverse)
     qt_app.processEvents()
-    colors = {"--": "#617183", "OK": "#00824e", "NG": "#ca3245"}
+    colors = {"--": "#617183", "OK": "#009900", "NG": "#ca3245"}
     for name, value in [("stationForward1", forward), ("stationReverse1", reverse)]:
         label = panel.station_panel.findChild(QLabel, name)
         assert label.text() == value
