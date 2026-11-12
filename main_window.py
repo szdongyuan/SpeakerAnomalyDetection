@@ -128,6 +128,7 @@ class MainWindow(QMainWindow):
 
         # set the menubar action
         self.function_action_product_test_program = QAction("产品测试程序配置", self)
+        self.function_action_ai_model_manager = QAction("AI模型管理", self)
         self.function_audio_manager = QAction("音频数据管理", self)
         self.function_action_report_export = QAction("报告导出", self)
         self.function_action_exit = QAction("退出", self)
@@ -144,6 +145,7 @@ class MainWindow(QMainWindow):
         ]
         self.widget_list_engineer = self.widget_list_operator + [
             self.function_action_product_test_program,
+            self.function_action_ai_model_manager,
             self.hardware_action_selection,
             self.hardware_action_calibration,
         ]
@@ -778,6 +780,9 @@ class MainWindow(QMainWindow):
         function_menu.addAction(self.function_audio_manager)
         self.function_audio_manager.triggered.disconnect()
         self.function_audio_manager.triggered.connect(self.on_audio_manager_init)
+        function_menu.addAction(self.function_action_ai_model_manager)
+        self.function_action_ai_model_manager.triggered.disconnect()
+        self.function_action_ai_model_manager.triggered.connect(self.on_ai_model_manager)
         function_menu.addAction(self.function_action_report_export)
         self.function_action_report_export.triggered.disconnect()
         self.function_action_report_export.triggered.connect(
@@ -944,6 +949,14 @@ class MainWindow(QMainWindow):
             recording_service=self.recording_bridge.service)
         dlg.exec()
 
+
+    def on_ai_model_manager(self):
+        from base.ai_model_catalog import AiModelCatalog
+        from ui.ai_model_manager_dialog import AiModelManagerDialog
+
+        dialog = AiModelManagerDialog(AiModelCatalog(DATABASE_PATH, DEFAULT_DIR), self)
+        dialog.exec()
+        dialog.deleteLater()
 
     def on_analysis_report_export(self):
         from ui.analysis_report_export_dialog import AnalysisReportExportDialog

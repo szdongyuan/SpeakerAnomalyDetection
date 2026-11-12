@@ -22,6 +22,7 @@ from time import time
 
 from base.data_struct.data_deal_struct import DataDealStruct
 from base.analysis_config_validation import validate_sequence_config
+from base.ai_model_catalog import AiModelCatalog
 from base.data_struct.sequence_data import SequenceData
 from base.product_test.queue_context import wav_positions, validate_queue_save
 from base.load_config import ConfigManager, LoadUiConfig
@@ -48,6 +49,7 @@ from ui.queue_display import is_default_queue_path
 from ui.acquisition_config_window import RecordConfigWindow
 
 from ui.ui_analysis_config.lp_config_dialog import LPConfigWindow
+from ui.ui_analysis_config.ai_config_dialog import AIConfigWindow
 from ui.ui_analysis_config.reference_spectrum_config_dialog import ReferenceSpectrumConfigWindow
 from ui.ui_analysis_config.spec_config_dialog import SpecConfigWindow
 from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
@@ -64,13 +66,14 @@ SUPPORTED_ANALYSIS_ITEMS = [
     "频段能量 (FBA) ",
     "快速傅里叶变换 (FFT) ",
     "响度 (LOUD) ",
+    "AI 分析 ",
 ]
 PENDING_ANALYSIS_ITEMS = [
     "尖锐度 (SHRP) ",
     "粗糙度 (ROUGH) ",
-    "AI 分析 (AI) ",
 ]
 SUPPORTED_ANALYSIS_TYPES = {
+    "AI",
     "SPL",
     "Spec",
     "RSC",
@@ -1046,6 +1049,12 @@ class OptionList(QListView):
                     f"Cannot open {type} config for unsupported acquisition mode: {mode}"
                 )
                 return None
+        if type == "AI":
+            return AIConfigWindow(
+                config_manager, name,
+                model_catalog=AiModelCatalog(model_consts.DATABASE_PATH, DEFAULT_DIR),
+                available_channels=available_channels,
+            )
         if type == "SPL":
             return SplConfigWindow(
                 config_manager,
@@ -1562,12 +1571,15 @@ class OptionList(QListView):
         code, data = LoadUiConfig.load_data_from_json(default_config_file)
         if code != 0:
             self.default_logger.error(f"Failed to load the default config file. {data}")
-            if analysis_type not in {"SPL", "Spec", "FBA", "FFT", "LOUD"}:
+            if analysis_type not in {"SPL", "Spec", "FBA", "FFT", "LOUD", "AI"}:
                 return
             data = {}
 
         default_of_type = dict(data.get(analysis_type, {}))
-        if analysis_type == "SPL":
+        if analysis_type == "AI":
+            default_of_type = {**AIConfigWindow.DEFAULT_CONFIG, **default_of_type}
+            default_of_type.pop("analysis_channels", None)
+        elif analysis_type == "SPL":
             default_of_type = SplConfigWindow.new_item_default_config(
                 default_of_type
             )
