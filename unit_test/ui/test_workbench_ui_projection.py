@@ -16,12 +16,53 @@ def configuration(tmp_path):
     return load_workbench_configuration(files["programs"], files["queues"], files["layout"])
 
 
+@pytest.mark.parametrize("with_layout", [True, False])
+def test_shared_queue_metrics_have_unique_ordered_config_keys(configuration, with_layout):
+    context = configuration.analysis.context
+    queue_name = context.conditions[0].test_queue
+    queue_config = {
+        "display_sequence": ["SPL-A", "SPL-B", "FFT"],
+        "SPL-A": {"type": "SPL", "custom": {"values": [1, 2]}},
+        "SPL-B": {"type": "SPL"},
+        "FFT": {"type": "FFT"},
+    }
+    analysis = replace(
+        configuration.analysis,
+        context=replace(context, conditions=tuple(
+            replace(condition, test_queue=queue_name) for condition in context.conditions
+        )),
+        test_queues={queue_name: AnalysisTestQueue("wav", queue_config)},
+    )
+    ui = configuration.ui if with_layout else replace(configuration.ui, layout=None)
+    before = analysis.describe()
+
+    projection = build_ui_projection(ui, analysis)
+
+    keys = ("SPL-A", "SPL-B", "FFT")
+    assert projection.stations == (
+        ("工位1", keys), ("工位2", keys), ("工位3", ()), ("工位4", keys),
+    )
+    assert projection.metric_keys == {"s1": keys, "s2": keys, "s3": (), "s4": keys}
+    for station, (_, labels) in zip(context.stations, projection.stations):
+        station_keys = projection.metric_keys[station.station_id]
+        assert station_keys == labels
+        assert len(dict((key, row) for row, key in enumerate(station_keys))) == len(labels)
+        assert all(isinstance(key, str) for key in station_keys)
+    with pytest.raises(TypeError):
+        projection.metric_keys["extra"] = ()
+    assert analysis.describe() == before
+    queue_config["display_sequence"].append("extra")
+    queue_config["SPL-A"]["custom"]["values"].append(3)
+    assert projection.metric_keys["s2"] == keys
+    assert analysis.describe() == before
+
+
 def test_projection_preserves_layout_partial_associations_and_conflicting_units(configuration):
     projection = build_ui_projection(configuration.ui, configuration.analysis)
 
     assert projection.stations == (
         ("工位1", ("声压级", "频谱")),
-        ("工位2", ("声压级（工况1）", "频谱（工况1）", "声压级（工况2）", "频谱（工况2）")),
+        ("工位2", ("声压级", "频谱")),
         ("工位3", ()),
         ("工位4", ("声压级", "频谱")),
     )
@@ -58,6 +99,7 @@ def test_absent_layout_projects_no_plots_but_keeps_stations_and_preview_modes(co
     projection = build_ui_projection(ui, configuration.analysis)
 
     assert projection.stations == expected.stations
+    assert projection.metric_keys == expected.metric_keys
     assert projection.preview_time_modes == expected.preview_time_modes
     assert projection.column_names == projection.cells == projection.bindings == ()
 
@@ -130,7 +172,7 @@ def test_projection_contains_only_display_values_and_limits_plots_to_first_two_c
     ui = replace(configuration.ui, preview_time_modes={"测试队列A": "window", "测试队列B": "cumulative"})
     projection = build_ui_projection(ui, analysis)
 
-    assert projection.stations[1][1][-2:] == ("声压级（工况3）", "频谱（工况3）")
+    assert projection.stations[1][1] == ("声压级", "频谱")
     assert tuple(binding.condition_id for binding in projection.bindings[1][1]) == ("c1", "c2")
     assert projection.preview_time_modes == {"c1": "window", "c2": "cumulative", "c3": "window", "c4": "window"}
 

@@ -19,6 +19,7 @@ from base.workbench_analysis_input import (
     build_analysis_payload, make_analysis_recording_context,
 )
 from ui.sequence.workbench_ui_projection import build_ui_projection, WorkbenchUiProjection, _PlotBindings
+from ui.sequence.workbench_result_state import WorkbenchResultState
 from base.recording_service import RecordingCallbacks
 from base.workbench_recording_protocol import WorkbenchRecordingCompletion
 from base.workbench_recording_request import (
@@ -57,12 +58,26 @@ class WorkbenchProductSelectionPorts:
 
 
 @dataclass(frozen=True)
+class _RecordingRound:
+    round_id: str
+    analysis_version: str
+    source_identity: str
+    display_revision: int
+    recorded_at: datetime
+    condition_ids: tuple[str, ...]
+    stations: tuple[tuple[str, int, tuple[str, ...]], ...]
+    product_code: str
+
+
+@dataclass(frozen=True)
 class _InFlightRecording:
     request_id: str
     configuration_revision: int
     condition_name: str
     product_name: str
     recorded_on: date
+    recorded_at: datetime
+    round_context: _RecordingRound
     analysis_context: AnalysisRecordingContext | None = None
     archiving: bool = False
 
@@ -85,6 +100,7 @@ class MotorWorkbenchController:
         self._repository = repository
         self._station_panel = station_panel
         self._plot_grid = plot_grid
+        self._plot_grid.set_mark_buttons_visible(False)
         self._set_active_product = set_active_product
         self._show_video_settings = show_video_settings
         self._initialized = False
@@ -107,9 +123,13 @@ class MotorWorkbenchController:
         self._configuration_revision = 0
         self._condition_index = 0
         self._in_flight: _InFlightRecording | None = None
-
-    def set_toolbar_mode(self, mode: str) -> None:
-        self._plot_grid.set_mark_buttons_visible(mode == "mark")
+        self._metric_keys = {}
+        self._display_revision = 0
+        self._recording_round: _RecordingRound | None = None
+        self._current_round_id: str | None = None
+        self._activated_round_ids: set[str] = set()
+        self._result_state = WorkbenchResultState()
+        self._set_daily_records = None
 
     def refresh_configuration(self) -> None:
         """Read the active configuration and replace both displays if it changed."""
@@ -219,6 +239,10 @@ class MotorWorkbenchController:
         self._analysis_event_received = event_received
         self.refresh_recording_state()
 
+    def bind_result_summary(self, set_daily_records: Callable | None) -> None:
+        """Attach the optional complete daily snapshot consumer on the GUI thread."""
+        self._set_daily_records = set_daily_records
+
     def activate_analysis(self) -> None:
         if self._analysis_active or self._analysis_closing:
             return
@@ -246,7 +270,10 @@ class MotorWorkbenchController:
             if context is not None:
                 key = context["station_id"], context["condition_id"]
                 current = (context["analysis_version"] == self._analysis_version
-                           and self._latest_analysis_tasks.get(key) == task_id)
+                           and self._latest_analysis_tasks.get(key) == task_id
+                           and context["round_id"] == self._current_round_id)
+                if event["event_type"] == "task_result":
+                    self._consume_analysis_result(event, context, current)
                 event = {**event, **context, "is_current": current}
                 if event["event_type"] == "task_result":
                     del self._analysis_tasks[task_id]
@@ -256,7 +283,43 @@ class MotorWorkbenchController:
         if events:
             self.refresh_recording_state()
 
-    def _submit_saved_recording(self, item: WorkbenchAnalysisInput) -> None:
+    def _consume_analysis_result(self, event, context, is_current):
+        """Authenticate raw identities before forwarding merges the task context."""
+        task_id = event["task_id"]
+        payload = event.get("payload", {})
+        expected = {"task_id": task_id, "station_id": context["station_id"],
+                    "condition_id": context["condition_id"]}
+        if not isinstance(payload, dict):
+            logging.getLogger("core").warning(
+                "Workbench result task %s station %s condition %s: invalid payload %r",
+                task_id, context["station_id"], context["condition_id"], payload,
+            )
+            return
+        for source_name, source in (("event", event), ("payload", payload)):
+            for field, identity in expected.items():
+                required = source_name == "payload" and field in ("station_id", "condition_id")
+                if (field in source or required) and source.get(field) != identity:
+                    logging.getLogger("core").warning(
+                        "Workbench result task %s station %s condition %s: %s.%s %r does not match %r",
+                        task_id, context["station_id"], context["condition_id"],
+                        source_name, field, source.get(field), identity,
+                    )
+                    return
+        snapshot = self._result_state.receive(
+            context["round_id"], context["station_id"], context["condition_id"], payload,
+        )
+        if snapshot is None:
+            return
+        if is_current:
+            self._station_panel.show_station_result(
+                context["station_ordinal"], snapshot.forward, snapshot.reverse,
+                snapshot.result, snapshot.rows,
+            )
+        if snapshot.complete and self._set_daily_records is not None:
+            today = datetime.now().date()
+            self._set_daily_records(self._result_state.records_for(today), today)
+
+    def _submit_saved_recording(self, item: WorkbenchAnalysisInput, round_context: _RecordingRound) -> None:
         """Submit published file paths, never sample buffers or the current configuration."""
         context = item.context
         condition = context.analysis.context.get_condition(context.condition_id)
@@ -285,9 +348,17 @@ class MotorWorkbenchController:
             if receipt["accepted"]:
                 for task in payload["tasks"]:
                     task_id = task["task_id"]
+                    _, ordinal, keys = next(station for station in round_context.stations
+                                            if station[0] == task["station_id"])
                     self._analysis_tasks[task_id] = {
                         "request_id": context.request_id, "analysis_version": context.analysis_version,
                         "station_id": task["station_id"], "condition_id": task["condition_id"],
+                        "round_id": round_context.round_id,
+                        "recorded_at": round_context.recorded_at,
+                        "source_identity": round_context.source_identity,
+                        "condition_ids": round_context.condition_ids,
+                        "station_ordinal": ordinal, "metric_keys": keys,
+                        "product_code": round_context.product_code,
                     }
                     self._latest_analysis_tasks[task["station_id"], task["condition_id"]] = task_id
         self._analysis_event_received({
@@ -347,6 +418,10 @@ class MotorWorkbenchController:
         self._applied_source_identity = source_identity
         self._analysis_version = analysis_version
         self._plot_bindings = bindings
+        self._metric_keys = projection.metric_keys if projection is not None else {}
+        self._display_revision += 1
+        self._recording_round = None
+        self._current_round_id = None
         self._publish_product_selection()
 
     def _recording_admission(self):
@@ -403,9 +478,18 @@ class MotorWorkbenchController:
         analysis_version = self._analysis_version
         condition = config.recording.context.conditions[self._condition_index]
         product_model, sample_number, serial_number = ports.read_wav_identity()
+        round_context = self._recording_round
+        if self._condition_index == 0 or round_context is None:
+            round_context = _RecordingRound(
+                uuid4().hex, analysis_version, self._applied_source_identity, self._display_revision,
+                recorded_at, tuple(c.condition_id for c in config.recording.context.conditions),
+                tuple((station.station_id, ordinal, self._metric_keys[station.station_id])
+                      for ordinal, station in enumerate(config.analysis.context.stations, 1)),
+                sample_number,
+            )
         attempt = _InFlightRecording(
             uuid4().hex, self._configuration_revision, condition.condition_name,
-            config.recording.context.project_name, recorded_at.date(),
+            config.recording.context.project_name, recorded_at.date(), recorded_at, round_context,
         )
         self._in_flight = attempt
         self.refresh_recording_state()
@@ -447,6 +531,29 @@ class MotorWorkbenchController:
                 # Consumer failures must not become recording admission errors.
                 raise
             self._reject_recording(attempt, f"工况「{condition.condition_name}」未能开始录制：{exc}")
+        else:
+            self._activate_recording_round(attempt)
+
+    def _activate_recording_round(self, attempt):
+        """Activate only admitted requests, once, before any terminal consumer runs."""
+        context = attempt.round_context
+        if context.round_id in self._activated_round_ids:
+            return
+        self._activated_round_ids.add(context.round_id)
+        self._result_state.open_round(
+            context.round_id, analysis_version=context.analysis_version,
+            source_identity=context.source_identity, recorded_at=context.recorded_at,
+            condition_ids=context.condition_ids, stations=context.stations,
+            product_code=context.product_code,
+        )
+        if context.display_revision != self._display_revision:
+            return
+        self._recording_round = context
+        self._current_round_id = context.round_id
+        for _, ordinal, keys in context.stations:
+            self._station_panel.show_station_result(
+                ordinal, "--", "--", "--", [[key, "--", "--"] for key in keys],
+            )
 
     def _reject_recording(self, attempt, detail):
         if self._in_flight is attempt:
@@ -471,6 +578,7 @@ class MotorWorkbenchController:
         attempt = self._matching_recording_terminal(session, result)
         if attempt is not None:
             self._in_flight = None
+            self._activate_recording_round(attempt)
         return attempt
 
     def _recording_completed(self, session, result):
@@ -479,6 +587,7 @@ class MotorWorkbenchController:
             return
         archiving = replace(attempt, archiving=True)
         self._in_flight = archiving
+        self._activate_recording_round(attempt)
         self.refresh_recording_state()
         try:
             self._recording.submit_archive(
@@ -513,7 +622,7 @@ class MotorWorkbenchController:
         item = WorkbenchAnalysisInput(attempt.analysis_context, result)
         if self._analysis_service is not None and not self._recording.is_closing():
             # Submit before outward completion callbacks can start another round.
-            self._submit_saved_recording(item)
+            self._submit_saved_recording(item, attempt.round_context)
         self._recording.completed(result)
         if self._analysis_input_ready is not None and not self._recording.is_closing():
             self._analysis_input_ready(item)

@@ -83,7 +83,9 @@ def test_close_preserves_discovery_cleanup_and_waits_for_video(ui_qapp, video_fi
 def test_sequence_initialization_keeps_prewarm_stores_and_video_panel(ui_qapp, monkeypatch):
     sequence = QWidget()
     panel = object()
-    sequence.left_panel = SimpleNamespace(video_monitor_panel=panel, station_panel=object())
+    sequence.left_panel = SimpleNamespace(
+        video_monitor_panel=panel, station_panel=object(), set_daily_records=Mock()
+    )
     sequence.plot_grid = object()
     sequence.set_workbench_active_product = Mock()
     sequence.show_workbench_products = Mock()
@@ -104,7 +106,6 @@ def test_sequence_initialization_keeps_prewarm_stores_and_video_panel(ui_qapp, m
         video_controller=SimpleNamespace(attach_panel=Mock(return_value=card), show_settings=Mock()),
         init_menu=Mock(return_value=QWidget()),
         set_title=Mock(return_value=QWidget()),
-        _bind_workbench_toolbar_mode=Mock(),
         _create_menu_row=Mock(return_value=QWidget()),
         setCentralWidget=Mock(),
         mic=None, speaker=None, mic_channels=[], speaker_channels=[],
@@ -121,7 +122,6 @@ def test_sequence_initialization_keeps_prewarm_stores_and_video_panel(ui_qapp, m
         assert sequence.ve_calibration_store is host.ve_calibration_store
         host.video_controller.attach_panel.assert_called_once_with(panel)
         card.settings_requested.connect.assert_called_once_with(workbench.open_video_settings)
-        host._bind_workbench_toolbar_mode.assert_called_once_with()
         workbench.refresh_configuration.assert_called_once_with()
         sequence.update_v2pa_factor.assert_called_once()
     finally:
