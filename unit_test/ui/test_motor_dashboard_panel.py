@@ -8,7 +8,7 @@ import pytest
 from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, Qt
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QDialog, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QDialog, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from consts.ui_style_const import MAIN_UI_SMALL_FONT_FAMILY_NAME
 from ui.sequence.motor_information_summary_panel import MotorInformationSummaryPanel
@@ -108,7 +108,32 @@ def test_dashboard_owns_station_area_above_summary_with_zero_stations(dashboard)
     assert len(dashboard.findChildren(QScrollArea)) == 1
 
 
-@pytest.mark.parametrize("width", [340, 600])
+def assert_summary_fits_dashboard(dashboard):
+    summary = dashboard.summary_panel
+    assert summary.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding
+    assert summary.sizePolicy().verticalPolicy() == QSizePolicy.Fixed
+    assert summary.minimumWidth() == 0
+    assert summary.maximumWidth() == 16777215
+    assert summary.width() == dashboard.width()
+    assert dashboard.rect().contains(summary.geometry())
+    children = summary.findChildren(QLabel) + summary.findChildren(QPushButton)
+    rectangles = []
+    for child in children:
+        assert child.isVisibleTo(dashboard)
+        assert child.visibleRegion().boundingRect() == child.rect()
+        assert child.width() >= child.sizeHint().width()
+        assert child.height() >= child.sizeHint().height()
+        rectangle = child.rect().translated(child.mapTo(summary, QPoint(0, 0)))
+        assert summary.rect().contains(rectangle)
+        assert all(not rectangle.intersects(previous) for previous in rectangles)
+        rectangles.append(rectangle)
+    counts = summary.findChild(QWidget, "summaryCounts")
+    columns = counts.findChildren(QWidget, options=Qt.FindDirectChildrenOnly)
+    assert len(columns) == 3
+    assert max(column.width() for column in columns) - min(column.width() for column in columns) <= 1
+
+
+@pytest.mark.parametrize("width", [300, 340, 600])
 def test_summary_stays_visible_when_station_content_scrolls_and_resizes(dashboard, qt_app, width):
     dashboard.resize(width, 400)
     station = dashboard.station_panel
@@ -124,14 +149,12 @@ def test_summary_stays_visible_when_station_content_scrolls_and_resizes(dashboar
     scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
     qt_app.processEvents()
     assert dashboard.summary_panel.geometry() == summary_rect
-    assert dashboard.rect().contains(summary_rect)
-    for child in dashboard.summary_panel.findChildren(QLabel) + dashboard.summary_panel.findChildren(QPushButton):
-        assert child.isVisibleTo(dashboard)
-        assert child.visibleRegion().boundingRect() == child.rect()
+    assert_summary_fits_dashboard(dashboard)
     dashboard.resize(width, 700)
     qt_app.processEvents()
     assert dashboard.summary_panel.height() == summary_rect.height()
     assert station.height() > summary_rect.top()
+    assert_summary_fits_dashboard(dashboard)
 
 
 def test_dashboard_instances_keep_station_data_and_daily_summary_independent(dashboard, qt_app):
@@ -166,17 +189,17 @@ def test_dashboard_can_shrink_after_widening_without_header_minimum_width(dashbo
     qt_app.processEvents()
     QTest.qWait(10)
     assert dashboard.width() == 600
-    dashboard.resize(340, 400)
+    dashboard.resize(300, 400)
     qt_app.processEvents()
     QTest.qWait(10)
-    assert dashboard.width() == 340
-    assert dashboard.minimumSizeHint().width() <= 340
-    assert station.minimumSizeHint().width() <= 340
+    assert dashboard.width() == 300
+    assert dashboard.minimumSizeHint().width() <= 300
+    assert station.minimumSizeHint().width() <= 300
     scroll = station.findChild(QScrollArea)
     general_header = station.findChild(QWidget, "stationGeneralHeader")
     assert general_header.contentsRect().width() == scroll.viewport().width()
     assert scroll.horizontalScrollBar().maximum() == 0
-    assert dashboard.rect().contains(dashboard.summary_panel.geometry())
+    assert_summary_fits_dashboard(dashboard)
     if station_count:
         assert scroll.verticalScrollBar().maximum() > 0
         general = station.findChild(QLabel, "stationGeneralForward")
@@ -202,16 +225,24 @@ def test_summary_native_render_matches_html_under_inherited_styles(summary, qt_a
             pixels = label.grab().toImage()
             assert any(pixels.pixelColor(x, y) == expected for x in range(pixels.width()) for y in range(pixels.height()))
             assert label.font().family() == MAIN_UI_SMALL_FONT_FAMILY_NAME
-            assert label.font().pixelSize() == 23
+            assert label.font().pixelSize() == 26
             assert label.font().bold()
         title = summary.findChild(QLabel, "summaryTitle")
-        assert title.font().pixelSize() == 14
+        assert title.font().pixelSize() == 17
         assert title.font().bold()
-        for name, size in (("summaryDate", 11), ("summaryTotal", 15), ("summaryRate", 15)):
+        for name, size in (("summaryDate", 14), ("summaryTotal", 18), ("summaryRate", 18)):
             font = summary.findChild(QLabel, name).font()
             assert (font.family(), font.pixelSize()) == (MAIN_UI_SMALL_FONT_FAMILY_NAME, size)
+            assert font.bold() == (name != "summaryDate")
+        for name in ("Total", "Rate", "Ok", "Ng", "Unmarked"):
+            label = summary.findChild(QLabel, f"summary{name}Caption")
+            assert (label.font().family(), label.font().pixelSize()) == (MAIN_UI_SMALL_FONT_FAMILY_NAME, 15)
+            assert not label.font().bold()
+            assert label.palette().color(label.foregroundRole()) == QColor("#617183")
         button = summary.findChild(QPushButton, "summaryDetails")
-        assert (button.font().family(), button.font().pixelSize()) == (MAIN_UI_SMALL_FONT_FAMILY_NAME, 12)
+        assert (button.font().family(), button.font().pixelSize()) == (MAIN_UI_SMALL_FONT_FAMILY_NAME, 15)
+        assert not button.font().bold()
+        assert button.minimumHeight() == 24
         expected = QColor("#246bed")
         assert button.isEnabled()
         assert button.palette().color(QPalette.Active, QPalette.ButtonText) == expected

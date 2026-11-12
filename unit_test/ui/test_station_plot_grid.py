@@ -2,7 +2,7 @@ import pyqtgraph as pg
 import pytest
 from PyQt5 import sip
 from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QSize, Qt, qInstallMessageHandler
-from PyQt5.QtGui import QHelpEvent, QIcon, QImage, QPalette, QPixmap, QTextDocument, QWheelEvent
+from PyQt5.QtGui import QHelpEvent, QIcon, QImage, QMouseEvent, QPalette, QPixmap, QTextDocument, QWheelEvent
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtTest import QSignalSpy, QTest
 from PyQt5.QtWidgets import (
@@ -43,6 +43,70 @@ def controls(grid, column):
 
 def curves(cell):
     return cell.plot_widget.getPlotItem().listDataItems()
+
+
+def test_plot_scrollbar_reference_pixels_native_controls_and_header_sync(grid, qt_app):
+    grid.set_grid_size(2, 4)
+    grid.resize(530, 330)
+    qt_app.processEvents()
+    body = grid.findChild(QScrollArea, 'stationPlotScroll')
+    header = grid.findChild(QScrollArea, 'stationHeaderScroll')
+    bar = body.horizontalScrollBar()
+    assert body.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+    assert header.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+    assert bar.isVisible() and bar.maximum() > 0
+    assert bar.height() == 14
+    assert not body.verticalScrollBar().styleSheet()
+    assert not header.horizontalScrollBar().styleSheet()
+    bar.setValue(bar.maximum() // 2)
+    image = bar.grab().toImage()
+    gray = [(x, y) for x in range(14, image.width() - 14)
+            for y in range(image.height()) if image.pixelColor(x, y).name() == '#8b8b8b']
+    assert gray
+    left, right = min(x for x, _ in gray), max(x for x, _ in gray)
+    top, bottom = min(y for _, y in gray), max(y for _, y in gray)
+    assert (top, bottom) == (3, 10)
+    assert right - left + 1 >= 20
+    middle = (left + right) // 2
+    assert all(image.pixelColor(middle, y).name() == '#8b8b8b' for y in range(3, 11))
+    assert image.pixelColor(left, 3).name() != '#8b8b8b'  # rounded end
+    assert image.pixelColor(middle, 0).name() == '#fafafa'
+    assert image.pixelColor(15, 7).name() == '#fafafa'
+    for start, end, points_left in ((0, 14, True), (image.width() - 14, image.width(), False)):
+        ink = []
+        for x in range(start, end):
+            for y in range(image.height()):
+                color = image.pixelColor(x, y)
+                assert color.red() == color.green() == color.blue()  # no navigation icon colors
+                if color.red() < 128:
+                    ink.append((x, y))
+        assert ink
+        first, last = min(x for x, _ in ink), max(x for x, _ in ink)
+        first_count = sum(x == first for x, _ in ink)
+        last_count = sum(x == last for x, _ in ink)
+        assert (first_count < last_count) if points_left else (first_count > last_count)
+    before = bar.value()
+    QTest.mouseClick(bar, Qt.LeftButton, pos=QPoint(bar.width() - 7, 7))
+    assert bar.value() == before + bar.singleStep()
+    QTest.mouseClick(bar, Qt.LeftButton, pos=QPoint(7, 7))
+    assert bar.value() == before
+    QTest.mousePress(bar, Qt.LeftButton, pos=QPoint(middle, 7))
+    # Deliver the pressed-button move explicitly on the offscreen platform.
+    QCoreApplication.sendEvent(bar, QMouseEvent(
+        QEvent.MouseMove, QPointF(middle + 50, 7), Qt.NoButton, Qt.LeftButton, Qt.NoModifier,
+    ))
+    QTest.mouseRelease(bar, Qt.LeftButton, pos=QPoint(middle + 50, 7))
+    assert bar.value() > before
+    qt_app.processEvents()
+    assert header.horizontalScrollBar().value() == bar.value()
+    for column in range(4):
+        head, cell = controls(grid, column), cells(grid)[0, column]
+        assert head.mapTo(grid, QPoint()).x() == cell.mapTo(grid, QPoint()).x()
+        assert head.width() == cell.width()
+    grid.set_grid_size(1, 1)
+    grid.resize(1100, 650)
+    qt_app.processEvents()
+    assert not bar.isVisible() and bar.maximum() == 0
 
 
 def test_creation_show_and_resize_do_not_exceed_qt_maximum_size(qt_app):
