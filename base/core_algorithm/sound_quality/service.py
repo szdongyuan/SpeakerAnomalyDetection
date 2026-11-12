@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from base.core_algorithm.sound_quality.psychoacoustic_constants import (
+from consts.acoustic_analysis.specific_consts.loudness_consts import (
     LOUDNESS_DEFAULT_OUTPUT_TIME_RESOLUTION_S,
     LOUDNESS_TV_SUMMARY_SKIP_S,
 )
@@ -570,7 +570,9 @@ def _specific_loudness_summed_exceedance(raw: LoudnessResult, advanced_cfg: dict
 
     If both are specified, the reference line takes priority.
     """
-    from .psychoacoustic_constants import SSTS_SPECIFIC_LOUDNESS_REF_LINES
+    from consts.acoustic_analysis.specific_consts.loudness_reference_consts import (
+        SSTS_SPECIFIC_LOUDNESS_REF_LINES,
+    )
 
     profile, bark_axis, _mode = _specific_loudness_profile(raw, advanced_cfg)
     if profile.size == 0 or bark_axis.size == 0:

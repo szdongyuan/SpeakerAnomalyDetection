@@ -13,7 +13,7 @@ from base.core_algorithm.sound_quality.noise_reduction import (
     DEFAULT_SPECTRAL_SUBTRACTION_MIN_GAIN_DB,
     DEFAULT_SPECTRAL_SUBTRACTION_N_FFT,
 )
-from base.core_algorithm.sound_quality.psychoacoustic_constants import (
+from consts.acoustic_analysis.specific_consts.loudness_consts import (
     LOUDNESS_DEFAULT_OUTPUT_TIME_RESOLUTION_MS,
     LOUDNESS_DEFAULT_STATIONARY_FRAME_DURATION_S,
     LOUDNESS_DEFAULT_STATIONARY_HOP_DURATION_S,

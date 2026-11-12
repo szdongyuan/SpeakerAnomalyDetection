@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from .psychoacoustic_constants import BARK_AXIS_24_BARK_0_1_STEP
+from .sound_quality_common_consts import BARK_AXIS_24_BARK_0_1_STEP
 
 
 def _readonly_array(values, *, dtype=np.float64) -> np.ndarray:

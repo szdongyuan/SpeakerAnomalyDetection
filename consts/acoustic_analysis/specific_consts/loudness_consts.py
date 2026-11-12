@@ -1,12 +1,8 @@
-"""Psychoacoustic reference constants and lookup tables.
-
-These values are algorithm reference data, not tunable product settings. Keep
-business defaults in UI/config files and keep standard/validated lookup tables
-here so loudness code can be reviewed without large
-anonymous arrays inside processing functions.
-"""
+"""Loudness reference tables, numerical coefficients and analysis defaults."""
 
 import numpy as np
+
+from .sound_quality_common_consts import BARK_AXIS_24_BARK_0_1_STEP
 
 
 def _readonly_array(values, *, dtype=np.float64) -> np.ndarray:
@@ -15,8 +11,7 @@ def _readonly_array(values, *, dtype=np.float64) -> np.ndarray:
     return arr
 
 
-# Shared acoustic constants -------------------------------------------------
-P_REF = 20.0e-6  # Sound pressure reference 20 µPa (hearing threshold)
+# Loudness sample rate and frequency bands --------------------------------
 TARGET_FS_HZ = 48_000  # Standard internal sample rate (Hz)
 # ISO 1/3-octave band center frequencies (25 Hz – 12.5 kHz, 28 bands)
 ONE_THIRD_CENTERS_HZ = _readonly_array([25.0,
@@ -47,8 +42,6 @@ ONE_THIRD_CENTERS_HZ = _readonly_array([25.0,
  8000.0,
  10000.0,
  12500.0])
-# Bark scale axis (0.1–24.0 Bark, step 0.1, 240 points) for specific loudness & sharpness
-BARK_AXIS_24_BARK_0_1_STEP = _readonly_array(np.linspace(0.1, 24.0, 240, dtype=np.float64))
 
 
 # Loudness: ISO 532-1 / Zwicker time-varying 1/3-octave filters & core tables
@@ -306,16 +299,6 @@ LOUDNESS_DEFAULT_STATIONARY_NHOP = int(  # Hop length in samples at TARGET_FS_HZ
 
 # Skip the initial transient when computing time-varying summary stats (avoids Nmax spikes)
 LOUDNESS_TV_SUMMARY_SKIP_S = 0.1  # Skip first 100 ms
-
-# SSTS Specific Loudness Reference Lines (from Seat SSTS Revision 40, Table 46 / Figure 6)
-# Format: list of (Bark, sone/Bark) breakpoints — linearly interpolated between points.
-# Units: Loudness in sone GF (free-field).
-SSTS_SPECIFIC_LOUDNESS_REF_LINES = {
-    "ref1": [(0, 0.33), (4, 0.33), (6, 0.18), (7, 0.18), (16, 0.18), (18, 0.1375), (24, 0.01)],
-    "ref2": [(0, 0.50), (4, 0.50), (6, 0.22), (7, 0.22), (16, 0.22), (18, 0.1675), (24, 0.01)],
-    "ref3": [(0, 0.40), (4, 0.40), (6, 0.267), (7, 0.20), (16, 0.20), (18, 0.20), (24, 0.01)],
-    "ref4": [(0, 0.60), (4, 0.60), (6, 0.18), (7, 0.18), (16, 0.18), (18, 0.1375), (24, 0.01)],
-}
 
 
 def validate_reference_tables() -> None:

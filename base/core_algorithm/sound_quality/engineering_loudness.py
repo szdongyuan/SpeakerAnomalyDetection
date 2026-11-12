@@ -15,8 +15,8 @@ from typing import Dict, Optional
 import numpy as np
 from scipy import signal as scipy_signal
 
-from .psychoacoustic_constants import (
-    BARK_AXIS_24_BARK_0_1_STEP,
+from consts.acoustic_analysis.common_consts import REFERENCE_PRESSURE_PA as P_REF
+from consts.acoustic_analysis.specific_consts.loudness_consts import (
     LOUDNESS_CORE_LEVEL_EXPONENT_SCALE,
     LOUDNESS_CORE_LTQ_EXPONENT_SCALE,
     LOUDNESS_CORE_MP1_SCALE,
@@ -51,8 +51,10 @@ from .psychoacoustic_constants import (
     LOUDNESS_USL_FULL_TABLE,
     LOUDNESS_ZUP_TABLE,
     ONE_THIRD_CENTERS_HZ,
-    P_REF,
     TARGET_FS_HZ,
+)
+from consts.acoustic_analysis.specific_consts.sound_quality_common_consts import (
+    BARK_AXIS_24_BARK_0_1_STEP,
 )
 
 
