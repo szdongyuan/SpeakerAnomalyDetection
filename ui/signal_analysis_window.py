@@ -3648,7 +3648,7 @@ class LoudnessAnalysis(AnalysisGraphWidget):
         advanced_cfg = (config or {}).get("advanced", {}) or {}
         ref_key = str(advanced_cfg.get("specific_loudness_exceedance_ref_line", "") or "").lower()
         try:
-            from base.core_algorithm.sound_quality.psychoacoustic_constants import (
+            from consts.acoustic_analysis.specific_consts.loudness_reference_consts import (
                 SSTS_SPECIFIC_LOUDNESS_REF_LINES,
             )
             from base.core_algorithm.sound_quality.service import interpolate_ref_line

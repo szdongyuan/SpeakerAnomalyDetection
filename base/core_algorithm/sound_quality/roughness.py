@@ -14,7 +14,7 @@ import numpy as np
 
 from .stat_utils import iso_c_percentile
 
-from .roughness_constants import (
+from consts.acoustic_analysis.specific_consts.roughness_consts import (
     DEFAULT_ROUGHNESS_OVERLAP,
     MOSQITO_ROUGHNESS_MODEL_NAME,
     ROUGHNESS_BARK_AXIS,

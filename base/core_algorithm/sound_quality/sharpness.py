@@ -20,8 +20,10 @@ from typing import Dict, Optional
 import numpy as np
 
 from .loudness import LoudnessMethod
-from .sharpness_constants import (
+from consts.acoustic_analysis.specific_consts.sound_quality_common_consts import (
     BARK_AXIS_24_BARK_0_1_STEP as _BARK_AXIS_REFERENCE,
+)
+from consts.acoustic_analysis.specific_consts.sharpness_consts import (
     DEFAULT_K_DIN45692,
     DEFAULT_N_FLOOR_SONE,
     DEFAULT_TIME_SKIP_S,
