@@ -1,13 +1,15 @@
 import os
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PyQt5.QtCore import Qt, QMimeData
 from PyQt5.QtWidgets import QApplication, QTreeView, QWidget
 
 from base.load_config import LoadUiConfig
-from ui.operation_sequence import AnalysisModelSelect, OptionList
+from ui.operation_sequence import AnalysisModelSelect, OptionList, PENDING_ANALYSIS_ITEMS
 from ui.ui_analysis_config.common_widgets import ChannelSelectorWidget, MultiChannelSelectorWidget
 from ui.ui_analysis_config.fft_config_dialog import FftConfigWindow
 from ui.ui_analysis_config.loudness_config_dialog import LoudnessConfigWindow
@@ -63,7 +65,7 @@ def test_acquisition_catalog_only_offers_recording(qapp):
         container.close()
 
 
-def test_analysis_catalog_only_shows_first_release_analysis_types(qapp):
+def test_analysis_catalog_shows_available_and_pending_analysis_types(qapp):
     container = QWidget()
     host = SimpleNamespace(analysis_list=QTreeView(container))
     container.setLayout(AnalysisModelSelect.create_analysis_list_layout(host))
@@ -76,9 +78,32 @@ def test_analysis_catalog_only_shows_first_release_analysis_types(qapp):
         assert visible_entries == [
             "声压级 (SPL)", "频谱分析 (Spec)",
             "频段能量 (FBA)", "快速傅里叶变换 (FFT)", "响度 (LOUD)",
+            "尖锐度 (SHRP)", "粗糙度 (ROUGH)", "AI 分析 (AI)",
         ]
+        for row in range(analysis_group.rowCount()):
+            item = analysis_group.child(row)
+            flags = item.index().flags()
+            pending = item.text() in PENDING_ANALYSIS_ITEMS
+            assert flags & Qt.ItemIsEnabled
+            assert bool(flags & Qt.ItemIsDragEnabled) is not pending
+            if pending:
+                button_host = SimpleNamespace(analysis_list=Mock(), select_list=Mock())
+                button_host.analysis_list.currentIndex.return_value = item.index()
+                AnalysisModelSelect.add_analysis_btn_clicked(button_host)
+                button_host.select_list.set_new_analysis_config.assert_not_called()
     finally:
         container.close()
+
+
+@pytest.mark.parametrize("text", PENDING_ANALYSIS_ITEMS)
+def test_pending_analysis_items_cannot_be_dragged_into_queue(text):
+    mime = QMimeData()
+    mime.setText(text)
+    event = Mock()
+    event.mimeData.return_value = mime
+    host = SimpleNamespace(sound_item_type="录制音频")
+    OptionList.dragenterevent(host, event)
+    assert host.drop_is_accept is False
 
 
 def test_new_queue_defaults_to_automatic_analysis_enabled(qapp):
