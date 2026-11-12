@@ -22,6 +22,7 @@ class MenuHarness(QWidget):
             "function_action_product_test_program": "on_product_test_program_config",
             "function_action_test_sequence": "analysis_model_select",
             "function_audio_manager": "on_audio_manager_init",
+            "function_action_ai_model_manager": "on_ai_model_manager",
             "function_action_report_export": "on_analysis_report_export",
             "function_action_exit": "on_window_close",
             "hardware_action_selection": "on_hardware_window_init",

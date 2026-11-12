@@ -2179,7 +2179,7 @@ class SequenceWidgetAnalysisOpsMixin(
         from base.analysis_config_validation import validate_analysis_config
 
         try:
-            validate_analysis_config(self.analysis_config or {})
+            validate_analysis_config(self.analysis_config or {}, for_execution=True)
         except ValueError as exc:
             QMessageBox.warning(self, "不支持的测试队列", str(exc))
             return

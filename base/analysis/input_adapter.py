@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 import math
 from pathlib import Path
+from base.ai_model_catalog import ai_execution_issue
 
 from .contracts import (
     AnalysisBatch,
@@ -218,7 +219,10 @@ def _preparation_issues(task, task_path, station_path, analysis_path):
     for instance in task.instances:
         path = f"{analysis_path}[{json.dumps(instance.config_key, ensure_ascii=False)}]"
         channel = task.channels[instance.channel_index]
-        if instance.analysis_type not in _ACOUSTIC_ANALYSIS_TYPES:
+        if instance.analysis_type == "AI":
+            kind, message = ai_execution_issue(instance.parameters)
+            add(path, kind, message)
+        elif instance.analysis_type not in _ACOUSTIC_ANALYSIS_TYPES:
             add(f"{path}.type", "UnsupportedAnalysisType", f"分析类型尚未接入：{instance.analysis_type}")
         elif channel.signal_type != "sound_pressure":
             selection_field = (

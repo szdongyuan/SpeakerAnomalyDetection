@@ -78,7 +78,7 @@ def test_analysis_catalog_shows_available_and_pending_analysis_types(qapp):
         assert visible_entries == [
             "声压级 (SPL)", "频谱分析 (Spec)",
             "频段能量 (FBA)", "快速傅里叶变换 (FFT)", "响度 (LOUD)",
-            "尖锐度 (SHRP)", "粗糙度 (ROUGH)", "AI 分析 (AI)",
+            "AI 分析", "尖锐度 (SHRP)", "粗糙度 (ROUGH)",
         ]
         for row in range(analysis_group.rowCount()):
             item = analysis_group.child(row)

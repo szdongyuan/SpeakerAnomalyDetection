@@ -11,8 +11,8 @@ from base.load_config import LoadUiConfig
 from consts import error_code
 
 
-@pytest.mark.parametrize("analysis_type", ["AI", "ai", " AI "])
-def test_legacy_ai_queue_is_rejected_without_rewriting_file(tmp_path, analysis_type):
+@pytest.mark.parametrize("analysis_type", ["ai", " AI "])
+def test_noncanonical_ai_type_is_rejected_without_rewriting_file(tmp_path, analysis_type):
     path = tmp_path / "queue.json"
     payload = [{"seq1": {"analysis_list": {
         "display_sequence": ["legacy", "spl"],
@@ -25,7 +25,7 @@ def test_legacy_ai_queue_is_rejected_without_rewriting_file(tmp_path, analysis_t
     code, message = LoadUiConfig.load_sequence_config_from_json(path)
 
     assert code == error_code.INVALID_DATA_LOADING
-    assert "已移除的 AI" in message
+    assert "AI 类型必须写为 AI" in message
     assert path.read_bytes() == original
 
 
@@ -41,9 +41,25 @@ def test_rule_queue_with_legacy_default_field_is_still_loadable(tmp_path):
     assert actual == payload
 
 
-def test_disabled_legacy_ai_item_is_not_silently_dropped():
-    with pytest.raises(ValueError, match="已移除的 AI"):
-        validate_analysis_config({"display_sequence": [], "legacy": {"type": "AI"}})
+def test_ai_draft_loads_without_rewriting_file_but_execution_is_blocked(tmp_path):
+    path = tmp_path / "queue.json"
+    config = {"display_sequence": ["AI 1"], "AI 1": {
+        "type": "AI", "analyse_model_name": "", "analysis_channel": 0,
+    }}
+    payload = [{"seq1": {"analysis_list": config}}]
+    original = json.dumps(payload).encode()
+    path.write_bytes(original)
+    code, loaded = LoadUiConfig.load_sequence_config_from_json(path)
+    assert code == error_code.OK
+    assert loaded == payload
+    assert path.read_bytes() == original
+    with pytest.raises(ValueError, match="尚未选择模型"):
+        validate_analysis_config(config, for_execution=True)
+
+
+def test_ai_model_name_must_be_text():
+    with pytest.raises(ValueError, match="模型名称必须为字符串"):
+        validate_analysis_config({"AI 1": {"type": "AI", "analyse_model_name": 123}})
 
 
 def test_startup_and_rule_analysis_work_without_tensorflow_or_keras(tmp_path):
@@ -57,7 +73,7 @@ from unittest.mock import patch
 
 class BlockModelLibraries(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {'tensorflow', 'keras'}:
+        if fullname.split('.')[0] in {'tensorflow', 'keras', 'onnxruntime'}:
             raise AssertionError('Forbidden dependency: ' + fullname)
 
 sys.meta_path.insert(0, BlockModelLibraries())
@@ -77,7 +93,16 @@ with patch.object(m.LogManager, 'set_log_handler', logging.getLogger), \
         window.access_lvl = role
         window.on_access_lvl_changed()
         menu = window.init_menu()
-        assert '训练AI模型' not in [a.text() for a in menu.actions()[0].menu().actions()]
+        actions = menu.actions()[0].menu().actions()
+        assert '训练AI模型' not in [a.text() for a in actions]
+        assert [a.text() for a in actions].count('AI模型管理') == 1
+        assert window.function_action_ai_model_manager.isVisible()
+        assert window.function_action_ai_model_manager.isEnabled() == (role != 'Operator')
+    from ui.ai_model_manager_dialog import AiModelManagerDialog
+    with patch.object(AiModelManagerDialog, 'exec', return_value=0) as opened, \
+         patch.object(m, 'DATABASE_PATH', 'missing/model_frontend.db'):
+        window.function_action_ai_model_manager.trigger()
+        opened.assert_called_once_with()
 from ui.signal_analysis_window import get_class_mapping
 assert 'AI' not in get_class_mapping()
 from base.analysis_algorithm_adapters import _HANDLERS
@@ -100,7 +125,7 @@ for kind, config in (
         source='自动分析', sequence_snapshot={},
     )
     assert result['plot']
-assert not any(n.split('.')[0] in {'tensorflow', 'keras'} for n in sys.modules)
+assert not any(n.split('.')[0] in {'tensorflow', 'keras', 'onnxruntime'} for n in sys.modules)
 print('startup_without_model_libraries_ok')
 '''
     result = subprocess.run(

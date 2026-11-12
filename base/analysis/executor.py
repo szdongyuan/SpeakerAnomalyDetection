@@ -6,6 +6,7 @@ import logging
 import numpy as np
 
 from base.analysis_algorithm_adapters import calculate_analysis_instance
+from base.ai_model_catalog import ai_execution_issue
 
 from .contracts import AnalysisTask
 from .evaluation import evaluate_instance
@@ -47,6 +48,10 @@ def execute_task(task: AnalysisTask) -> dict:
 
 def _execute_instance(task, instance, samples, sample_rate, metadata):
     result = instance_result(instance)
+    if instance.analysis_type == "AI":
+        kind, message = ai_execution_issue(instance.parameters)
+        result["error"] = error_record("validation", message, error_type=kind)
+        return result
     if instance.analysis_type not in _SUPPORTED_TYPES:
         result["error"] = error_record(
             "validation", f"不支持的分析类型：{instance.analysis_type}",

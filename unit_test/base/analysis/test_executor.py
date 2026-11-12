@@ -234,7 +234,7 @@ def test_config_dispatches_fft_fba_and_full_calibrated_spectrogram(task):
 
 def test_failures_are_isolated_and_judgement_failure_retains_calculation(task):
     items = (
-        AnalysisInstance("unknown", "AI", 0, {}),
+        AnalysisInstance("unknown", "UNKNOWN", 0, {}),
         AnalysisInstance("bad threshold", "SPL", 0, {"limit_checked": True}),
         AnalysisInstance("good", "SPL", 1, {"weighting": "Z"}),
     )

@@ -1229,4 +1229,4 @@ def test_recorded_ai_item_is_rejected_before_calibration_or_execution():
     loader.assert_not_called()
     assert created == []
     messages.warning.assert_called_once()
-    assert "已移除的 AI" in messages.warning.call_args.args[2]
+    assert "尚未选择模型" in messages.warning.call_args.args[2]

@@ -53,7 +53,7 @@ def build_analysis_task_request(
     if not isinstance(analysis_config, dict):
         raise AnalysisTaskBuildError("当前分析配置无效")
     try:
-        validate_analysis_config(analysis_config)
+        validate_analysis_config(analysis_config, for_execution=True)
     except ValueError as exc:
         raise AnalysisTaskBuildError(str(exc)) from exc
 
