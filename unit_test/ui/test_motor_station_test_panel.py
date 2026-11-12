@@ -4,7 +4,7 @@ import math
 
 import pytest
 from PyQt5.QtCore import QPoint, QRect, Qt
-from PyQt5.QtGui import QColor, QImage, QPainter
+from PyQt5.QtGui import QColor, QFont, QImage, QPainter
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QAbstractButton, QAbstractItemView, QLabel, QScrollArea, QStyle, QStyleOption,
@@ -56,7 +56,7 @@ def test_initial_zero_and_fixed_general_header(panel):
     labels = [label.text() for label in panel.findChildren(QLabel)]
     assert labels == ["工位测试", "工位", "正转", "反转", "结果"]
     assert len(panel.findChildren(QScrollArea)) == 1
-    for name, size, bold in (("stationTitle", 14, True), ("stationGeneralForward", 12, False), ("stationGeneralResult", 12, False)):
+    for name, size, bold in (("stationTitle", 14, True), *((f"stationGeneral{column}", 12, False) for column in ("Station", "Forward", "Reverse", "Result"))):
         label = panel.findChild(QLabel, name)
         label.ensurePolished()
         font = label.font()
@@ -65,10 +65,82 @@ def test_initial_zero_and_fixed_general_header(panel):
 
 def test_station_details_use_pixel_fonts(panel):
     panel.set_station_count(1)
-    for widget in (panel.findChild(QLabel, "stationForward1"), panel.findChild(QLabel, "stationResult1"), table(panel)):
+    for widget in (*header(panel).findChildren(QLabel), table(panel)):
         widget.ensurePolished()
         font = widget.font()
-        assert (font.family(), font.pixelSize(), font.bold()) == (MAIN_UI_SMALL_FONT_FAMILY_NAME, 13, False)
+        assert (font.family(), font.pixelSize(), font.bold()) == (MAIN_UI_SMALL_FONT_FAMILY_NAME, 12, False)
+    section_style = panel.styleSheet().split("QTableWidget QHeaderView::section {", 1)[1].split("}", 1)[0]
+    assert "font-size: 12px;" in section_style
+    assert f"font-family: '{MAIN_UI_SMALL_FONT_FAMILY_NAME}';" in section_style
+
+
+@pytest.mark.parametrize("width", [300, 340, 600])
+def test_metric_table_compact_columns_alignment_and_complete_text(panel, qt_app, width):
+    panel.resize(width, 560)
+    panel.show_workbench_stations((("一号工位", ("声压级（SPL）1", "快速傅里叶变换（FFT）1")),))
+    panel.show_station_result(1, "OK", "--", "--", [
+        ["声压级（SPL）1", "63.13 dB(Z)", "63.13 dB(Z)"],
+        ["快速傅里叶变换（FFT）1", "分析完成", "分析完成"],
+    ])
+    header(panel).setChecked(True)
+    qt_app.processEvents()
+    QTest.qWait(10)
+    detail = table(panel)
+    available = detail.viewport().width()
+    first, second = int(available * .40), int(available * .30)
+    assert [detail.columnWidth(c) for c in range(3)] == [first, second, available - first - second]
+    for column in range(3):
+        alignment = Qt.AlignVCenter | (Qt.AlignLeft if column == 0 else Qt.AlignHCenter)
+        assert detail.horizontalHeaderItem(column).textAlignment() == int(alignment)
+        for row in range(2):
+            item = detail.item(row, column)
+            assert item.textAlignment() == int(alignment)
+            bounds = detail.fontMetrics().boundingRect(
+                QRect(0, 0, detail.columnWidth(column) - 12, 1000),
+                int(alignment | Qt.TextWordWrap), item.text(),
+            )
+            assert bounds.height() <= detail.rowHeight(row)
+            assert bounds.width() <= detail.columnWidth(column) - 12
+    assert detail.wordWrap()
+    assert detail.horizontalScrollBar().maximum() == 0
+    assert detail.isVisible()
+    style = panel.styleSheet()
+    for selector in ("QTableWidget::item", "QTableWidget QHeaderView::section"):
+        rule = style.split(selector + " {", 1)[1].split("}", 1)[0]
+        assert "padding: 0 6px;" in rule
+
+
+def test_wrapped_metric_rows_grow_and_shrink_with_width_and_keep_fold_state(panel, qt_app):
+    metric = "很长的指标名称 / Long metric name"
+    panel.show_workbench_stations((("一号工位", (metric, "SPL")),))
+    panel.set_station_row(1, 0, [metric, "63.13 dB(Z)", "分析完成"])
+    panel.set_station_row(1, 1, ["SPL", "63.13 dB(Z)", "分析完成"])
+    header(panel).setChecked(True)
+    heights = []
+    for width in (300, 600, 300):
+        panel.resize(width, 560)
+        qt_app.processEvents()
+        QTest.qWait(10)
+        qt_app.processEvents()
+        detail = table(panel)
+        for row in range(2):
+            for column in range(3):
+                bounds = detail.fontMetrics().boundingRect(
+                    QRect(0, 0, detail.columnWidth(column) - 12, 1000),
+                    int(Qt.TextWordWrap), detail.item(row, column).text(),
+                )
+                assert bounds.height() <= detail.rowHeight(row)
+        assert detail.rowHeight(1) == detail.verticalHeader().defaultSectionSize() == 34
+        assert detail.height() == detail.horizontalHeader().height() + sum(detail.rowHeight(r) for r in range(2))
+        assert detail.horizontalScrollBar().maximum() == 0
+        heights.append(detail.rowHeight(0))
+    assert heights[0] > heights[1] == 34
+    assert heights[2] == heights[0]
+    header(panel).click()
+    assert table(panel).isHidden()
+    header(panel).click()
+    qt_app.processEvents()
+    assert table(panel).isVisible() and table(panel).rowHeight(0) == heights[0]
 
 
 def test_workbench_stations_show_names_and_reset_results_on_same_size_update(panel, qt_app):
@@ -247,7 +319,7 @@ def test_public_updates_and_independent_tables(panel):
     assert table(panel).verticalHeader().isHidden()
     assert not table(panel).horizontalHeader().sectionsMovable()
     assert table(panel).item(0, 0).textAlignment() & Qt.AlignLeft
-    assert table(panel).item(0, 1).textAlignment() & Qt.AlignRight
+    assert table(panel).item(0, 1).textAlignment() & Qt.AlignHCenter
 
 
 def test_independent_expansion_and_preserved_header(panel, qt_app):
@@ -397,7 +469,7 @@ def test_invalid_table_indices(panel, index, error, method, target):
     assert panel.get_station_data(1)["rows"] == [["--"] * 3]
 
 
-@pytest.mark.parametrize("width", [340, 600])
+@pytest.mark.parametrize("width", [300, 340, 600])
 def test_scrolling_alignment_and_native_status_colors(panel, qt_app, styled_host, width):
     # Simulate the application's generic inherited styles: station colors must win.
     styled_host.resize(width, 400)
@@ -432,10 +504,10 @@ def test_scrolling_alignment_and_native_status_colors(panel, qt_app, styled_host
     reverse = panel.findChild(QLabel, "stationReverse1")
     result = panel.findChild(QLabel, "stationResult1")
     pending = panel.findChild(QLabel, "stationForward2")
-    for label, color in [(forward, "#00824e"), (reverse, "#ca3245"), (pending, "#617183"), (result, "#ca3245")]:
+    for label, color in [(forward, "#009900"), (reverse, "#ca3245"), (pending, "#617183"), (result, "#ca3245")]:
         assert label.palette().color(label.foregroundRole()) == QColor(color)
     assert abs(general.mapTo(panel, general.rect().center()).x() - forward.mapTo(panel, forward.rect().center()).x()) <= 1
-    assert abs(table(panel).columnWidth(0) / table(panel).viewport().width() - .46) < .02
+    assert abs(table(panel).columnWidth(0) / table(panel).viewport().width() - .40) < .02
     scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
     assert general.isVisible()
 
@@ -479,7 +551,7 @@ def test_complete_result_snapshot_preserves_shape_fold_and_other_station(panel, 
     panel.show_workbench_stations((("一号工位", ("SPL", "FFT")), ("二号工位", ("SPL",))))
     header(panel).setChecked(True)
     other = panel.get_station_data(2)
-    rows = [["SPL", "62.30 dB(A)", "63.10 dB(A)"], ["FFT", "分析已完成", "--"]]
+    rows = [["SPL", "62.30 dB(A)", "63.10 dB(A)"], ["FFT", "分析完成", "--"]]
     assert panel.show_station_result(1, " ok ", "ng", status.lower(), rows) is None
     expected = {"station_id": 1, "forward": "OK", "reverse": "NG", "result": status,
                 "rows": [row[:] for row in rows]}
@@ -528,6 +600,14 @@ def test_invalid_complete_result_is_atomic(panel, forward, reverse, result, rows
 def test_zero_rows_and_rebuilt_stations_reset_final_result(panel):
     panel.show_workbench_stations((("工位", ()),))
     assert panel.get_station_data(1)["result"] == "--"
+    for status in ("OK", "NG", "--"):
+        panel.set_station_results(1, status, status, result=status)
+        for direction in ("Forward", "Reverse", "Result"):
+            label = panel.findChild(QLabel, f"station{direction}1")
+            label.ensurePolished()
+            assert not label.font().bold()
+            assert label.font().weight() == QFont.Normal
+            assert label.font().pixelSize() == 12
     panel.show_station_result(1, "OK", "--", "OK", ())
     assert panel.get_station_data(1)["result"] == "OK"
     assert table(panel).rowCount() == 0 and table(panel).columnCount() == 3

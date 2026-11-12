@@ -141,6 +141,7 @@ def test_missing_items_and_types_keep_condition_slots_and_custom_titles(configur
 @pytest.mark.parametrize(("raw", "unit"), [
     ("a", "dB(A)"), ("c", "dB(C)"), ("None", "dB(Z)"),
     ("Z（NONE）", "dB(Z)"), (None, "dB(Z)"), ("B", "dB(B)"),
+    ("d", "dB(D)"), ("Z", "dB(Z)"),
     ("custom-weighting", "dB(CUSTOM-WEIGHTING)"),
 ])
 def test_units_are_display_only_and_preserve_full_analysis(configuration, kind, raw, unit):

@@ -4,6 +4,8 @@ import math
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
+from ui.sequence.workbench_units import format_workbench_spl_unit
+
 
 def _aggregate_status(values):
     statuses = [value.strip().upper() if isinstance(value, str) else "--"
@@ -22,8 +24,9 @@ def _format_instance_value(item):
     )
     value = metrics.get(key) if key else None
     if type(value) not in (int, float) or not math.isfinite(value):
-        return "分析已完成"
-    unit = metrics.get("unit") or ""
+        return "分析完成"
+    unit = (format_workbench_spl_unit(metrics["weighting"])
+            if "weighting" in metrics else (metrics.get("unit") or ""))
     return f"{value:.2f} {unit}".strip()
 
 

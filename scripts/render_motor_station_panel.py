@@ -70,11 +70,11 @@ def main():
         panel.set_station_count(3)
         for station_id, count in ((1, 2), (2, 5), (3, 0)):
             panel.set_station_row_count(station_id, count)
-        panel.set_station_row(1, 0, ["SPL", "68.50 dB(A)", "63.60 dB(A)"])
-        panel.set_station_row(1, 1, ["FFT", "分析已完成", "分析已完成"])
+        panel.set_station_row(1, 0, ["声压级（SPL）1", "63.13 dB(Z)", "63.60 dB(A)"])
+        panel.set_station_row(1, 1, ["快速傅里叶变换（FFT）1", "分析完成", "分析完成"])
         panel.set_station_column(2, 0, ["SPL", "FFT", "FBA", "SPL 复测", "时频图"])
-        panel.set_station_column(2, 1, ["61.20 dB(A)", "分析已完成", "0.00 dB(Z)", "62.00 dB(A)", "分析已完成"])
-        panel.set_station_column(2, 2, ["62.40 dB(A)", "分析已完成", "64.10 dB(Z)", "--", "--"])
+        panel.set_station_column(2, 1, ["61.20 dB(A)", "分析完成", "0.00 dB(Z)", "62.00 dB(A)", "分析完成"])
+        panel.set_station_column(2, 2, ["62.40 dB(A)", "分析完成", "64.10 dB(Z)", "--", "--"])
         if long_text:
             panel.set_station_cell(2, 4, 0, "很长的指标名称 / Long metric name")
         panel.set_station_results(1, " ok ", "NG", result="NG")
@@ -122,7 +122,7 @@ def main():
         assert entry["header_width"] == panel.width() - 2, entry
         print(f"{target}: {widget.width()}x{widget.height()}, expanded={entry['expanded']}, scroll={entry['scroll_value']}/{entry['scroll_maximum']}")
 
-    for width in (340, 600):
+    for width in (300, 340, 600):
         for scenario in ("zero", "populated", "zero-row", "long-text", "scroll"):
             widget = MotorDashboardPanel()
             widget.resize(width, 760)

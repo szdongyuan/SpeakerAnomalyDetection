@@ -10,6 +10,7 @@ from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QDialog, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
+from consts.ui_style_const import MAIN_UI_SMALL_FONT_FAMILY_NAME
 from ui.sequence.motor_information_summary_panel import MotorInformationSummaryPanel
 from unit_test.daily_record_cases import make_daily_records
 
@@ -194,13 +195,13 @@ def test_summary_native_render_matches_html_under_inherited_styles(summary, qt_a
     qt_app.processEvents()
     try:
         assert summary.grab().toImage().pixelColor(5, 5) == QColor("#ffffff")
-        for name, color in [("summaryOk", "#00824e"), ("summaryNg", "#ca3245"), ("summaryUnmarked", "#617183")]:
+        for name, color in [("summaryOk", "#009900"), ("summaryNg", "#ca3245"), ("summaryUnmarked", "#617183")]:
             label = summary.findChild(QLabel, name)
             expected = QColor(color)
             assert label.palette().color(label.foregroundRole()) == expected
             pixels = label.grab().toImage()
             assert any(pixels.pixelColor(x, y) == expected for x in range(pixels.width()) for y in range(pixels.height()))
-            assert label.font().family() == "Microsoft YaHei UI"
+            assert label.font().family() == MAIN_UI_SMALL_FONT_FAMILY_NAME
             assert label.font().pixelSize() == 23
             assert label.font().bold()
         title = summary.findChild(QLabel, "summaryTitle")
@@ -208,9 +209,9 @@ def test_summary_native_render_matches_html_under_inherited_styles(summary, qt_a
         assert title.font().bold()
         for name, size in (("summaryDate", 11), ("summaryTotal", 15), ("summaryRate", 15)):
             font = summary.findChild(QLabel, name).font()
-            assert (font.family(), font.pixelSize()) == ("Microsoft YaHei UI", size)
+            assert (font.family(), font.pixelSize()) == (MAIN_UI_SMALL_FONT_FAMILY_NAME, size)
         button = summary.findChild(QPushButton, "summaryDetails")
-        assert (button.font().family(), button.font().pixelSize()) == ("Microsoft YaHei UI", 12)
+        assert (button.font().family(), button.font().pixelSize()) == (MAIN_UI_SMALL_FONT_FAMILY_NAME, 12)
         expected = QColor("#246bed")
         assert button.isEnabled()
         assert button.palette().color(QPalette.Active, QPalette.ButtonText) == expected
