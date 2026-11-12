@@ -4,7 +4,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from base.ai_model_catalog import ModelRecord
-from ui.ai_model_dialog_base import AiModelDialogBase, model_button, model_table
+from ui.ai.model_dialog_base import AiModelDialogBase, model_button, model_table
 
 
 class AiModelEvaluationDialog(AiModelDialogBase):

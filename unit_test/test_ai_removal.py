@@ -98,7 +98,7 @@ with patch.object(m.LogManager, 'set_log_handler', logging.getLogger), \
         assert [a.text() for a in actions].count('AI模型管理') == 1
         assert window.function_action_ai_model_manager.isVisible()
         assert window.function_action_ai_model_manager.isEnabled() == (role != 'Operator')
-    from ui.ai_model_manager_dialog import AiModelManagerDialog
+    from ui.ai.model_manager_dialog import AiModelManagerDialog
     with patch.object(AiModelManagerDialog, 'exec', return_value=0) as opened, \
          patch.object(m, 'DATABASE_PATH', 'missing/model_frontend.db'):
         window.function_action_ai_model_manager.trigger()

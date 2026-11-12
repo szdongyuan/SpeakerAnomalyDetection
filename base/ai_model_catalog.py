@@ -85,10 +85,3 @@ class AiModelCatalog:
                 reason = ""
             choices.append(ModelChoice(name, not reason, reason))
         return tuple(choices)
-
-
-def ai_execution_issue(config):
-    """Until the input contract/runtime is implemented, never emit a judgement."""
-    if not str(config.get("analyse_model_name") or "").strip():
-        return "MissingAiModel", "AI分析尚未选择模型；请先配置可用模型。"
-    return "AiInferenceUnavailable", "模型检测功能尚未开放，当前配置仅供编辑和保存。"

@@ -17,8 +17,8 @@ from PyQt5.QtWidgets import (
 )
 
 from base.ai_model_catalog import ModelCatalogError, ModelRecord, ModelRegistryReader
-from ui.ai_model_dialog_base import AiModelDialogBase, ModelNameDelegate, model_button, model_table
-from ui.ai_model_evaluation_dialog import AiModelEvaluationDialog
+from ui.ai.model_dialog_base import AiModelDialogBase, ModelNameDelegate, model_button, model_table
+from ui.ai.model_evaluation_dialog import AiModelEvaluationDialog
 
 
 class AiModelDetailsDialog(AiModelDialogBase):

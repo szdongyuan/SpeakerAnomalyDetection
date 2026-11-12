@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from base.ai_model_catalog import AiModelCatalog, ModelCatalogError, ai_execution_issue
+from base.ai_model_catalog import AiModelCatalog, ModelCatalogError
 
 
 def test_missing_database_returns_empty_without_creating_it(tmp_path):
@@ -75,11 +75,3 @@ def test_missing_registry_table_is_an_error_not_empty_success(tmp_path):
         db.execute("CREATE TABLE unrelated (id INTEGER)")
     with pytest.raises(ModelCatalogError, match="模型目录读取失败"):
         AiModelCatalog(path, tmp_path).list_records()
-
-
-@pytest.mark.parametrize("config, kind", [
-    ({}, "MissingAiModel"),
-    ({"analyse_model_name": "candidate"}, "AiInferenceUnavailable"),
-])
-def test_runtime_is_explicitly_blocked(config, kind):
-    assert ai_execution_issue(config)[0] == kind
