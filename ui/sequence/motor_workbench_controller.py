@@ -20,6 +20,7 @@ from base.workbench_analysis_input import (
 )
 from ui.sequence.workbench_ui_projection import build_ui_projection, WorkbenchUiProjection, _PlotBindings
 from ui.sequence.workbench_result_state import WorkbenchResultState
+from ui.sequence.workbench_plot_presenter import WorkbenchPlotPresenter
 from base.recording_service import RecordingCallbacks
 from base.workbench_recording_protocol import WorkbenchRecordingCompletion
 from base.workbench_recording_request import (
@@ -80,6 +81,7 @@ class _InFlightRecording:
     round_context: _RecordingRound
     analysis_context: AnalysisRecordingContext | None = None
     archiving: bool = False
+    starts_round: bool = False
 
 
 class MotorWorkbenchController:
@@ -101,6 +103,7 @@ class MotorWorkbenchController:
         self._station_panel = station_panel
         self._plot_grid = plot_grid
         self._plot_grid.set_mark_buttons_visible(False)
+        self._plot_presenter = WorkbenchPlotPresenter(plot_grid)
         self._set_active_product = set_active_product
         self._show_video_settings = show_video_settings
         self._initialized = False
@@ -279,6 +282,7 @@ class MotorWorkbenchController:
                     del self._analysis_tasks[task_id]
                     if self._latest_analysis_tasks.get(key) == task_id:
                         del self._latest_analysis_tasks[key]
+            self._plot_presenter.analysis_event(event)
             self._analysis_event_received(event)
         if events:
             self.refresh_recording_state()
@@ -324,6 +328,7 @@ class MotorWorkbenchController:
         context = item.context
         condition = context.analysis.context.get_condition(context.condition_id)
         if not context.analysis.test_queues[condition.test_queue].analysis_config["display_sequence"]:
+            self._plot_presenter.recording_state(context, '未配置分析项')
             self._analysis_event_received({
                 "event_type": "analysis_skipped", "request_id": context.request_id,
                 "analysis_version": context.analysis_version, "payload": {"reason": "no_analysis_items"},
@@ -361,6 +366,13 @@ class MotorWorkbenchController:
                         "product_code": round_context.product_code,
                     }
                     self._latest_analysis_tasks[task["station_id"], task["condition_id"]] = task_id
+                if context.analysis_version == self._analysis_version and payload['tasks']:
+                    self._plot_presenter.begin_batch(context.request_id, payload['tasks'])
+        if context.analysis_version == self._analysis_version:
+            self._plot_presenter.recording_state(
+                context, '待分析' if receipt['accepted'] else '分析未提交',
+                '\n'.join(issue['message'] for issue in receipt.get('issues', [])),
+            )
         self._analysis_event_received({
             "event_type": "submission_result", "request_id": context.request_id,
             "analysis_version": context.analysis_version, "payload": receipt,
@@ -412,6 +424,7 @@ class MotorWorkbenchController:
         logging.getLogger("core").info("Applying workbench configuration from %s", source_identity)
         self._station_panel.show_workbench_stations(stations)
         self._plot_grid.show_workbench_layout(names, cells)
+        self._plot_presenter.configure(projection, invalidate_requests=analysis_version != self._analysis_version)
         if self._product_selection is None:
             self._set_active_product(product_name)
         self._applied_config = config
@@ -490,6 +503,7 @@ class MotorWorkbenchController:
         attempt = _InFlightRecording(
             uuid4().hex, self._configuration_revision, condition.condition_name,
             config.recording.context.project_name, recorded_at.date(), recorded_at, round_context,
+            starts_round=self._condition_index == 0,
         )
         self._in_flight = attempt
         self.refresh_recording_state()
@@ -519,6 +533,7 @@ class MotorWorkbenchController:
             return
         try:
             ports.bridge.start(request, RecordingCallbacks(
+                started=self._recording_started,
                 workbench_completed=self._recording_completed,
                 failed=self._recording_failed,
                 cancelled=self._recording_cancelled,
@@ -555,6 +570,14 @@ class MotorWorkbenchController:
                 ordinal, "--", "--", "--", [[key, "--", "--"] for key in keys],
             )
 
+    def _recording_started(self, session):
+        attempt = self._in_flight
+        if (attempt is None or attempt.request_id != session.request.request_id
+                or attempt.analysis_context is None
+                or attempt.analysis_context.analysis_version != self._analysis_version):
+            return
+        self._plot_presenter.recording_started(attempt.analysis_context, starts_round=attempt.starts_round)
+
     def _reject_recording(self, attempt, detail):
         if self._in_flight is attempt:
             self._in_flight = None
@@ -585,6 +608,9 @@ class MotorWorkbenchController:
         attempt = self._matching_recording_terminal(session, result)
         if attempt is None:
             return
+        # Completion also establishes ownership if no started notification was delivered.
+        self._recording_started(session)
+        self._plot_presenter.recording_state(attempt.analysis_context, '保存中')
         archiving = replace(attempt, archiving=True)
         self._in_flight = archiving
         self._activate_recording_round(attempt)
@@ -630,13 +656,16 @@ class MotorWorkbenchController:
     def _recording_failed(self, session, failure):
         attempt = self._take_recording_terminal(session, failure)
         if attempt is not None:
+            self._plot_presenter.recording_state(attempt.analysis_context, '采集失败', failure.message)
             self.refresh_recording_state()
             self._report_recording_error(
                 attempt, f"工况「{attempt.condition_name}」录制失败（{failure.stage}）：{failure.message}",
             )
 
     def _recording_cancelled(self, session, cancellation):
-        if self._take_recording_terminal(session, cancellation) is not None:
+        attempt = self._take_recording_terminal(session, cancellation)
+        if attempt is not None:
+            self._plot_presenter.recording_state(attempt.analysis_context, '已取消')
             self.refresh_recording_state()
 
     def _recording_release_failed(self, attempt, session, detail):
@@ -652,7 +681,7 @@ class MotorWorkbenchController:
         self.refresh_recording_state()
 
     def get_plot_bindings(self, row: int, column: int) -> _PlotBindings:
-        """Return the two condition bindings at a zero-based plot position."""
+        """Return the condition bindings at a zero-based plot position."""
         if 0 <= row < len(self._plot_bindings):
             bindings = self._plot_bindings[row]
             if 0 <= column < len(bindings):

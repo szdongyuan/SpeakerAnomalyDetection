@@ -6,7 +6,7 @@ import numpy as np
 import pyqtgraph as pg
 
 
-def _real_array(value, *, dimensions, context, field):
+def _real_array(value, *, dimensions, context, field, allow_gaps=False):
     if not isinstance(value, (list, tuple, np.ndarray)):
         raise TypeError(f'{context}: {field} must be a list, tuple or real NumPy array')
     if isinstance(value, np.ndarray):
@@ -22,6 +22,8 @@ def _real_array(value, *, dimensions, context, field):
                 elif isinstance(item, np.ndarray):
                     if item.dtype.kind not in 'iuf':
                         raise TypeError(f'{context}: {field} must contain real numbers, excluding bool')
+                elif item is None and allow_gaps:
+                    continue
                 elif isinstance(item, (bool, np.bool_)) or not isinstance(item, Real):
                     raise TypeError(f'{context}: {field} must contain real numbers, excluding bool')
         check_numbers(value)
@@ -33,7 +35,7 @@ def _real_array(value, *, dimensions, context, field):
         raise ValueError(f'{context}: {field} must be a rectangular finite real array') from error
     if array.ndim != dimensions:
         raise ValueError(f'{context}: {field} must have {dimensions} dimension(s)')
-    if not np.isfinite(array).all():
+    if np.isinf(array).any() or (not allow_gaps and np.isnan(array).any()):
         raise ValueError(f'{context}: {field} must contain only finite values')
     return array
 
@@ -78,7 +80,7 @@ def validate_plot_config(*, kind, title='', right_text='', x_label='', y_label='
     return config
 
 
-def validate_curve_series(series, *, context):
+def validate_curve_series(series, *, context, allow_gaps=False):
     if not isinstance(series, (list, tuple)):
         raise TypeError(f'{context}: series must be a list or tuple')
     result = []
@@ -90,7 +92,7 @@ def validate_curve_series(series, *, context):
             if key not in item:
                 raise ValueError(f'{context}: {field}.{key} is required')
         x = _real_array(item['x'], dimensions=1, context=context, field=f'{field}.x')
-        y = _real_array(item['y'], dimensions=1, context=context, field=f'{field}.y')
+        y = _real_array(item['y'], dimensions=1, context=context, field=f'{field}.y', allow_gaps=allow_gaps)
         if x.size != y.size:
             raise ValueError(f'{context}: {field}.y must have the same length as x')
         name = item.get('name', f'曲线 {index + 1}')

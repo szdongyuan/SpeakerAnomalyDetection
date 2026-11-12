@@ -14,6 +14,7 @@ from base.workbench_config_values import (
 )
 from base.workbench_recording_config import WorkbenchRecordingConfig
 from base.workbench_ui_config import WorkbenchPlotCell, WorkbenchPlotLayout, WorkbenchUiConfig
+from base.workbench_plot_config import parse_plot_templates
 from consts.product_test_project_consts import (
     CONDITION_NAME_KEY, PROJECT_NAME_KEY, REGISTRY_ACTIVE_FILE_KEY, REGISTRY_CONFIGS_KEY,
     REGISTRY_FILE_KEY, RESULT_ROOT_DIRECTORY_KEY, TEST_QUEUE_KEY, TRIGGER_STATE_KEY,
@@ -143,6 +144,11 @@ def _load_plot_layout(path: Path) -> WorkbenchPlotLayout | None:
             return None
         raise
     data = _object(data, path, "plot layout")
+    if "plot_templates" in data:
+        try:
+            return parse_plot_templates(data)
+        except ValueError as exc:
+            raise WorkbenchConfigurationError(f"{path}: {exc}") from exc
     rows = _layout_dimension(data, path, "rows", 3)
     columns = _layout_dimension(data, path, "columns", 4)
     cell_data = _array(data.get("cells"), path, "cells")
@@ -389,5 +395,9 @@ def _load_active_configuration(program_registry_path, queue_registry_path, plot_
     return WorkbenchConfiguration(
         recording=WorkbenchRecordingConfig(context=context, parameters_by_queue=parameters),
         analysis=WorkbenchAnalysisConfig(context=context, test_queues=test_queues),
-        ui=WorkbenchUiConfig(layout=plot_layout, preview_time_modes=previews),
+        ui=WorkbenchUiConfig(
+            layout=plot_layout, preview_time_modes=previews,
+            condition_durations={condition.condition_id: parameters[condition.test_queue]["total_time"]
+                                 for condition in conditions},
+        ),
     )

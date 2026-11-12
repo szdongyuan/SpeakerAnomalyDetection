@@ -1,12 +1,14 @@
 """One independent, caller-fed curve or heatmap plot."""
 
 import pyqtgraph as pg
+import math
 from PyQt5.QtCore import QPoint, QPointF, QRectF
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from consts.ui_style_const import MAIN_UI_SMALL_FONT_FAMILY_NAME
 from ui.sequence.station_plot_header import StationPlotHeader, StationPlotSubheader
+from ui.sequence.station_plot_style import StyledGridAxis, apply_style, draw_curves
 from ui.sequence.station_plot_validation import (
     validate_curve_series,
     validate_heatmap_data,
@@ -16,12 +18,29 @@ from ui.sequence.station_plot_validation import (
 )
 
 
-class _BottomAxis(pg.AxisItem):
+class _BottomAxis(StyledGridAxis):
+    def set_tick_text_alignments(self, alignments):
+        self._tick_text_alignments = tuple(alignments)
+        self.picture = None
+        self.update()
+
     def generateDrawSpecs(self, painter):
         specs = super().generateDrawSpecs(painter)
         if specs is None:
             return None
         axis_spec, tick_specs, text_specs = specs
+
+        # Align condition-edge labels inward without moving their ticks or data.
+        view = self.linkedView()
+        for value, side in getattr(self, '_tick_text_alignments', ()):
+            anchor = self.mapFromScene(view.mapViewToScene(QPointF(value, 0))).x()
+            for rect, _, _ in text_specs:
+                if abs(rect.center().x() - anchor) < 1:
+                    if side == 'right':
+                        rect.moveRight(anchor)
+                    else:
+                        rect.moveLeft(anchor)
+                    break
 
         # Shift only text that would cross the cell edge or AxisItem's paint clip.
         plot_bounds = self.mapRectFromParent(self.parentItem().rect())
@@ -83,10 +102,13 @@ class StationPlotCell(QWidget):
         self._image = None
         self._series = []
         self._heatmap = None
+        self._display_style = None
+        self._log_axes = (False, False)
         self._curve_colors = ('#2478C8', '#E68A2E', '#2C9C74', '#9A63C3', '#D5586B', '#499BAA')
         self.setMinimumSize(280, 180)
         self.plot_widget = pg.PlotWidget(
-            parent=self, background='white', axisItems={'bottom': _BottomAxis('bottom')})
+            parent=self, background='white', axisItems={
+                'bottom': _BottomAxis('bottom'), 'left': StyledGridAxis('left')})
         plot = self.plot_widget.getPlotItem()
         # Keep endpoint tick text inside the viewport and away from grid borders.
         # This is internal plot padding; adjacent grid cells still touch.
@@ -160,13 +182,21 @@ class StationPlotCell(QWidget):
         right = self.plot_widget.mapFromScene(QPointF(bounds.right(), bounds.top())).x() + origin
         self.subheader.set_plot_span(left, right)
 
-    def set_curve_data(self, series):
+    def set_curve_data(self, series, *, allow_gaps=False):
         context = self._context('set_curve_data')
         if self.kind != 'curve':
             raise ValueError(f'{context}: kind must be curve')
-        snapshot = validate_curve_series(series, context=context)
+        snapshot = validate_curve_series(series, context=context, allow_gaps=allow_gaps)
+        if self._display_style is not None:
+            for item in series:
+                if item.get('role', 'curve') not in ('curve', 'upper', 'lower', 'exceedance'):
+                    raise ValueError('curve role must be curve, upper, lower or exceedance')
         self._clear_data()
         self._series = snapshot
+        if self._display_style is not None:
+            draw_curves(self, series, snapshot)
+            self._apply_ranges()
+            return
         plot = self.plot_widget.getPlotItem()
         if sum(item['x'].size > 0 for item in snapshot) > 1:
             plot.addLegend(labelTextColor='#64748B')
@@ -202,6 +232,19 @@ class StationPlotCell(QWidget):
         self._clear_data()
         self._apply_ranges()
 
+    def set_display_style(self, style, x_axis, y_axis):
+        """Apply an already validated template; axis ranges remain in physical units."""
+        self._display_style = style
+        self._log_axes = (x_axis['scale'] == 'log', y_axis['scale'] == 'log')
+        self.plot_widget.getPlotItem().setLogMode(x=self._log_axes[0], y=self._log_axes[1])
+        apply_style(self.plot_widget, style)
+        self._apply_ranges()
+
+    def dispose(self):
+        self.clear_plot()
+        self.plot_widget.close()
+        self.plot_widget.deleteLater()
+
     def _clear_data(self):
         plot = self.plot_widget.getPlotItem()
         if self._colorbar is not None:
@@ -235,7 +278,12 @@ class StationPlotCell(QWidget):
         has_data = self._image is not None or any(item['x'].size for item in self._series)
         for axis, field in enumerate(('x_range', 'y_range')):
             configured = self._configuration[field]
+            if self._display_style is not None:
+                self.plot_widget.getPlotItem().getAxis(('bottom', 'left')[axis]).setStyle(
+                    showValues=has_data or configured is not None)
             if configured is not None:
+                if self._log_axes[axis]:
+                    configured = tuple(math.log10(value) for value in configured)
                 view.setRange(**{('xRange', 'yRange')[axis]: configured}, padding=0)
             else:
                 if not has_data:
