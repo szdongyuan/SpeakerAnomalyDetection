@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from functools import partial
 from string import Template
 from typing import Any, Callable
@@ -188,6 +189,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         self._restore_callback: Callable[[], Any] | None = None
         self._ok_callback: Callable[[], Any] | None = None
         self._cancel_callback: Callable[[], Any] | None = None
+        self._accepted_config: dict[str, Any] | None = None
         self._syncing_scroll = False
         self.curve_color_widget = None
         self.plot_view_config_widget = None
@@ -452,6 +454,17 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         footer_layout.addWidget(self.semantic_ok_btn)
         install_dialog_enter_policy(self, self.semantic_ok_btn)
         return footer_layout
+
+    def accept_config(self, config: dict[str, Any]) -> None:
+        """Capture validated form data before emitting the accepted signal."""
+        self._accepted_config = deepcopy(config)
+        self.accept()
+
+    def get_accepted_config(self) -> dict[str, Any] | None:
+        """Read the confirmed snapshot without collecting or validating controls."""
+        if self.result() != self.Accepted:
+            return None
+        return deepcopy(self._accepted_config)
 
     def set_semantic_button_callbacks(
         self,

@@ -88,6 +88,4 @@ class AIConfigWindow(SemanticAnalysisConfigDialogBase):
         self._build_semantic_sections()
 
     def on_click_ok_btn(self):
-        config = self.get_default_config()
-        self.accept()
-        return config
+        self.accept_config(self.get_default_config())

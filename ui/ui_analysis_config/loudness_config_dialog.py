@@ -859,6 +859,4 @@ class LoudnessConfigWindow(SemanticAnalysisConfigDialogBase):
     def on_click_ok_btn(self):
         if not self.panel.validate_limits():
             return
-        self._accepted_config = self.get_default_config()
-        self.accept()
-        return self._accepted_config
+        self.accept_config(self.get_default_config())
