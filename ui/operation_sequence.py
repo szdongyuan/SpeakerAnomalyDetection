@@ -65,6 +65,11 @@ SUPPORTED_ANALYSIS_ITEMS = [
     "快速傅里叶变换 (FFT) ",
     "响度 (LOUD) ",
 ]
+PENDING_ANALYSIS_ITEMS = [
+    "尖锐度 (SHRP) ",
+    "粗糙度 (ROUGH) ",
+    "AI 分析 (AI) ",
+]
 SUPPORTED_ANALYSIS_TYPES = {
     "SPL",
     "Spec",
@@ -454,6 +459,8 @@ class AnalysisModelSelect(ConfigDialogBase):
                 QMessageBox.information(self, "提示", "请选择要添加的子项")
                 return
             text = index.data()
+            if text in PENDING_ANALYSIS_ITEMS:
+                return
             self.select_list.set_new_analysis_config(text)
             self.select_list.data_struct.add_stft_or_fft_count(text)
 
@@ -496,7 +503,7 @@ class AnalysisModelSelect(ConfigDialogBase):
         self.analysis_model.appendRow(sound_item)
 
         analysis_item_item = QStandardItem("音频分析")
-        analysis_items = SUPPORTED_ANALYSIS_ITEMS
+        analysis_items = SUPPORTED_ANALYSIS_ITEMS + PENDING_ANALYSIS_ITEMS
         for item in analysis_items:
             list_item = QStandardItem(item.lstrip())
             list_item.setData(item, Qt.DisplayRole)
@@ -1617,7 +1624,7 @@ class AnalysisModel(QStandardItemModel):
         if not index.isValid():
             return default_flags
 
-        if not index.parent().isValid():
+        if not index.parent().isValid() or index.data() in PENDING_ANALYSIS_ITEMS:
             return default_flags & ~Qt.ItemIsDragEnabled
 
         return default_flags | Qt.ItemIsDragEnabled
