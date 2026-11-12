@@ -34,7 +34,6 @@ EXPECTED_ROUGHNESS_CASES = {
         "summary": {
             "r_mean_asper": 0.001298066552392956,
             "r_max_asper": 0.0012980665524627672,
-            "r5_asper": 0.0012980665524300054,
         },
     },
     "am_70hz_1khz": {
@@ -57,7 +56,6 @@ EXPECTED_ROUGHNESS_CASES = {
         "summary": {
             "r_mean_asper": 0.553998364427958,
             "r_max_asper": 0.5539983644279887,
-            "r5_asper": 0.5539983644279769,
         },
     },
     "two_tone": {
@@ -80,7 +78,6 @@ EXPECTED_ROUGHNESS_CASES = {
         "summary": {
             "r_mean_asper": 0.0019361762414025912,
             "r_max_asper": 0.001936176243951268,
-            "r5_asper": 0.0019361762429612151,
         },
     },
 }
@@ -137,7 +134,6 @@ def test_roughness_daniel_weber_regression(case_name):
 
     assert result.summary.r_mean_asper == pytest.approx(expected["summary"]["r_mean_asper"], abs=5e-15)
     assert result.summary.r_max_asper == pytest.approx(expected["summary"]["r_max_asper"], abs=5e-15)
-    assert result.summary.r5_asper == pytest.approx(expected["summary"]["r5_asper"], abs=5e-15)
 
 
 def test_roughness_project_backend_matches_mosqito_reference_when_available():

@@ -12,8 +12,6 @@ from typing import Dict
 
 import numpy as np
 
-from .stat_utils import iso_c_percentile
-
 from consts.acoustic_analysis.specific_consts.roughness_consts import (
     DEFAULT_ROUGHNESS_OVERLAP,
     MOSQITO_ROUGHNESS_MODEL_NAME,
@@ -47,7 +45,6 @@ class RoughnessSummary:
 
     r_mean_asper: float
     r_max_asper: float
-    r5_asper: float
 
 
 @dataclass(frozen=True)
@@ -417,11 +414,10 @@ def _build_summary(roughness: np.ndarray) -> RoughnessSummary:
     values = np.asarray(roughness, dtype=np.float64)
     values = values[np.isfinite(values)]
     if values.size == 0:
-        return RoughnessSummary(float("nan"), float("nan"), float("nan"))
+        return RoughnessSummary(float("nan"), float("nan"))
     return RoughnessSummary(
         r_mean_asper=float(np.mean(values)),
         r_max_asper=float(np.max(values)),
-        r5_asper=iso_c_percentile(values, percentile=5),
     )
 
 
