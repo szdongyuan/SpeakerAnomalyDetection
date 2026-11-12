@@ -1,6 +1,6 @@
 """Caller-fed plot grid with fixed, horizontally synchronized column controls."""
 
-from dataclasses import dataclass, fields
+from dataclasses import fields
 from html import escape
 from numbers import Integral
 
@@ -19,6 +19,9 @@ from consts.ui_style_const import (
     main_window_tooltip_style, toolbar_combobox_style,
 )
 from ui.sequence.station_plot_cell import StationPlotCell
+from ui.sequence.condition_plot_cell import ConditionPlotCell
+from ui.sequence.condition_heatmap_cell import ConditionHeatmapCell
+from ui.sequence.workbench_plot_display import ConditionPlotDisplay, WorkbenchPlotCellDisplay
 
 
 _CONTROL_VERTICAL_PADDING = 8
@@ -45,16 +48,6 @@ class _PlotHorizontalScrollBar(QScrollBar):
                 target = QRect(0, 0, 12, 14)
                 target.moveCenter(button.center())
                 painter.drawPixmap(target, arrow)
-
-
-@dataclass(frozen=True)
-class WorkbenchPlotCellDisplay:
-    title: str = ''
-    unit: str = ''
-    first_condition: str = ''
-    second_condition: str = ''
-    warning: str = ''
-    warning_detail: str = ''
 
 
 class _ElidedLabel(QLabel):
@@ -134,6 +127,7 @@ class _ColumnComboBox(QComboBox):
 class _ColumnControls(QWidget):
     def __init__(self, column, marks_visible, parent):
         super().__init__(parent)
+        self._name_only = False
         self.setObjectName(f'stationColumn{column}')
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.name = _ElidedLabel(self)
@@ -181,9 +175,19 @@ class _ColumnControls(QWidget):
         self.set_mark_buttons_visible(marks_visible)
 
     def set_mark_buttons_visible(self, visible):
-        self.ok.setVisible(visible)
-        self.ng.setVisible(visible)
+        self.ok.setVisible(visible and not self._name_only)
+        self.ng.setVisible(visible and not self._name_only)
         self._resize_combo()
+
+    def show_name_only(self):
+        self._name_only = True
+        self.name.setAlignment(Qt.AlignCenter)
+        self.name.setStyleSheet(
+            f'QLabel {{ font-family: {MAIN_UI_SMALL_FONT_FAMILY}; '
+            'font-size: 16px; font-weight: normal; }')
+        for control in (self.combo, self.play, self.ok, self.ng):
+            control.hide()
+        self.layout().setContentsMargins(8, 4, 8, 4)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -347,6 +351,9 @@ class StationPlotGrid(QWidget):
 
         self._resize_grid(2, len(names))
         self._set_workbench_column_controls(names)
+        for key, cell in list(self._cells.items()):
+            if isinstance(cell, ConditionPlotCell):
+                self._replace_cell(key, StationPlotCell(self._content, row=key[0], column=key[1]))
         for cell in self._cells.values():
             cell.configure_plot(kind='curve')
             cell.clear_plot()
@@ -383,6 +390,10 @@ class StationPlotGrid(QWidget):
                 if not isinstance(display, WorkbenchPlotCellDisplay):
                     raise TypeError(f'{context}: {location} must be a WorkbenchPlotCellDisplay')
                 for field in display_fields:
+                    if field.name == 'condition_plot':
+                        if display.condition_plot is not None and not isinstance(display.condition_plot, ConditionPlotDisplay):
+                            raise TypeError(f'{context}: {location}.condition_plot must be ConditionPlotDisplay')
+                        continue
                     if not isinstance(getattr(display, field.name), str):
                         raise TypeError(f'{context}: {location}.{field.name} must be a string')
             rows.append(row)
@@ -390,8 +401,16 @@ class StationPlotGrid(QWidget):
         self._resize_grid(row_count, column_count)
         self._set_workbench_column_controls(names)
         empty_display = WorkbenchPlotCellDisplay()
-        for (row, column), cell in self._cells.items():
+        for (row, column), cell in list(self._cells.items()):
             display = rows[row][column] if names[column] else empty_display
+            if display.condition_plot is not None:
+                cell_type = ConditionHeatmapCell if display.condition_plot.settings['chart_type'] == 'heatmap' else ConditionPlotCell
+                self._replace_cell((row, column), cell_type(
+                    display, self._content, row=row, column=column, station_name=names[column]))
+                continue
+            if isinstance(cell, ConditionPlotCell):
+                cell = StationPlotCell(self._content, row=row, column=column)
+                self._replace_cell((row, column), cell)
             cell.configure_plot(
                 kind='curve', title=display.title, right_text=display.warning,
                 right_text_detail=display.warning_detail, subheader_left_text=display.unit,
@@ -399,11 +418,36 @@ class StationPlotGrid(QWidget):
                 subheader_second_half_text=display.second_condition,
             )
             cell.clear_plot()
+        self._resize_contents()
+
+    def _replace_cell(self, key, replacement):
+        old = self._cells[key]
+        replacement.setObjectName(old.objectName())
+        replacement.setAttribute(Qt.WA_StyledBackground, True)
+        replacement.setStyleSheet(old.styleSheet())
+        margins = old.layout().contentsMargins()
+        replacement.layout().setContentsMargins(margins)
+        self._plot_layout.removeWidget(old)
+        old.dispose()
+        old.hide()
+        old.setParent(None)
+        old.deleteLater()
+        self._cells[key] = replacement
+        self._plot_layout.addWidget(replacement, *key)
+        replacement.show()
+
+    def closeEvent(self, event):
+        for cell in self._cells.values():
+            if isinstance(cell, ConditionPlotCell):
+                cell.close_detail()
+        super().closeEvent(event)
 
     def _set_workbench_column_controls(self, names):
+        self._header_scroll.setFixedHeight(36)
         for column, name in enumerate(names):
             self._headers[column].name.set_full_text(name, plain_text=True)
             self.set_column_options(column, ())
+            self._headers[column].show_name_only()
 
     def _resize_grid(self, rows, columns):
         if (rows, columns) == (self._rows, self._columns):
@@ -412,10 +456,7 @@ class StationPlotGrid(QWidget):
             if key[0] >= rows or key[1] >= columns:
                 cell = self._cells.pop(key)
                 self._plot_layout.removeWidget(cell)
-                cell.clear_plot()
-                # pyqtgraph.close detaches the widget from its Qt parent.
-                cell.plot_widget.close()
-                cell.plot_widget.deleteLater()
+                cell.dispose()
                 cell.hide()
                 cell.setParent(None)
                 cell.deleteLater()
@@ -548,6 +589,24 @@ class StationPlotGrid(QWidget):
     def set_curve_data(self, row, column, series):
         self._cell(row, column, 'set_curve_data').set_curve_data(series)
 
+    def set_condition_curve_data(self, row, column, condition_id, series, *, status='', detail='', summaries=()):
+        cell = self._cell(row, column, 'set_condition_curve_data')
+        if not isinstance(cell, ConditionPlotCell):
+            raise ValueError('当前图框未配置工况分区')
+        cell.set_condition_curve_data(condition_id, series, status=status, detail=detail, summaries=summaries)
+
+    def set_condition_heatmap_data(self, row, column, condition_id, heatmap, *, status='', detail=''):
+        cell = self._cell(row, column, 'set_condition_heatmap_data')
+        if not isinstance(cell, ConditionHeatmapCell):
+            raise ValueError('目标图框不是工况时频图')
+        cell.set_condition_heatmap_data(condition_id, heatmap, status=status, detail=detail)
+
+    def set_condition_state(self, row, column, condition_id, status, detail='', *, clear=False):
+        cell = self._cell(row, column, 'set_condition_state')
+        if not isinstance(cell, ConditionPlotCell):
+            raise ValueError('当前图框未配置工况分区')
+        cell.set_condition_state(condition_id, status, detail, clear=clear)
+
     def set_heatmap_data(self, row, column, values, *, extent=None, levels=None, colormap='viridis'):
         self._cell(row, column, 'set_heatmap_data').set_heatmap_data(
             values, extent=extent, levels=levels, colormap=colormap)
@@ -569,13 +628,15 @@ class StationPlotGrid(QWidget):
             return
         self._resizing_contents = True
         viewport = self._scroll.viewport()
-        width = max(self._columns * 280, viewport.width())
-        height = max(self._rows * 180 if self._columns else 0, viewport.height())
+        column_width = max((cell.minimumWidth() for cell in self._cells.values()), default=280)
+        row_height = max((cell.minimumHeight() for cell in self._cells.values()), default=180)
+        width = max(self._columns * column_width, viewport.width())
+        height = max(self._rows * row_height if self._columns else 0, viewport.height())
         self._content.setFixedSize(width, height)
         # Leave the same gutter as the body's vertical scrollbar. Header and
         # body then have identical viewport widths and horizontal scroll ranges.
         gutter = self._scroll.width() - viewport.width()
         self._header_row_layout.setContentsMargins(0, 0, gutter, 0)
-        self._header_content.setFixedSize(width, _CONTROL_ROW_HEIGHT)
+        self._header_content.setFixedSize(width, self._header_scroll.height())
         self._header_scroll.horizontalScrollBar().setValue(self._scroll.horizontalScrollBar().value())
         self._resizing_contents = False

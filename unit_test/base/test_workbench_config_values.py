@@ -202,7 +202,7 @@ def test_values_have_only_their_owned_fields_and_share_same_queue_parameters():
     }
     assert set(vars(recording)) == {"context", "parameters_by_queue"}
     assert set(vars(analysis)) == {"context", "test_queues"}
-    assert set(vars(ui)) == {"layout", "preview_time_modes"}
+    assert set(vars(ui)) == {"layout", "preview_time_modes", "condition_durations"}
     shared = replace(recording.context.conditions[1], test_queue="测试队列A")
     same_queue = replace(recording, context=replace(recording.context, conditions=(recording.context.conditions[0], shared)))
     assert same_queue.parameters_for("c1") is same_queue.parameters_for("c2")

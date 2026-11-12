@@ -207,10 +207,10 @@ def workbench(qt_app, tmp_path, monkeypatch, config_files, request):
         write_json(config_files["product"], product)
     other_path = tmp_path / "other.json"
     other_queue = [{"seq1": {"analysis_list": {"display_sequence": []}}}]
-    if startup == "selected removed AI queue":
+    if startup == "selected malformed queue":
         other_queue[0]["seq1"] = {
             "acq": {"mode": "RECORD_ONLY", "detail": {"sample_rate": 48000}},
-            "analysis_list": {"display_sequence": ["AI"], "AI": {"type": "AI"}},
+            "analysis_list": {"display_sequence": ["Invalid"], "Invalid": {"type": None}},
         }
         queue_registry["using_config_path"] = os.path.relpath(other_path, config_files["queues"].parent)
     write_json(other_path, other_queue)
@@ -325,12 +325,11 @@ def workbench(qt_app, tmp_path, monkeypatch, config_files, request):
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
-def _assert_mark_buttons(grid, *, visible):
+def _assert_station_headers_name_only(grid):
     assert grid._headers
     for header in grid._headers.values():
-        assert header.ok.isHidden() is (not visible)
-        assert header.ng.isHidden() is (not visible)
-        assert not header.play.isHidden()
+        assert not header.name.isHidden()
+        assert all(control.isHidden() for control in (header.combo, header.play, header.ok, header.ng))
 
 
 @pytest.mark.parametrize("workbench", ["missing layout"], indirect=True)
@@ -374,7 +373,7 @@ def test_workbench_ignores_mode_preferences_and_keeps_results_on_hidden_combo_ch
     workbench.load_mode.assert_not_called()
     workbench.save_mode.assert_not_called()
     assert combo.isHidden() and combo.focusPolicy() == Qt.NoFocus
-    _assert_mark_buttons(grid, visible=False)
+    _assert_station_headers_name_only(grid)
     assert sequence.count_board.mode == workbench.legacy_recorded_info.get("sequence_mode", "mark")
     grid.set_curve_data(0, 0, [{"x": [1, 2], "y": [3, 4]}])
     sequence.left_panel.set_station_results(1, "OK", "NG")
@@ -384,7 +383,7 @@ def test_workbench_ignores_mode_preferences_and_keeps_results_on_hidden_combo_ch
     monkeypatch.setattr(sequence, "_persist_sequence_page_state", persist_legacy)
     for mode in ("mark", "test", "mark"):
         combo.setCurrentIndex(combo.findData(mode))
-        _assert_mark_buttons(grid, visible=False)
+        _assert_station_headers_name_only(grid)
     curve, = grid._cells[0, 0].plot_widget.getPlotItem().listDataItems()
     x, y = curve.getData()
     np.testing.assert_array_equal(x, [1, 2])
@@ -396,15 +395,15 @@ def test_workbench_ignores_mode_preferences_and_keeps_results_on_hidden_combo_ch
     sequence.count_board.on_mark_btn_clicked()
     legacy_mode_changed.assert_called_once()
     persist_legacy.assert_called_once_with("mark")
-    _assert_mark_buttons(grid, visible=False)
+    _assert_station_headers_name_only(grid)
     for _ in range(2):
         workbench.window.on_workbench_configuration_committed()
-        _assert_mark_buttons(grid, visible=False)
+        _assert_station_headers_name_only(grid)
     for legacy_mode in ("mark", "test"):
         workbench.legacy_recorded_info["sequence_mode"] = legacy_mode
         reopened = workbench.open_window().sequence_window
         assert reopened.count_board.mode == legacy_mode
-        _assert_mark_buttons(reopened.plot_grid, visible=False)
+        _assert_station_headers_name_only(reopened.plot_grid)
         assert reopened.condition_mode_combobox.isHidden()
     workbench.load_mode.assert_not_called()
     workbench.save_mode.assert_not_called()
@@ -418,7 +417,7 @@ def test_workbench_hidden_marks_survive_zero_columns_growth_and_refresh(workbenc
     sequence = window.sequence_window
     combo, grid = sequence.condition_mode_combobox, sequence.plot_grid
     assert len(grid._headers) == 2
-    _assert_mark_buttons(grid, visible=False)
+    _assert_station_headers_name_only(grid)
     registry = json.loads(files["programs"].read_text(encoding="utf-8"))
     write_json(files["programs"], {"active_file": None, "configs": []})
     window.on_workbench_configuration_committed()
@@ -433,10 +432,10 @@ def test_workbench_hidden_marks_survive_zero_columns_growth_and_refresh(workbenc
     for _ in range(2):
         window.on_workbench_configuration_committed()
         assert len(grid._headers) == 3
-        _assert_mark_buttons(grid, visible=False)
+        _assert_station_headers_name_only(grid)
     reopened = workbench.open_window().sequence_window
     assert len(reopened.plot_grid._headers) == 3
-    _assert_mark_buttons(reopened.plot_grid, visible=False)
+    _assert_station_headers_name_only(reopened.plot_grid)
     workbench.load_mode.assert_not_called()
     workbench.save_mode.assert_not_called()
     assert not workbench.preference_path.exists()
@@ -662,11 +661,11 @@ def test_toolbar_product_selection_hides_marks_and_preserves_independent_queue(w
     sequence.condition_mode_combobox.setCurrentIndex(sequence.condition_mode_combobox.findData("mark"))
     queue_path = sequence.using_config_path
     sequence.using_file_combobox.setCurrentIndex(sequence.using_file_combobox.findData(second.name))
-    _assert_mark_buttons(sequence.plot_grid, visible=False)
+    _assert_station_headers_name_only(sequence.plot_grid)
     assert sequence.using_config_path == queue_path
     reopened = workbench.open_window().sequence_window
     assert reopened.using_file_combobox.currentData() == second.name
-    _assert_mark_buttons(reopened.plot_grid, visible=False)
+    _assert_station_headers_name_only(reopened.plot_grid)
     workbench.load_mode.assert_not_called()
     workbench.save_mode.assert_not_called()
     assert ((path.read_bytes(), path.stat().st_mtime_ns) if path.exists() else None) == saved
@@ -852,8 +851,8 @@ def test_selected_relative_independent_queue_is_available_to_editor(workbench, m
     workbench.load_active.assert_called_once_with()
 
 
-@pytest.mark.parametrize("workbench", ["selected removed AI queue"], indirect=True)
-def test_unsupported_selected_queue_falls_back_to_valid_independent_queue(workbench):
+@pytest.mark.parametrize("workbench", ["selected malformed queue"], indirect=True)
+def test_malformed_selected_queue_falls_back_to_valid_independent_queue(workbench):
     window = workbench.window
     sequence = window.sequence_window
     assert sequence.using_config_path == str(workbench.independent_path)

@@ -371,7 +371,7 @@ def test_workbench_columns_reset_same_size_results_and_release_all_in_empty_stat
     grid.show_workbench_columns(("恢复工位",))
     assert set(cells(grid)) == {(0, 0), (1, 0)}
     assert grid.findChild(QLabel, "stationName0").text() == "恢复工位"
-    assert combo(grid, 0).isVisible() and not combo(grid, 0).isEnabled()
+    assert combo(grid, 0).isHidden() and not combo(grid, 0).isEnabled()
 
 
 def test_workbench_column_header_shows_markup_as_literal_text(grid, qt_app):

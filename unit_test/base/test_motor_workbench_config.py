@@ -300,17 +300,31 @@ def test_load_active_preserves_layout_and_exports_independent_process_configs(re
 
 
 def test_default_layout_is_loaded_from_the_application_root(config_files, tmp_path, monkeypatch):
+    from consts.running_consts import DEFAULT_DIR
+    from unit_test.base.workbench_plot_fixtures import template_layout
+
+    expected_path = Path(DEFAULT_DIR) / 'ui' / 'ui_config' / 'motor_workbench_plot_layout.json'
+    fixture_json = json.dumps(template_layout(), ensure_ascii=False)
+    original_read = Path.read_text
+    reads = []
+
+    def read_isolated_layout(path, *args, **kwargs):
+        reads.append(path)
+        if path == expected_path:
+            return fixture_json
+        return original_read(path, *args, **kwargs)
+
+    # Exercise the real default path without depending on ignored user settings.
+    monkeypatch.setattr(Path, 'read_text', read_isolated_layout)
     monkeypatch.chdir(tmp_path)
     repository = MotorWorkbenchConfigRepository(config_files["programs"], config_files["queues"])
 
     layout = repository.load_active().ui.layout
 
-    assert (layout.rows, layout.columns) == (2, 4)
+    assert reads.count(expected_path) == 1
+    assert (layout.rows, layout.columns) == (1, 4)
     assert tuple((cell.title, cell.analysis_item, cell.analysis_type) for cell in layout.cells[0]) == (
-        ("声压级（SPL）1", "声压级", "SPL"),
-    ) * 4
-    assert tuple((cell.title, cell.analysis_item, cell.analysis_type) for cell in layout.cells[1]) == (
-        ("快速傅里叶变换 (FFT) 1", "快速傅里叶变换 (FFT) 1", "FFT"),
+        ("声压级", "声压级", "SPL"),
     ) * 4
 
 
