@@ -13,7 +13,8 @@ from PyQt5.QtWidgets import (
 
 from consts.running_consts import DEFAULT_DIR
 from consts.ui_style_const import (
-    MAIN_UI_SMALL_FONT_FAMILY, TOOLBAR_ICON_BUTTON_HEIGHT, TOOLBAR_ICON_BUTTON_WIDTH,
+    MAIN_UI_SMALL_FONT_FAMILY, MOTOR_WORKBENCH_SCROLLBAR_STYLE,
+    TOOLBAR_ICON_BUTTON_HEIGHT, TOOLBAR_ICON_BUTTON_WIDTH,
     main_window_tooltip_style, toolbar_combobox_style,
 )
 from ui.sequence.station_plot_cell import StationPlotCell
@@ -256,6 +257,9 @@ class StationPlotGrid(QWidget):
         self._scroll = QScrollArea(self)
         self._scroll.setObjectName('stationPlotScroll')
         self._scroll.setFrameShape(QFrame.NoFrame)
+        scrollbar = self._scroll.horizontalScrollBar()
+        scrollbar.setObjectName('workbenchPlotHorizontalScrollBar')
+        scrollbar.setStyleSheet(MOTOR_WORKBENCH_SCROLLBAR_STYLE)
         self._content = QWidget()
         self._plot_layout = QGridLayout(self._content)
         self._plot_layout.setContentsMargins(0, 0, 0, 0)

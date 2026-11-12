@@ -42,6 +42,62 @@ COLOR_OK = "#16A34A"
 COLOR_NG = "#DC2626"
 
 
+MOTOR_WORKBENCH_SCROLLBAR_STYLE = """
+QScrollBar#workbenchStationVerticalScrollBar:vertical {
+    background: #fafafa; width: 14px; margin: 14px 0px; border: none;
+}
+QScrollBar#workbenchStationVerticalScrollBar::handle:vertical {
+    background: #8b8b8b; border-radius: 4px; margin: 0px 3px; min-height: 20px;
+}
+QScrollBar#workbenchStationVerticalScrollBar::sub-line:vertical {
+    background: #fafafa; border: none; height: 14px;
+    subcontrol-origin: margin; subcontrol-position: top;
+}
+QScrollBar#workbenchStationVerticalScrollBar::add-line:vertical {
+    background: #fafafa; border: none; height: 14px;
+    subcontrol-origin: margin; subcontrol-position: bottom;
+}
+QScrollBar#workbenchStationVerticalScrollBar::up-arrow:vertical {
+    image: url(:/qt-project.org/styles/commonstyle/images/titlebar-shade-16.png);
+    width: 14px; height: 12px;
+}
+QScrollBar#workbenchStationVerticalScrollBar::down-arrow:vertical {
+    image: url(:/qt-project.org/styles/commonstyle/images/titlebar-unshade-16.png);
+    width: 14px; height: 12px;
+}
+QScrollBar#workbenchStationVerticalScrollBar::sub-page:vertical,
+QScrollBar#workbenchStationVerticalScrollBar::add-page:vertical {
+    background: #fafafa;
+}
+QScrollBar#workbenchPlotHorizontalScrollBar:horizontal {
+    background: #fafafa; height: 14px; margin: 0px 14px; border: none;
+}
+QScrollBar#workbenchPlotHorizontalScrollBar::handle:horizontal {
+    background: #8b8b8b; border-radius: 4px; margin: 3px 0px; min-width: 20px;
+}
+QScrollBar#workbenchPlotHorizontalScrollBar::sub-line:horizontal {
+    background: #fafafa; border: none; width: 14px;
+    subcontrol-origin: margin; subcontrol-position: left;
+}
+QScrollBar#workbenchPlotHorizontalScrollBar::add-line:horizontal {
+    background: #fafafa; border: none; width: 14px;
+    subcontrol-origin: margin; subcontrol-position: right;
+}
+QScrollBar#workbenchPlotHorizontalScrollBar::left-arrow:horizontal {
+    image: url("@workbench-assets@workbench_scrollbar_left.svg");
+    width: 6px; height: 8px;
+}
+QScrollBar#workbenchPlotHorizontalScrollBar::right-arrow:horizontal {
+    image: url("@workbench-assets@workbench_scrollbar_right.svg");
+    width: 6px; height: 8px;
+}
+QScrollBar#workbenchPlotHorizontalScrollBar::sub-page:horizontal,
+QScrollBar#workbenchPlotHorizontalScrollBar::add-page:horizontal {
+    background: #fafafa;
+}
+""".replace("@workbench-assets@", DEFAULT_DIR + "ui/sequence/assets/")
+
+
 def _get_font_scale() -> float:
     app = QApplication.instance()
     if app is None:
@@ -1454,7 +1510,7 @@ QWidget#motorInformationSummaryPanel QWidget {
 QWidget#motorInformationSummaryPanel QLabel,
 QWidget#motorInformationSummaryPanel QPushButton {
     font-family: $MAIN_UI_SMALL_FONT_FAMILY;
-    font-size: 12px;
+    font-size: 15px;
     font-weight: normal;
     background: transparent;
     color: #617183;
@@ -1463,11 +1519,11 @@ QWidget#motorInformationSummaryPanel QPushButton {
 }
 QWidget#motorInformationSummaryPanel QLabel#summaryTitle {
     color: #293b4d;
-    font-size: 14px;
+    font-size: 17px;
     font-weight: 500;
 }
 QWidget#motorInformationSummaryPanel QLabel#summaryDate {
-    font-size: 11px;
+    font-size: 14px;
 }
 QWidget#motorInformationSummaryPanel QPushButton#summaryDetails {
     color: #246bed;
@@ -1480,7 +1536,7 @@ QWidget#motorInformationSummaryPanel QPushButton#summaryDetails:focus {
 QWidget#motorInformationSummaryPanel QLabel#summaryTotal,
 QWidget#motorInformationSummaryPanel QLabel#summaryRate {
     color: #293b4d;
-    font-size: 15px;
+    font-size: 18px;
     font-weight: 500;
 }
 QWidget#motorInformationSummaryPanel QWidget#summaryCounts {
@@ -1492,7 +1548,7 @@ QWidget#motorInformationSummaryPanel QWidget[summarySeparated="true"] {
 QWidget#motorInformationSummaryPanel QLabel#summaryOk,
 QWidget#motorInformationSummaryPanel QLabel#summaryNg,
 QWidget#motorInformationSummaryPanel QLabel#summaryUnmarked {
-    font-size: 23px;
+    font-size: 26px;
     font-weight: 500;
     color: #617183;
 }

@@ -9,7 +9,9 @@ from PyQt5.QtWidgets import (
     QSizePolicy, QStyle, QStyleOption, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from consts.ui_style_const import MOTOR_STATION_PANEL_STYLE, MOTOR_STATION_STATUS_COLORS
+from consts.ui_style_const import (
+    MOTOR_STATION_PANEL_STYLE, MOTOR_STATION_STATUS_COLORS, MOTOR_WORKBENCH_SCROLLBAR_STYLE,
+)
 
 
 class _FourColumns:
@@ -214,6 +216,9 @@ class MotorStationTestPanel(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scrollbar = self._scroll.verticalScrollBar()
+        scrollbar.setObjectName("workbenchStationVerticalScrollBar")
+        scrollbar.setStyleSheet(MOTOR_WORKBENCH_SCROLLBAR_STYLE)
         self._content = QWidget()
         self._content.setObjectName("stationContent")
         self._station_layout = QVBoxLayout(self._content)

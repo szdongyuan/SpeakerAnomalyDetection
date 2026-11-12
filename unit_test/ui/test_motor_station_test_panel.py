@@ -3,8 +3,8 @@
 import math
 
 import pytest
-from PyQt5.QtCore import QPoint, QRect, Qt
-from PyQt5.QtGui import QColor, QFont, QImage, QPainter
+from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QRect, Qt
+from PyQt5.QtGui import QColor, QFont, QImage, QMouseEvent, QPainter
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import (
     QAbstractButton, QAbstractItemView, QLabel, QScrollArea, QStyle, QStyleOption,
@@ -48,6 +48,48 @@ def table(panel, station=1):
 
 def header(panel, station=1):
     return panel.findChild(QAbstractButton, f"stationHeader{station}")
+
+
+def test_station_scrollbar_reference_pixels_and_native_controls(panel, qt_app, styled_host):
+    styled_host.resize(340, 400)
+    panel.set_station_count(18)
+    qt_app.processEvents()
+    QTest.qWait(10)
+    scroll = panel.findChild(QScrollArea, "stationScroll")
+    bar = scroll.verticalScrollBar()
+    assert scroll.verticalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+    assert bar.isVisible() and bar.maximum() > 0
+    assert bar.width() == 14
+    bar.setValue(bar.maximum() // 2)
+    image = bar.grab().toImage()
+    gray = [(x, y) for y in range(14, image.height() - 14)
+            for x in range(image.width()) if image.pixelColor(x, y).name() == "#8b8b8b"]
+    assert gray
+    left, right = min(x for x, _ in gray), max(x for x, _ in gray)
+    top, bottom = min(y for _, y in gray), max(y for _, y in gray)
+    assert (left, right) == (3, 10)
+    assert bottom - top + 1 >= 20
+    middle = (top + bottom) // 2
+    assert all(image.pixelColor(x, middle).name() == "#8b8b8b" for x in range(3, 11))
+    assert image.pixelColor(3, top).name() != "#8b8b8b"  # rounded end
+    assert image.pixelColor(0, middle).name() == "#fafafa"
+    assert image.pixelColor(7, 15).name() == "#fafafa"  # unoccupied track
+    before = bar.value()
+    QTest.mouseClick(bar, Qt.LeftButton, pos=QPoint(7, bar.height() - 7))
+    assert bar.value() == before + bar.singleStep()
+    QTest.mouseClick(bar, Qt.LeftButton, pos=QPoint(7, 7))
+    assert bar.value() == before
+    QTest.mousePress(bar, Qt.LeftButton, pos=QPoint(7, middle))
+    # Offscreen QTest.mouseMove moves the cursor without delivering a drag event.
+    QCoreApplication.sendEvent(bar, QMouseEvent(
+        QEvent.MouseMove, QPointF(7, middle + 40), Qt.NoButton, Qt.LeftButton, Qt.NoModifier,
+    ))
+    QTest.mouseRelease(bar, Qt.LeftButton, pos=QPoint(7, middle + 40))
+    assert bar.value() > before
+    panel.set_station_count(0)
+    qt_app.processEvents()
+    QTest.qWait(10)
+    assert not bar.isVisible() and bar.maximum() == 0
 
 
 def test_initial_zero_and_fixed_general_header(panel):
