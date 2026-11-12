@@ -1,4 +1,4 @@
-"""Contracts of the unchanged snapshot algorithms with the existing loudness API."""
+"""Contracts of the migrated algorithms with the existing loudness API."""
 
 import numpy as np
 import pytest
@@ -84,4 +84,5 @@ def test_roughness_minimum_frame_and_silence():
     result = compute_roughness_daniel_weber(np.zeros(9600), 48000)
     np.testing.assert_array_equal(result.roughness_asper, [0.0])
     assert result.specific_roughness_asper_per_bark.shape == (47, 1)
-    assert result.summary.r5_asper == 0.0
+    assert result.summary.r_mean_asper == 0.0
+    assert result.summary.r_max_asper == 0.0
