@@ -56,7 +56,7 @@ def test_fft_is_registered_and_dispatches_its_config_dialog(qapp):
     assert "快速傅里叶变换 (FFT) " in SUPPORTED_ANALYSIS_ITEMS
 
     dialog = OptionList.create_config_dialog(
-        SimpleNamespace(mic_channels=[0, 1]),
+        SimpleNamespace(mic_channels=[0, 1], wav_channels=None, config=[]),
         None,
         _manager(),
         "快速傅里叶变换 (FFT) 1",

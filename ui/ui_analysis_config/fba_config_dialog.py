@@ -292,5 +292,4 @@ class FbaConfigWindow(SemanticAnalysisConfigDialogBase):
     def on_click_ok_btn(self):
         if not self._validate_form():
             return
-        self.accept()
-        return self.get_default_config()
+        self.accept_config(self.get_default_config())

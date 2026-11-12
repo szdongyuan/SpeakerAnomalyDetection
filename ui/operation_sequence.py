@@ -1024,7 +1024,7 @@ class OptionList(QListView):
                 return
             model.setWindowTitle(name)
             if model.exec_() == QDialog.Accepted:
-                config_data = model.on_click_ok_btn()
+                config_data = model.get_accepted_config()
                 self.add_config(name, config_data)
 
     def create_config_dialog(

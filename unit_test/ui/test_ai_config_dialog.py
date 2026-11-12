@@ -23,7 +23,8 @@ def test_no_model_draft_can_be_saved_without_mutating_source(ui_qapp):
     try:
         assert dialog.model_status_label.isHidden()
         assert dialog.analyse_model_combo_box.count() == 1
-        assert dialog.on_click_ok_btn() == {"analysis_channel": 2, "analyse_model_name": ""}
+        dialog.on_click_ok_btn()
+        assert dialog.get_accepted_config() == {"analysis_channel": 2, "analyse_model_name": ""}
         assert dialog.result() == QDialog.Accepted
         assert dialog.config_manager.config == {"AI 1": {"analysis_channel": 2}}
     finally:

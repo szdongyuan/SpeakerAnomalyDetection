@@ -307,7 +307,8 @@ def test_sequence_json_restart_restores_offsets_without_accumulating(qapp, tmp_p
     )
     _limit_data_equal(first_dialog.threshold_widget.limit_data, expected_effective)
 
-    accepted_config = first_dialog.on_click_ok_btn()
+    first_dialog.on_click_ok_btn()
+    accepted_config = first_dialog.get_accepted_config()
     assert accepted_config is not None
     first_analysis_list[config_name].update(accepted_config)
     assert LoadUiConfig.save_sequence_config_to_json(
@@ -356,7 +357,8 @@ def test_switching_named_configs_keeps_offset_state_isolated(qapp):
     dialog_a = SplConfigWindow(manager, config_a, available_channels=[0])
     dialog_a.threshold_widget.csv_upper_offset_spin.setValue(2.0)
     dialog_a.threshold_widget.csv_lower_offset_spin.setValue(-3.0)
-    accepted_a = dialog_a.on_click_ok_btn()
+    dialog_a.on_click_ok_btn()
+    accepted_a = dialog_a.get_accepted_config()
     assert accepted_a is not None
     manager.config[config_a].update(accepted_a)
 

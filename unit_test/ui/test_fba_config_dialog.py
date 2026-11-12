@@ -60,7 +60,8 @@ def test_fba_is_registered_and_dispatches_its_config_dialog(qapp):
     dialog = OptionList.create_config_dialog(
         SimpleNamespace(
             mic_channels=[0, 1],
-            config=[SimpleNamespace(mode="RECORD_ONLY")],
+            wav_channels=None,
+            config=[SimpleNamespace(mode="RECORD_ONLY", analysis_channel_basis="hardware")],
             default_logger=SimpleNamespace(warning=lambda message: None),
         ),
         None,

@@ -611,6 +611,4 @@ class ReferenceSpectrumConfigWindow(SemanticAnalysisConfigDialogBase):
     def on_click_ok_btn(self):
         if not self.validate(save_reference_sample_data=True):
             return
-        config_data = self.get_default_config()
-        self.accept()
-        return config_data
+        self.accept_config(self.get_default_config())

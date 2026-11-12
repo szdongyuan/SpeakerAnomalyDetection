@@ -235,5 +235,4 @@ class SpecConfigWindow(SemanticAnalysisConfigDialogBase):
         config_data = self.get_default_config()
         if not config_data:
             return
-        self.accept()
-        return config_data
+        self.accept_config(config_data)

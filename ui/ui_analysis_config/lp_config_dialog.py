@@ -192,6 +192,4 @@ class LPConfigWindow(SemanticAnalysisConfigDialogBase):
         self._build_semantic_sections()
 
     def on_click_ok_btn(self):
-        config_data = self.get_default_config()
-        self.accept()
-        return config_data
+        self.accept_config(self.get_default_config())
