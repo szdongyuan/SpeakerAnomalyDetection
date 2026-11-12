@@ -30,10 +30,11 @@ AI 配置窗口支持单通道选择、已登记模型选择、保存默认值�
 
 | 模块 | 职责 |
 | --- | --- |
-| `base/ai_model_catalog.py` | 只读查询既有 `training_model_table`、映射登记字段、检查文件存在性及提供 AI 未就绪原因；不加载模型。 |
-| `ui/ai_model_manager_dialog.py` | 模型列表、详情、选择状态和占位操作提示。 |
-| `ui/ai_model_evaluation_dialog.py` | 评估布局及未接入状态，不生成模拟结果。 |
-| `ui/ai_model_dialog_base.py` | 模型窗口的局部主题、表格及名称绘制。 |
+| `base/ai_model_catalog.py` | 只读查询既有 `training_model_table`、映射登记字段、检查文件存在性；不加载模型。 |
+| `base/analysis_config_validation.py` | 校验 AI 配置，提供缺少模型及推理未接入的执行阻断原因。 |
+| `ui/ai/model_manager_dialog.py` | 模型列表、详情、选择状态和占位操作提示。 |
+| `ui/ai/model_evaluation_dialog.py` | 评估布局及未接入状态，不生成模拟结果。 |
+| `ui/ai/model_dialog_base.py` | 模型窗口的局部主题、表格及名称绘制。 |
 | `ui/ui_analysis_config/ai_config_dialog.py` | 编辑配置草稿，通过注入目录服务获取候选模型。 |
 | 主窗口及队列窗口 | 注入目录服务，绑定菜单权限和配置入口。 |
 | 配置校验、分析输入适配器及执行器 | 区分可保存草稿与可执行配置，阻断尚未实现的 AI 推理。 |

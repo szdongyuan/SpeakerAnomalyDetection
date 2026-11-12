@@ -6,8 +6,8 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QDialog, QLabel
 
 from base.ai_model_catalog import AiModelCatalog, ModelCatalogError, ModelRecord
-from ui.ai_model_evaluation_dialog import AiModelEvaluationDialog
-from ui.ai_model_manager_dialog import AiModelDetailsDialog, AiModelManagerDialog
+from ui.ai.model_evaluation_dialog import AiModelEvaluationDialog
+from ui.ai.model_manager_dialog import AiModelDetailsDialog, AiModelManagerDialog
 
 
 def model_record(**changes):

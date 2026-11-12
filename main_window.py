@@ -952,7 +952,7 @@ class MainWindow(QMainWindow):
 
     def on_ai_model_manager(self):
         from base.ai_model_catalog import AiModelCatalog
-        from ui.ai_model_manager_dialog import AiModelManagerDialog
+        from ui.ai.model_manager_dialog import AiModelManagerDialog
 
         dialog = AiModelManagerDialog(AiModelCatalog(DATABASE_PATH, DEFAULT_DIR), self)
         dialog.exec()

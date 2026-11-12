@@ -6,7 +6,7 @@ import logging
 import numpy as np
 
 from base.analysis_algorithm_adapters import calculate_analysis_instance
-from base.ai_model_catalog import ai_execution_issue
+from base.analysis_config_validation import ai_execution_issue
 
 from .contracts import AnalysisTask
 from .evaluation import evaluate_instance

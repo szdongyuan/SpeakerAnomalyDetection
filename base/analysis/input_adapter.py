@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 import math
 from pathlib import Path
-from base.ai_model_catalog import ai_execution_issue
+from base.analysis_config_validation import ai_execution_issue
 
 from .contracts import (
     AnalysisBatch,
