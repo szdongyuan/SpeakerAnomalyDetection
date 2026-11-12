@@ -171,7 +171,7 @@ def workbench(qt_app, tmp_path, monkeypatch, config_files, request):
         "test_toolbar_product_selection_switch_and_restart",
         "test_toolbar_product_selection_failures_restore_current_product",
         "test_toolbar_product_selection_busy_and_recovery",
-        "test_toolbar_product_selection_preserves_mode_and_independent_queue",
+        "test_toolbar_product_selection_hides_marks_and_preserves_independent_queue",
     )
     if startup in ("unselected", "empty", "missing registry", "unreadable registry"):
         registry = json.loads(config_files["programs"].read_text(encoding="utf-8"))
@@ -290,6 +290,14 @@ def workbench(qt_app, tmp_path, monkeypatch, config_files, request):
 
     monkeypatch.setattr(workbench_toolbar_preferences, "DEFAULT_DIR", tmp_path)
     preference_path = tmp_path / "ui" / "ui_config" / "workbench_toolbar_preferences.ini"
+    if startup in ("preference mark", "preference test", "preference invalid"):
+        preference_path.parent.mkdir(parents=True, exist_ok=True)
+        preference_path.write_bytes(f"[General]\nmode={startup.split()[-1]}\n".encode("ascii"))
+    preference_original = (preference_path.read_bytes(), preference_path.stat().st_mtime_ns) if preference_path.exists() else None
+    load_mode = Mock(wraps=workbench_toolbar_preferences.load_mode)
+    save_mode = Mock(wraps=workbench_toolbar_preferences.save_mode)
+    monkeypatch.setattr(workbench_toolbar_preferences, "load_mode", load_mode)
+    monkeypatch.setattr(workbench_toolbar_preferences, "save_mode", save_mode)
     windows = []
 
     def open_window():
@@ -303,7 +311,8 @@ def workbench(qt_app, tmp_path, monkeypatch, config_files, request):
                               load_active=load_active, independent_path=independent_path, other_path=other_path,
                               hardware=hardware, warning=warning, information=information,
                               repository=repository, manager=manager, save_registry=save_registry, startup=startup,
-                              forbidden=forbidden)
+                              forbidden=forbidden, load_mode=load_mode, save_mode=save_mode,
+                              preference_original=preference_original)
     finally:
         for window in reversed(windows):
             qt_app.removeEventFilter(window.sequence_window)
@@ -356,137 +365,81 @@ def test_startup_without_layout_loads_business_state_and_refresh_recovers_plots(
     workbench.forbidden.assert_not_called()
 
 
-@pytest.mark.parametrize("workbench", ["legacy test mode"], indirect=True)
-def test_workbench_toolbar_mode_switch_and_restart(workbench, monkeypatch):
+@pytest.mark.parametrize("workbench", ["legacy test mode", "preference mark", "preference test", "preference invalid"], indirect=True)
+def test_workbench_ignores_mode_preferences_and_keeps_results_on_hidden_combo_changes(workbench, monkeypatch):
     sequence = workbench.window.sequence_window
     combo, grid = sequence.condition_mode_combobox, sequence.plot_grid
     path = workbench.preference_path
-    assert not combo.isHidden()
-    assert [combo.itemText(i) for i in range(combo.count())] == ["测试", "标记"]
-    assert combo.currentData() == "mark"
-    assert sequence.count_board.mode == "test"
-    _assert_mark_buttons(grid, visible=True)
-    assert not path.exists()
-
+    saved = workbench.preference_original
+    workbench.load_mode.assert_not_called()
+    workbench.save_mode.assert_not_called()
+    assert combo.isHidden() and combo.focusPolicy() == Qt.NoFocus
+    _assert_mark_buttons(grid, visible=False)
+    assert sequence.count_board.mode == workbench.legacy_recorded_info.get("sequence_mode", "mark")
     grid.set_curve_data(0, 0, [{"x": [1, 2], "y": [3, 4]}])
     sequence.left_panel.set_station_results(1, "OK", "NG")
     legacy_mode_changed = Mock()
     sequence.count_board.register_mode_change_callback(legacy_mode_changed)
     persist_legacy = Mock()
     monkeypatch.setattr(sequence, "_persist_sequence_page_state", persist_legacy)
-    save = Mock(wraps=workbench_toolbar_preferences.save_mode)
-    monkeypatch.setattr(workbench_toolbar_preferences, "save_mode", save)
-
-    combo.setCurrentIndex(combo.findData("test"))
-    _assert_mark_buttons(grid, visible=False)
+    for mode in ("mark", "test", "mark"):
+        combo.setCurrentIndex(combo.findData(mode))
+        _assert_mark_buttons(grid, visible=False)
     curve, = grid._cells[0, 0].plot_widget.getPlotItem().listDataItems()
     x, y = curve.getData()
     np.testing.assert_array_equal(x, [1, 2])
     np.testing.assert_array_equal(y, [3, 4])
     station = sequence.left_panel.get_station_data(1)
     assert (station["forward"], station["reverse"]) == ("OK", "NG")
-    assert sequence.count_board.mode == "test"
     legacy_mode_changed.assert_not_called()
     persist_legacy.assert_not_called()
-    workbench.forbidden.assert_not_called()
-    save.assert_called_once_with("test", workbench.window.default_logger)
-    saved = path.read_bytes(), path.stat().st_mtime_ns
-
     sequence.count_board.on_mark_btn_clicked()
     legacy_mode_changed.assert_called_once()
     persist_legacy.assert_called_once_with("mark")
-    assert combo.currentData() == "test"
     _assert_mark_buttons(grid, visible=False)
-    assert (path.read_bytes(), path.stat().st_mtime_ns) == saved
-    assert save.call_count == 1
-
-    workbench.legacy_recorded_info["sequence_mode"] = "mark"
-    reopened = workbench.open_window().sequence_window
-    assert reopened.count_board.mode == "mark"
-    assert reopened.condition_mode_combobox.currentData() == "test"
-    _assert_mark_buttons(reopened.plot_grid, visible=False)
-    assert (path.read_bytes(), path.stat().st_mtime_ns) == saved
-    assert save.call_count == 1
-
-    reopened_combo = reopened.condition_mode_combobox
-    reopened_combo.setCurrentIndex(reopened_combo.findData("mark"))
-    _assert_mark_buttons(reopened.plot_grid, visible=True)
-    assert save.call_count == 2
-    saved = path.read_bytes(), path.stat().st_mtime_ns
-    workbench.legacy_recorded_info["sequence_mode"] = "test"
-    reopened = workbench.open_window().sequence_window
-    assert reopened.count_board.mode == "test"
-    assert reopened.condition_mode_combobox.currentData() == "mark"
-    _assert_mark_buttons(reopened.plot_grid, visible=True)
-    assert (path.read_bytes(), path.stat().st_mtime_ns) == saved
-    assert save.call_count == 2
+    for _ in range(2):
+        workbench.window.on_workbench_configuration_committed()
+        _assert_mark_buttons(grid, visible=False)
+    for legacy_mode in ("mark", "test"):
+        workbench.legacy_recorded_info["sequence_mode"] = legacy_mode
+        reopened = workbench.open_window().sequence_window
+        assert reopened.count_board.mode == legacy_mode
+        _assert_mark_buttons(reopened.plot_grid, visible=False)
+        assert reopened.condition_mode_combobox.isHidden()
+    workbench.load_mode.assert_not_called()
+    workbench.save_mode.assert_not_called()
+    assert ((path.read_bytes(), path.stat().st_mtime_ns) if path.exists() else None) == saved
+    workbench.forbidden.assert_not_called()
 
 
 @pytest.mark.parametrize("workbench", ["custom plots"], indirect=True)
-def test_workbench_toolbar_mode_survives_zero_columns_and_refresh(workbench, monkeypatch):
+def test_workbench_hidden_marks_survive_zero_columns_growth_and_refresh(workbench):
     window, files = workbench.window, workbench.files
     sequence = window.sequence_window
     combo, grid = sequence.condition_mode_combobox, sequence.plot_grid
-    path = workbench.preference_path
-    save = Mock(wraps=workbench_toolbar_preferences.save_mode)
-    monkeypatch.setattr(workbench_toolbar_preferences, "save_mode", save)
-    combo.setCurrentIndex(combo.findData("test"))
     assert len(grid._headers) == 2
     _assert_mark_buttons(grid, visible=False)
-
     registry = json.loads(files["programs"].read_text(encoding="utf-8"))
     write_json(files["programs"], {"active_file": None, "configs": []})
     window.on_workbench_configuration_committed()
     assert not grid._headers
-    assert combo.currentData() == "test"
-    save.assert_called_once_with("test", window.default_logger)
-
-    assert combo.isEnabled()
     combo.setCurrentIndex(combo.findData("mark"))
-    assert workbench_toolbar_preferences.load_mode(window.default_logger) == "mark"
-    combo.setCurrentIndex(combo.findData("test"))
-    assert workbench_toolbar_preferences.load_mode(window.default_logger) == "test"
-    saved = path.read_bytes(), path.stat().st_mtime_ns
-    save.reset_mock()
-
     layout = json.loads(files["layout"].read_text(encoding="utf-8"))
     layout["columns"] = 3
     for row in layout["cells"]:
         row.append(row[-1])
     write_json(files["layout"], layout)
     write_json(files["programs"], registry)
-    window.on_workbench_configuration_committed()
-    assert len(grid._headers) == 3
-    assert combo.currentData() == "test"
-    _assert_mark_buttons(grid, visible=False)
-    assert (path.read_bytes(), path.stat().st_mtime_ns) == saved
-    save.assert_not_called()
-    combo.setCurrentIndex(combo.findData("mark"))
-    _assert_mark_buttons(grid, visible=True)
-
-
-def test_workbench_toolbar_mode_save_failure_keeps_current_display(workbench, monkeypatch, caplog):
-    sequence = workbench.window.sequence_window
-    combo, grid = sequence.condition_mode_combobox, sequence.plot_grid
-    path = workbench.preference_path
-    failed_output = Mock()
-    failed_output.open.return_value = False
-    failed_output.errorString.return_value = "simulated Qt save error"
-
-    with monkeypatch.context() as patch:
-        patch.setattr(workbench_toolbar_preferences, "QSaveFile", Mock(return_value=failed_output))
-        combo.setCurrentIndex(combo.findData("test"))
-
-    assert combo.currentData() == "test"
-    _assert_mark_buttons(grid, visible=False)
-    assert "simulated Qt save error" in caplog.text and str(path) in caplog.text
-    assert not path.exists()
-    combo.setCurrentIndex(combo.findData("mark"))
-    _assert_mark_buttons(grid, visible=True)
-    combo.setCurrentIndex(combo.findData("test"))
+    for _ in range(2):
+        window.on_workbench_configuration_committed()
+        assert len(grid._headers) == 3
+        _assert_mark_buttons(grid, visible=False)
     reopened = workbench.open_window().sequence_window
-    assert reopened.condition_mode_combobox.currentData() == "test"
+    assert len(reopened.plot_grid._headers) == 3
     _assert_mark_buttons(reopened.plot_grid, visible=False)
+    workbench.load_mode.assert_not_called()
+    workbench.save_mode.assert_not_called()
+    assert not workbench.preference_path.exists()
 
 
 def _assert_display(window, product, names, *, selection_enabled=True):
@@ -700,20 +653,23 @@ def test_toolbar_product_selection_popup_and_editor_refresh(workbench):
     workbench.forbidden.assert_not_called()
 
 
-@pytest.mark.parametrize("mode", ["test", "mark"])
-def test_toolbar_product_selection_preserves_mode_and_independent_queue(workbench, mode):
+@pytest.mark.parametrize("workbench", ["with fallback", "preference mark", "preference test", "preference invalid"], indirect=True)
+def test_toolbar_product_selection_hides_marks_and_preserves_independent_queue(workbench):
     second, _ = _register_toolbar_product(workbench)
     sequence = workbench.window.sequence_window
-    sequence.condition_mode_combobox.setCurrentIndex(sequence.condition_mode_combobox.findData(mode))
+    path = workbench.preference_path
+    saved = workbench.preference_original
+    sequence.condition_mode_combobox.setCurrentIndex(sequence.condition_mode_combobox.findData("mark"))
     queue_path = sequence.using_config_path
     sequence.using_file_combobox.setCurrentIndex(sequence.using_file_combobox.findData(second.name))
-    assert sequence.condition_mode_combobox.currentData() == mode
-    _assert_mark_buttons(sequence.plot_grid, visible=mode == "mark")
+    _assert_mark_buttons(sequence.plot_grid, visible=False)
     assert sequence.using_config_path == queue_path
     reopened = workbench.open_window().sequence_window
-    assert reopened.condition_mode_combobox.currentData() == mode
     assert reopened.using_file_combobox.currentData() == second.name
-    _assert_mark_buttons(reopened.plot_grid, visible=mode == "mark")
+    _assert_mark_buttons(reopened.plot_grid, visible=False)
+    workbench.load_mode.assert_not_called()
+    workbench.save_mode.assert_not_called()
+    assert ((path.read_bytes(), path.stat().st_mtime_ns) if path.exists() else None) == saved
     workbench.forbidden.assert_not_called()
 
 
@@ -1392,6 +1348,79 @@ def _recording_program(files, audio_root, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", Mock())
     monkeypatch.setattr(QMessageBox, "warning", Mock())
     return product
+
+
+def test_main_window_paired_results_update_station_and_daily_summary(
+    startup, config_files, tmp_path, monkeypatch,
+):
+    from unit_test.ui.test_workbench_result_state import instance
+    from unit_test.ui.test_workbench_result_sync import result_event
+
+    product = _recording_program(config_files, tmp_path / "audio", monkeypatch)
+    for station in product["stations"]:
+        station["channels"] = station["channels"][:1]
+    for condition in product["conditions"]:
+        condition["test_queue"] = "Plot A"
+        condition["applicable_station_ids"] = [s["station_id"] for s in product["stations"]]
+    write_json(config_files["product"], product)
+    queue = json.loads(config_files["shared"].read_text(encoding="utf-8"))
+    analysis = queue[0]["seq1"]["analysis_list"]
+    for key in analysis["display_sequence"]:
+        analysis[key]["analysis_channels"] = [0]
+    write_json(config_files["shared"], queue)
+    submissions = []
+
+    def start(request, callbacks):
+        submissions.append((request, callbacks))
+        return SimpleNamespace(request=request)
+
+    monkeypatch.setattr(startup.bridge, "start", start, raising=False)
+
+    def login(window):
+        startup.bridge.change_worker(1)
+        startup.bridge.answer_probe()
+        return "Engineer", "test"
+
+    window = startup.launch(login)
+    controller = window.workbench_controller
+    controller.bind_recording(replace(
+        controller._recording,
+        submit_archive=lambda completion, _product, _day, callback: callback(completion.request_id, None),
+    ))
+    controller.activate_analysis()
+    sequence = _set_recording_identity(window)
+    events = []
+    window.workbench_analysis_event.connect(events.append)
+    summary = sequence.left_panel.dashboard_panel.summary_panel
+    panel = sequence.left_panel.station_panel
+    for _ in range(2):
+        controller.start_recording()
+        request, callbacks = submissions[-1]
+        group = request.station_group
+        callbacks.workbench_completed(SimpleNamespace(request=request), WorkbenchRecordingCompletion(
+            request.request_id, group.project_id, group.condition_id, request.sample_rate,
+            request.target_samples - request.trim_samples,
+            tuple(StationWav(s.station_id, str(Path(group.final_path) / s.filename), s.channels)
+                  for s in group.stations),
+        ))
+    first, second = [batch["tasks"][0] for batch in startup.analysis_service.submissions]
+    metric = analysis["display_sequence"][0]
+    item = instance(metric, metrics={"overall_spl": 42.5, "unit": "dB(A)"})
+    item["artifacts"] = [{"status": "failed", "error": {"stage": "saving", "message": "access denied"}}]
+    startup.analysis_service.events.append(result_event(first, [item]))
+    controller.poll_analysis_events()
+    assert panel.get_station_data(1)["rows"][0] == [metric, "42.50 dB(A)", "--"]
+    assert summary.total_label.text() == "0" and summary.rate_label.text() == "--"
+    assert "文件保存错误" in window.statusBar().currentMessage()
+    startup.analysis_service.events.append(result_event(second, [instance(metric, judgement="NG")]))
+    controller.poll_analysis_events()
+    station = panel.get_station_data(1)
+    assert (station["forward"], station["reverse"], station["result"]) == ("OK", "NG", "NG")
+    assert len(station["rows"]) == len(analysis["display_sequence"])
+    assert all(len(row) == 3 for row in station["rows"])
+    assert (summary.total_label.text(), summary.ng_label.text(), summary.rate_label.text()) == ("1", "1", "0.0%")
+    assert len([event for event in events if event["event_type"] == "task_result"]) == 2
+    assert summary._details_dialog is None
 
 
 @pytest.mark.parametrize("output_location", ["inside", "outside"])

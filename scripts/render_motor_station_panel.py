@@ -35,7 +35,7 @@ def main():
     from ui.sequence.motor_dashboard_panel import MotorDashboardPanel
 
     app = QApplication.instance() or QApplication([])
-    font_paths = args.font or [Path("C:/Windows/Fonts/msyh.ttc"), Path("C:/Windows/Fonts/msyhbd.ttc"),
+    font_paths = args.font or [Path("C:/Windows/Fonts/simsun.ttc"),
                                Path("C:/Windows/Fonts/seguisym.ttf")]
     registered = []
     for path in font_paths:
@@ -48,7 +48,7 @@ def main():
         raise RuntimeError("Qt has no real fonts; supply --font with an installed font file")
     if "Segoe UI Symbol" in registered:
         # Offscreen's empty system font DB needs an explicit real-glyph fallback.
-        QFont.insertSubstitution("Microsoft YaHei UI", "Segoe UI Symbol")
+        QFont.insertSubstitution("SimSun", "Segoe UI Symbol")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     evidence = {"font_dpi": args.font_dpi, "registered_fonts": registered,
                 "image_scale": 2, "renders": []}
@@ -70,15 +70,16 @@ def main():
         panel.set_station_count(3)
         for station_id, count in ((1, 2), (2, 5), (3, 0)):
             panel.set_station_row_count(station_id, count)
-        panel.set_station_row(1, 0, ["SPL dB(A)", 68.5, 63.6])
-        panel.set_station_row(1, 1, ["响度 sone", None, 2.4])
-        panel.set_station_column(2, 0, ["SPL dB(A)", "响度 sone", "峰值", "判定", "备注"])
-        panel.set_station_column(2, 1, [61.2, 1.8, 72, "OK", None])
-        panel.set_station_column(2, 2, [62.4, 2.1, 74, "NG", "--"])
-        panel.set_station_cell(2, 4, 0, "很长的指标名称 / Long metric name" if long_text else "备注")
-        panel.set_station_results(1, " ok ", "NG")
-        panel.set_station_results(2, "--", "ok")
-        panel.set_station_results(3, "NG", "--")
+        panel.set_station_row(1, 0, ["SPL", "68.50 dB(A)", "63.60 dB(A)"])
+        panel.set_station_row(1, 1, ["FFT", "分析已完成", "分析已完成"])
+        panel.set_station_column(2, 0, ["SPL", "FFT", "FBA", "SPL 复测", "时频图"])
+        panel.set_station_column(2, 1, ["61.20 dB(A)", "分析已完成", "0.00 dB(Z)", "62.00 dB(A)", "分析已完成"])
+        panel.set_station_column(2, 2, ["62.40 dB(A)", "分析已完成", "64.10 dB(Z)", "--", "--"])
+        if long_text:
+            panel.set_station_cell(2, 4, 0, "很长的指标名称 / Long metric name")
+        panel.set_station_results(1, " ok ", "NG", result="NG")
+        panel.set_station_results(2, "--", "ok", result="OK")
+        panel.set_station_results(3, "--", "--", result="--")
 
     def save(widget, name, requested_width):
         settle()
@@ -139,6 +140,9 @@ def main():
                         panel.findChild(QTableWidget, "stationTable3"))
                 if scenario == "scroll":
                     panel.set_station_count(18)
+                    panel.set_station_results(16, "OK", "--", result="OK")
+                    panel.set_station_results(17, "OK", "NG", result="NG")
+                    panel.set_station_results(18, "--", "--", result="--")
                     settle()
                     bar = panel.findChild(QScrollArea).verticalScrollBar()
                     bar.setValue(bar.maximum())

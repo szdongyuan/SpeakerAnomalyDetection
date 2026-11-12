@@ -12,16 +12,16 @@ from PyQt5.QtWidgets import (
 from consts.ui_style_const import MOTOR_STATION_PANEL_STYLE, MOTOR_STATION_STATUS_COLORS
 
 
-class _ThreeColumns:
+class _FourColumns:
     """Shared geometry for the general header and each station toggle."""
 
     def _place_columns(self):
         width = self.contentsRect().width()
         first = int(width * .46)
-        second = int(width * .27)
+        status_width = (width - first) // 3
         for label, left, label_width in zip(
-            self._labels, (0, first, first + second),
-            (first, second, width - first - second),
+            self._labels, (0, first, first + status_width, first + 2 * status_width),
+            (first, status_width, status_width, width - first - 2 * status_width),
         ):
             label.setGeometry(self.contentsRect().x() + left, 0, label_width, self.height())
 
@@ -30,13 +30,13 @@ class _ThreeColumns:
         self._place_columns()
 
 
-class _GeneralHeader(_ThreeColumns, QWidget):
+class _GeneralHeader(_FourColumns, QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("stationGeneralHeader")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self._labels = [QLabel(text, self) for text in ("工位", "正转", "反转")]
-        for label, name in zip(self._labels, ("Station", "Forward", "Reverse")):
+        self._labels = [QLabel(text, self) for text in ("工位", "正转", "反转", "结果")]
+        for label, name in zip(self._labels, ("Station", "Forward", "Reverse", "Result")):
             label.setObjectName(f"stationGeneral{name}")
             label.setAlignment(Qt.AlignCenter)
         self._labels[0].setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
@@ -44,14 +44,14 @@ class _GeneralHeader(_ThreeColumns, QWidget):
         self.setFixedHeight(max(30, self.fontMetrics().height() + 12))
 
 
-class _StationHeader(_ThreeColumns, QPushButton):
+class _StationHeader(_FourColumns, QPushButton):
     def __init__(self, station_id, parent=None):
         super().__init__(parent)
         self.setObjectName(f"stationHeader{station_id}")
         self.setProperty("stationHeader", True)
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
-        self._labels = [QLabel(self) for _ in range(3)]
+        self._labels = [QLabel(self) for _ in range(4)]
         for label in self._labels:
             label.setAttribute(Qt.WA_TransparentForMouseEvents)
             label.setAlignment(Qt.AlignCenter)
@@ -63,11 +63,12 @@ class _StationHeader(_ThreeColumns, QPushButton):
         self._labels[0].setStyleSheet("color: #293b4d;")
         self._labels[1].setObjectName(f"stationForward{station_id}")
         self._labels[2].setObjectName(f"stationReverse{station_id}")
+        self._labels[3].setObjectName(f"stationResult{station_id}")
         self.setFixedHeight(max(34, self.fontMetrics().height() + 14))
         self.toggled.connect(self._set_expanded)
         self._set_expanded(self.isChecked())
         self.set_station_name(f"工位 {station_id}")
-        self.set_results("--", "--")
+        self.set_results("--", "--", "--")
 
     def set_station_name(self, name):
         self._labels[0].setText(name)
@@ -91,8 +92,8 @@ class _StationHeader(_ThreeColumns, QPushButton):
         with QPainter(self) as painter:
             QApplication.style().drawPrimitive(QStyle.PE_IndicatorBranch, option, painter, self)
 
-    def set_results(self, forward, reverse):
-        for label, status in zip(self._labels[1:], (forward, reverse)):
+    def set_results(self, forward, reverse, result):
+        for label, status in zip(self._labels[1:], (forward, reverse, result)):
             label.setText(status)
             # Local explicit colors override generic QWidget/QLabel ancestor styles.
             label.setStyleSheet(f"color: {MOTOR_STATION_STATUS_COLORS[status]};")
@@ -152,6 +153,7 @@ class _Station(QWidget):
         self.rows = []
         self.forward = "--"
         self.reverse = "--"
+        self.result = "--"
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -244,22 +246,22 @@ class MotorStationTestPanel(QWidget):
         return value
 
     @staticmethod
-    def _cell(value):
+    def _cell(value, name="cell value"):
         if value is None:
             return "--"
         if isinstance(value, bool) or not isinstance(value, (str, int, float)):
-            raise TypeError("cell value must be str, int, finite float or None")
+            raise TypeError(f"{name} must be str, int, finite float or None")
         if isinstance(value, float) and not math.isfinite(value):
-            raise ValueError("cell value must be finite")
+            raise ValueError(f"{name} must be finite")
         return str(value)
 
     @classmethod
-    def _values(cls, values, length):
+    def _values(cls, values, length, name="values"):
         if not isinstance(values, (list, tuple)):
-            raise TypeError("values must be a list or tuple")
+            raise TypeError(f"{name} must be a list or tuple")
         if len(values) != length:
-            raise ValueError(f"values must contain exactly {length} cells")
-        return [cls._cell(value) for value in values]
+            raise ValueError(f"{name} must contain exactly {length} cells")
+        return [cls._cell(value, f"{name}[{index}]") for index, value in enumerate(values)]
 
     @staticmethod
     def _status(value, name):
@@ -354,13 +356,36 @@ class MotorStationTestPanel(QWidget):
         rows[row][column] = normalized
         station.apply_rows(rows)
 
-    def set_station_results(self, station_id, forward, reverse):
-        """Normalize both statuses before updating either direction."""
+    def set_station_results(self, station_id, forward, reverse, *, result="--"):
+        """Normalize all statuses before updating the station header."""
         station = self._station(station_id)
         forward = self._status(forward, "forward")
         reverse = self._status(reverse, "reverse")
-        station.forward, station.reverse = forward, reverse
-        station.header.set_results(forward, reverse)
+        result = self._status(result, "result")
+        station.forward, station.reverse, station.result = forward, reverse, result
+        station.header.set_results(forward, reverse, result)
+
+    def show_station_result(self, station_id, forward, reverse, result, rows):
+        """Validate a complete snapshot before replacing this station's display.
+
+        Rows retain the configured count and three-cell shape. Caller-owned
+        containers are copied; the station's expansion state is preserved.
+        """
+        station = self._station(station_id)
+        field = f"station_id {station_id}"
+        forward = self._status(forward, f"{field} forward")
+        reverse = self._status(reverse, f"{field} reverse")
+        result = self._status(result, f"{field} result")
+        if not isinstance(rows, (list, tuple)):
+            raise TypeError(f"{field} rows must be a list or tuple")
+        if len(rows) != len(station.rows):
+            raise ValueError(f"{field} rows must contain exactly {len(station.rows)} rows")
+        normalized = [self._values(row, 3, f"{field} rows[{index}]")
+                      for index, row in enumerate(rows)]
+
+        station.apply_rows(normalized)
+        station.forward, station.reverse, station.result = forward, reverse, result
+        station.header.set_results(forward, reverse, result)
 
     def get_station_count(self):
         """Return the number of stations explicitly created by this caller."""
@@ -370,4 +395,4 @@ class MotorStationTestPanel(QWidget):
         """Return an independent snapshot of normalized display strings."""
         station = self._station(station_id)
         return {"station_id": station_id, "forward": station.forward,
-                "reverse": station.reverse, "rows": [row[:] for row in station.rows]}
+                "reverse": station.reverse, "result": station.result, "rows": [row[:] for row in station.rows]}

@@ -145,51 +145,66 @@ def test_round_field_removed_without_leaving_a_layout_slot(width, toolbar_host, 
     assert round_value.value() == 1
 
 
-def test_workbench_toolbar_mode_replaces_reset_in_compact_row(toolbar_host, ui_qapp):
-    window, legacy_toolbar, _ = toolbar_host
-    legacy_row = legacy_toolbar.layout().itemAt(1).layout()
-    reset_index = legacy_row.indexOf(legacy_toolbar.reset_round_button)
+@pytest.mark.parametrize("width", [1030, 1920])
+def test_workbench_analysis_action_removed_without_a_layout_slot(width, toolbar_host, ui_qapp):
+    window, legacy, _ = toolbar_host
     toolbar = SequenceToolsBar(workbench_mode=True)
-    legacy_toolbar.parentWidget().layout().replaceWidget(legacy_toolbar, toolbar)
-    legacy_toolbar.hide()
-    toolbar.show()
+    legacy.parentWidget().layout().insertWidget(1, toolbar)
+    window.resize(width, 760)
     ui_qapp.processEvents()
+    try:
+        button = toolbar.data_btn
+        assert button.isHidden()
+        assert button.parentWidget() is toolbar
+        assert not button.isWindow()
+        assert button.focusPolicy() == Qt.NoFocus
+        row = toolbar.layout().itemAt(1).layout()
+        controls = [row.itemAt(index).widget() for index in range(row.count())]
+        assert button not in controls
+        assert controls[:2] == [toolbar.player_btn, toolbar.serial_trigger_btn]
+        spacing = 1 if toolbar.serial_trigger_btn.compact else row.spacing()
+        assert toolbar.serial_trigger_btn.x() - (
+            toolbar.player_btn.x() + toolbar.player_btn.width()) == spacing
 
-    assert window.width() == 1030
-    assert toolbar.width() == 1028
-    assert toolbar.serial_trigger_btn.compact
-    combo = toolbar.condition_mode_combobox
-    row = toolbar.layout().itemAt(1).layout()
-    assert row.count() == legacy_row.count() + 1
-    assert row.indexOf(combo) == reset_index + 1
-    assert row.indexOf(toolbar.reset_round_button) == -1
-    assert toolbar.reset_round_button.isHidden()
-    assert toolbar.reset_round_button.parentWidget() is toolbar
-    assert row.itemAt(reset_index - 1).widget().frameShape() == QFrame.VLine
-    separator = row.itemAt(reset_index + 2).widget()
-    assert separator.frameShape() == QFrame.VLine
-    assert row.itemAt(reset_index + 3).widget() is toolbar.barcode_scanner_box
-    assert combo.geometry().right() < separator.x() < toolbar.barcode_scanner_box.x()
-    assert combo.isVisible()
-    assert combo.accessibleName() == "工作台显示模式"
-    assert combo.height() == 35
-    option = QStyleOptionComboBox()
-    combo.initStyleOption(option)
-    text_area = combo.style().subControlRect(QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, combo)
-    assert [combo.itemText(i) for i in range(combo.count())] == ["测试", "标记"]
-    assert all(combo.fontMetrics().horizontalAdvance(combo.itemText(i)) <= text_area.width()
-               for i in range(combo.count()))
-    assert combo.currentIndex() == 1
-    combo.setFocus()
-    QTest.keyClick(combo, Qt.Key_Up)
-    assert combo.currentIndex() == 0
+        for update in (lambda: button.setEnabled(True), button.set_idle,
+                       lambda: button.set_analyzing(1, 2, "正转"),
+                       lambda: button.set_completed("正转"),
+                       lambda: button.set_failed("正转")):
+            update()
+            ui_qapp.processEvents()
+            assert button.isHidden()
+            assert button.focusPolicy() == Qt.NoFocus
+        toolbar.player_btn.setFocus()
+        for _ in range(len(window.findChildren(QWidget)) + 1):
+            QTest.keyClick(window.focusWidget(), Qt.Key_Tab)
+            assert not button.hasFocus()
+
+        recordings = QSignalSpy(toolbar.player_btn.clicked)
+        QTest.mouseClick(toolbar.player_btn, Qt.LeftButton)
+        assert len(recordings) == 1
+        toolbar.using_file_combobox.addItem("合成产品", "synthetic.json")
+        assert toolbar.using_file_combobox.isVisible()
+        assert toolbar.using_file_combobox.currentData() == "synthetic.json"
+        assert toolbar.condition_mode_combobox.isHidden()
+        assert toolbar.condition_mode_combobox.focusPolicy() == Qt.NoFocus
+
+        legacy.data_btn.setEnabled(True)
+        assert legacy.data_btn.isVisible()
+        assert legacy.data_btn.focusPolicy() != Qt.NoFocus
+        assert legacy.layout().itemAt(1).layout().indexOf(legacy.data_btn) >= 0
+        manual_analysis = QSignalSpy(legacy.data_btn.clicked)
+        QTest.mouseClick(legacy.data_btn, Qt.LeftButton)
+        assert len(manual_analysis) == 1
+    finally:
+        toolbar.close()
+        toolbar.deleteLater()
+        ui_qapp.processEvents()
 
 
 @pytest.mark.parametrize("width", [1030, 1920])
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5])
-def test_workbench_mode_label_and_extra_width(width, scale, toolbar_host, ui_qapp, tmp_path, monkeypatch):
+def test_workbench_mode_removed_without_layout_slot(width, scale, toolbar_host, ui_qapp, tmp_path, monkeypatch):
     from consts import ui_style_const
-    from ui.sequence.toolbar_eliding_widgets import ToolbarFieldLabel
 
     window, legacy, _ = toolbar_host
     for name, style in vars(ui_style_const).items():
@@ -203,37 +218,40 @@ def test_workbench_mode_label_and_extra_width(width, scale, toolbar_host, ui_qap
     legacy.parentWidget().layout().replaceWidget(legacy, toolbar)
     legacy.hide()
     toolbar.show()
-    combo = toolbar.condition_mode_combobox
     window.resize(width, 760)
     ui_qapp.processEvents()
+    combo = toolbar.condition_mode_combobox
     row = toolbar.layout().itemAt(1).layout()
-    label = row.itemAt(row.indexOf(combo) - 1).widget()
-    assert isinstance(label, ToolbarFieldLabel)
-    assert label.text() == "模式：" and label.buddy() is combo
-    reference = field_labels(toolbar)[0]
-    assert label.styleSheet() == reference.styleSheet()
-    assert label.font() == reference.font()
-    assert label.height() == reference.height() == 40
-    assert combo.width() == max(55, combo.sizeHint().width()) + 20
-    assert label.x() + label.width() < combo.x()
     controls = [row.itemAt(i).widget() for i in range(row.count())]
+    assert combo.isHidden()
+    assert combo.focusPolicy() == Qt.NoFocus
+    assert combo.parentWidget() is toolbar and not combo.isWindow()
+    assert combo not in controls
+    assert toolbar.reset_round_button.isHidden()
+    assert toolbar.reset_round_button not in controls
+    assert not any(label.buddy() is combo or "模式" in label.text()
+                   for label in toolbar.findChildren(QLabel))
+    assert [combo.itemData(i) for i in range(combo.count())] == ["test", "mark"]
+    assert combo.currentData() == "test"
+    sample_index = controls.index(toolbar.sample_number_lineedit)
+    scanner_index = controls.index(toolbar.barcode_scanner_box)
+    assert scanner_index == sample_index + 2
+    assert controls[sample_index + 1].frameShape() == QFrame.VLine
+    assert sum(isinstance(w, QFrame) and w.frameShape() == QFrame.VLine for w in controls) == 5
     assert all(widget.isVisible() and toolbar.rect().contains(widget.geometry()) for widget in controls)
     assert all(a.geometry().right() < b.x() for a, b in zip(controls, controls[1:]))
-    for item in [*field_labels(toolbar), label]:
-        text = item._display_text()
+    for label in field_labels(toolbar):
+        text = label._display_text()
         assert "…" not in text
-        assert item._text_rect().contains(item.fontMetrics().boundingRect(
-            item._text_rect(), int(item.alignment()) | Qt.TextSingleLine, text,
+        assert label._text_rect().contains(label.fontMetrics().boundingRect(
+            label._text_rect(), int(label.alignment()) | Qt.TextSingleLine, text,
         ))
     assert toolbar.lineedit_s_or_n.width() >= 125
-    option = QStyleOptionComboBox()
-    combo.initStyleOption(option)
-    text_area = combo.style().subControlRect(QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, combo)
-    assert all(combo.fontMetrics().horizontalAdvance(combo.itemText(i)) <= text_area.width() for i in range(combo.count()))
+    toolbar.player_btn.setFocus()
+    for _ in range(len(window.findChildren(QWidget)) + 1):
+        QTest.keyClick(window.focusWidget(), Qt.Key_Tab)
+        assert not combo.hasFocus()
     assert toolbar.grab().save(str(tmp_path / f"workbench-toolbar-{width}-font{scale}.png"))
-    combo.setFocus()
-    QTest.keyClick(combo, Qt.Key_Up)
-    assert combo.currentData() == "test"
 
 
 @pytest.mark.parametrize("width", [1030, 1280, 1440, 1920])
@@ -355,16 +373,23 @@ def test_resize_preserves_values_focus_selection_and_signals(toolbar_host, ui_qa
     assert ui_qapp.clipboard().text() == originals[-1]
 
 
-def test_production_blocked_config_and_barcode_updates_keep_full_hints(toolbar_host, ui_qapp):
+def test_production_blocked_config_and_barcode_updates_keep_full_hints(toolbar_host, ui_qapp, tmp_path):
+    from base.product_test_project_config import ProductTestProjectConfigManager
     from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
     from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 
     class Operations(SequenceWidgetBarcodeOpsMixin, SequenceWidgetConfigOpsMixin):
         def _get_product_program_registry(self):
+            self.active_product_program_file = self.registry["active_file"]
             return self.registry
 
     _, toolbar, _ = toolbar_host
     operations = Operations()
+    operations.product_program_manager = ProductTestProjectConfigManager(
+        program_dir=tmp_path, registry_path=tmp_path / "registry.json",
+        queue_registry_path=tmp_path / "queues.json")
+    for file_name in ("old.json", "current.json"):
+        (tmp_path / file_name).write_text("{}", encoding="utf-8")
     operations.using_file_combobox = toolbar.using_file_combobox
     operations.lineedit_s_or_n = toolbar.lineedit_s_or_n
     operations.lineedit_type = toolbar.lineedit_type
@@ -604,6 +629,9 @@ def test_serial_click_uses_production_signal_and_configuration_entry(toolbar_hos
     host.count_board = SimpleNamespace(mode="test",
                                       reset_btn=QPushButton(), mark_btn=QPushButton())
     host._serial_trigger_config = {"enabled": False, "port": "TEST"}
+    from consts import error_code
+    monkeypatch.setattr(serial_ops.LoadUiConfig, "load_serial_discrete_input_config",
+                        lambda: (error_code.OK, host._serial_trigger_config))
     host.hw_manager = SimpleNamespace(get_serial_discrete_input_status=lambda: {"connected": False})
     dialogs = []
     class Dialog:

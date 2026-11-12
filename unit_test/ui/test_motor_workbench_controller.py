@@ -184,6 +184,29 @@ def plot_cells(grid):
     return {(cell.row, cell.column): cell for cell in grid.findChildren(StationPlotCell)}
 
 
+def test_controller_hides_marks_before_refresh_and_new_columns_inherit(workbench, config):
+    grid = workbench.grid
+
+    def assert_hidden():
+        assert grid._headers
+        assert all(header.ok.isHidden() and header.ng.isHidden()
+                   and not header.play.isHidden() for header in grid._headers.values())
+
+    assert_hidden()
+    workbench.repository.result = config
+    workbench.controller.refresh_configuration()
+    assert_hidden()
+    workbench.repository.result = None
+    workbench.controller.refresh_configuration()
+    assert not grid._headers
+    workbench.repository.result = config
+    workbench.controller.refresh_configuration()
+    assert_hidden()
+    grid.set_grid_size(1, 4)
+    assert len(grid._headers) == 4
+    assert_hidden()
+
+
 @pytest.mark.parametrize("initial_error", [None, "queue.json: missing display_sequence"])
 def test_first_refresh_starts_empty_and_applies_valid_configuration(workbench, config, initial_error):
     if initial_error is not None:
@@ -206,7 +229,7 @@ def test_first_refresh_starts_empty_and_applies_valid_configuration(workbench, c
     assert [workbench.grid.findChild(QLabel, f"stationName{i}").toolTip() for i in range(3)] == names
     assert set(plot_cells(workbench.grid)) == {(0, c) for c in range(3)}
     assert all(not column_options(workbench.grid, i).isEnabled() for i in range(3))
-    expected_names = (("响度", "", "峰值（热机）", "峰值（冷机）", "转速"),
+    expected_names = (("响度", "", "峰值", "转速"),
                       ("响度", "", "峰值"), ())
     for station, metrics in enumerate(expected_names, start=1):
         data = workbench.panel.get_station_data(station)
@@ -527,6 +550,116 @@ def recording_workbench(workbench, config):
         cleanup_problems=cleanup_problems, archive_problems=archive_problems,
         archive_submissions=archive_submissions,
     )
+
+
+@pytest.fixture
+def paired_recording_workbench(recording_workbench):
+    """Synthetic paired result configuration; leave the general fixtures unchanged."""
+    w = recording_workbench
+    ids = tuple(s.station_id for s in w.config.analysis.context.stations)
+    conditions = tuple(replace(c, test_queue="queue-a", applicable_station_ids=ids)
+                       for c in w.config.analysis.context.conditions)
+    queue = AnalysisTestQueue("wav", {"display_sequence": ["SPL"],
+                                     "SPL": {"type": "SPL", "analysis_channels": [0]}})
+    w.config = configuration_with(w.config, conditions=conditions, test_queues={"queue-a": queue})
+    w.repository.result = w.config
+    w.controller.refresh_configuration()
+    return w
+
+
+@pytest.mark.parametrize("rejection", ["admission", "build", "bridge"])
+def test_round_reject_preserves_display_until_first_condition_is_accepted(
+    paired_recording_workbench, workbench, rejection,
+):
+    w, panel = paired_recording_workbench, workbench.panel
+    for _ in range(2):
+        w.controller.start_recording()
+        w.complete()
+    previous_round = w.controller._recording_round
+    panel.show_station_result(1, "OK", "NG", "NG", [["SPL", "10", "20"]])
+    before = panel.get_station_data(1)
+    if rejection == "admission":
+        w.outcome.hardware_available = False
+    elif rejection == "build":
+        w.identity.sample = ""
+    else:
+        w.outcome.error = RuntimeError("busy")
+    w.controller.start_recording()
+    assert panel.get_station_data(1) == before
+    assert w.controller._current_round_id == previous_round.round_id
+    assert w.controller._recording_round is previous_round
+    w.outcome.hardware_available, w.identity.sample, w.outcome.error = True, "007", None
+    w.controller.start_recording()
+    assert panel.get_station_data(1) == {
+        "station_id": 1, "forward": "--", "reverse": "--", "result": "--",
+        "rows": [["SPL", "--", "--"]],
+    }
+    first_round = w.controller._current_round_id
+    assert first_round != previous_round.round_id
+    w.complete()
+    panel.show_station_result(1, "OK", "--", "OK", [["SPL", "10", "--"]])
+    before = panel.get_station_data(1)
+    w.controller.start_recording()
+    assert w.controller._current_round_id == first_round
+    assert panel.get_station_data(1) == before
+
+
+@pytest.mark.parametrize("terminal", ["success", "failure", "cancelled"])
+def test_round_synchronous_terminal_activates_once_before_reentrant_start(
+    paired_recording_workbench, workbench, terminal,
+):
+    w, panel = paired_recording_workbench, workbench.panel
+    reset_calls = []
+    render = panel.show_station_result
+
+    def record_reset(*args):
+        reset_calls.append(args)
+        render(*args)
+
+    panel.show_station_result = record_reset
+    if terminal == "success":
+        # Finish the first direction so synchronous completion wraps the cursor.
+        w.controller.start_recording()
+        w.complete()
+    old_round = w.controller._current_round_id
+
+    def finish_and_restart():
+        w.outcome.on_start = None
+        w.complete(outcome=terminal)
+        w.controller.start_recording()
+
+    w.outcome.on_start = finish_and_restart
+    w.controller.start_recording()
+    new_round = w.controller._in_flight.round_context
+    assert w.controller._current_round_id == new_round.round_id
+    assert w.controller._recording_round is new_round
+    assert new_round.round_id != old_round
+    assert len(reset_calls) == 6  # Three stations, two admitted rounds, no outer reactivation.
+    assert len(w.problems) == (1 if terminal == "failure" else 0)
+
+
+@pytest.mark.parametrize("terminal", ["success", "failure", "cancelled"])
+@pytest.mark.parametrize("error_type", [ValueError, RuntimeError, OSError])
+def test_round_synchronous_terminal_rendering_error_propagates(
+    paired_recording_workbench, workbench, monkeypatch, terminal, error_type,
+):
+    w = paired_recording_workbench
+    consumer_error = error_type("snapshot consumer bug")
+
+    def fail_render(*args):
+        raise consumer_error
+
+    monkeypatch.setattr(workbench.panel, "show_station_result", fail_render)
+    w.outcome.on_start = lambda: w.complete(outcome=terminal)
+    with pytest.raises(error_type, match="snapshot consumer bug") as raised:
+        w.controller.start_recording()
+    assert raised.value is consumer_error
+    assert w.problems == []
+    assert w.completions == []
+    if terminal == "success":
+        assert w.controller._in_flight.archiving
+    else:
+        assert w.controller._in_flight is None
 
 
 def test_recording_stays_busy_until_current_archive_result_is_delivered_once(recording_workbench):

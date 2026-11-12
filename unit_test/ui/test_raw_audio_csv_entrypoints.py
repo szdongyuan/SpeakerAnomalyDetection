@@ -88,7 +88,6 @@ def test_main_owns_fallback_and_shares_with_sequence(ui_qapp, monkeypatch, injec
         factory = Mock(return_value=sequence)
         monkeypatch.setattr(module, "SequenceWindow", factory)
         monkeypatch.setattr(module, "MotorWorkbenchController", Mock())
-        monkeypatch.setattr(window, "_bind_workbench_toolbar_mode", Mock())
         monkeypatch.setattr(window, "init_menu", lambda: QWidget())
         monkeypatch.setattr(window, "set_title", lambda: QWidget())
         monkeypatch.setattr(window, "_create_menu_row", lambda menu: QWidget())

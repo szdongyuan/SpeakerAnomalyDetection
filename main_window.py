@@ -28,7 +28,6 @@ from ui.hardware_window import open_hardware_selection_window
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
 from ui.operation_sequence import AnalysisModelSelect
 from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
-from ui.sequence import workbench_toolbar_preferences
 from ui.sequence.motor_workbench_controller import (
     MotorWorkbenchController, WorkbenchProductSelectionPorts, WorkbenchRecordingPorts,
 )
@@ -686,8 +685,8 @@ class MainWindow(QMainWindow):
             self.video_controller.show_settings,
         )
         card.settings_requested.connect(self.workbench_controller.open_video_settings)
-        self._bind_workbench_toolbar_mode()
         controller = self.workbench_controller
+        controller.bind_result_summary(sequence.left_panel.set_daily_records)
         controller.bind_product_selection(WorkbenchProductSelectionPorts(
             product_manager=ProductTestProjectConfigManager(),
             show_catalog=sequence.show_workbench_products,
@@ -729,20 +728,6 @@ class MainWindow(QMainWindow):
         self.sequence_window.mic_channels = self.mic_channels
         if (self.mic or {}).get("backend") != "vkinging":
             self.sequence_window.update_v2pa_factor()
-
-    def _bind_workbench_toolbar_mode(self):
-        combo = self.sequence_window.condition_mode_combobox
-        mode = workbench_toolbar_preferences.load_mode(self.default_logger)
-        combo.setCurrentIndex(combo.findData(mode))
-        self.workbench_controller.set_toolbar_mode(mode)
-        combo.currentIndexChanged.connect(self._on_workbench_toolbar_mode_changed)
-
-    def _on_workbench_toolbar_mode_changed(self, index):
-        mode = self.sequence_window.condition_mode_combobox.itemData(index)
-        if mode is None:
-            return
-        self.workbench_controller.set_toolbar_mode(mode)
-        workbench_toolbar_preferences.save_mode(mode, self.default_logger)
 
     def _expand_sequence_workspace(self):
         """Let the logged-in workspace consume the remaining window height."""

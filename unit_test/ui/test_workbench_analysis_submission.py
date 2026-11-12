@@ -1,6 +1,7 @@
 """Published WAV handoff, rejection and real resident-worker execution."""
 
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from time import monotonic
@@ -12,7 +13,7 @@ from PyQt5.QtTest import QTest
 
 from base.workbench_analysis_config import AnalysisTestQueue
 from unit_test.ui.test_motor_workbench_controller import (
-    config, workbench, recording_workbench, configuration_with,
+    config, workbench, recording_workbench, paired_recording_workbench, configuration_with,
 )
 from unit_test.ui.test_workbench_recording_startup import AnalysisServiceStub, startup
 
@@ -25,6 +26,115 @@ def submission(recording_workbench):
     w.controller.bind_analysis_service(service, events.append)
     w.controller.activate_analysis()
     return SimpleNamespace(w=w, service=service, events=events)
+
+
+@pytest.fixture
+def paired_submission(paired_recording_workbench):
+    """Result lifecycle tests use two conditions sharing one single-channel queue."""
+    w = paired_recording_workbench
+    service, events = AnalysisServiceStub(), []
+    w.controller.bind_analysis_service(service, events.append)
+    w.controller.activate_analysis()
+    return SimpleNamespace(w=w, service=service, events=events)
+
+
+def test_round_timestamp_and_identity_follow_first_condition_wav(paired_submission, monkeypatch):
+    from ui.sequence import motor_workbench_controller as module
+
+    w, service = paired_submission.w, paired_submission.service
+    times = (datetime(2026, 11, 11, 23, 59, 59), datetime(2026, 11, 12, 0, 0, 1),
+             datetime(2026, 11, 12, 0, 1, 2))
+    clock = iter(times)
+    monkeypatch.setattr(module, "datetime", SimpleNamespace(now=lambda: next(clock)))
+    contexts = []
+    for index, stamp in enumerate(times):
+        w.identity.sample = str(7 + index)
+        w.controller.start_recording()
+        w.complete()
+        task = service.submissions[-1]["tasks"][0]
+        contexts.append(w.controller._analysis_tasks[task["task_id"]])
+        assert Path(task["wav_path"]).name.startswith(stamp.strftime("%Y-%m-%d_%H-%M-%S"))
+        assert w.archive_submissions[-1][2] == stamp.date()
+        assert "round_id" not in task and "recorded_at" not in task
+    assert contexts[0]["round_id"] == contexts[1]["round_id"]
+    assert contexts[2]["round_id"] != contexts[0]["round_id"]
+    assert [c["recorded_at"] for c in contexts] == [times[0], times[0], times[2]]
+    assert [c["product_code"] for c in contexts] == ["7", "7", "9"]
+    assert contexts[0]["source_identity"] == w.repository.source_identity
+    assert contexts[0]["condition_ids"] == ("warm", "cold")
+    assert contexts[0]["station_ordinal"] == 1
+    assert contexts[0]["metric_keys"] == ("SPL",)
+
+
+@pytest.mark.parametrize("direction", ["warm", "cold"])
+@pytest.mark.parametrize("terminal", ["failure", "cancelled"])
+def test_round_retry_freezes_successful_first_timestamp(paired_submission, monkeypatch, direction, terminal):
+    from ui.sequence import motor_workbench_controller as module
+
+    w, service = paired_submission.w, paired_submission.service
+    stamp = datetime(2026, 11, 11, 23, 59, 59)
+    retry_stamp = datetime(2026, 11, 12, 0, 0, 3)
+    clock = SimpleNamespace(now=lambda: stamp)
+    monkeypatch.setattr(module, "datetime", clock)
+    if direction == "cold":
+        w.controller.start_recording()
+        w.complete()
+    w.controller.start_recording()
+    failed_round = w.controller._current_round_id
+    w.complete(outcome=terminal)
+    assert not w.controller._result_state.records_for(stamp.date())
+    clock.now = lambda: retry_stamp
+    w.controller.start_recording()
+    w.complete()
+    task = service.submissions[-1]["tasks"][0]
+    context = w.controller._analysis_tasks[task["task_id"]]
+    assert context["recorded_at"] == (retry_stamp if direction == "warm" else stamp)
+    assert (context["round_id"] == failed_round) == (direction == "cold")
+    assert w.archive_submissions[-1][2] == retry_stamp.date()
+
+
+@pytest.mark.parametrize("refresh_at", ["inflight", "preparation"])
+def test_round_snapshot_survives_inflight_refresh_without_replacing_new_display(
+    paired_submission, workbench, monkeypatch, refresh_at,
+):
+    from ui.sequence import motor_workbench_controller as module
+
+    w, service = paired_submission.w, paired_submission.service
+    updated = configuration_with(w.config, project_name="new product")
+    if refresh_at == "preparation":
+        build = module.build_recording_request
+
+        def build_and_refresh(*args, **kwargs):
+            request = build(*args, **kwargs)
+            w.repository.result = updated
+            w.controller.refresh_configuration()
+            return request
+
+        monkeypatch.setattr(module, "build_recording_request", build_and_refresh)
+    w.controller.start_recording()
+    original_round = w.controller._in_flight.round_context
+    if refresh_at == "inflight":
+        w.repository.result = updated
+        w.controller.refresh_configuration()
+    assert w.controller._current_round_id is None
+    w.identity.sample = "new sample"
+    w.complete()
+    task = service.submissions[-1]["tasks"][0]
+    context = w.controller._analysis_tasks[task["task_id"]]
+    assert context["round_id"] == original_round.round_id
+    assert context["product_code"] == "007"
+    assert context["analysis_version"] == original_round.analysis_version
+    assert w.controller._current_round_id is None
+    assert original_round.round_id in w.controller._result_state._rounds
+    w.controller.start_recording()
+    new_round = w.controller._current_round_id
+    assert new_round != original_round.round_id
+    workbench.panel.show_station_result(1, "OK", "--", "OK", [["SPL", "10", "--"]])
+    before = workbench.panel.get_station_data(1)
+    w.controller.refresh_configuration()
+    assert w.controller._current_round_id == new_round
+    assert w.controller._in_flight.round_context.round_id == new_round
+    assert workbench.panel.get_station_data(1) == before
 
 
 def test_submit_only_after_success_and_use_published_paths(submission):

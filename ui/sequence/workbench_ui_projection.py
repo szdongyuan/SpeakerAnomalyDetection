@@ -1,6 +1,5 @@
 """Immutable workbench display data derived without retaining analysis test queues."""
 
-from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -25,32 +24,20 @@ _PlotBindings = tuple[WorkbenchPlotBinding | None, WorkbenchPlotBinding | None]
 @dataclass(frozen=True)
 class WorkbenchUiProjection:
     stations: tuple[tuple[str, tuple[str, ...]], ...]
+    metric_keys: Mapping[str, tuple[str, ...]]  # station ID -> config keys in row order
     column_names: tuple[str, ...]
     cells: tuple[tuple[WorkbenchPlotCellDisplay, ...], ...]
     bindings: tuple[tuple[_PlotBindings, ...], ...]
     preview_time_modes: Mapping[str, str]  # condition ID -> display mode
 
 
-def _station_display(analysis_config: WorkbenchAnalysisConfig) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    context = analysis_config.context
-    metrics_by_station = {station.station_id: [] for station in context.stations}
-    for condition in context.conditions:
-        analysis = analysis_config.test_queues[condition.test_queue].analysis_config
-        for station_id in condition.applicable_station_ids:
-            metrics_by_station[station_id].extend(
-                (metric, condition.condition_name) for metric in analysis["display_sequence"]
-            )
-
-    display = []
-    for station in context.stations:
-        metrics = metrics_by_station[station.station_id]
-        counts = Counter(metric for metric, _ in metrics)
-        labels = tuple(
-            f"{metric}（{condition}）" if counts[metric] > 1 else metric
-            for metric, condition in metrics
-        )
-        display.append((station.station_name, labels))
-    return tuple(display)
+def _station_display(
+    analysis_config: WorkbenchAnalysisConfig, metric_keys: Mapping[str, tuple[str, ...]],
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return tuple(
+        (station.station_name, metric_keys[station.station_id])
+        for station in analysis_config.context.stations
+    )
 
 
 def _plot_unit(analysis: Mapping[str, object]) -> str:
@@ -104,13 +91,22 @@ def build_ui_projection(
     """Project validated settings into display values in product and queue order."""
     context = analysis_config.context
     layout = ui_config.layout
+    keys_by_station = {station.station_id: {} for station in context.stations}
+    for condition in context.conditions:
+        sequence = analysis_config.test_queues[condition.test_queue].analysis_config["display_sequence"]
+        for station_id in condition.applicable_station_ids:
+            keys_by_station[station_id].update(dict.fromkeys(sequence))
+    metric_keys = MappingProxyType({
+        station_id: tuple(keys) for station_id, keys in keys_by_station.items()
+    })
     preview_time_modes = MappingProxyType({
         condition.condition_id: ui_config.preview_time_modes[condition.test_queue]
         for condition in context.conditions
     })
     if layout is None:
         return WorkbenchUiProjection(
-            stations=_station_display(analysis_config), column_names=(), cells=(), bindings=(),
+            stations=_station_display(analysis_config, metric_keys), metric_keys=metric_keys,
+            column_names=(), cells=(), bindings=(),
             preview_time_modes=preview_time_modes,
         )
     padding = layout.columns - len(context.stations)
@@ -133,7 +129,8 @@ def build_ui_projection(
         display_rows.append(tuple(displays))
         binding_rows.append(tuple(bindings))
     return WorkbenchUiProjection(
-        stations=_station_display(analysis_config),
+        stations=_station_display(analysis_config, metric_keys),
+        metric_keys=metric_keys,
         column_names=names,
         cells=tuple(display_rows),
         bindings=tuple(binding_rows),

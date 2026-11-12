@@ -146,7 +146,7 @@ class SequenceToolsBar(QWidget):
         self.player_btn = QPushButton()
         self.replayer_btn = QPushButton()
         self.serial_trigger_btn = ToolbarSerialButton()
-        self.data_btn = AnalysisStatusButton()
+        self.data_btn = AnalysisStatusButton(self)
         self.using_file_combobox = RefreshBeforePopupComboBox()
         self.sample_number_lineedit = ElidingLineEdit()
         # 元数据、进度恢复和重置仍使用轮次值；不再作为可见输入项。
@@ -155,13 +155,9 @@ class SequenceToolsBar(QWidget):
         self.condition_mode_combobox = QComboBox(self)
         self.condition_mode_combobox.addItem("测试", "test")
         self.condition_mode_combobox.addItem("标记", "mark")
+        self.condition_mode_combobox.hide()
         if workbench_mode:
-            self.condition_mode_combobox.setCurrentIndex(1)
-            self.condition_mode_combobox.setAccessibleName("工作台显示模式")
-            self.condition_mode_combobox.setFixedHeight(35)
-            self.condition_mode_combobox.setStyleSheet(ui_style_const.toolbar_combobox_style)
-        else:
-            self.condition_mode_combobox.hide()
+            self.condition_mode_combobox.setFocusPolicy(Qt.NoFocus)
         self.lineedit_type = ModelLineEdit()
         self.lineedit_count = QLineEdit()
         self.lineedit_s_or_n = ElidingLineEdit()
@@ -200,7 +196,8 @@ class SequenceToolsBar(QWidget):
 
     def create_mainly_layout(self):
         layout = ToolbarRowLayout()
-        for button in (self.player_btn, self.data_btn):
+        buttons = (self.player_btn,) if self._workbench_mode else (self.player_btn, self.data_btn)
+        for button in buttons:
             layout.add_control(button, "action", ui_style_const.TOOLBAR_ICON_BUTTON_WIDTH, 120)
         layout.add_control(self.serial_trigger_btn, "serial", 48, 124)
         layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
@@ -219,18 +216,9 @@ class SequenceToolsBar(QWidget):
             layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
         if self._workbench_mode:
             self.reset_round_button.hide()
-            combo = self.condition_mode_combobox
-            label = ToolbarFieldLabel("模式：", "模式：")
-            label.setFixedHeight(40)
-            label.setStyleSheet(ui_style_const.toolbar_field_label_style)
-            label.setBuddy(combo)
-            layout.add_control(label, "label")
-            combo.ensurePolished()
-            width = max(55, combo.sizeHint().width()) + 20
-            layout.add_control(combo, "fixed", width, width)
         else:
             layout.add_control(self.reset_round_button, "fixed", 52, 52)
-        layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
+            layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
         layout.add_control(self.barcode_scanner_box, "switch")
         layout.add_control(self.lineedit_s_or_n, "sn", 125, 320)
         layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
@@ -270,6 +258,9 @@ class SequenceToolsBar(QWidget):
             QSize(35, 35),
         )
         self.data_btn.setEnabled(False)
+        if self._workbench_mode:
+            self.data_btn.setFocusPolicy(Qt.NoFocus)
+            self.data_btn.hide()
 
     def set_serial_trigger_btn(self):
         self._configure_icon_button(
