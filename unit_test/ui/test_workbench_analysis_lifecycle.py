@@ -91,6 +91,7 @@ def test_window_defers_activation_until_after_login_and_forwards_events(
     window.close()
     wait_until(lambda: service.closed)
     wait_until(lambda: getattr(window, "_exit_cleanup_complete", False))
+    assert window.audio_label_sync_bridge.is_closed
     assert not window._analysis_timer.isActive()
     assert service.shutdown_calls == 1
 
@@ -126,6 +127,8 @@ def test_close_before_first_tick_does_not_start_stations(startup, monkeypatch, c
     window = startup.launch(lambda _: (None, None))
     window.close()
     wait_until(lambda: service.closed)
+    wait_until(lambda: getattr(window, "_exit_cleanup_complete", False))
+    assert window.audio_label_sync_bridge.is_closed
     assert service.sync_calls == []
 
 

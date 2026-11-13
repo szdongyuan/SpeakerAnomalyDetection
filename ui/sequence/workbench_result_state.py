@@ -4,15 +4,8 @@ import math
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
+from base.audio_label_policy import aggregate_judgements
 from ui.sequence.workbench_units import format_workbench_spl_unit
-
-
-def _aggregate_status(values):
-    statuses = [value.strip().upper() if isinstance(value, str) else "--"
-                for value in values]
-    if "NG" in statuses:
-        return "NG"
-    return "OK" if "OK" in statuses else "--"
 
 
 def _format_instance_value(item):
@@ -52,7 +45,7 @@ class _Station:
         reverse, reverse_values = self.received.get(condition_ids[1], ("--", {}))
         complete = all(direction in self.received for direction in condition_ids)
         return WorkbenchStationResult(
-            forward, reverse, _aggregate_status((forward, reverse)) if complete else "--",
+            forward, reverse, aggregate_judgements((forward, reverse)) if complete else "--",
             [[key, forward_values.get(key, "--"), reverse_values.get(key, "--")]
              for key in self.metric_keys],
             complete,
@@ -119,7 +112,7 @@ class WorkbenchResultState:
         if condition_id in station.received:
             return None
         items = payload.get("instance_results", ())
-        status = _aggregate_status(item.get("judgement") for item in items)
+        status = aggregate_judgements(item.get("judgement") for item in items)
         values = {item["config_key"]: _format_instance_value(item) for item in items}
         station.received[condition_id] = status, values
         snapshot = station.snapshot(round_state.condition_ids)

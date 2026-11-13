@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from PyQt5.QtCore import QCoreApplication, QEvent
+from PyQt5.QtCore import QCoreApplication, QEvent, QObject, pyqtSignal
 
 import main_window as main_window_module
 
@@ -70,3 +70,34 @@ def test_audio_manager_is_disabled_when_access_is_cleared(window):
     window.on_access_lvl_changed()
 
     assert not window.function_audio_manager.isEnabled()
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_audio_manager_subscribes_only_for_its_modal_lifetime(window, monkeypatch, raises):
+    class Labels(QObject):
+        changed = pyqtSignal(object)
+
+    bridge = Labels(window)
+    window.audio_label_sync_bridge = bridge
+    other_observer = Mock()
+    bridge.changed.connect(other_observer)
+    dialog = Mock()
+    update = object()
+
+    def execute():
+        bridge.changed.emit(update)
+        dialog.apply_audio_label_update.assert_called_once_with(update)
+        if raises:
+            raise RuntimeError("modal failure")
+
+    dialog.exec.side_effect = execute
+    monkeypatch.setattr(main_window_module, "ArchiveAudioDataDialog", lambda *args, **kwargs: dialog)
+    window.access_lvl = "Engineer"
+    if raises:
+        with pytest.raises(RuntimeError, match="modal failure"):
+            window.on_audio_manager_init()
+    else:
+        window.on_audio_manager_init()
+    bridge.changed.emit(object())
+    dialog.apply_audio_label_update.assert_called_once_with(update)
+    assert other_observer.call_count == 2

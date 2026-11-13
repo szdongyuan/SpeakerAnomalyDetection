@@ -3,12 +3,14 @@
 import json
 from datetime import date, datetime
 from threading import Event
+from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 from PyQt5 import QtWidgets, sip
 from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtTest import QTest
 
 import main_window
 from base import hardware_selection, recording_service
@@ -218,8 +220,24 @@ def startup(ui_qapp, monkeypatch, tmp_path):
     yield state
     for window in windows:
         if not sip.isdeleted(window):
+            analysis = getattr(window, "analysis_service", None)
+            if isinstance(analysis, AnalysisServiceStub):
+                analysis.allow_close = True
             window.close()
-            ui_qapp.processEvents()
+            deadline = monotonic() + 40
+            while not getattr(window, "_exit_cleanup_complete", False) and monotonic() < deadline:
+                QTest.qWait(10)
+            labels = getattr(window, "audio_label_sync_bridge", None)
+            assert getattr(window, "_exit_cleanup_complete", False), (
+                "startup window did not finish asynchronous shutdown",
+                {"analysis_closed": getattr(analysis, "closed", None),
+                 "analysis_events_drained": getattr(window, "_analysis_events_drained", None),
+                 "archive_state": getattr(window, "_workbench_archive_close_state", None),
+                 "label_pending": labels.pending if labels is not None else None,
+                 "label_closed": labels.is_closed if labels is not None else None},
+            )
+            if labels is not None:
+                assert labels.pending == 0 and labels.is_closed and labels._service.closed
             sip.delete(window)
 
 
@@ -337,7 +355,7 @@ def test_injected_bridge_shuts_down_once_when_application_quits(startup, ui_qapp
     shutdown = Mock(wraps=startup.bridge.shutdown)
     monkeypatch.setattr(startup.bridge, "shutdown", shutdown)
     startup.launch(lambda _: (None, None))
-    startup.launch(lambda _: (None, None))
+    startup.launch(lambda _: (None, None), analysis_service=AnalysisServiceStub())
 
     try:
         ui_qapp.aboutToQuit.emit()

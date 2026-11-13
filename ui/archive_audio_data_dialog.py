@@ -5,7 +5,7 @@ import textwrap
 import wave
 from datetime import datetime
 
-from PyQt5.QtCore import QEvent, Qt, QTimer
+from PyQt5.QtCore import QEvent, QItemSelectionModel, Qt, QTimer
 from PyQt5.QtGui import QStandardItem
 from PyQt5.QtWidgets import (
     QPushButton,
@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
     QWidget,
     QHBoxLayout,
     QHeaderView,
+    QAbstractItemView,
 )
 from scipy.io import wavfile as scipy_wavfile
 
@@ -29,6 +30,7 @@ from base.audio_record_package import (
 )
 from base.log_manager import LogManager
 from base.playback_controller import PlaybackController
+from base.recording_management import RecordingManager
 from consts import error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
 from ui.archive_audio_delete_dialog import ArchiveAudioDeleteDialog
@@ -146,6 +148,99 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             self.all_audio_data, self._refresh_audio_filter_metadata(), filter_config,
         )
 
+    def apply_audio_label_update(self, update):
+        """Apply a committed label without reloading or interrupting visible audio."""
+        for position, record in enumerate(self.all_audio_data):
+            if record[0] == update.audio_data_id:
+                break
+        else:
+            return
+
+        def normalized_path(path):
+            absolute = path if os.path.isabs(path) else os.path.join(DEFAULT_DIR, path)
+            return os.path.normcase(RecordingManager.normalize_audio_path_for_db(absolute))
+
+        if normalized_path(record[1]) != normalized_path(update.file_path):
+            return
+
+        previous_rows = list(self.filter_audio_data if self.is_filter_flag else self.all_audio_data)
+        self.all_audio_data[position] = record[:5] + (update.label,) + record[6:]
+        self.filter_audio_data_at_filter_config(self.filter_config)
+        rows = self.filter_audio_data if self.is_filter_flag else self.all_audio_data
+        previous_ids = [row[0] for row in previous_rows]
+        row_by_id = {row[0]: i for i, row in enumerate(rows)}
+        checked_ids = {row[0] for row in self.select_wave_data.values()}
+        playing_id = (previous_rows[self._current_playing_row][0]
+                      if self._current_playing_row is not None else None)
+
+        if previous_ids != [row[0] for row in rows]:
+            self._sync_audio_label_rows(previous_ids, rows, checked_ids)
+        elif update.audio_data_id in row_by_id:
+            self.model().item(row_by_id[update.audio_data_id], 4).setText(update.label)
+
+        self.select_wave_data = {str(i): row for i, row in enumerate(rows) if row[0] in checked_ids}
+        self.all_select_flag = bool(rows) and len(self.select_wave_data) == len(rows)
+        self.all_selected_checkbox.setChecked(self.all_select_flag)
+        self.set_select_wave_num_text(len(self.select_wave_data))
+        if playing_id is not None:
+            if playing_id not in row_by_id:
+                self._stop_playback_if_needed()
+            else:
+                self._current_playing_row = row_by_id[playing_id]
+                self._set_play_cell_text(self._current_playing_row, True)
+
+    def _sync_audio_label_rows(self, previous_ids, rows, checked_ids):
+        """Keep retained items and restore view coordinates after a filter delta."""
+        view, model = self.data_view, self.model()
+        selection = view.selectionModel()
+        selected_cells = [(previous_ids[index.row()], index.column())
+                          for index in selection.selectedIndexes()]
+        current = view.currentIndex()
+        current_cell = ((previous_ids[current.row()], current.column()) if current.isValid() else None)
+        top = view.rowAt(0)
+        anchor = previous_ids[top] if top >= 0 else None
+        offset = view.visualRect(model.index(top, 0)).top() if top >= 0 else 0
+        horizontal_scroll = view.horizontalScrollBar().value()
+        row_by_id = {row[0]: i for i, row in enumerate(rows)}
+
+        retained_ids = list(previous_ids)
+        for i in range(len(retained_ids) - 1, -1, -1):
+            if retained_ids[i] not in row_by_id:
+                model.removeRow(i)
+                del retained_ids[i]
+        for i, record in enumerate(rows):
+            if i >= len(retained_ids) or retained_ids[i] != record[0]:
+                model.insertRow(i, self._audio_row_items(record))
+                retained_ids.insert(i, record[0])
+                view.resizeRowToContents(i)
+
+        send_signal = view.is_send_signal
+        view.is_send_signal = False
+        try:
+            for i, record in enumerate(rows):
+                checkbox = model.item(i, 0)
+                state = Qt.Checked if record[0] in checked_ids else Qt.Unchecked
+                if checkbox.checkState() != state:
+                    checkbox.setCheckState(state)
+        finally:
+            view.is_send_signal = send_signal
+
+        selection.clearSelection()
+        if current_cell is not None and current_cell[0] in row_by_id:
+            selection.setCurrentIndex(model.index(row_by_id[current_cell[0]], current_cell[1]),
+                                      QItemSelectionModel.NoUpdate)
+        else:
+            selection.clearCurrentIndex()
+        for identifier, column in selected_cells:
+            if identifier in row_by_id:
+                selection.select(model.index(row_by_id[identifier], column), QItemSelectionModel.Select)
+        view.doItemsLayout()
+        if anchor in row_by_id:
+            view.scrollTo(model.index(row_by_id[anchor], 0), QAbstractItemView.PositionAtTop)
+            if view.verticalScrollMode() == QAbstractItemView.ScrollPerPixel:
+                view.verticalScrollBar().setValue(view.verticalScrollBar().value() - offset)
+        view.horizontalScrollBar().setValue(horizontal_scroll)
+
     def delete_audio_data_with_id(self, id_list):
         super().delete_audio_data_with_id(id_list)
         self._refresh_audio_filter_metadata()
@@ -207,22 +302,10 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
 
         product_model_set = set()
         record_date_set = set()
-        for row, item in enumerate(audio_data):
+        for item in audio_data:
             product_model_set.add(item[2])
             record_date_set.add(item[4])
-
-            file_name = extract_audio_file_name(item[1])
-            barcode = item[6] or ""
-            row_data_list = [
-                None, file_name, item[2], barcode, item[5], item[3], item[4], None, None,
-            ]
-            self.add_row_data(row_data_list)
-            self.model().item(row, 1).setToolTip(file_name)
-            barcode_item = self.model().item(row, self._barcode_col)
-            barcode_item.setToolTip(textwrap.fill(
-                barcode, width=64, break_on_hyphens=False,
-                replace_whitespace=False, drop_whitespace=False,
-            ))
+            self.model().appendRow(self._audio_row_items(item, with_actions=False))
 
         self.resizeColumnsToContents()
         self.data_view.setColumnWidth(2, 120)
@@ -230,6 +313,30 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.data_view.setColumnWidth(self._barcode_col, self._barcode_column_width)
         self.resizeRowsToContents()
         return product_model_set, record_date_set
+
+    def _audio_row_items(self, record, *, with_actions=True):
+        file_name = extract_audio_file_name(record[1])
+        barcode = record[6] or ""
+        values = [None, file_name, record[2], barcode, record[5], record[3], record[4],
+                  self._play_text if with_actions else None, "查看" if with_actions else None]
+        items = []
+        for column, value in enumerate(values):
+            item = QStandardItem() if value is None else QStandardItem(str(value))
+            if column in self.data_view.set_checkable_column:
+                item.setCheckable(True)
+            if column in self.column_alignment_list:
+                item.setTextAlignment(self.column_alignment[str(column)])
+            items.append(item)
+        items[1].setToolTip(file_name)
+        items[self._barcode_col].setToolTip(textwrap.fill(
+            barcode, width=64, break_on_hyphens=False,
+            replace_whitespace=False, drop_whitespace=False,
+        ))
+        for column in (self._play_btn_col, self._analysis_btn_col):
+            items[column].setTextAlignment(Qt.AlignCenter)
+            self._apply_play_action_item_style(items[column])
+        items[self._analysis_btn_col].setData((record[0], record[1]), Qt.UserRole)
+        return items
 
     def set_bottom_layout(self):
         all_show_btn = QPushButton("全部显示")
@@ -459,11 +566,14 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             self._set_play_cell_text(row, is_current)
         rows = self.filter_audio_data if self.is_filter_flag else self.all_audio_data
         for row, record in enumerate(rows):
-            item = QStandardItem("查看")
+            item = model.item(row, self._analysis_btn_col)
+            if item is None:
+                item = QStandardItem("查看")
+                model.setItem(row, self._analysis_btn_col, item)
+            item.setText("查看")
             item.setTextAlignment(Qt.AlignCenter)
             item.setData((record[0], record[1]), Qt.UserRole)
             self._apply_play_action_item_style(item)
-            model.setItem(row, self._analysis_btn_col, item)
         model.setHeaderData(self._analysis_btn_col, Qt.Horizontal, "分析结果")
         self.data_view.resizeColumnToContents(self._analysis_btn_col)
 

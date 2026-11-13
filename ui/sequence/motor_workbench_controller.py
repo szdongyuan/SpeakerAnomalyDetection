@@ -12,6 +12,8 @@ from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from base.audio_label_policy import audio_label_for_results
+from base.audio_label_sync import AudioLabelJob
 from base.workbench_config_values import WorkbenchChannel, WorkbenchCondition
 from base.workbench_round_counter import WorkbenchRoundCounter
 from base.workbench_round_store import RoundSnapshot, WorkbenchRoundStateError
@@ -122,6 +124,7 @@ class MotorWorkbenchController:
         self._analysis_input_ready = None
         self._analysis_service = None
         self._analysis_event_received = None
+        self._submit_audio_label: Callable[[AudioLabelJob], None] | None = None
         self._analysis_active = False
         self._analysis_closing = False
         self._analysis_tasks = {}
@@ -295,6 +298,10 @@ class MotorWorkbenchController:
         """Attach the optional complete daily snapshot consumer on the GUI thread."""
         self._set_daily_records = set_daily_records
 
+    def bind_audio_label_sync(self, submit: Callable[[AudioLabelJob], None] | None) -> None:
+        """Attach the optional label job sink; persistence belongs to its owner."""
+        self._submit_audio_label = submit
+
     def activate_analysis(self) -> None:
         if self._analysis_active or self._analysis_closing:
             return
@@ -363,6 +370,11 @@ class MotorWorkbenchController:
         )
         if snapshot is None:
             return
+        if self._submit_audio_label is not None:
+            self._submit_audio_label(AudioLabelJob(
+                task_id, context["wav_path"],
+                audio_label_for_results(payload.get("instance_results", ())),
+            ))
         if self._round_counter is not None and payload.get("execution_status") == "分析完成":
             self._update_round_counter(
                 self._round_counter.analysis_completed, context["round_id"],
@@ -411,6 +423,7 @@ class MotorWorkbenchController:
                                             if station[0] == task["station_id"])
                     self._analysis_tasks[task_id] = {
                         "request_id": context.request_id, "analysis_version": context.analysis_version,
+                        "wav_path": task["wav_path"],
                         "station_id": task["station_id"], "condition_id": task["condition_id"],
                         "round_id": round_context.round_id,
                         "recorded_at": round_context.recorded_at,
