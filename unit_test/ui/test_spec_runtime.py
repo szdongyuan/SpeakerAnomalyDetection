@@ -1,67 +1,32 @@
-from types import SimpleNamespace
+"""Real current spectrogram axes reserve space for their actual tick fonts."""
+from PyQt5.QtGui import QFont, QFontMetrics
 
-from unit_test.ui.test_spl_runtime import (
-    _load_signal_analysis_module_without_heavy_optional_imports,
+from unit_test.ui.test_condition_plot_layout import configuration, grid, show
+from unit_test.ui.test_workbench_extended_plots import (
+    extended_configuration, instance, matrix_payload, publish,
 )
+from ui.sequence.workbench_plot_presenter import WorkbenchPlotPresenter
 
 
-class _Axis:
-    def __init__(self, label_text=""):
-        self.labelText = label_text
-        self.style = {}
-
-    def setTickFont(self, font):
-        self.tick_font = font
-
-    def setStyle(self, **style):
-        self.style.update(style)
-
-    def setTextPen(self, pen):
-        self.text_pen = pen
-
-    def setLabel(self, text, **style):
-        self.labelText = text
-        self.label_style = style
-
-
-class _PlotWidget:
-    def __init__(self):
-        self.axes = {
-            "bottom": _Axis("Time (s)"),
-            "left": _Axis("Frequency (Hz)"),
-        }
-        self.plotItem = SimpleNamespace(
-            titleLabel=SimpleNamespace(text="Spectrogram (Linear Scale)")
-        )
-
-    def getAxis(self, orientation):
-        return self.axes[orientation]
-
-    def setTitle(self, title, **style):
-        self.plotItem.titleLabel.text = title
-        self.title_style = style
-
-
-def test_spectrogram_reserves_space_for_large_axis_fonts():
-    signal_module = _load_signal_analysis_module_without_heavy_optional_imports()
-    plot_widget = _PlotWidget()
-    color_bar = SimpleNamespace(axis=_Axis())
-    window = SimpleNamespace(
-        plot_container=SimpleNamespace(
-            findChildren=lambda _widget_type: [plot_widget]
-        ),
-        stft_colorbar=color_bar,
-    )
-
-    signal_module.Spectrogram.set_color_font_size(window)
-
-    bottom_style = plot_widget.getAxis("bottom").style
-    left_style = plot_widget.getAxis("left").style
-    color_bar_style = color_bar.axis.style
-    assert bottom_style["autoExpandTextSpace"] is False
-    assert bottom_style["tickTextHeight"] == 26
-    assert left_style["autoExpandTextSpace"] is False
-    assert left_style["tickTextWidth"] == 72
-    assert "hideOverlappingLabels" not in left_style
-    assert color_bar_style["autoExpandTextSpace"] is False
-    assert color_bar_style["tickTextWidth"] == 44
+def test_spectrogram_reserves_space_for_large_axis_fonts(grid, configuration, qt_app):
+    projection = show(grid, extended_configuration(configuration), qt_app)
+    presenter = WorkbenchPlotPresenter(grid)
+    presenter.configure(projection, invalidate_requests=True)
+    binding = projection.bindings[0][0][0]
+    publish(projection, presenter, [instance(binding, matrix_payload())])
+    cell = grid._cells[0, 0]
+    plot = cell.plot_widget.getPlotItem()
+    bottom, left = plot.getAxis('bottom'), plot.getAxis('left')
+    color = cell._colorbar.axis
+    font = QFont(bottom.style['tickFont'])
+    font.setPixelSize(24)
+    for axis in (bottom, left, color):
+        axis.setTickFont(font)
+    for _ in range(8):
+        qt_app.processEvents()
+        cell.grab()
+    metrics = QFontMetrics(font)
+    assert bottom.boundingRect().height() >= metrics.height()
+    assert left.boundingRect().width() >= metrics.horizontalAdvance('20')
+    assert color.boundingRect().width() >= metrics.horizontalAdvance('100')
+    assert plot.getViewBox().height() >= 120

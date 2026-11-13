@@ -1,13 +1,9 @@
 """Bounded publication and actual Qt processing-state regressions."""
 from dataclasses import replace
 import threading
-import sys
 import logging
-from unittest import mock
 import numpy as np
 import pytest
-from PyQt5.QtCore import QThread, QTimer
-from unit_test.ui.test_recording_process_integration import main_host, pump, service
 from unit_test.base.test_recording_finalization import capture_audio, read_result
 from unit_test.base.test_recording_capture import request
 from base.recording_final_result import prepare_main_recording_result
@@ -112,88 +108,6 @@ def test_calibration_skips_display_preparation(tmp_path):
     assert not audio.is_prepared_for(req)
 
 
-@pytest.mark.parametrize("stage", ["数据保存中", "正转 数据保存中"])
-def test_actual_panel_recognizes_processing(ui_qapp, stage):
-    from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
-    panel = MotorDetectionLeftPanel(None, )
-    panel.set_current_stage(stage)
-    assert panel.condition_state.stage_text == "数据保存中"
-    panel.close()
-
-
-@pytest.mark.parametrize("drop_finalizing", [False, True])
-def test_background_preparation_keeps_qt_responsive_and_publishes_without_scans(ui_qapp, service, tmp_path, monkeypatch, caplog, drop_finalizing):
-    caplog.set_level(logging.INFO)
-    import base.recording_final_result as reader_module
-    from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
-    from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
-    entered, release, ticked = threading.Event(), threading.Event(), threading.Event()
-    handle_event = service._event
-    if drop_finalizing:
-        def terminal_only(worker, event):
-            if event.kind != "finalizing":
-                handle_event(worker, event)
-        monkeypatch.setattr(service, "_event", terminal_only)
-    original = reader_module.prepare_main_recording_result
-    def block_reader(descriptor, request):
-        entered.set()
-        assert release.wait(10)
-        return original(descriptor, request)
-    monkeypatch.setattr(reader_module, "prepare_main_recording_result", block_reader)
-    host = main_host(service, tmp_path, streaming=False)
-    panel = MotorDetectionLeftPanel(None, )
-    panel.set_condition_configs([{"key":"forward", "name":"正转"}])
-    panel.resize(640, 500)
-    panel.show()
-    host.left_panel = panel
-    host._get_active_product_condition_key = lambda: "forward"
-    host._active_product_condition_config = {"name":"正转"}
-    monkeypatch.setattr("ui.sequence.sequence_widget_streaming_ops.RecordingManager", lambda: mock.Mock(save_signal_info_to_db=mock.Mock(return_value=(0,"ok"))))
-    host.judge_play_and_record()
-    session = host._recording_process_session
-    try:
-        pump(ui_qapp, entered.is_set)
-        QTimer.singleShot(0, ticked.set)
-        pump(ui_qapp, ticked.is_set)
-        assert panel.condition_state.stage_text == "数据保存中"
-        assert panel.condition_state.rows["forward"]["result"] == "数据保存中"
-        assert panel.dashboard_panel.summary_panel.isVisible()
-        assert panel.get_station_count() == 0
-        assert session.state == "delivering" and service.busy
-        assert host.data_struct.store_wave_data is None
-        def forbidden(*args, **kwargs):
-            raise AssertionError("full waveform preparation on GUI")
-        monkeypatch.setattr("ui.sequence.sequence_widget_streaming_ops.quantize_pcm24", forbidden)
-        original_equal, original_finite = np.array_equal, np.isfinite
-        def guarded(original):
-            def invoke(*args, **kwargs):
-                if QThread.currentThread() is ui_qapp.thread():
-                    raise AssertionError("array scan on GUI")
-                return original(*args, **kwargs)
-            return invoke
-        monkeypatch.setattr(np, "array_equal", guarded(original_equal))
-        monkeypatch.setattr(np, "isfinite", guarded(original_finite))
-        def forbid_gui_mean(frame, event, function):
-            if event == "c_call" and getattr(function, "__name__", "") == "mean":
-                raise AssertionError("mean on GUI")
-        sys.setprofile(forbid_gui_mean)
-        release.set()
-        pump(ui_qapp, lambda: getattr(host.data_struct, "recording_source", None) is not None)
-        assert host.data_struct.store_wave_data is None
-        assert host.data_struct.store_wave_data_multi is None
-        assert host.data_struct.audio_lenth == session.audio.descriptor.final_frames
-        assert session.state == "completed"
-        messages = [record.getMessage() for record in caplog.records]
-        assert any("stage=gui_publication" in message and session.request.request_id in message for message in messages)
-        assert any("stage=completion" in message and "child_descriptor_to_parent_observation_gap=unmeasured" in message for message in messages)
-        assert panel.condition_state.stage_text != "数据保存中"
-        assert panel.condition_state.rows["forward"]["result"] != "数据保存中"
-    finally:
-        sys.setprofile(None)
-        release.set()
-        panel.close()
-
-
 def test_child_reports_request_correlated_local_durations(tmp_path, caplog):
     import logging
     caplog.set_level(logging.INFO)
@@ -228,116 +142,6 @@ def test_finalizing_is_once_only_and_cancel_blocks_fallback():
     cancelled.cancel_requested = True
     service._notify_finalizing(cancelled)
     assert seen == [session]
-
-
-@pytest.mark.parametrize("legacy_prefinalized", [False, True])
-def test_changed_legacy_input_recomputes_mono(ui_qapp, tmp_path, monkeypatch, legacy_prefinalized):
-    from unit_test.ui.test_sequence_wav_calibration_metadata import _prepare_final_completion_host
-    req = request(tmp_path, trim_samples=0)
-    _, descriptor = capture_audio(req)
-    import hashlib
-    expected_saved = known_audio()[:9, req.channels]
-    descriptor = replace(descriptor, final_envelope=None, digest_algorithm="sha256-float32-le",
-                         sample_digest=hashlib.sha256(expected_saved.astype("<f4").tobytes()).hexdigest())
-    audio = read_result(descriptor, req).audio
-    changed = audio.multi.copy()
-    changed[:, 0] += 4
-    host, _ = _prepare_final_completion_host(changed)
-    host._recording_process_request = req
-    host._recording_process_direction = "condition-1"
-    monkeypatch.setattr("ui.sequence.sequence_widget_streaming_ops.resolve_startup_trim_samples", lambda *args: 0)
-    monkeypatch.setattr("ui.sequence.sequence_widget_streaming_ops.validate_recorded_audio", lambda *args: (True,"",{}))
-    monkeypatch.setattr("ui.sequence.sequence_widget_streaming_ops.RecordingManager", lambda: mock.Mock(save_signal_info_to_db=mock.Mock(return_value=(0,"ok"))))
-    assert host._on_streaming_complete(recorded_mono=audio.mono, recorded_multi=changed,
-        sample_rate=req.sample_rate, prefinalized=legacy_prefinalized,
-        completion_source="process" if legacy_prefinalized else "streaming",
-        prepared_audio=audio) is True, host.default_logger.error.call_args_list
-    expected = changed.copy()
-    if not legacy_prefinalized:
-        expected[:, 0] = np.float32(8388607 / 8388608)
-    np.testing.assert_array_equal(host.data_struct.store_wave_data, expected.mean(axis=1))
-    assert host.data_struct.store_wave_data is not audio.mono
-
-
-@pytest.mark.parametrize("terminal", ["cancel", "cancelled", "failed"])
-def test_cancelled_and_replaced_session_cannot_restore_processing(ui_qapp, tmp_path, terminal):
-    from types import SimpleNamespace
-    from base.recording_service import RecordingSession, RecordingCallbacks
-    from ui.sequence.recording_process_context import RecordingProcessContext
-    from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
-    service = SimpleNamespace(cancel=mock.Mock())
-    host = main_host(service, tmp_path)
-    panel = MotorDetectionLeftPanel(None, condition_configs=[{"key":"forward", "name":"正转"}])
-    host.left_panel = panel
-    host._get_active_product_condition_key = lambda: "forward"
-    req = request(tmp_path)
-    old = RecordingSession(service, req, RecordingCallbacks())
-    context = RecordingProcessContext(req, "forward", session=old)
-    host._recording_process_contexts = {req.request_id: context}
-    host._recording_process_session = old
-    host._active_recording_process_id = req.request_id
-    host._on_process_recording_finalizing(old)
-    assert panel.condition_state.stage_text == "数据保存中"
-    if terminal == "cancel":
-        host._cancel_process_recording()
-        expected = "等待开始"
-    elif terminal == "cancelled":
-        host._on_process_recording_cancelled(old, None)
-        expected = "等待开始"
-    else:
-        from base.recording_process_protocol import RecordingFailure
-        host._on_process_recording_failed(old, RecordingFailure(req.request_id, "read", req.path, "broken"))
-        expected = "测试异常"
-    assert panel.condition_state.stage_text == expected
-    expected_condition = "测试异常" if terminal == "failed" else "待检测"
-    host._on_process_recording_finalizing(old)
-    assert panel.condition_state.stage_text == expected
-    fresh_req = replace(req, request_id="fresh")
-    fresh = RecordingSession(service, fresh_req, RecordingCallbacks())
-    fresh_context = RecordingProcessContext(fresh_req, "forward", session=fresh)
-    host._recording_process_contexts[fresh_req.request_id] = fresh_context
-    host._active_recording_process_id = fresh_req.request_id
-    panel.set_current_stage("分析中")
-    host._on_process_recording_finalizing(old)
-    assert panel.condition_state.stage_text == "分析中"
-    host._on_process_recording_finalizing(fresh)
-    assert panel.condition_state.stage_text == "数据保存中"
-    host._finish_process_recording_status(context, "待检测", "等待开始", "pending")
-    panel.set_current_stage("分析中")
-    host._finish_process_recording_status(fresh_context, "待检测", "等待开始", "pending")
-    host._on_process_recording_finalizing(fresh)
-    assert panel.condition_state.stage_text == "分析中"  # once per session
-    host._get_active_product_condition_key = lambda: "reverse"
-    host._finish_process_recording_status(fresh_context, "待检测", "等待开始", "pending")
-    panel.close()
-
-
-def test_ve_trusted_result_admission_never_scans_audio(ui_qapp, tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    from unit_test.base.test_recording_finalization import prepared_ve_result
-    from ui.sequence.recording_process_context import RecordingProcessContext
-    req, descriptor, multi, _ = prepared_ve_result(tmp_path, {"enabled":False})
-    from base.recording_process_protocol import RecordingFinalEnvelope, RecordingQualityEvidence
-    columns = tuple((np.arange(len(multi), dtype=np.int64), multi[:, column]) for column in range(2))
-    descriptor = replace(descriptor, digest_algorithm=None, sample_digest=None,
-        final_envelope=RecordingFinalEnvelope(1, len(multi), req.channels, columns, None,
-            RecordingQualityEvidence(len(multi), "skipped", None, None, None, True)))
-    audio = prepare_main_recording_result(descriptor, req)
-    host = main_host(SimpleNamespace(), tmp_path)
-    host._recording_input_channels = req.channels
-    host._active_input_channels = list(req.channels)
-    session = SimpleNamespace(request=req, accept_result=mock.Mock(), reject_result=mock.Mock())
-    context = RecordingProcessContext(req, "forward", session=session)
-    host._recording_process_contexts = {req.request_id:context}
-    host._active_recording_process_id = req.request_id
-    def forbidden(*args, **kwargs):
-        raise AssertionError("full audio scan on trusted VE delivery")
-    monkeypatch.setattr(np, "isfinite", forbidden)
-    monkeypatch.setattr(np, "array_equal", forbidden)
-    host._on_process_recording_result(session, audio)
-    session.accept_result.assert_called_once_with()
-    session.reject_result.assert_not_called()
-    assert context.validated_audio is audio
 
 
 def test_legacy_reader_retains_writable_array_contract(tmp_path):
@@ -472,48 +276,3 @@ def test_cancel_during_metadata_skips_optional_success_timing_io(tmp_path, monke
         release.set()
         capture.cancel()
         assert capture.join(3)
-
-
-def test_ve_release_grace_keeps_data_saving_without_failure_dialog(ui_qapp, tmp_path, monkeypatch):
-    from PyQt5.QtWidgets import QMessageBox
-    from base.recording_service import RecordingCallbacks
-    from base.recording_process_protocol import RecordingEvent, RecordingProgress
-    from unit_test.base.test_recording_service_pipeline import ve_probe
-    from ui.sequence.recording_process_context import RecordingProcessContext
-    from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
-
-    probe = ve_probe(monkeypatch, tmp_path)
-    host = main_host(probe.service, tmp_path)
-    panel = MotorDetectionLeftPanel(None, condition_configs=[{"key": "forward", "name": "正转"}])
-    host.left_panel = panel
-    host._get_active_product_condition_key = lambda: "forward"
-    session, req = probe.session, probe.session.request
-    context = RecordingProcessContext(req, "forward", session=session)
-    host._recording_process_contexts = {req.request_id: context}
-    host._recording_process_session = session
-    host._active_recording_process_id = req.request_id
-    failed = mock.Mock(wraps=host._on_process_recording_failed)
-    dialog = mock.Mock()
-    monkeypatch.setattr(QMessageBox, "warning", dialog)
-    session.callbacks = RecordingCallbacks(finalizing=host._on_process_recording_finalizing, failed=failed)
-    try:
-        probe.clock.advance(.1)
-        probe.service._event(probe.worker, RecordingEvent(1, req.request_id, "progress",
-            RecordingProgress(req.request_id, 1, req.target_samples, 100.1)))
-        probe.service._event(probe.worker, RecordingEvent(1, req.request_id, "finalizing"))
-        assert panel.condition_state.stage_text == "数据保存中"
-        for delay in (1.0, 18.99):
-            probe.clock.advance(delay)
-            probe.service._tick()
-            assert panel.condition_state.stage_text == "数据保存中"
-            failed.assert_not_called()
-            dialog.assert_not_called()
-        assert session._slot_release_warning_sent
-        assert session.failure is None and not probe.service.can_start_recording
-        probe.clock.advance(120.1 - probe.clock())
-        probe.service._tick()
-        failed.assert_called_once()
-        assert session.failure.stage == "capture_release_timeout"
-        assert panel.condition_state.stage_text == "测试异常"
-    finally:
-        panel.close()

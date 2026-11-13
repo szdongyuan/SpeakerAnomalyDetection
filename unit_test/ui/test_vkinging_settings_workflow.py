@@ -1,231 +1,18 @@
-"""Connected Qt queue editing and condition recording; all device I/O is fake."""
+"""Current queue editing resolves VE parameters against shared instance stores."""
 from copy import deepcopy
 import json
 from types import MethodType
 
-import numpy as np
 import pytest
-import soundfile as sf
-from PyQt5.QtCore import Qt
-from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QDialog, QMessageBox
+from PyQt5.QtWidgets import QMessageBox
 
-from base.recording_capture import RecordingCapture
-from base.recording_final_result import prepare_main_recording_result
-from base.recording_process_protocol import RecordingResult
-from base.product_test_project_config import ProductTestProjectConfigManager
 from base.sequence_queue_references import SequenceQueueReferenceScanner
-from base.vkinging_capture import VkingingInputStream
-from base.wav_calibration_metadata import inspect_wav_calibration_metadata
-from consts.recording_preview_consts import (
-    PREVIEW_TIME_MODE_CUMULATIVE, RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
-)
-from consts.vkinging_consts import VE_RANGE_LABELS
 from ui.acquisition_config_window import RecordConfigWindow
-from ui.hardware_window import HardwareSelectionState
 from ui.operation_sequence import AnalysisModelSelect
-from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
-from ui.shared_queue_save_dialog import SharedQueueSaveDialog
+from ui.sequence.workbench_editor_context import resolve_editor_ve_device
 from unit_test.base.test_sequence_queue_references import write_json
-from unit_test.product_config_fixtures import make_project
-from unit_test.base.vkinging_fakes import CaptureSDK, device_info
-from unit_test.ui.test_vkinging_hardware import controls, confirm, select_device
-from unit_test.ui.test_vkinging_queue_parameters import condition_host, enter_condition
-from unit_test.ui.test_vkinging_recording import (
-    host_factory, finish_ve_capture, save_calibration,
-)
-
-
-@pytest.mark.parametrize("reopen_collapsed", [False, True])
-def test_discovery_queue_edit_shared_save_condition_capture(
-        controls, condition_host, ui_qapp, tmp_path, monkeypatch, reopen_collapsed):
-    host = condition_host
-    monkeypatch.setattr(QMessageBox, "information", lambda *_: QMessageBox.Ok)
-    controller = controls.create(HardwareSelectionState(
-        api_name="MME", mic_device=controls.old_mic, mic_channels=[1]))
-    view = controller.view
-    view.driver_combo.setCurrentIndex(view.driver_combo.findData("vkinging"))
-    assert not view.mic_channel_table.isEnabled()
-    confirm(controller, ui_qapp, device_info())
-    assert view.mic_device_table.checked_payload() is None
-    assert view.mic_channel_table.model().rowCount() == 0
-    select_device(controller, "test-machine-1")
-    for row in range(view.mic_channel_table.model().rowCount()):
-        view.mic_channel_table.model().item(row).setCheckState(Qt.Checked)
-    controller._on_ok_clicked()
-    assert view.result() == QDialog.Accepted
-    host.mic = deepcopy(controller.model.state.mic_device)
-    host.mic_channels = list(controller.model.state.mic_channels)
-    assert host.mic_channels == [7, 1]
-    host.refresh_channel_windows()
-    save_calibration(host, physical=7, factor=12)
-    profile_before = host.ve_profile_store.path.read_bytes()
-    calibration_before = host.ve_calibration_store.path.read_bytes()
-
-    products = tmp_path / "products"
-    product_registry = products / "registry.json"
-    queue_registry = tmp_path / "queues.json"
-    q, r = tmp_path / "Q.json", tmp_path / "R.json"
-    payload = [{"seq1": {
-        "acq": {"name": "录制音频", "mode": "RECORD_ONLY", "detail": {
-            "sample_rate": 48000, "ve_range_index": 1, "total_time": .1,
-            "startup_trim_ms": 10, "use_streaming_recording": False,
-            "audio_validation": {"enabled": False}, "monitor_playback": True,
-            "monitor_gain_db": "obsolete", "monitor_fade_in_ms": "obsolete",
-        }},
-        "analysis_list": {"display_sequence": [], "default_ai": None, "auto_analysis": True},
-    }}]
-    write_json(q, payload)
-    write_json(r, payload)
-    write_json(queue_registry, {"Q": str(q), "Q_alias": str(q), "R": str(r), "using_config_path": str(q)})
-    manager = ProductTestProjectConfigManager(str(products), str(product_registry), str(queue_registry))
-    for name, queues in (("First", ("Q", "R")), ("Second", ("Q_alias",))):
-        configured = make_project(tmp_path, project_name=name, station_count=1, condition_count=len(queues))
-        configured["stations"][0]["station_name"] = "Port"
-        for index, (condition, queue) in enumerate(zip(configured["conditions"], queues)):
-            condition["condition_name"] = chr(65 + index)
-            condition["test_queue"] = queue
-        saved, message = manager.save_project(None, configured)
-        assert saved, message
-    monkeypatch.setattr("base.load_config.SEQUENCE_CONFIG_REGISTRY_PATH", str(queue_registry))
-    scanner = SequenceQueueReferenceScanner(products, product_registry, queue_registry)
-    editor = AnalysisModelSelect(str(q), mic=host.mic, mic_channels=host.mic_channels,
-                                 reference_scanner=scanner)
-    before = q.read_bytes(), r.read_bytes(), queue_registry.read_bytes()
-    dialogs = []
-
-    def edit_recording(dialog):
-        dialogs.append(dialog)
-        dialog.show()
-        assert dialog.recording_advanced_panel.isHidden()
-        dialog.samplerate_combo.setEditText("96000")
-        dialog.recording_advanced_toggle.click()
-        dialog.streaming_recording_checkbox.setChecked(True)
-        dialog.preview_time_mode_combo.setCurrentIndex(
-            dialog.preview_time_mode_combo.findData(PREVIEW_TIME_MODE_CUMULATIVE))
-        dialog.ve_range_combo.setCurrentIndex(5)
-        ui_qapp.processEvents()
-        dialog.ve_range_combo.showPopup()
-        popup = dialog.ve_range_combo.view()
-        assert QTest.qWaitForWindowExposed(popup.window(), 1000)
-        assert popup.isVisible()
-        assert [dialog.ve_range_combo.itemText(i) for i in range(7)] == list(VE_RANGE_LABELS)
-        assert dialog.ve_range_combo.count() == 7
-        dialog.ve_range_combo.hidePopup()
-        dialog.on_click_ok_btn()
-        assert dialog.final_data is not None
-        return dialog.final_data
-
-    monkeypatch.setattr(RecordConfigWindow, "exec", edit_recording)
-    try:
-        editor.select_list.show_dialog(editor.select_list.config[0].name)
-        edited = editor.select_list.config[0].detail
-        assert edited["sample_rate"] == 96000 and edited["ve_range_index"] == 5
-        assert edited["use_streaming_recording"] is True
-        assert edited[RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY] == PREVIEW_TIME_MODE_CUMULATIVE
-        assert not any(key.startswith("monitor_") for key in edited)
-        assert editor.dirty
-        assert (q.read_bytes(), r.read_bytes(), queue_registry.read_bytes()) == before
-
-        if reopen_collapsed:
-            def accept_collapsed(dialog):
-                dialogs.append(dialog)
-                dialog.show()
-                ui_qapp.processEvents()
-                assert dialog.recording_advanced_panel.isHidden()
-                assert dialog.streaming_recording_checkbox.isChecked()
-                dialog.on_click_ok_btn()
-                return dialog.final_data
-            monkeypatch.setattr(RecordConfigWindow, "exec", accept_collapsed)
-            editor.select_list.show_dialog(editor.select_list.config[0].name)
-
-        decisions = iter((False, True))
-        shown = []
-
-        def decide_shared(dialog):
-            shown.append(dialog.details.toPlainText())
-            assert "First/Port/A" in shown[-1] and "Second/Port/A" in shown[-1]
-            assert "First/Port/B" not in shown[-1]
-            return QMessageBox.Ok if next(decisions) else QMessageBox.Cancel
-
-        monkeypatch.setattr(SharedQueueSaveDialog, "exec_", decide_shared)
-        editor.ok_btn_clicked()
-        assert editor.dirty
-        assert (q.read_bytes(), r.read_bytes(), queue_registry.read_bytes()) == before
-        editor.ok_btn_clicked()
-        assert len(shown) == 2 and not editor.dirty
-        assert q.read_bytes() != before[0] and r.read_bytes() == before[1]
-        saved = json.loads(q.read_text(encoding="utf-8"))[0]["seq1"]["acq"]["detail"]
-        assert saved["sample_rate"] == 96000 and saved["ve_range_index"] == 5
-
-        # The real manual condition entry loads the saved queue and builds the
-        # real frozen request. Only the process transport is injected by fixture.
-        for name in ("_load_sequence_config_for_product_condition", "_resolve_sequence_queue_path",
-                     "_apply_sequence_config_from_path"):
-            setattr(host, name, MethodType(getattr(SequenceWidgetConfigOpsMixin, name), host))
-        host.product_test_condition_configs = [
-            {"key": "r", "condition_name": "R", "test_queue": str(r)},
-            {"key": "q", "condition_name": "Q", "test_queue": str(q)},
-        ]
-        for index, rate, limit, live in ((1, 96000, .1, True), (0, 48000, 5, False),
-                                         (1, 96000, .1, True)):
-            host._manual_product_condition_index = index
-            enter_condition(host, "manual")
-            session = host._recording_process_session
-            request = session.request
-            assert request.sample_rate == rate and request.channels == (7, 1)
-            assert request.target_samples == int(.1 * rate) + round(.01 * rate)
-            assert request.trim_samples == round(.01 * rate)
-            assert request.effective_streaming is live and dict(request.monitor) == {}
-            sdk = CaptureSDK()
-            sdk.values_by_physical_channel = {7: .0125, 1: -.025}
-            capture = RecordingCapture(request, ve_stream_factory=lambda **kwargs:
-                VkingingInputStream(**kwargs, sdk_factory=lambda: sdk))
-            capture.start()
-            result = capture.wait(5)
-            assert isinstance(result, RecordingResult), result
-            channel_calls = [call for call in sdk.trace
-                             if call["operation"] == "create_iepe_voltage_channel"]
-            clock_calls = [call for call in sdk.trace
-                           if call["operation"] == "configure_sample_clock"]
-            assert len(channel_calls) == len(clock_calls) == 1
-            assert channel_calls[0]["kwargs"] == {
-                "range_min": -limit, "range_max": limit}
-            assert clock_calls[0]["args"][1] == rate
-            assert sdk.calls("verify_actual_sample_rate") == 1
-            data, actual_rate = sf.read(request.path, dtype="float32", always_2d=True)
-            assert actual_rate == rate and len(data) == int(.1 * rate)
-            assert sf.info(request.path).subtype == "PCM_24"
-            # Literal PCM24 codes for the fake input voltages; do not derive the
-            # expected samples with the production quantizer being exercised.
-            expected = (np.array([104857, -209716]) / 8388608).astype(np.float32)
-            np.testing.assert_array_equal(data, np.tile(expected, (len(data), 1)))
-            metadata = inspect_wav_calibration_metadata(request.path).metadata
-            assert metadata["acquisition"]["sample_rate"] == rate
-            assert metadata["acquisition"]["range_min"] == -limit
-            assert metadata["acquisition"]["range_max"] == limit
-            channel = metadata["recorded_channels"][0]
-            assert channel["physical_input_channel"] == 7
-            assert metadata["schema_version"] == 2
-            assert channel["v2pa_factor"] == 12 and channel["factor_source"] == "calibrated"
-            assert metadata["recorded_channels"][1]["factor_source"] == "none"
-            preview = capture.snapshot(generation=session.generation, sequence=1)
-            if live:
-                assert preview.time_mode == PREVIEW_TIME_MODE_CUMULATIVE
-                assert preview.waveforms[0].time[0] == 0
-                assert preview.waveforms[0].time[-1] == pytest.approx((len(data) - 1) / rate)
-                np.testing.assert_allclose(preview.waveforms[0].amplitude, .0125)
-            else:
-                assert preview is None
-            finish_ve_capture(host, session, prepare_main_recording_result(result, request))
-            assert host.ve_calibration_store.get_factor(request.device, 7) == 12
-            assert host.ve_profile_store.path.read_bytes() == profile_before
-            assert host.ve_calibration_store.path.read_bytes() == calibration_before
-    finally:
-        for dialog in dialogs:
-            dialog.close()
-        editor._allow_close = True
-        editor.close()
+from unit_test.base.vkinging_fakes import device_info
+from unit_test.ui.vkinging_editor_fixtures import editor_factory as host_factory
 
 
 @pytest.mark.parametrize("entry", ["direct", "project"])
@@ -244,6 +31,8 @@ def test_queue_editor_after_startup_uses_saved_profile_for_missing_rate(
     host = host_factory(48000)
     window = _WindowHarness()
     window.sequence_window = host
+    from ui.sequence.workbench_editor_context import WorkbenchEditorContext
+    window.editor_context = WorkbenchEditorContext(None, host.queue_data, host.default_logger)
     window.ve_profile_store = host.ve_profile_store
     window.ve_calibration_store = host.ve_calibration_store
     window.mic = device_info(available=False, input_config=None)
@@ -251,11 +40,11 @@ def test_queue_editor_after_startup_uses_saved_profile_for_missing_rate(
     window._on_ve_discovery_result(_discovery(device_info()))
     assert window.mic["available"]
     assert window.mic["input_config"]["sample_rate"] == 51200
-    effective = SequenceWidgetConfigOpsMixin._current_ve_recording_device(host, window.mic)
+    effective = resolve_editor_ve_device(host.queue_data, window.mic,
+                                        host.ve_profile_store, host.ve_calibration_store)
     assert effective["input_config"]["sample_rate"] == 48000
     before_device = deepcopy(window.mic)
     profile_before = host.ve_profile_store.path.read_bytes()
-    host.on_sequence_config_updated = Mock()
     window._on_configuration_deleted = Mock()
     notice = Mock()
     monkeypatch.setattr("ui.operation_sequence.QMessageBox.information", notice)
@@ -322,7 +111,6 @@ def test_queue_editor_after_startup_uses_saved_profile_for_missing_rate(
         assert host.ve_profile_store.path.read_bytes() == profile_before
         assert all(path.read_bytes() == content for path, content in product_before.items())
         assert "测试队列已保存" in notice.call_args.args[2]
-        host.on_sequence_config_updated.assert_not_called()
     finally:
         if parent is not None:
             parent._dirty = False
@@ -394,7 +182,8 @@ def test_missing_profile_uses_runtime_default_without_writing_a_profile(host_fac
     host = host_factory(48000)
     host.ve_profile_store.path.unlink()
     mic = device_info()
-    runtime = SequenceWidgetConfigOpsMixin._current_ve_recording_device(host, mic)
+    runtime = resolve_editor_ve_device(host.queue_data, mic,
+                                     host.ve_profile_store, host.ve_calibration_store)
     dialog = RecordConfigWindow({}, mic=mic, ve_profile_provider=lambda device:
                                 host.ve_profile_store.load(device, host.ve_calibration_store))
     try:

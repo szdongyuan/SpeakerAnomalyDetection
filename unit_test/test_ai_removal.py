@@ -103,15 +103,10 @@ with patch.object(m.LogManager, 'set_log_handler', logging.getLogger), \
          patch.object(m, 'DATABASE_PATH', 'missing/model_frontend.db'):
         window.function_action_ai_model_manager.trigger()
         opened.assert_called_once_with()
-from ui.signal_analysis_window import get_class_mapping
-assert 'AI' not in get_class_mapping()
 from base.analysis_algorithm_adapters import _HANDLERS
 from base.analysis_algorithm_adapters import calculate_analysis_instance
-from base.analysis_worker import _contributes_to_final
-from base.analysis_process_protocol import SUPPORTED_ANALYSIS_TYPES
-assert 'AI' not in _HANDLERS and 'AI' not in SUPPORTED_ANALYSIS_TYPES
-assert _contributes_to_final('SPL', {'limit_checked': True})
-assert not _contributes_to_final('SPL', {'limit_checked': False})
+from base.analysis.executor import _SUPPORTED_TYPES
+assert 'AI' not in _HANDLERS and 'AI' not in _SUPPORTED_TYPES
 import numpy as np
 signal = .01 * np.sin(2 * np.pi * 1000 * np.arange(12000) / 48000)
 for kind, config in (

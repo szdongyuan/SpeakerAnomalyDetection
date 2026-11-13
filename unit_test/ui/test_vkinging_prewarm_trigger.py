@@ -11,6 +11,7 @@ from base.recording_process_protocol import VeLifecycleCounts
 from base.recording_service import VePrewarmCompletion
 from base.vkinging_prewarm_lifetime import VePrewarmLifetime
 from main_window import MainWindow
+from ui.sequence.workbench_editor_context import WorkbenchEditorContext
 from unit_test.base.vkinging_fakes import device_info, input_config
 
 
@@ -70,6 +71,13 @@ class _WindowHarness:
 
     def __init__(self, *, bridge=None, lifetime=None):
         self.default_logger = logging.getLogger("core")
+        self.editor_context = WorkbenchEditorContext(None, [], self.default_logger)
+        self.editor_context.update_channels = Mock(return_value=True)
+        self._configuration_editor_open = False
+        self._configuration_deletion_error = ""
+        self._configuration_deletion_busy = lambda: False
+        self._configuration_deletion_failed = Mock()
+        self.workbench_controller = SimpleNamespace(refresh_recording_state=Mock())
         self.ve_prewarm_lifetime = lifetime or VePrewarmLifetime()
         self.recording_bridge = bridge or _Bridge()
         self.sequence_window = SimpleNamespace(
@@ -392,8 +400,7 @@ def test_first_ve_confirmation_lets_prewarm_own_incompatible_release(monkeypatch
     assert len(window.recording_bridge.calls) == 1
     assert window.recording_bridge.calls[0].signature[3] == 44100
     assert window.recording_bridge.release_calls == []
-    window.sequence_window.synchronize_hardware_analysis_channels.assert_called_once()
-
+    window.editor_context.update_channels.assert_called_once()
 
 def test_unchanged_hardware_confirmation_preserves_manual_analysis_subset(monkeypatch):
     window = _WindowHarness()
@@ -403,21 +410,20 @@ def test_unchanged_hardware_confirmation_preserves_manual_analysis_subset(monkey
 
     window.on_hardware_window_init()
 
-    window.sequence_window.synchronize_hardware_analysis_channels.assert_not_called()
-
+    window.editor_context.update_channels.assert_not_called()
 
 def test_changed_channels_sync_immediately_and_failed_sync_can_retry(monkeypatch):
     window = _WindowHarness(bridge=_SynchronousBridge())
     window.mic, window.mic_channels = device_info(), [1]
-    window.sequence_window.synchronize_hardware_analysis_channels.side_effect = [False, True]
+    window.editor_context.update_channels.side_effect = [False, True]
     monkeypatch.setattr("main_window.open_hardware_selection_window",
                         lambda **kwargs: (True, None, [], window.mic, [1, 7]))
 
     window.on_hardware_window_init()
-    assert window.sequence_window.mic_channels == [1, 7]
+    assert window.mic_channels == [1, 7]
     assert window._hardware_analysis_sync_pending is True
     window.on_hardware_window_init()
-    assert window.sequence_window.synchronize_hardware_analysis_channels.call_count == 2
+    assert window.editor_context.update_channels.call_count == 2
     assert window._hardware_analysis_sync_pending is False
 
 
@@ -441,8 +447,7 @@ def test_waiting_product_round_keeps_original_hardware_admission(monkeypatch, ui
 
     assert warnings == []
     dialog.assert_called_once()
-    window.sequence_window.synchronize_hardware_analysis_channels.assert_not_called()
-
+    window.editor_context.update_channels.assert_not_called()
 
 def test_cancel_does_not_consume_and_consumed_or_ordinary_switch_keeps_release(monkeypatch):
     lifetime = VePrewarmLifetime()
@@ -454,7 +459,7 @@ def test_cancel_does_not_consume_and_consumed_or_ordinary_switch_keeps_release(m
                         lambda **kwargs: (False, None, [], None, []))
     window.on_hardware_window_init()
     assert lifetime.snapshot().state == "available"
-    window.sequence_window.synchronize_hardware_analysis_channels.assert_not_called()
+    window.editor_context.update_channels.assert_not_called()
 
     selected_signature = window._ve_prewarm_signature(old, [7, 1])
     assert lifetime.claim("already-used", selected_signature)

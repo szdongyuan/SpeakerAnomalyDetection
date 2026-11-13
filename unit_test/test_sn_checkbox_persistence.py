@@ -1,206 +1,54 @@
-import logging
-import os
-import sys
-import types
+"""Current scanner preference restore and shared-file merge contracts."""
+import json
+from unittest.mock import Mock, call
+from datetime import date
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QCheckBox, QLineEdit
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
-if "concurrent_log_handler" not in sys.modules:
-    concurrent_log_handler = types.ModuleType("concurrent_log_handler")
-
-    class _ConcurrentRotatingFileHandler(logging.Handler):
-        def __init__(self, *args, **kwargs):
-            super().__init__()
-
-        def emit(self, record):
-            return None
-
-    concurrent_log_handler.ConcurrentRotatingFileHandler = _ConcurrentRotatingFileHandler
-    sys.modules["concurrent_log_handler"] = concurrent_log_handler
-
-from ui.sequence import sequence_widget_barcode_ops as barcode_ops
-from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
+from ui.sequence import workbench_input_ops as input_ops
+from unit_test.ui.test_workbench_input_ops import host
 
 
-class _DummyLogger:
-    def __init__(self):
-        self.infos = []
-        self.warnings = []
-
-    def info(self, message):
-        self.infos.append(message)
-
-    def warning(self, message):
-        self.warnings.append(message)
-
-
-class _DummyHardwareManager:
-    def __init__(self):
-        self.ensure_calls = 0
-        self.start_calls = 0
-        self.stop_calls = 0
-        self.force_reload_calls = []
-
-    def ensure_config_loaded(self, force_reload=False):
-        self.ensure_calls += 1
-        self.force_reload_calls.append(force_reload)
-        return True
-
-    def start_scanner_and_sensor_listeners(self):
-        self.start_calls += 1
-        return True
-
-    def stop_scanner_and_sensor_listeners(self):
-        self.stop_calls += 1
+@pytest.mark.parametrize('payload, enabled', [
+    ({'scanner_barcode_check': True}, True),
+    ({'scanner_barcode_check': 'true'}, True),
+    ({'scanner_barcode_check': 'invalid'}, False),
+    (None, False), ([1], False), ('invalid', False),
+])
+def test_restore_scanner_checkbox_without_persisting(host, monkeypatch, payload, enabled):
+    saved = Mock()
+    monkeypatch.setattr(input_ops.LoadUiConfig, 'load_last_recorded_info', lambda _: payload)
+    monkeypatch.setattr(input_ops, 'save_recorded_data_to_json', saved)
+    host.lineedit_s_or_n.setText('SN001')
+    host.hw_manager.calls.clear()
+    host.restore_scanner_checkbox_state()
+    assert host.barcode_scanner_box.isChecked() is enabled
+    assert host.lineedit_s_or_n.isEnabled() is enabled
+    assert ('start' if enabled else 'stop') in host.hw_manager.calls
+    if not enabled:
+        assert host.lineedit_s_or_n.text() == ''
+    saved.assert_not_called()
 
 
-class _DummyWidget(SequenceWidgetBarcodeOpsMixin):
-    def __init__(self):
-        self.barcode_scanner_box = QCheckBox()
-        self.lineedit_s_or_n = QLineEdit()
-        self.lineedit_type = QLineEdit()
-        self.default_logger = _DummyLogger()
-        self.hw_manager = _DummyHardwareManager()
-        self.lineedit_type.setText("MODEL")
-
-
-@pytest.fixture(scope="module", autouse=True)
-def app():
-    return QApplication.instance() or QApplication([])
-
-
-def test_restore_scanner_checkbox_state_uses_saved_flag(monkeypatch):
-    widget = _DummyWidget()
-    saved_payload = {"scanner_barcode_check": True}
-    save_calls = []
-
-    monkeypatch.setattr(barcode_ops.LoadUiConfig, "load_last_recorded_info", staticmethod(lambda logger: saved_payload))
-    monkeypatch.setattr(barcode_ops, "save_recorded_data_to_json", lambda *args: save_calls.append(args), raising=False)
-
-    widget.restore_scanner_checkbox_state()
-
-    assert widget.barcode_scanner_box.isChecked() is True
-    assert widget.lineedit_s_or_n.isEnabled() is True
-    assert widget.hw_manager.start_calls == 1
-    assert save_calls == []
-
-
-def test_restore_scanner_checkbox_state_defaults_to_disabled(monkeypatch):
-    widget = _DummyWidget()
-    widget.barcode_scanner_box.setChecked(True)
-    widget.lineedit_s_or_n.setEnabled(True)
-    widget.lineedit_s_or_n.setText("SN001")
-    save_calls = []
-
-    monkeypatch.setattr(
-        barcode_ops.LoadUiConfig,
-        "load_last_recorded_info",
-        staticmethod(lambda logger: {"scanner_barcode_check": "invalid"}),
-    )
-    monkeypatch.setattr(barcode_ops, "save_recorded_data_to_json", lambda *args: save_calls.append(args), raising=False)
-
-    widget.restore_scanner_checkbox_state()
-
-    assert widget.barcode_scanner_box.isChecked() is False
-    assert widget.lineedit_s_or_n.isEnabled() is False
-    assert widget.lineedit_s_or_n.text() == ""
-    assert widget.hw_manager.stop_calls == 1
-    assert save_calls == []
-
-
-def test_restore_scanner_checkbox_state_accepts_legacy_truthy_string(monkeypatch):
-    widget = _DummyWidget()
-    save_calls = []
-
-    monkeypatch.setattr(
-        barcode_ops.LoadUiConfig,
-        "load_last_recorded_info",
-        staticmethod(lambda logger: {"scanner_barcode_check": "true"}),
-    )
-    monkeypatch.setattr(barcode_ops, "save_recorded_data_to_json", lambda *args: save_calls.append(args), raising=False)
-
-    widget.restore_scanner_checkbox_state()
-
-    assert widget.barcode_scanner_box.isChecked() is True
-    assert widget.lineedit_s_or_n.isEnabled() is True
-    assert widget.hw_manager.start_calls == 1
-    assert save_calls == []
-
-
-@pytest.mark.parametrize("saved_payload", [None, [1], "invalid"])
-def test_restore_scanner_checkbox_state_handles_missing_or_malformed_payload(monkeypatch, saved_payload):
-    widget = _DummyWidget()
-    widget.barcode_scanner_box.setChecked(True)
-    widget.lineedit_s_or_n.setEnabled(True)
-    widget.lineedit_s_or_n.setText("SN001")
-    save_calls = []
-
-    monkeypatch.setattr(
-        barcode_ops.LoadUiConfig,
-        "load_last_recorded_info",
-        staticmethod(lambda logger: saved_payload),
-    )
-    monkeypatch.setattr(barcode_ops, "save_recorded_data_to_json", lambda *args: save_calls.append(args), raising=False)
-
-    widget.restore_scanner_checkbox_state()
-
-    assert widget.barcode_scanner_box.isChecked() is False
-    assert widget.lineedit_s_or_n.isEnabled() is False
-    assert widget.lineedit_s_or_n.text() == ""
-    assert widget.hw_manager.stop_calls == 1
-    assert save_calls == []
-
-
-def test_clicked_scanner_persists_only_checkbox_state(monkeypatch):
-    """clicked_scanner must persist ONLY the checkbox flag, never the
-    product_model/scanner_barcode fields, so unrelated UI state is preserved."""
-    widget = _DummyWidget()
-    save_calls = []
-
-    def _capture(*args, **kwargs):
-        save_calls.append((args, kwargs))
-
-    monkeypatch.setattr(barcode_ops, "save_recorded_data_to_json", _capture, raising=False)
-
-    widget.barcode_scanner_box.setChecked(True)
-    widget.clicked_scanner()
-    widget.barcode_scanner_box.setChecked(False)
-    widget.clicked_scanner()
-
-    assert save_calls == [
-        ((), {"scanner_barcode_check": True}),
-        ((), {"scanner_barcode_check": False}),
+def test_clicked_scanner_persists_only_checkbox_state(host, monkeypatch):
+    saved = Mock()
+    monkeypatch.setattr(input_ops, 'save_recorded_data_to_json', saved)
+    for enabled in (True, False):
+        host.barcode_scanner_box.setChecked(enabled)
+        host.clicked_scanner()
+    assert saved.call_args_list == [
+        call(scanner_barcode_check=True),
+        call(scanner_barcode_check=False),
     ]
 
 
-def test_save_recorded_data_to_json_merge_preserves_checkbox(tmp_path, monkeypatch):
-    """A subsequent save that does NOT mention scanner_barcode_check must
-    preserve the previously persisted value (regression test for the bug
-    where mode-switch / type-edit lose-focus would overwrite the flag)."""
+def test_save_recorded_data_to_json_merge_preserves_existing_fields(tmp_path, monkeypatch):
     from base import save_data
-
-    fake_dir = str(tmp_path) + os.sep
-    monkeypatch.setattr(save_data, "DEFAULT_DIR", fake_dir, raising=False)
-    os.makedirs(os.path.join(fake_dir, "ui", "ui_config"), exist_ok=True)
-
-    save_data.save_recorded_data_to_json(scanner_barcode_check=True)
-    save_data.save_recorded_data_to_json(product_model="MODEL_A", sequence_mode="mark")
-    save_data.save_recorded_data_to_json(
-        sample_number="SAMPLE-001",
-        current_test_round=7,
-    )
-
-    import json
-    with open(os.path.join(fake_dir, "ui", "ui_config", "recorded_number.json"), "r") as f:
-        data = json.load(f)
-
-    assert data["scanner_barcode_check"] is True
-    assert data["product_model"] == "MODEL_A"
-    assert data["sequence_mode"] == "mark"
-    assert data["sample_number"] == "SAMPLE-001"
-    assert data["current_test_round"] == 7
+    monkeypatch.setattr(save_data, 'DEFAULT_DIR', str(tmp_path) + '/')
+    path = tmp_path / 'ui/ui_config/recorded_number.json'
+    path.parent.mkdir(parents=True)
+    original = {'scanner_barcode_check': True, 'sequence_mode': 'mark',
+                'sample_number': 'SAMPLE-001', 'current_test_round': 7, 'unknown': {'keep': 1}}
+    path.write_text(json.dumps(original), encoding='utf-8')
+    save_data.save_recorded_data_to_json(product_model='MODEL_A', scanner_barcode='SN1')
+    assert json.loads(path.read_text()) == {**original, 'product_model': 'MODEL_A', 'scanner_barcode': 'SN1', 'datetime': date.today().isoformat()}

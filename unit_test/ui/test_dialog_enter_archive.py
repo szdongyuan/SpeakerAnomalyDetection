@@ -10,7 +10,6 @@ from PyQt5.QtWidgets import QDialog, QFileDialog, QMessageBox, QPushButton
 from base.analysis_report_source import ProjectReportIndex
 from base.audio_record_filter import parse_audio_filter_metadata
 from consts import error_code
-from ui.analysis_multichannel_result_window import AnalysisMultichannelResultWindow
 from ui.analysis_report_export_dialog import AnalysisReportExportDialog
 from ui.analysis_report_wav_dialog import AnalysisReportWavDialog, CandidateTableModel
 from ui.archive_audio_analysis_dialog import ArchiveAudioAnalysisDialog
@@ -263,11 +262,3 @@ def test_archive_result_enter_never_clicks_viewer_buttons(dialogs, monkeypatch, 
         press(button, enter, ui_qapp)
     assert recorded == []
     assert dialog.isVisible()
-
-
-def test_plain_result_widget_still_has_no_enter_action(dialogs, enter, ui_qapp):
-    window = dialogs(AnalysisMultichannelResultWindow("SPL", ()))
-    assert not window.findChildren(QPushButton)
-    assert not hasattr(window, "_enter_policy")
-    QTest.keyClick(window, *enter)
-    assert window.isVisible()

@@ -6,7 +6,6 @@ from PyQt5.QtWidgets import QDialog, QGroupBox, QTableView
 from ui import hardware_window as hardware_ui
 from unit_test.ui.test_vkinging_hardware import controls, confirm, main_window_harness
 from unit_test.base.vkinging_fakes import device_info
-from unit_test.ui.test_vkinging_recording import host_factory
 from base import hardware_selection
 
 
@@ -77,28 +76,6 @@ def test_main_status_has_only_input(controls, main_window_harness):
     assert "扬声器" not in text and "输出" not in text and "Old output" not in text
 
 
-
-@pytest.mark.parametrize("legacy_output", [None, {"name": "stale output", "hostapi": 1}])
-def test_capture_ignores_absent_or_cross_api_legacy_output(host_factory, controls, monkeypatch, legacy_output):
-    from ui.sequence import sequence_widget_analysis_ops as analysis
-    host = host_factory()
-    host.mic, host.mic_channels = controls.old_mic, [1]
-    host.refresh_channel_windows()
-    original = analysis.LoadUiConfig.get_rec_and_play_dict_base_sequence_dict
-    def with_legacy_output(*args):
-        playback, record = original(*args)
-        record.update(input_device=controls.old_mic, output_device=legacy_output)
-        return playback, record
-    monkeypatch.setattr(analysis.LoadUiConfig, "get_rec_and_play_dict_base_sequence_dict", with_legacy_output)
-    def no_output_lookup(*args, **kwargs):
-        raise AssertionError("Pure capture must not query output")
-    monkeypatch.setattr(controls.audio.sdm, "get_default_device", no_output_lookup)
-    recorded, rate = host.reset_work_pram("not_labeled")
-    assert recorded["device"] == controls.old_mic
-    assert host._recording_input_channels == (1,)
-    assert rate == recorded["sample_rate"]
-
-
 def test_recording_editor_ignores_legacy_output_without_query(controls, monkeypatch):
     from ui.acquisition_config_window import RecordConfigWindow, SoundDeviceManager
     def unexpected(*args, **kwargs):
@@ -127,7 +104,6 @@ def test_main_driver_comes_from_input_and_does_not_propagate_output(controls, ma
 def test_failed_dialog_save_does_not_publish_draft_to_main(controls, main_window_harness, ui_qapp, monkeypatch, ve):
     window = main_window_harness.create()
     window.mic, window.mic_channels = controls.old_mic, [1]
-    window.sequence_window.mic, window.sequence_window.mic_channels = controls.old_mic, [1]
     before = controls.path.read_bytes()
     previous = deepcopy(window.mic)
     def reject_write(*args):
@@ -146,8 +122,8 @@ def test_failed_dialog_save_does_not_publish_draft_to_main(controls, main_window
         return False, None, [], controller._initial_state.mic_device, controller._initial_state.mic_channels
     monkeypatch.setattr(hardware_ui.HardwareSelectionController, "on_exec", interact)
     window.on_hardware_window_init()
-    assert window.mic == window.sequence_window.mic == previous
-    assert window.mic_channels == window.sequence_window.mic_channels == [1]
+    assert window.mic == previous
+    assert window.mic_channels == [1]
     assert controls.path.read_bytes() == before
 
 

@@ -137,7 +137,7 @@ def test_main_window_two_conditions_publish_eight_analysis_tasks(startup, tmp_pa
     monkeypatch.setattr(QMessageBox, 'warning', Mock())
     forbidden = Mock(side_effect=AssertionError('workbench must not start analysis'))
     for name in ('_start_process_recording', '_start_next_queued_analysis'):
-        monkeypatch.setattr(SequenceWindow, name, forbidden)
+        assert not hasattr(SequenceWindow, name)
     service = RecordingService(
         backend_factory='unit_test.base.recording_process_fakes:workbench_soundcard_dependencies',
         backend_options={'trace_dir': str(tmp_path), 'frames': 12, 'chunk_frames': 4})

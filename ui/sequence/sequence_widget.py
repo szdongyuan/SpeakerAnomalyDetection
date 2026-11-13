@@ -1,222 +1,97 @@
-import os
-import weakref
+"""Current workbench view and operator inputs."""
+from html import escape
 
-from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QApplication, QWidget
+from PyQt5.QtCore import Qt, QSignalBlocker
+from PyQt5.QtGui import QIcon
+from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
-from base.data_struct.data_deal_struct import DataDealStruct
-from base.load_config import LoadUiConfig
 from base.log_manager import LogManager
-from base.soundcard_calibration_manager import get_mic_v2pa_factor
 from base.unified_hid_device_manager import UnifiedHardwareManager
+from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
-from ui.sequence.barcode_router import BarcodeRouter
 from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
 from ui.sequence.sequence_tools_bar import SequenceToolsBar
-from ui.sequence.sequencement_count_board import SequenceCountBoard
-
-from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
-from ui.sequence.sequence_widget_test_metadata_ops import SequenceWidgetTestMetadataOpsMixin
-from ui.sequence.sequence_widget_progress_ops import SequenceWidgetProgressOpsMixin
-from ui.sequence.sequence_widget_round_reset_ops import SequenceWidgetRoundResetOpsMixin
-from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
-from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
-from ui.sequence.sequence_widget_analysis_process_ops import (
-    SequenceWidgetAnalysisProcessOpsMixin,
-)
-from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
-from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
-from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
-from ui.sequence.sequence_widget_raw_csv_ops import SequenceWidgetRawCsvOpsMixin
+from ui.sequence.workbench_input_ops import WorkbenchInputOpsMixin
+from ui.sequence.workbench_layout import build_workbench_layout
 
 
-class SequenceWindow(
-    SequenceWidgetUiOpsMixin,
-    SequenceWidgetTestMetadataOpsMixin,
-    SequenceWidgetProgressOpsMixin,
-    SequenceWidgetRoundResetOpsMixin,
-    SequenceWidgetBarcodeOpsMixin,
-    SequenceWidgetSerialTriggerOpsMixin,
-    SequenceWidgetAnalysisProcessOpsMixin,
-    SequenceWidgetAnalysisOpsMixin,
-    SequenceWidgetConfigOpsMixin,
-    SequenceWidgetStreamingOpsMixin,
-    SequenceWidgetRawCsvOpsMixin,
-    QWidget,
-):
-
-    def __init__(self, *, recording_bridge=None, ve_prewarm_lifetime=None,
-                 raw_audio_csv_bridge=None, workbench_mode=False):
-        """Initializes the class instance, setting up the user interface and necessary parameters."""
+class SequenceWindow(WorkbenchInputOpsMixin, QWidget):
+    def __init__(self, *, can_commit):
         super().__init__()
-        self.workbench_mode = workbench_mode
-        if not self.workbench_mode:
-            self._product_config_refresh_state = "initializing"
-            self._product_config_refresh_error = ""
-            self._applied_product_snapshot = None
-            self._pending_initial_product_snapshot = None
         self.default_logger = LogManager.set_log_handler("core")
-        self.recording_bridge = recording_bridge
-        self.ve_prewarm_lifetime = ve_prewarm_lifetime
-        self._owns_recording_bridge = False
-        self.data_struct = DataDealStruct()
-        self.recorded_path = None
-        self.count_board = None
-        self.toolsbar = SequenceToolsBar(workbench_mode=self.workbench_mode)
-
-        self.mic = None
-        self.mic_channels = []
-        self.v2pa_factor = get_mic_v2pa_factor(
-            self.mic,
-            self.mic_channels,
-        )
-        self.using_config_path, self.registry = self.get_sequence_config_from_registry()
-        self.sequence_config = list()
-        self.analysis_config = dict()
-        self.get_sequence_config_from_json()
-        self.signal_info = {}
-        self.analysis_window = []
-        self._analysis_result_summary_window = None
-
-        if self.workbench_mode:
-            self.product_test_condition_configs = []
-            self.product_test_project_context = {}
-            self._product_queue_catalog = {}
-            self.product_test_close_trigger_state = ""
-        else:
-            self._prepare_initial_product_configuration()
-            self.product_test_close_trigger_state = self.load_active_product_test_close_trigger_state()
-        self.init_data_struct_stimulus_config()
-        self.init_fft_and_stft_flag()
-        self.count_board = SequenceCountBoard(self.analysis_config)
-        self._initialize_raw_audio_csv_runtime(raw_audio_csv_bridge=raw_audio_csv_bridge)
-        self.left_panel = MotorDetectionLeftPanel(
-            self.count_board,
-            condition_configs=self.product_test_condition_configs,
-            queue_catalog=self._product_queue_catalog,
-        )
-        self._initialize_analysis_process_runtime()
-        self._init_test_round_metadata()
-        self._init_round_reset()
-        if not self.workbench_mode:
-            self._refresh_test_mode_availability()
-        self.player_status_flag = False
-        # True while a record run is still processing (record -> analysis -> save).
-        # Used to prevent starting a new recording before the full workflow completes.
-        self._record_workflow_busy = False
-        self.recorded_signal_info = {}
-        self.clicked_player_flag = False
-        self.mode = None
-        self.last_play_count = None  # Cache last run token for replay overwrite
-        self._current_cycle_recorded_count = None
-        self._current_run_recording_token = ""
-        self._manual_product_condition_index = 0
-        self._manual_product_condition_group_id = ""
-        self._manual_product_condition_results = {}
-        self._manual_product_condition_completed_keys = set()
-        self._manual_product_condition_counted_group_labels = {}
-        self._active_product_condition_key = ""
-        self._active_product_condition_config = None
-
-        self._missing_config_prompted = False
-        # Only show missing-config prompt after the window is shown (i.e. after login success).
-        self._missing_config_prompt_enabled = False
-
-        self._barcode_debounce_ms = 120
-        self._barcode_fast_input_max_seconds = 0.4  # 首字符到末字符的总耗时，小于该值更像扫码（扫码枪通常 < 0.2秒）
-        self._barcode_min_length_for_auto_commit = 4  # 条码最小长度，太短容易误触发（可按实际条码规则调整）
-
-        # 扫码逻辑委托到 BarcodeRouter（需先创建，再连接定时器/信号）
-        self._barcode_router = BarcodeRouter(self)
-
-        self._barcode_debounce_timer = QTimer(self)
-        self._barcode_debounce_timer.setSingleShot(True)
-        self._barcode_debounce_timer.setInterval(self._barcode_debounce_ms)
-        # 扫码逻辑委托到 BarcodeRouter，SequenceWidget 只保留业务提交入口 _commit_barcode
-        self._barcode_debounce_timer.timeout.connect(self._barcode_router.on_barcode_debounce_timeout)
-        self._serial_trigger_delay_timer = QTimer(self)
-        self._serial_trigger_delay_timer.setSingleShot(True)
-        self._serial_trigger_delay_timer.timeout.connect(self._on_serial_trigger_delay_timeout)
-        self._current_trigger_direction = ""
-        self._active_recording_direction = ""
-        self._manual_direction_fallback_next_direction = "forward"
-        self._direction_cycle_started_at = ""
-        self._current_cycle_first_direction = ""
-        self._condition_record_cache = {}
-        self._pending_serial_trigger_direction = ""
-        self._queued_directional_trigger = ""
-        self._serial_product_condition_executing = False
-        self._serial_product_session_started = False
-        self._serial_product_latched_frame = ""
-        self._serial_product_waiting_for_close = False
-        self._product_test_program_config_dialog_open = False
-        self._serial_product_error_dialog_open = False
-        self._barcode_first_char_ts = None
-        self._barcode_last_char_ts = None
-        # 当焦点不在 S/N 输入框时，用事件过滤器捕获扫码枪按键序列（避免"必须点到输入框才生效"）
-        self._barcode_capture_buffer = ""
-        self._barcode_capture_first_ts = None
-        self._barcode_capture_last_ts = None
-        self._barcode_capture_target_lineedit = None
-        self._barcode_capture_target_text = None
-        self._barcode_capture_target_cursor_pos = None
-        app = QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
-        self._awaiting_ok_ng = False
-        self._sn_clear_on_next_scan = False
-        self._sn_locked_for_product_round = False
-
-        # 条码提交去重机制：防止 HID 模式和键盘楔入模式同时触发导致重复提交
-        self._last_committed_barcode = None
-        self._last_committed_barcode_time = 0.0
-        self._barcode_commit_dedup_window_sec = 0.8  # 800ms 去重窗口
-
-        # HID 模式激活标志：当 HID 模式成功接收条码后，暂时忽略键盘楔入模式的输入
-        self._hid_mode_active_until = 0.0  # 时间戳，在此之前忽略键盘输入
-
-        # Streaming state variables
-        self._streaming_chunk_contract_failed = False
-        self.streaming_wav_writer = None  # WAV file writer for incremental saving
-        self.streaming_processor = None  # StreamingAudioProcessor instance
-        self._streaming_completion_processor = None
-        self.streaming_stimulus_data = None  # Stimulus data for alignment (play+record mode)
-        self.streaming_mode = None  # "play_record" or "record_only"
-        self._configured_input_channels = None
-        self._recording_input_channels = None
-        self._pending_configured_input_channels = None
-        self._channel_selection_error = ""
-        self._active_input_channels = [0]
-        self.recent_test_sessions = []
-        self.recent_test_session_by_id = {}
-        self._recent_session_seq = 0
-        self._recent_session_max_items = 20
-        self._current_recent_session_id = None
-        self._pending_recent_session_append = False
-        self._streaming_first_chunk_logged = False
-
-        # Analysis window geometry persistence (per analysis item key)
-        self._analysis_window_key_by_obj = weakref.WeakKeyDictionary()
-        self._analysis_window_geometry_path = os.path.join(
-            DEFAULT_DIR, "ui", "ui_config", "analysis_window_geometry.json"
-        )
-        self._analysis_window_geometry = self._load_analysis_window_geometry()
-        self._analysis_window_geometry_flush_timer = QTimer(self)
-        self._analysis_window_geometry_flush_timer.setSingleShot(True)
-        self._analysis_window_geometry_flush_timer.timeout.connect(self._flush_analysis_window_geometry)
-        self._analysis_window_geometry_dirty = False
-
+        self.toolsbar = SequenceToolsBar()
+        self.left_panel = MotorDetectionLeftPanel()
         self.hw_manager = UnifiedHardwareManager()
+        self.setWindowIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/logo_pic/ting.ico"))
+        self.setMinimumHeight(700)
+        layout = QVBoxLayout()
+        layout.addWidget(self.toolsbar)
+        layout.addLayout(build_workbench_layout(self), stretch=1)
+        layout.setContentsMargins(1, 0, 1, 0)
+        self.setLayout(layout)
+        self.setStyleSheet(ui_style_const.qcombobox_style)
+        self.set_workbench_recording_state(False, "正在准备录制设备…")
+        self.using_file_combobox.setPlaceholderText("未选择产品")
+        self.init_workbench_input(can_commit)
 
-        # Restore persisted mode before UI callbacks are registered to avoid startup side effects.
-        self._restore_last_sequence_mode()
+    def closeEvent(self, event):
+        # A view close is also used to hide the workspace before login.
+        # MainWindow explicitly releases inputs after its application drains.
+        event.accept()
 
-        self.set_member_connect()
-        self.bind_hw_signals()
-        self.init_lineedit_text()
-        self.init_ui()
-        self._serial_trigger_runtime_initialized = False
-        if not self.workbench_mode:
-            self._finish_initial_product_configuration()
-            self._init_product_progress_runtime()
-        self.restore_scanner_checkbox_state()
+    def show_workbench_round(self, number):
+        self.toolsbar.sample_number_lineedit.setText(str(number))
+
+    def set_workbench_recording_state(self, enabled, detail, busy=False):
+        self.toolsbar.set_recording_busy(busy)
+        self.player_btn.setEnabled(enabled)
+        self.player_btn.setToolTip(detail)
+        self.player_btn.setAccessibleDescription(detail)
+
+    def set_workbench_active_product(self, product_name):
+        combo = self.using_file_combobox
+        with QSignalBlocker(combo):
+            combo.clear()
+            if product_name:
+                combo.addItem(product_name)
+                combo.setCurrentIndex(0)
+        combo.setToolTip(f"<qt>{escape(product_name)}</qt>" if product_name else "")
+
+    def show_workbench_products(self, entries, selected_file):
+        combo = self.using_file_combobox
+        name_counts = {}
+        for _, name in entries:
+            name_counts[name] = name_counts.get(name, 0) + 1
+        with QSignalBlocker(combo):
+            combo.clear()
+            for file_name, name in entries:
+                label = f"{name}（{file_name}）" if name_counts[name] > 1 else name
+                combo.addItem(label, file_name)
+                combo.setItemData(combo.count() - 1, f"<qt>{escape(name)}<br>{escape(file_name)}</qt>", Qt.ToolTipRole)
+            combo.setPlaceholderText("未选择产品" if entries else "暂无配置")
+            combo.setCurrentIndex(combo.findData(selected_file))
+        hint = combo.itemData(combo.currentIndex(), Qt.ToolTipRole) or ""
+        combo.setToolTip(hint)
+
+    def set_workbench_product_selection_enabled(self, enabled):
+        self.using_file_combobox.setEnabled(enabled)
+
+    @property
+    def player_btn(self):
+        return self.toolsbar.player_btn
+
+    @property
+    def using_file_combobox(self):
+        return self.toolsbar.using_file_combobox
+
+    @property
+    def lineedit_type(self):
+        return self.toolsbar.lineedit_type
+
+    @property
+    def lineedit_s_or_n(self):
+        return self.toolsbar.lineedit_s_or_n
+
+    @property
+    def barcode_scanner_box(self):
+        return self.toolsbar.barcode_scanner_box

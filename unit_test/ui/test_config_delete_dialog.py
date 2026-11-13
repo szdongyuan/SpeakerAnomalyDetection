@@ -1,7 +1,7 @@
 import json
+import logging
 import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from PyQt5.QtCore import QTimer, Qt
@@ -14,7 +14,7 @@ from base.sequence_queue_references import QueueReferenceDraft
 from ui.config_delete_dialog import ConfigDeleteDialog, STATUS_ROLE
 from ui.operation_sequence import AnalysisModelSelect
 from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
-from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
+from ui.sequence.workbench_editor_context import WorkbenchEditorContext
 from unit_test.base.test_config_deletion import files, product, write
 
 
@@ -312,10 +312,9 @@ def test_explicit_no_selection_survives_registry_reload(files, monkeypatch):
     _, _, _, registry, target = files
     write(registry, {"Q": str(target), "using_config_path": None})
     monkeypatch.setattr("base.load_config.SEQUENCE_CONFIG_REGISTRY_PATH", str(registry))
-    host = SimpleNamespace(_is_sequence_config_path=lambda path: True)
     for _ in range(2):
-        path, _ = SequenceWidgetConfigOpsMixin.get_sequence_config_from_registry(host)
-        assert path is None
+        context = WorkbenchEditorContext.load(logging.getLogger(__name__))
+        assert context.selected_path is None
     assert json.loads(registry.read_text())["using_config_path"] is None
 
 

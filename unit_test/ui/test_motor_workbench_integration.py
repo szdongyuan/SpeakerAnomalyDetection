@@ -38,7 +38,7 @@ from main_window import MainWindow
 from ui.config_delete_dialog import ConfigDeleteDialog
 from ui.recording_service_bridge import RecordingServiceBridge
 from ui.sequence import (
-    sequence_tools_bar, sequence_widget, sequence_widget_serial_trigger_ops, workbench_toolbar_preferences,
+    sequence_tools_bar, sequence_widget, workbench_input_ops,
 )
 from ui.sequence.sequence_widget import SequenceWindow
 from ui.video_controller import VideoController
@@ -69,12 +69,16 @@ class _Hardware(QObject):
     sig_serial_trigger_status = pyqtSignal(object)
 
     get_serial_discrete_input_status = staticmethod(lambda: {})
-
+    stop_scanner_listeners = staticmethod(lambda: None)
 
 class _WorkbenchWindow(MainWindow):
     def __init__(self, video_path):
         QMainWindow.__init__(self)
         self.default_logger = logging.getLogger(__name__)
+        self._configuration_editor_open = False
+        self._configuration_deletion_error = ""
+        from ui.sequence.workbench_editor_context import WorkbenchEditorContext
+        self.editor_context = WorkbenchEditorContext.load(self.default_logger)
         self.mic, self.mic_channels = None, []
         self.access_lvl = None
         self._hardware_analysis_sync_pending = False
@@ -172,6 +176,7 @@ def workbench(qt_app, tmp_path, monkeypatch, config_files, request):
         "test_toolbar_product_selection_failures_restore_current_product",
         "test_toolbar_product_selection_busy_and_recovery",
         "test_toolbar_product_selection_hides_marks_and_preserves_independent_queue",
+        "test_deletion_failure_blocks_only_own_configuration_entries",
     )
     if startup in ("unselected", "empty", "missing registry", "unreadable registry"):
         registry = json.loads(config_files["programs"].read_text(encoding="utf-8"))
@@ -251,13 +256,6 @@ def workbench(qt_app, tmp_path, monkeypatch, config_files, request):
     monkeypatch.setattr(load_config, "SEQUENCE_CONFIG_REGISTRY_PATH", str(config_files["queues"]))
     forbidden = Mock(side_effect=AssertionError("workbench entered the old product runtime or wrote a configuration"))
     for owner, names in (
-        (SequenceWindow, ("_get_product_program_manager", "_prepare_initial_product_configuration",
-                          "_finish_initial_product_configuration", "_init_product_progress_runtime",
-                          "_offer_product_test_resume", "_start_serial_product_listener",
-                          "_sync_product_progress_after_trigger_switch",
-                          "_prepare_next_manual_product_condition_recording", "start_this_play",
-                          "_start_directional_workflow", "update_recorded_signal_info_to_db",
-                          "_start_process_recording", "_start_next_queued_analysis")),
         (StreamingWavWriter, ("__init__",)),
         (load_config.LoadUiConfig, ("update_using_config_path", "save_sequence_config_to_json")),
         (ProductTestProjectConfigManager, ("save_project",) if selection_test else ("save_registry", "save_project")),
@@ -278,26 +276,19 @@ def workbench(qt_app, tmp_path, monkeypatch, config_files, request):
     monkeypatch.setattr(sequence_widget, "UnifiedHardwareManager", lambda: hardware)
     monkeypatch.setattr(sequence_widget.LogManager, "set_log_handler", logging.getLogger)
     legacy_recorded_info = {"sequence_mode": "test"} if startup == "legacy test mode" else {}
-    monkeypatch.setattr(sequence_widget.LoadUiConfig, "load_last_recorded_info", lambda _: legacy_recorded_info)
-    for name in ("restore_scanner_checkbox_state", "init_lineedit_text"):
-        monkeypatch.setattr(SequenceWindow, name, lambda self: None)
-    monkeypatch.setattr(SequenceWindow, "_load_analysis_window_geometry", lambda self: {})
+    monkeypatch.setattr(workbench_input_ops.LoadUiConfig, "load_last_recorded_info", lambda _: legacy_recorded_info)
+    monkeypatch.setattr(SequenceWindow, "restore_scanner_checkbox_state", lambda self: None)
     monkeypatch.setattr(SequenceWindow, "closeEvent", QWidget.closeEvent)
     warning = Mock()
     information = Mock()
     monkeypatch.setattr(QMessageBox, "warning", warning)
     monkeypatch.setattr(QMessageBox, "information", information)
 
-    monkeypatch.setattr(workbench_toolbar_preferences, "DEFAULT_DIR", tmp_path)
     preference_path = tmp_path / "ui" / "ui_config" / "workbench_toolbar_preferences.ini"
     if startup in ("preference mark", "preference test", "preference invalid"):
         preference_path.parent.mkdir(parents=True, exist_ok=True)
         preference_path.write_bytes(f"[General]\nmode={startup.split()[-1]}\n".encode("ascii"))
     preference_original = (preference_path.read_bytes(), preference_path.stat().st_mtime_ns) if preference_path.exists() else None
-    load_mode = Mock(wraps=workbench_toolbar_preferences.load_mode)
-    save_mode = Mock(wraps=workbench_toolbar_preferences.save_mode)
-    monkeypatch.setattr(workbench_toolbar_preferences, "load_mode", load_mode)
-    monkeypatch.setattr(workbench_toolbar_preferences, "save_mode", save_mode)
     windows = []
 
     def open_window():
@@ -311,7 +302,7 @@ def workbench(qt_app, tmp_path, monkeypatch, config_files, request):
                               load_active=load_active, independent_path=independent_path, other_path=other_path,
                               hardware=hardware, warning=warning, information=information,
                               repository=repository, manager=manager, save_registry=save_registry, startup=startup,
-                              forbidden=forbidden, load_mode=load_mode, save_mode=save_mode,
+                              forbidden=forbidden,
                               preference_original=preference_original)
     finally:
         for window in reversed(windows):
@@ -326,38 +317,21 @@ def workbench(qt_app, tmp_path, monkeypatch, config_files, request):
 
 
 def test_main_window_round_ignores_legacy_metadata(workbench, monkeypatch, isolate_workbench_round_state):
-    from ui.sequence import sequence_widget_test_metadata_ops as metadata_module
-    from ui.sequence import sequence_widget_ui_ops as ui_module
-
     workbench.legacy_recorded_info.update(sample_number="007", current_test_round=777)
     save = Mock()
-    monkeypatch.setattr(metadata_module, "save_recorded_data_to_json", save)
+    monkeypatch.setattr(workbench_input_ops, "save_recorded_data_to_json", save)
     window = workbench.open_window()
     sequence = window.sequence_window
     assert sequence.toolsbar.sample_number_lineedit.text() == "1"
     assert sequence.toolsbar.sample_number_lineedit.isReadOnly()
     assert json.loads(isolate_workbench_round_state.read_text())["round_number"] == 1
-    sequence.toolsbar.current_round_spinbox.setValue(888)
-    sequence.toolsbar.sample_number_lineedit.editingFinished.emit()
-    sequence.toolsbar.current_round_spinbox.editingFinished.emit()
-    assert sequence.toolsbar.sample_number_lineedit.text() == "1"
-    save.assert_not_called()
     sequence.show_workbench_round(10000)
-    sequence._restore_test_metadata_ui_state()
-    sequence._persist_test_metadata_ui_state()
-    sequence._sync_test_round_label()
-    sequence._end_test_round_metadata()
     assert sequence.toolsbar.sample_number_lineedit.text() == "10000"
-    assert sequence.left_panel.condition_state.current_round == 10000
-    assert sequence.toolsbar.sample_number_lineedit.isReadOnly()
     save.assert_not_called()
-    save_page = Mock()
-    monkeypatch.setattr(ui_module, "save_recorded_data_to_json", save_page)
     sequence.lineedit_type.setText("MODEL-2")
     sequence.lineedit_s_or_n.setText("SN-2")
-    sequence._persist_sequence_page_state()
-    save_page.assert_called_once_with(product_model="MODEL-2", scanner_barcode="SN-2", sequence_mode=None)
-
+    sequence._finish_product_model_edit()
+    save.assert_called_once_with(product_model="MODEL-2", scanner_barcode="SN-2")
 
 def _assert_station_headers_name_only(grid):
     assert grid._headers
@@ -400,23 +374,18 @@ def test_startup_without_layout_loads_business_state_and_refresh_recovers_plots(
 
 @pytest.mark.parametrize("workbench", ["legacy test mode", "preference mark", "preference test", "preference invalid"], indirect=True)
 def test_workbench_ignores_mode_preferences_and_keeps_results_on_hidden_combo_changes(workbench, monkeypatch):
-    sequence = workbench.window.sequence_window
-    combo, grid = sequence.condition_mode_combobox, sequence.plot_grid
+    window = workbench.window
+    sequence = window.sequence_window
+    grid = sequence.plot_grid
     path = workbench.preference_path
     saved = workbench.preference_original
-    workbench.load_mode.assert_not_called()
-    workbench.save_mode.assert_not_called()
-    assert combo.isHidden() and combo.focusPolicy() == Qt.NoFocus
+    assert not hasattr(sequence, "condition_mode_combobox")
+    assert not hasattr(sequence, "count_board")
     _assert_station_headers_name_only(grid)
-    assert sequence.count_board.mode == workbench.legacy_recorded_info.get("sequence_mode", "mark")
     grid.set_curve_data(0, 0, [{"x": [1, 2], "y": [3, 4]}])
     sequence.left_panel.set_station_results(1, "OK", "NG")
-    legacy_mode_changed = Mock()
-    sequence.count_board.register_mode_change_callback(legacy_mode_changed)
-    persist_legacy = Mock()
-    monkeypatch.setattr(sequence, "_persist_sequence_page_state", persist_legacy)
-    for mode in ("mark", "test", "mark"):
-        combo.setCurrentIndex(combo.findData(mode))
+    for _ in range(2):
+        workbench.window.on_workbench_configuration_committed()
         _assert_station_headers_name_only(grid)
     curve, = grid._cells[0, 0].plot_widget.getPlotItem().listDataItems()
     x, y = curve.getData()
@@ -424,23 +393,11 @@ def test_workbench_ignores_mode_preferences_and_keeps_results_on_hidden_combo_ch
     np.testing.assert_array_equal(y, [3, 4])
     station = sequence.left_panel.get_station_data(1)
     assert (station["forward"], station["reverse"]) == ("OK", "NG")
-    legacy_mode_changed.assert_not_called()
-    persist_legacy.assert_not_called()
-    sequence.count_board.on_mark_btn_clicked()
-    legacy_mode_changed.assert_called_once()
-    persist_legacy.assert_called_once_with("mark")
-    _assert_station_headers_name_only(grid)
-    for _ in range(2):
-        workbench.window.on_workbench_configuration_committed()
-        _assert_station_headers_name_only(grid)
     for legacy_mode in ("mark", "test"):
         workbench.legacy_recorded_info["sequence_mode"] = legacy_mode
         reopened = workbench.open_window().sequence_window
-        assert reopened.count_board.mode == legacy_mode
+        assert not hasattr(reopened, "count_board")
         _assert_station_headers_name_only(reopened.plot_grid)
-        assert reopened.condition_mode_combobox.isHidden()
-    workbench.load_mode.assert_not_called()
-    workbench.save_mode.assert_not_called()
     assert ((path.read_bytes(), path.stat().st_mtime_ns) if path.exists() else None) == saved
     workbench.forbidden.assert_not_called()
 
@@ -449,14 +406,13 @@ def test_workbench_ignores_mode_preferences_and_keeps_results_on_hidden_combo_ch
 def test_workbench_hidden_marks_survive_zero_columns_growth_and_refresh(workbench):
     window, files = workbench.window, workbench.files
     sequence = window.sequence_window
-    combo, grid = sequence.condition_mode_combobox, sequence.plot_grid
+    grid = sequence.plot_grid
     assert len(grid._headers) == 2
     _assert_station_headers_name_only(grid)
     registry = json.loads(files["programs"].read_text(encoding="utf-8"))
     write_json(files["programs"], {"active_file": None, "configs": []})
     window.on_workbench_configuration_committed()
     assert not grid._headers
-    combo.setCurrentIndex(combo.findData("mark"))
     layout = json.loads(files["layout"].read_text(encoding="utf-8"))
     layout["columns"] = 3
     for row in layout["cells"]:
@@ -470,8 +426,6 @@ def test_workbench_hidden_marks_survive_zero_columns_growth_and_refresh(workbenc
     reopened = workbench.open_window().sequence_window
     assert len(reopened.plot_grid._headers) == 3
     _assert_station_headers_name_only(reopened.plot_grid)
-    workbench.load_mode.assert_not_called()
-    workbench.save_mode.assert_not_called()
     assert not workbench.preference_path.exists()
 
 
@@ -584,7 +538,8 @@ def test_toolbar_product_selection_startup_empty_and_unreadable(workbench, caplo
 @pytest.mark.parametrize("failure", ["missing", "product", "queue", "layout", "removed", "write"])
 def test_toolbar_product_selection_failures_restore_current_product(workbench, monkeypatch, failure):
     second, _ = _register_toolbar_product(workbench)
-    sequence = workbench.window.sequence_window
+    window = workbench.window
+    sequence = window.sequence_window
     controller = workbench.window.workbench_controller
     combo = sequence.using_file_combobox
     _seed_toolbar_results(sequence)
@@ -625,12 +580,10 @@ def test_toolbar_product_selection_busy_and_recovery(workbench, monkeypatch, pha
     monkeypatch.setattr(window, "_calibration_admission_available", lambda: True)
     window.recording_bridge.service.busy = phase == "finalizing"
     window.recording_bridge.hardware_busy = phase == "cleanup"
-    sequence._analysis_round_config_locked = phase == "analysis"
-    monkeypatch.setattr(sequence, "_analysis_has_pending_tasks", lambda: phase == "queued analysis")
-    sequence.player_status_flag = phase == "recording"
+    monkeypatch.setattr(type(window.workbench_controller), "recording_busy", property(lambda _: phase == "recording"))
     window._closing = phase == "closing"
     window.analysis_service = SimpleNamespace(
-        pending_task_count={"resident analysis": 1, "resident queued analysis": 2}.get(phase, 0),
+        pending_task_count={"analysis": 1, "queued analysis": 2, "resident analysis": 1, "resident queued analysis": 2}.get(phase, 0),
     )
     window._update_hardware_busy_state()
     assert not combo.isEnabled()
@@ -639,9 +592,7 @@ def test_toolbar_product_selection_busy_and_recovery(workbench, monkeypatch, pha
     workbench.save_registry.assert_not_called()
     window.recording_bridge.service.busy = False
     window.recording_bridge.hardware_busy = False
-    sequence._analysis_round_config_locked = False
-    monkeypatch.setattr(sequence, "_analysis_has_pending_tasks", lambda: False)
-    sequence.player_status_flag = False
+    monkeypatch.setattr(type(window.workbench_controller), "recording_busy", property(lambda _: False))
     window._closing = False
     window.analysis_service.pending_task_count = 0
     window._update_hardware_busy_state()
@@ -689,19 +640,17 @@ def test_toolbar_product_selection_popup_and_editor_refresh(workbench):
 @pytest.mark.parametrize("workbench", ["with fallback", "preference mark", "preference test", "preference invalid"], indirect=True)
 def test_toolbar_product_selection_hides_marks_and_preserves_independent_queue(workbench):
     second, _ = _register_toolbar_product(workbench)
-    sequence = workbench.window.sequence_window
+    window = workbench.window
+    sequence = window.sequence_window
     path = workbench.preference_path
     saved = workbench.preference_original
-    sequence.condition_mode_combobox.setCurrentIndex(sequence.condition_mode_combobox.findData("mark"))
-    queue_path = sequence.using_config_path
+    queue_path = window.editor_context.selected_path
     sequence.using_file_combobox.setCurrentIndex(sequence.using_file_combobox.findData(second.name))
     _assert_station_headers_name_only(sequence.plot_grid)
-    assert sequence.using_config_path == queue_path
+    assert window.editor_context.selected_path == queue_path
     reopened = workbench.open_window().sequence_window
     assert reopened.using_file_combobox.currentData() == second.name
     _assert_station_headers_name_only(reopened.plot_grid)
-    workbench.load_mode.assert_not_called()
-    workbench.save_mode.assert_not_called()
     assert ((path.read_bytes(), path.stat().st_mtime_ns) if path.exists() else None) == saved
     workbench.forbidden.assert_not_called()
 
@@ -863,8 +812,7 @@ def test_startup_reads_both_views_and_uses_independent_fallback_in_memory(workbe
     window = workbench.window
     _assert_display(window, "电机", ("工位三", "工位一", "工位二"))
     sequence = window.sequence_window
-    assert sequence.using_config_path == str(workbench.independent_path)
-    assert sequence.count_board.analysis_config is sequence.analysis_config
+    assert window.editor_context.selected_path == str(workbench.independent_path)
     assert sequence.left_panel.get_station_data(1)["rows"] == [["B", "--", "--"], ["A", "--", "--"]]
     assert sequence.left_panel.get_station_data(1)["forward"] == "--"
     assert sequence.left_panel.get_station_data(1)["reverse"] == "--"
@@ -889,8 +837,8 @@ def test_selected_relative_independent_queue_is_available_to_editor(workbench, m
 def test_malformed_selected_queue_falls_back_to_valid_independent_queue(workbench):
     window = workbench.window
     sequence = window.sequence_window
-    assert sequence.using_config_path == str(workbench.independent_path)
-    assert sequence.analysis_config["fft"]["type"] == "FFT"
+    assert window.editor_context.selected_path == str(workbench.independent_path)
+    assert window.editor_context.queue_data[0]["seq1"]["analysis_list"]["fft"]["type"] == "FFT"
     _assert_display(window, "电机", ("工位三", "工位一", "工位二"))
     assert {path: path.read_bytes() for path in workbench.original} == workbench.original
 
@@ -898,17 +846,17 @@ def test_malformed_selected_queue_falls_back_to_valid_independent_queue(workbenc
 @pytest.mark.parametrize("workbench", ["no independent queue"], indirect=True)
 def test_workbench_starts_with_recording_parameters_and_no_independent_queue(workbench):
     window = workbench.window
-    assert window.sequence_window.using_config_path is None
+    assert window.editor_context.selected_path is None
     _assert_display(window, "电机", ("工位三", "工位一", "工位二"))
 
 
 @pytest.mark.parametrize("workbench", ["display-only queue"], indirect=True)
 def test_display_only_queue_is_rejected_without_disrupting_independent_analysis(workbench):
     _assert_display(workbench.window, "", ())
-    sequence = workbench.window.sequence_window
-    assert sequence.using_config_path == str(workbench.independent_path)
-    assert sequence.analysis_config["fft"]["type"] == "FFT"
-
+    window = workbench.window
+    sequence = window.sequence_window
+    assert window.editor_context.selected_path == str(workbench.independent_path)
+    assert window.editor_context.queue_data[0]["seq1"]["analysis_list"]["fft"]["type"] == "FFT"
 
 @pytest.mark.parametrize("workbench", ["invalid product", "missing product"], indirect=True)
 def test_first_failed_load_silently_leaves_both_views_empty(workbench):
@@ -916,6 +864,156 @@ def test_first_failed_load_silently_leaves_both_views_empty(workbench):
     assert workbench.window.findChild(QLabel, "workbenchConfigurationError") is None
     workbench.warning.assert_not_called()
     workbench.information.assert_not_called()
+
+
+@pytest.mark.parametrize("entry", ["product selection", "queue editor", "product editor"])
+def test_deletion_failure_blocks_only_own_configuration_entries(workbench, monkeypatch, entry):
+    failed = workbench.window
+    second, _ = _register_toolbar_product(workbench)
+    healthy = workbench.open_window()
+    _seed_toolbar_results(failed.sequence_window)
+    snapshot = failed.workbench_controller.get_recording_config()
+    registry = workbench.files["programs"].read_bytes()
+    queue_editor = Mock(side_effect=lambda *args, **kwargs: _CommitDialog(lambda: None))
+    product_editor = Mock(side_effect=lambda *args, **kwargs: _CommitDialog(lambda: None))
+    monkeypatch.setattr(main_module, "AnalysisModelSelect", queue_editor)
+    monkeypatch.setattr(main_module, "ProductTestProjectConfigDialog", product_editor)
+    failed._configuration_deletion_failed("删除未完整提交")
+
+    def invoke(window):
+        if entry == "product selection":
+            window.workbench_controller.select_product(second.name)
+        elif entry == "queue editor":
+            window.analysis_model_select()
+        else:
+            window.on_product_test_program_config()
+
+    invoke(failed)
+
+    assert workbench.files["programs"].read_bytes() == registry
+    assert failed.workbench_controller.get_recording_config() is snapshot
+    assert failed.sequence_window.using_file_combobox.currentData() == workbench.files["product"].name
+    assert failed.sequence_window.left_panel.get_station_data(1)["forward"] == "OK"
+    workbench.save_registry.assert_not_called()
+    queue_editor.assert_not_called()
+    product_editor.assert_not_called()
+
+    invoke(healthy)
+
+    if entry == "product selection":
+        workbench.save_registry.assert_called_once()
+        assert healthy.sequence_window.using_file_combobox.currentData() == second.name
+        assert json.loads(workbench.files["programs"].read_text(encoding="utf-8"))["active_file"] == second.name
+    elif entry == "queue editor":
+        queue_editor.assert_called_once()
+        product_editor.assert_not_called()
+    else:
+        product_editor.assert_called_once()
+        queue_editor.assert_not_called()
+    assert failed.workbench_controller.get_recording_config() is snapshot
+    assert failed._configuration_deletion_error == "删除未完整提交"
+    assert healthy._configuration_deletion_error == ""
+
+
+@pytest.mark.parametrize("state", ["deletion failure", "closing", "normal"])
+def test_nested_queue_editor_obeys_current_window_failure_and_close_state(workbench, monkeypatch, state):
+    from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
+
+    window = workbench.window
+    queue_editor = Mock(side_effect=lambda *args, **kwargs: _CommitDialog(lambda: None))
+    monkeypatch.setattr(main_module, "AnalysisModelSelect", queue_editor)
+    dialogs = []
+
+    def create_product_editor(_manager, callback, parent, **options):
+        dialog = ProductTestProjectConfigDialog(workbench.manager, callback, parent, **options)
+        dialogs.append(dialog)
+        def execute():
+            assert window._configuration_editor_open
+            if state == "deletion failure":
+                window._configuration_deletion_failed("嵌套编辑前删除失败")
+            elif state == "closing":
+                window._closing = True
+            dialog._edit_queue("Shared")
+            assert window._configuration_editor_open
+        dialog.exec = execute
+        return dialog
+
+    monkeypatch.setattr(main_module, "ProductTestProjectConfigDialog", create_product_editor)
+    try:
+        window.on_product_test_program_config()
+        assert len(dialogs) == 1
+        if state == "normal":
+            queue_editor.assert_called_once()
+            assert callable(queue_editor.call_args.kwargs["parent_draft_provider"])
+        else:
+            queue_editor.assert_not_called()
+        assert not window._configuration_editor_open
+        assert {path: path.read_bytes() for path in workbench.original} == workbench.original
+        workbench.save_registry.assert_not_called()
+    finally:
+        for dialog in dialogs:
+            dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+
+@pytest.mark.parametrize("blocked", ["deletion failure", "closing"])
+def test_committed_notification_preserves_snapshot_when_refresh_is_blocked(workbench, blocked):
+    window, files = workbench.window, workbench.files
+    controller, sequence = window.workbench_controller, window.sequence_window
+    _seed_toolbar_results(sequence)
+    recording = controller.get_recording_config()
+    analysis = controller.get_analysis_config()
+    condition = controller.get_condition_config("c1")
+    bindings = controller.get_plot_bindings(0, 0)
+    version = controller._analysis_version
+    product = json.loads(files["product"].read_text(encoding="utf-8"))
+    product["project_name"] = "已落盘但暂不应用"
+    write_json(files["product"], product)
+    if blocked == "deletion failure":
+        window._configuration_deletion_failed("删除未完整提交")
+    else:
+        window._closing = True
+
+    window.on_workbench_configuration_committed()
+
+    workbench.load_active.assert_called_once_with()
+    assert controller.get_recording_config() is recording
+    assert controller.get_analysis_config() is analysis
+    assert controller.get_condition_config("c1") is condition
+    assert controller.get_plot_bindings(0, 0) is bindings
+    assert controller._analysis_version == version
+    assert sequence.using_file_combobox.currentText() == "电机"
+    assert sequence.left_panel.get_station_data(1)["forward"] == "OK"
+    for cell in sequence.plot_grid._cells.values():
+        curve, = cell.plot_widget.getPlotItem().listDataItems()
+        x, y = curve.getData()
+        np.testing.assert_array_equal(x, [1, 2])
+        np.testing.assert_array_equal(y, [3, 4])
+
+
+@pytest.mark.parametrize("busy_owner", ["editor", "capture", "archive", "analysis"])
+def test_committed_notification_refreshes_already_saved_configuration_while_busy(workbench, monkeypatch, busy_owner):
+    window, files = workbench.window, workbench.files
+    controller = window.workbench_controller
+    recording = controller.get_recording_config()
+    product = json.loads(files["product"].read_text(encoding="utf-8"))
+    product["project_name"] = "已提交的新名称"
+    write_json(files["product"], product)
+    registry = json.loads(files["programs"].read_text(encoding="utf-8"))
+    registry["configs"][0]["project_name"] = product["project_name"]
+    write_json(files["programs"], registry)
+    window._configuration_editor_open = busy_owner == "editor"
+    window.recording_bridge.hardware_busy = busy_owner == "capture"
+    monkeypatch.setattr(type(controller), "recording_busy", property(lambda _: busy_owner == "archive"))
+    window.analysis_service = SimpleNamespace(pending_task_count=int(busy_owner == "analysis"))
+    assert window._workbench_configuration_busy()
+
+    window.on_workbench_configuration_committed()
+
+    assert workbench.load_active.call_count == 2
+    assert controller.get_recording_config() is not recording
+    assert controller.get_recording_config().context.project_name == "已提交的新名称"
+    assert window.sequence_window.using_file_combobox.currentText() == "已提交的新名称"
 
 
 def test_refresh_reads_committed_files_and_keeps_last_display_on_error(workbench, monkeypatch):
@@ -970,7 +1068,7 @@ def test_refresh_reads_committed_files_and_keeps_last_display_on_error(workbench
     registry["active_file"] = next_product.name
     registry["configs"].append({"file": next_product.name, "project_name": product["project_name"]})
     write_json(files["programs"], registry)
-    window.sequence_window._record_workflow_busy = True
+    window.recording_bridge.service.busy = True
     editor.committed.emit()
     _assert_display(window, "另一产品", ("工位二", "工位一", "工位三", "工位四"), selection_enabled=False)
     assert window.sequence_window.left_panel.get_station_data(1)["forward"] == "--"
@@ -986,7 +1084,7 @@ def test_refresh_reads_committed_files_and_keeps_last_display_on_error(workbench
 def test_successful_deletion_notifies_after_matching_independent_cleanup(workbench, monkeypatch, kind):
     window, files = workbench.window, workbench.files
     sequence = window.sequence_window
-    assert sequence.using_config_path == str(workbench.independent_path)
+    assert window.editor_context.selected_path == str(workbench.independent_path)
 
     def open_editor(*args, deletion_completed, **kwargs):
         def execute():
@@ -1017,13 +1115,11 @@ def test_successful_deletion_notifies_after_matching_independent_cleanup(workben
 
     assert workbench.load_active.call_count == 2
     if kind == "selected queue":
-        assert sequence.using_config_path is None
-        assert sequence.sequence_config == []
-        assert sequence.analysis_config == sequence.count_board.analysis_config == {}
+        assert window.editor_context.selected_path is None
+        assert window.editor_context.queue_data == []
     else:
-        assert sequence.using_config_path == str(workbench.independent_path)
-        assert sequence.analysis_config["fft"]["type"] == "FFT"
-
+        assert window.editor_context.selected_path == str(workbench.independent_path)
+        assert window.editor_context.queue_data[0]["seq1"]["analysis_list"]["fft"]["type"] == "FFT"
 
 @pytest.mark.parametrize("action", ["draft", "cancel", "failed save"])
 def test_uncommitted_dialog_exit_leaves_workbench_untouched(workbench, monkeypatch, action):
@@ -1056,12 +1152,11 @@ def test_hardware_confirmation_updates_independent_channels_without_writing(work
     window = workbench.window
     sequence = window.sequence_window
     if deletion_failed:
-        sequence._configuration_deletion_failed("配置列表未恢复")
+        window._configuration_deletion_failed("配置列表未恢复")
     _confirm_hardware(window, monkeypatch)
-    assert sequence.analysis_config["fft"]["analysis_channel"] == 2
-    assert sequence.analysis_config["fft"]["analysis_channels"] == [2, 4]
-    assert sequence.count_board.analysis_config is sequence.analysis_config
-    assert sequence._configuration_deletion_busy() is deletion_failed
+    assert window.editor_context.queue_data[0]["seq1"]["analysis_list"]["fft"]["analysis_channel"] == 2
+    assert window.editor_context.queue_data[0]["seq1"]["analysis_list"]["fft"]["analysis_channels"] == [2, 4]
+    assert window._configuration_deletion_busy() is deletion_failed
     assert not window._hardware_analysis_sync_pending
     assert {path: path.read_bytes() for path in workbench.original} == workbench.original
 
@@ -1070,8 +1165,8 @@ def test_hardware_confirmation_updates_independent_channels_without_writing(work
 def test_malformed_independent_queue_is_not_loaded_or_updated(workbench, monkeypatch):
     window = workbench.window
     _confirm_hardware(window, monkeypatch)
-    assert window.sequence_window.using_config_path is None
-    assert window.sequence_window.sequence_config == []
+    assert window.editor_context.selected_path is None
+    assert window.editor_context.queue_data == []
     assert not window._hardware_analysis_sync_pending
     _assert_display(window, "电机", ("工位三", "工位一", "工位二"))
     assert {path: path.read_bytes() for path in workbench.original} == workbench.original
@@ -1080,10 +1175,9 @@ def test_malformed_independent_queue_is_not_loaded_or_updated(workbench, monkeyp
 def test_hardware_confirmation_rejects_malformed_runtime_queue_before_mutation(workbench, monkeypatch, caplog):
     window = workbench.window
     sequence = window.sequence_window
-    sequence.sequence_config.append({"seq2": {"analysis_list": {"invalid": {"type": ["FFT"]}}}})
+    window.editor_context.queue_data.append({"seq2": {"analysis_list": {"invalid": {"type": ["FFT"]}}}})
     _confirm_hardware(window, monkeypatch)
-    assert sequence.analysis_config["fft"]["analysis_channel"] == 0
-    assert sequence.count_board.analysis_config is sequence.analysis_config
+    assert window.editor_context.queue_data[0]["seq1"]["analysis_list"]["fft"]["analysis_channel"] == 0
     assert window._hardware_analysis_sync_pending
     assert "Independent analysis queue" in caplog.text
     assert {path: path.read_bytes() for path in workbench.original} == workbench.original
@@ -1104,16 +1198,7 @@ def test_product_manual_login_and_serial_paths_do_not_enter_runtime(workbench, m
     window.on_login_window_init()
     start_preview.assert_called_once_with()
     assert window.access_lvl == "Engineer"
-    assert not sequence._serial_trigger_runtime_initialized
-
-    serial = sequence_widget_serial_trigger_ops
-    monkeypatch.setattr(serial.LoadUiConfig, "load_serial_discrete_input_config", lambda: (error_code.OK, {}))
-    save_serial = Mock(return_value=True)
-    monkeypatch.setattr(serial.LoadUiConfig, "save_serial_discrete_input_config", save_serial)
-    monkeypatch.setattr(serial, "SerialDiscreteInputConfigDialog", lambda *args, **kwargs:
-                        SimpleNamespace(exec=lambda: ("save", {"enabled": True})))
-    sequence.serial_trigger_btn.click()
-    save_serial.assert_called_once()
+    assert not hasattr(sequence, "_serial_trigger_runtime_initialized")
     workbench.hardware.sig_trigger.emit()
     workbench.hardware.sig_directional_trigger.emit("forward")
     workbench.hardware.sig_serial_full_frame.emit({"raw_hex": "AB"})
@@ -1759,18 +1844,12 @@ def test_toolbar_product_selection_recording_terminals_and_cleanup_recover(
     callbacks.released(session)
     assert combo.isEnabled()
     assert window._hardware_busy_timer.isActive()
-    sequence._analysis_round_config_locked = True
+    service = window.analysis_service
+    service.pending_task_count = 1
     _wait_for_qt(lambda: not combo.isEnabled())
     combo.currentIndexChanged.emit(combo.findData(second.name))
     save.assert_not_called()
-    sequence._analysis_round_config_locked = False
-    _wait_for_qt(lambda: combo.isEnabled())
-    pending = [True]
-    monkeypatch.setattr(sequence, "_analysis_has_pending_tasks", lambda: pending[0])
-    _wait_for_qt(lambda: not combo.isEnabled())
-    combo.currentIndexChanged.emit(combo.findData(second.name))
-    save.assert_not_called()
-    pending[0] = False
+    service.pending_task_count = 0
     _wait_for_qt(lambda: combo.isEnabled())
     combo.setCurrentIndex(combo.findData(second.name))
     assert combo.currentData() == second.name and save.call_count == 1

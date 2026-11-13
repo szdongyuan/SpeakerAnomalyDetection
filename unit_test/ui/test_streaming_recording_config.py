@@ -1,53 +1,14 @@
-import ast
 import os
-from pathlib import Path
-from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtWidgets import QApplication
-
 from ui.acquisition_config_window import RecordConfigWindow
-from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
 from consts.recording_preview_consts import (
     PREVIEW_TIME_MODE_RELATIVE_LATEST,
     RECORDING_PREVIEW_TIME_MODE_CONFIG_KEY,
 )
-
-
-ANALYSIS_OPS_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "ui"
-    / "sequence"
-    / "sequence_widget_analysis_ops.py"
-)
-
-
-def _load_method(method_name, extra_globals=None):
-    module_tree = ast.parse(ANALYSIS_OPS_PATH.read_text(encoding="utf-8"))
-    mixin = next(
-        node
-        for node in module_tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "SequenceWidgetAnalysisOpsMixin"
-    )
-    method = next(
-        node
-        for node in mixin.body
-        if isinstance(node, ast.FunctionDef) and node.name == method_name
-    )
-    test_class = ast.ClassDef(
-        name="TestMixin",
-        bases=[],
-        keywords=[],
-        body=[method],
-        decorator_list=[],
-    )
-    namespace = dict(extra_globals or {})
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[test_class], type_ignores=[])), str(ANALYSIS_OPS_PATH), "exec"), namespace)
-    return getattr(namespace["TestMixin"], method_name)
 
 
 @pytest.fixture(scope="module")
@@ -81,35 +42,6 @@ def test_record_config_defaults_to_blocking_and_persists_streaming_choice(qapp):
     )
 
 
-@pytest.mark.parametrize(
-    ("detail", "expected"),
-    [
-        ({}, False),
-        ({"use_streaming_recording": False}, False),
-        ({"use_streaming_recording": True}, True),
-        ({"use_streaming_recording": False, "monitor_playback": True}, False),
-    ],
-)
-def test_streaming_runtime_flag_is_opt_in(detail, expected):
-    instance = type("RuntimeConfig", (), {})()
-    instance.sequence_config = [{"seq1": {"acq": {"detail": detail}}}]
-    should_use_streaming = _load_method("_should_use_streaming_recording")
-
-    assert should_use_streaming(instance) is expected
-
-
-def test_recording_entry_routes_all_modes_to_process():
-    module_tree = ast.parse(ANALYSIS_OPS_PATH.read_text(encoding="utf-8"))
-    calls = {
-        node.func.attr
-        for node in ast.walk(module_tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-    }
-
-    assert "_start_process_recording" in calls
-    assert "_start_blocking_recording" not in calls
-
-
 def test_legacy_corrupt_monitor_fields_are_ignored_on_open_and_save(qapp):
     window = RecordConfigWindow(
         {"total_time": 2.0, "sample_rate": 48000, "monitor_playback": True,
@@ -123,131 +55,3 @@ def test_legacy_corrupt_monitor_fields_are_ignored_on_open_and_save(qapp):
     window.on_click_ok_btn()
     assert not any(key.startswith("monitor_") for key in window.final_data)
     assert window.final_data["use_streaming_recording"] is False
-
-
-def test_blocking_recording_reuses_the_existing_completion_pipeline():
-    recorded_multi = np.array([[1.0, 3.0], [2.0, 4.0]], dtype=np.float32)
-    calls = {}
-    ordered_calls = []
-
-    class FakeSoundcardAudioProcessor:
-        @staticmethod
-        def sd_rec(recorded_dict):
-            recorded_dict["_recorded_multi"] = recorded_multi
-            return 0, recorded_multi.mean(axis=1)
-
-    def fake_save_audio(path, samples, sample_rate):
-        ordered_calls.append("save")
-        calls["save"] = (path, samples.copy(), sample_rate)
-
-    def fake_complete(**kwargs):
-        ordered_calls.append("complete")
-        calls["complete"] = kwargs
-
-    instance = SimpleNamespace(
-        recorded_path="record.wav",
-        default_logger=SimpleNamespace(error=lambda message: calls.setdefault("error", message)),
-        _normalize_blocking_recorded_data=lambda recorded_data, recorded_dict: recorded_dict["_recorded_multi"],
-        _normalize_final_recording_array=SequenceWidgetStreamingOpsMixin._normalize_final_recording_array,
-        _on_streaming_complete=fake_complete,
-        _handle_invalid_recording=lambda reason: calls.setdefault("invalid", reason),
-    )
-    start_blocking = _load_method(
-        "_start_blocking_recording",
-        {
-            "SoundcardAudioProcessor": FakeSoundcardAudioProcessor,
-            "error_code": SimpleNamespace(OK=0),
-            "np": np,
-            "save_audio_simple": fake_save_audio,
-        },
-    )
-    recorded_dict = {}
-
-    start_blocking(instance, recorded_dict, 48000)
-
-    assert recorded_dict["blocking"] is True
-    assert calls["save"][0] == "record.wav"
-    np.testing.assert_array_equal(calls["save"][1], recorded_multi)
-    assert calls["save"][2] == 48000
-    assert calls["complete"]["completion_source"] == "blocking"
-    np.testing.assert_array_equal(calls["complete"]["recorded_multi"], recorded_multi)
-    assert ordered_calls == ["save", "complete"]
-    assert "invalid" not in calls
-
-
-def test_blocking_recording_failure_uses_existing_invalid_recording_cleanup():
-    calls = {}
-
-    class FailingSoundcardAudioProcessor:
-        @staticmethod
-        def sd_rec(recorded_dict):
-            return 1, "device unavailable"
-
-    instance = SimpleNamespace(
-        recorded_path="record.wav",
-        default_logger=SimpleNamespace(error=lambda message: calls.setdefault("error", message)),
-        _normalize_blocking_recorded_data=lambda recorded_data, recorded_dict: recorded_data,
-        _on_streaming_complete=lambda **kwargs: calls.setdefault("complete", kwargs),
-        _handle_invalid_recording=lambda reason: calls.setdefault("invalid", reason),
-    )
-    start_blocking = _load_method(
-        "_start_blocking_recording",
-        {
-            "SoundcardAudioProcessor": FailingSoundcardAudioProcessor,
-            "error_code": SimpleNamespace(OK=0),
-            "np": np,
-            "save_audio_simple": lambda *args: calls.setdefault("save", args),
-        },
-    )
-
-    start_blocking(instance, {}, 48000)
-
-    assert "device unavailable" in calls["invalid"]
-    assert "complete" not in calls
-    assert "save" not in calls
-
-
-@pytest.mark.parametrize(
-    "recorded_multi",
-    [
-        np.ones((4, 1), dtype=np.float32),
-        np.ones((4, 3), dtype=np.float32),
-    ],
-)
-def test_blocking_recording_rejects_final_column_mismatch_before_save(recorded_multi):
-    calls = {}
-
-    class FakeSoundcardAudioProcessor:
-        @staticmethod
-        def sd_rec(recorded_dict):
-            recorded_dict["_recorded_multi"] = recorded_multi
-            return 0, recorded_multi.mean(axis=1)
-
-    instance = SimpleNamespace(
-        _recording_input_channels=(0, 2),
-        recorded_path="record.wav",
-        default_logger=SimpleNamespace(
-            error=lambda message: calls.setdefault("error", message)
-        ),
-        _normalize_blocking_recorded_data=lambda recorded_data, recorded_dict: recorded_dict[
-            "_recorded_multi"
-        ],
-        _normalize_final_recording_array=SequenceWidgetStreamingOpsMixin._normalize_final_recording_array,
-        _on_streaming_complete=lambda **kwargs: calls.setdefault("complete", kwargs),
-        _handle_invalid_recording=lambda reason: calls.setdefault("invalid", reason),
-    )
-    start_blocking = _load_method(
-        "_start_blocking_recording",
-        {
-            "SoundcardAudioProcessor": FakeSoundcardAudioProcessor,
-            "error_code": SimpleNamespace(OK=0),
-            "np": np,
-            "save_audio_simple": lambda *args: calls.setdefault("save", args),
-        },
-    )
-
-    start_blocking(instance, {"input_channels": [0, 2]}, 48000)
-
-    assert "expected 2 channels" in calls["invalid"]
-    assert "save" not in calls
-    assert "complete" not in calls

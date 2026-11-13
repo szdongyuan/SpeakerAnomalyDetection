@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from ui.sequence.streaming_waveform_accumulator import StreamingWaveformAccumulator
+from base.streaming_waveform_accumulator import StreamingWaveformAccumulator
 
 
 class _ScalarEnvelopeReference:

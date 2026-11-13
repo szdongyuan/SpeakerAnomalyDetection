@@ -6,13 +6,12 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFileDialog
 
 from base.config_deletion import ConfigDeletionService
-from base.product_test_project_config import iter_test_conditions
 from base.sequence_queue_references import QueueReferenceDraft
 from ui.config_delete_dialog import ConfigDeleteDialog, STATUS_ROLE
-from ui.sequence import sequence_widget_config_ops as config_ops
 from unit_test.base.test_config_deletion import files, product, write
 from unit_test.ui.test_config_delete_dialog import choose, notices, queue_editor
-from unit_test.ui.test_product_test_program_runtime_refresh import refresh_host, save_b
+from unit_test.ui.test_product_test_program_runtime_refresh import current_main, save_b
+from unit_test.ui.test_workbench_recording_startup import startup
 
 
 def test_bad_row_is_disabled_but_normal_queue_can_be_deleted(files, ui_qapp):
@@ -133,128 +132,120 @@ def test_removing_current_legacy_record_cannot_auto_reregister(files, queue_edit
 
 
 @pytest.mark.parametrize("kind", ["queue", "product"])
-def test_preexisting_invalid_active_product_must_not_lock_unrelated_deletion(refresh_host, ui_qapp, kind):
-    host, project, existing_queue, warnings = refresh_host
-    manager = host.product_program_manager
-    save_b(host, project)
+def test_preexisting_invalid_active_product_must_not_lock_unrelated_deletion(current_main, ui_qapp, kind):
+    current = current_main
+    window, manager = current.window, current.manager
+    save_b(current)
     active = Path(manager.program_dir) / "A.json"
     data = json.loads(active.read_text(encoding="utf-8"))
-    for _, _, _, condition in iter_test_conditions(data):
+    for condition in data["conditions"]:
         condition["test_queue"] = "old_missing_queue"
     write(active, data)
-    host._refresh_active_product_configuration()
-    assert host._product_config_refresh_state == "failed"
-    assert not host._configuration_deletion_busy()
-    unused = existing_queue.with_name("unused.json")
+    window.on_workbench_configuration_committed()
+    assert not window.workbench_controller._configuration_valid
+    assert not window._configuration_deletion_busy()
+    unused = current.queue_path.with_name("unused.json")
     write(unused, [])
     registry = Path(manager.queue_registry_path)
     catalog = json.loads(registry.read_text(encoding="utf-8"))
     catalog["unused"] = str(unused)
     write(registry, catalog)
-    service = ConfigDeletionService(manager)
-    dialog = ConfigDeleteDialog(service, kind,
-        completed=host._configuration_deleted, failed=host._configuration_deletion_failed)
+    dialog = ConfigDeleteDialog(ConfigDeletionService(manager), kind,
+        completed=window._on_configuration_deleted, failed=window._configuration_deletion_failed)
     choose(dialog, "unused" if kind == "queue" else "B")
     assert dialog.delete_button.isEnabled()
     dialog.delete_button.click()
     assert len(dialog.completed_targets) == 1
     assert not (unused if kind == "queue" else active.with_name("B.json")).exists()
-    assert not getattr(host, "_configuration_deletion_error", ""), "Unrelated invalid product caused deletion write lock"
+    assert not window._configuration_deletion_error
     assert not dialog._blocked
-    assert not host.player_btn.isEnabled()
-    assert not host._configuration_deletion_busy()
-    assert warnings[-1][0] == "配置已删除"
-    assert "可修改或删除该产品配置" in warnings[-1][1]
-    assert "old_missing_queue" in warnings[-1][1]
+    assert not window.sequence_window.toolsbar.player_btn.isEnabled()
+    assert not window._configuration_deletion_busy()
     dialog.close()
-    assert manager.save_project("A.json", project)[0]
-    host.on_product_test_program_updated()
-    assert host._product_config_refresh_state == "ready"
-    assert host.player_btn.isEnabled()
+    assert manager.save_project("A.json", current.project)[0]
+    window.on_workbench_configuration_committed()
+    assert window.workbench_controller._configuration_valid
 
 
 @pytest.mark.parametrize("failure", ["snapshot", "apply"])
-def test_real_refresh_failure_after_deletion_still_locks_writes(refresh_host, ui_qapp, monkeypatch, failure):
-    host, project, _, _ = refresh_host
-    manager = host.product_program_manager
-    save_b(host, project)
+def test_real_refresh_failure_after_deletion_still_locks_writes(current_main, ui_qapp, monkeypatch, failure):
+    current = current_main
+    window, manager = current.window, current.manager
+    save_b(current)
     def fail(*args, **kwargs):
         raise RuntimeError("unexpected refresh failure")
     if failure == "snapshot":
-        monkeypatch.setattr(config_ops, "build_product_test_refresh_snapshot", fail)
+        monkeypatch.setattr(window.workbench_controller._repository, "load_active", fail)
     else:
-        monkeypatch.setattr(host, "_reset_manual_product_condition_cycle", fail)
-    service = ConfigDeletionService(manager)
-    dialog = ConfigDeleteDialog(service, "product",
-        completed=host._configuration_deleted, failed=host._configuration_deletion_failed)
+        monkeypatch.setattr(window.workbench_controller, "_apply_configuration", fail)
+    dialog = ConfigDeleteDialog(ConfigDeletionService(manager), "product",
+        completed=window._on_configuration_deleted, failed=window._configuration_deletion_failed)
     choose(dialog, "B" if failure == "snapshot" else "A")
     dialog.delete_button.click()
     assert len(dialog.completed_targets) == 1
-    assert dialog._blocked and host._configuration_deletion_busy()
-    assert "unexpected refresh failure" in host._configuration_deletion_error
-    assert not host.player_btn.isEnabled()
+    assert dialog._blocked and window._configuration_deletion_busy()
+    assert "unexpected refresh failure" in window._configuration_deletion_error
+    window.workbench_controller.refresh_recording_state()
+    assert not window.sequence_window.toolsbar.player_btn.isEnabled()
     dialog.close()
 
 
-def test_invalid_product_can_be_deleted_after_unrelated_deletion(refresh_host, ui_qapp):
-    host, project, _, warnings = refresh_host
-    manager = host.product_program_manager
-    save_b(host, project)
+def test_invalid_product_can_be_deleted_after_unrelated_deletion(current_main, ui_qapp):
+    current = current_main
+    window, manager = current.window, current.manager
+    save_b(current)
     active = Path(manager.program_dir) / "A.json"
     data = json.loads(active.read_text(encoding="utf-8"))
-    for _, _, _, condition in iter_test_conditions(data):
+    for condition in data["conditions"]:
         condition["test_queue"] = "old_missing_queue"
     write(active, data)
-    service = ConfigDeletionService(manager)
-    dialog = ConfigDeleteDialog(service, "product",
-        completed=host._configuration_deleted, failed=host._configuration_deletion_failed)
+    dialog = ConfigDeleteDialog(ConfigDeletionService(manager), "product",
+        completed=window._on_configuration_deleted, failed=window._configuration_deletion_failed)
     choose(dialog, "A")
     choose(dialog, "B")
-    # Deliberately delete unrelated B first, then the invalid active A.
     first = dialog.config_list.takeItem(0)
     dialog.config_list.addItem(first)
     dialog.delete_button.click()
-    assert [t.key for t in dialog.completed_targets] == ["B.json", "A.json"]
-    assert not dialog._blocked and not host._configuration_deletion_busy()
-    assert host._product_config_refresh_state == "empty"
+    assert [target.key for target in dialog.completed_targets] == ["B.json", "A.json"]
+    assert not dialog._blocked and not window._configuration_deletion_busy()
     assert not active.exists() and not active.with_name("B.json").exists()
     assert json.loads(Path(manager.registry_path).read_text())["active_file"] is None
-    assert not host.player_btn.isEnabled()
-    assert warnings[0][0] == "配置已删除"
+    assert window.workbench_controller.get_recording_config() is None
+    assert not window.sequence_window.toolsbar.player_btn.isEnabled()
     dialog.close()
 
 
-@pytest.mark.parametrize("field", ["groups", "conditions", "acq", "detail", "analysis"])
-def test_invalid_configuration_shape_remains_repairable_after_product_delete(refresh_host, ui_qapp, field):
-    host, project, queue_path, warnings = refresh_host
-    manager = host.product_program_manager
-    save_b(host, project)
+@pytest.mark.parametrize("field", ["stations", "conditions", "acq", "detail", "analysis"])
+def test_invalid_configuration_shape_remains_repairable_after_product_delete(current_main, ui_qapp, field):
+    current = current_main
+    window, manager = current.window, current.manager
+    save_b(current)
     active = Path(manager.program_dir) / "A.json"
-    if field in {"groups", "conditions"}:
+    queue_before = current.queue_path.read_bytes()
+    if field in {"stations", "conditions"}:
         data = json.loads(active.read_text(encoding="utf-8"))
-        if field == "groups":
-            data["test_groups"] = None
-        else:
-            data["test_groups"][0]["test_conditions"] = None
+        data[field] = None
         write(active, data)
     else:
-        data = json.loads(queue_path.read_text(encoding="utf-8"))
+        data = json.loads(current.queue_path.read_text(encoding="utf-8"))
         if field == "acq":
             data[0]["seq1"]["acq"] = None
         elif field == "detail":
             data[0]["seq1"]["acq"]["detail"] = None
         else:
             data[0]["seq1"]["analysis_list"] = None
-        write(queue_path, data)
-    service = ConfigDeletionService(manager)
-    dialog = ConfigDeleteDialog(service, "product",
-        completed=host._configuration_deleted, failed=host._configuration_deletion_failed)
+        write(current.queue_path, data)
+    dialog = ConfigDeleteDialog(ConfigDeletionService(manager), "product",
+        completed=window._on_configuration_deleted, failed=window._configuration_deletion_failed)
     choose(dialog, "B")
     dialog.delete_button.click()
     assert len(dialog.completed_targets) == 1 and not dialog._blocked
-    assert not host._configuration_deletion_busy()
-    assert host._product_config_refresh_state == "failed"
-    assert not host.player_btn.isEnabled()
-    assert warnings[-1][0] == "配置已删除"
-    assert "可修改或删除该产品配置" in warnings[-1][1]
+    assert not window._configuration_deletion_busy()
+    assert not window.workbench_controller._configuration_valid
+    assert not window.sequence_window.toolsbar.player_btn.isEnabled()
     dialog.close()
+    assert window.workbench_controller.get_recording_config() is not None  # last successful view remains
+    write(active, current.project)
+    current.queue_path.write_bytes(queue_before)
+    window.on_workbench_configuration_committed()
+    assert window.workbench_controller._configuration_valid

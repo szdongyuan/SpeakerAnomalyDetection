@@ -107,13 +107,14 @@ for name in (
     "base.vkinging_capture",
     "base.vkinging_discovery",
     "ui.recording_service_bridge",
-    "ui.sequence.analysis_report_snapshot",
     "base.raw_audio_csv_service",
     "base.raw_audio_csv_worker",
     "base.raw_audio_csv_exporter",
     "base.recording_defaults",
     "ui.raw_audio_csv_service_bridge",
-    "ui.sequence.sequence_widget_streaming_ops",
+    "ui.sequence.workbench_input_ops",
+    "ui.sequence.workbench_editor_context",
+    "ui.sequence.workbench_layout",
 ):
     importlib.import_module(name)
 """

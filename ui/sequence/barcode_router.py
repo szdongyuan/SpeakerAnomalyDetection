@@ -194,9 +194,9 @@ class BarcodeRouter(QObject):
             return None
 
         # “最简焦点方案”：
-        # 型号/计数输入框一律不拦截、不收集、不提交（保证手动输入 100% 正常）
+        # 型号输入框一律不拦截、不收集、不提交（保证手动输入 100% 正常）
         # 注意：键盘模式扫码会进入这些输入框，但不会触发条码提交/流程
-        if fw is ctx.lineedit_type or fw is ctx.lineedit_count:
+        if fw is ctx.lineedit_type:
             return None
 
         # 扩展白名单：其它输入控件（SpinBox/可编辑ComboBox/文本框等）也不做全局捕获

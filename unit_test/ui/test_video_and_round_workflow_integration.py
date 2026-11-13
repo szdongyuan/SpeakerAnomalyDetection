@@ -9,39 +9,6 @@ from PyQt5.QtWidgets import QComboBox, QWidget
 
 import main_window as main_window_module
 from main_window import MainWindow
-from ui.sequence import sequence_widget_test_metadata_ops as metadata
-from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
-from unit_test.test_test_round_metadata import _MetadataHost
-
-
-@pytest.mark.parametrize("admitted", [False, True])
-@pytest.mark.parametrize("delete_failed", [False, True])
-def test_manual_start_and_button_require_both_guards(
-    ui_qapp, monkeypatch, admitted, delete_failed
-):
-    monkeypatch.setattr(metadata.LoadUiConfig, "load_last_recorded_info", lambda logger: None)
-    monkeypatch.setattr(metadata, "save_recorded_data_to_json", Mock())
-    monkeypatch.setattr(metadata.QMessageBox, "warning", Mock())
-    host = _MetadataHost()
-    host.player_btn = host.toolsbar.player_btn
-    host._next_manual_product_condition_display_name = Mock(return_value="condition")
-    host._can_prepare_recording_workflow = Mock(return_value=admitted)
-    host._round_reset_delete_failed = delete_failed
-    host.toolsbar.sample_number_lineedit.setText("sample-1")
-    host.toolsbar.current_round_spinbox.setValue(1)
-    try:
-        SequenceWidgetUiOpsMixin.update_player_btn_is_paused(host)
-        expected = admitted and not delete_failed
-        assert host.player_btn.isEnabled() is expected
-        result = host._prepare_next_manual_product_condition_recording()
-        assert result is (True if expected else None)
-        if not expected:
-            host._load_sequence_config_for_product_condition.assert_not_called()
-            assert not host._manual_product_condition_group_id
-    finally:
-        host.toolsbar.close()
-        host.close()
-
 
 @pytest.mark.parametrize("video_finished", [False, True])
 def test_close_preserves_discovery_cleanup_and_waits_for_video(ui_qapp, video_finished):
@@ -87,6 +54,7 @@ def test_sequence_initialization_keeps_prewarm_stores_and_video_panel(ui_qapp, m
         video_monitor_panel=panel, station_panel=object(), set_daily_records=Mock()
     )
     sequence.plot_grid = object()
+    sequence.show_workbench_round = Mock()
     sequence.set_workbench_active_product = Mock()
     sequence.show_workbench_products = Mock()
     sequence.set_workbench_product_selection_enabled = Mock()
@@ -98,6 +66,8 @@ def test_sequence_initialization_keeps_prewarm_stores_and_video_panel(ui_qapp, m
     monkeypatch.setattr(main_window_module, "MotorWorkbenchController", Mock(return_value=workbench))
     card = SimpleNamespace(settings_requested=SimpleNamespace(connect=Mock()))
     host = SimpleNamespace(
+        _workbench_scanner_admission_available=Mock(),
+        _workbench_configuration_busy=Mock(),
         recording_bridge=object(),
         raw_audio_csv_bridge=object(),
         ve_prewarm_lifetime=object(),
@@ -112,18 +82,10 @@ def test_sequence_initialization_keeps_prewarm_stores_and_video_panel(ui_qapp, m
     )
     try:
         MainWindow.init_sequence_widget(host)
-        factory.assert_called_once_with(
-            recording_bridge=host.recording_bridge,
-            ve_prewarm_lifetime=host.ve_prewarm_lifetime,
-            raw_audio_csv_bridge=host.raw_audio_csv_bridge,
-            workbench_mode=True,
-        )
-        assert sequence.ve_profile_store is host.ve_profile_store
-        assert sequence.ve_calibration_store is host.ve_calibration_store
+        factory.assert_called_once_with(can_commit=host._workbench_scanner_admission_available)
         host.video_controller.attach_panel.assert_called_once_with(panel)
         card.settings_requested.connect.assert_called_once_with(workbench.open_video_settings)
         workbench.refresh_configuration.assert_called_once_with()
-        sequence.update_v2pa_factor.assert_called_once()
     finally:
         if host.setCentralWidget.called:
             host.setCentralWidget.call_args.args[0].close()
