@@ -142,6 +142,11 @@ class MotorWorkbenchController:
         self._notify_round_error = None
         self._round_error = None
 
+    @property
+    def recording_busy(self) -> bool:
+        """Capture and archive ownership remain in flight until completion."""
+        return self._in_flight is not None
+
     def bind_round_counter(self, counter, show_round, notify_error) -> None:
         """Attach the persisted daily number; standalone legacy callers may omit it."""
         self._round_counter = counter

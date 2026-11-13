@@ -2,7 +2,7 @@
 from copy import deepcopy
 import ast
 from pathlib import Path
-from types import MethodType, SimpleNamespace
+from types import SimpleNamespace
 import threading
 import json
 
@@ -25,7 +25,8 @@ from base.workbench_recording_protocol import WorkbenchRecordingCompletion
 from unit_test.base.vkinging_fakes import device_info
 from unit_test.base.test_vkinging_stores import save_measurement
 from unit_test.base.test_vkinging_hardware_selection import fake_soundcards
-from unit_test.ui.test_vkinging_recording import host_factory, capture_audio, finish_ve_capture
+from unit_test.ui.vkinging_editor_fixtures import editor_factory as host_factory
+from ui.sequence.workbench_editor_context import WorkbenchEditorContext, resolve_editor_ve_device
 from ui.acquisition_config_window import RecordConfigWindow
 from ui.vkinging_presentation import device_display_name, ve_failure_text
 from consts.recording_preview_consts import (
@@ -114,7 +115,6 @@ def controls(ui_qapp, tmp_path, monkeypatch):
 def confirm(controller, ui_qapp, *devices):
     controller.view.ve_controls.discovery.service.deliver(devices or (device_info(),))
     ui_qapp.processEvents()
-
 
 
 def select_device(controller, machine_id):
@@ -502,7 +502,6 @@ def test_unreleased_discovery_is_unavailable_not_busy_forever(controls, ui_qapp,
 def test_bad_profile_does_not_disable_discovered_hardware_or_explicit_queue(
         controls, ui_qapp, host_factory, monkeypatch, restored, failure):
     from unittest.mock import Mock
-    from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 
     host = host_factory()
     device = device_info()
@@ -547,27 +546,21 @@ def test_bad_profile_does_not_disable_discovered_hardware_or_explicit_queue(
     host.mic = deepcopy(controller.model.state.mic_device)
     host.mic_channels = list(controller.model.state.mic_channels)
     host.ve_profile_store, host.ve_calibration_store = controls.profiles, controls.calibrations
-    host.refresh_channel_windows()
-    detail = host.sequence_config[0]["seq1"]["acq"]["detail"]
+    detail = host.queue_data[0]["seq1"]["acq"]["detail"]
     detail.update(sample_rate=96000, ve_range_index=5)
-    host.judge_play_and_record()
-    session = host._recording_process_session
-    request = session.request
-    assert request.sample_rate == 96000 and request.device["input_config"]["range_max"] == .1
-    assert request.calibration_metadata["recorded_channels"][0]["v2pa_factor"] == 10
-    _, audio = capture_audio(request)
-    finish_ve_capture(host, session, audio)
+    resolved = resolve_editor_ve_device(host.queue_data, host.mic,
+                                       host.ve_profile_store, host.ve_calibration_store)
+    assert resolved["input_config"]["sample_rate"] == 96000
+    assert resolved["input_config"]["range_max"] == .1
     load.assert_not_called()
     assert host.mic["available"]
-    assert controls.calibrations.get_factor(request.device, 7) == 10
-    assert controls.calibrations.get_factor(request.device, 1) is None
     assert controls.calibrations.path.read_bytes() == calibration_before
     assert controls.profiles.path.read_bytes() == before
 
     # The bad profile still fails at the boundary that actually needs it.
     del detail["sample_rate"]
     with pytest.raises((OSError, ValueError)):
-        SequenceWidgetConfigOpsMixin._current_ve_recording_device(host, host.mic)
+        resolve_editor_ve_device(host.queue_data, host.mic, host.ve_profile_store, host.ve_calibration_store)
     load.assert_called_once()
     assert host.mic["available"]
     assert controls.profiles.path.read_bytes() == before
@@ -605,6 +598,8 @@ def test_record_config_effective_rate_preserves_product_rate_and_ignores_monitor
 def main_window_harness(controls, monkeypatch):
     """Run complete MainWindow methods on Qt, isolating unrelated DB/login setup."""
     from base import hardware_selection
+    monkeypatch.setattr(WorkbenchEditorContext, "load",
+                        classmethod(lambda cls, logger: cls(None, [], logger)))
     source = Path(__file__).resolve().parents[2] / "main_window.py"
     parsed = ast.parse(source.read_text(encoding="utf-8"))
     klass = next(node for node in parsed.body if isinstance(node, ast.ClassDef) and node.name == "MainWindow")
@@ -612,6 +607,7 @@ def main_window_harness(controls, monkeypatch):
         "QPoint": QPoint, "SoundDeviceManager": hardware_ui.SoundDeviceManager,
         "pyqtSignal": pyqtSignal, "WorkbenchRecordingCompletion": WorkbenchRecordingCompletion,
         "QMessageBox": hardware_ui.QMessageBox, "restore_or_default": hardware_selection.restore_or_default,
+        "WorkbenchEditorContext": WorkbenchEditorContext,
         "save_if_changed": hardware_selection.save_if_changed,
         "device_display_name": device_display_name, "ve_failure_text": ve_failure_text,
         "open_hardware_selection_window": hardware_ui.open_hardware_selection_window}
@@ -620,12 +616,7 @@ def main_window_harness(controls, monkeypatch):
     events = []
     def init_ui(window):
         events.append("sequence initialized")
-        window.sequence_window = SimpleNamespace(player_status_flag=False, mic=window.mic,
-            mic_channels=list(window.mic_channels),
-            update_v2pa_factor=lambda: events.append("legacy calibration refresh"),
-            refresh_channel_windows=lambda: events.append("channels refreshed"),
-            _product_configuration_refresh_busy=lambda: False,
-            synchronize_hardware_analysis_channels=lambda: True)
+        window.workbench_controller = SimpleNamespace(refresh_recording_state=lambda: None, recording_busy=False)
         window.device_label, window.user_label = QLabel(window), QLabel(window)
     monkeypatch.setattr(MainWindow, "init_ui", init_ui)
     monkeypatch.setattr(MainWindow, "closeEvent", lambda window, event: event.accept())
@@ -671,9 +662,15 @@ def main_window_harness(controls, monkeypatch):
         return window
     yield SimpleNamespace(create=create, bridge=bridge, lifetime=lifetime,
                           events=events, namespace=namespace)
+    from PyQt5 import sip
     for window in windows:
         window._close_ve_discovery()
+        window.video_controller.shutdown()
+        window.raw_audio_csv_service.begin_shutdown()
+        assert window.raw_audio_csv_service.closed.wait(3)
+        window.raw_audio_csv_bridge.close_delivery()
         window.close()
+        sip.delete(window)
 
 
 class _QtPrewarmService:
@@ -716,12 +713,11 @@ def test_main_startup_is_async_and_shares_instance_stores(main_window_harness, c
     window = main_window_harness.create()
     assert "mic" not in controls.audio.queries
     assert not window.mic["available"] and window.mic_channels == [7, 1]
-    assert window.sequence_window.ve_profile_store is controls.profiles
-    assert window.sequence_window.ve_calibration_store is controls.calibrations
+    assert window.ve_profile_store is controls.profiles
+    assert window.ve_calibration_store is controls.calibrations
     window.ve_discovery.service.deliver([device_info(name="reconnected")])
     ui_qapp.processEvents()
-    assert window.mic["available"] and window.sequence_window.mic == window.mic
-    assert window.mic["name"] == "reconnected"
+    assert window.mic["available"] and window.mic["name"] == "reconnected"
     assert "reconnected · 可用" in window.device_label.text()
     assert "test-machine-1" not in window.device_label.text()
     assert "legacy calibration refresh" not in main_window_harness.events
@@ -843,7 +839,7 @@ def test_main_hardware_accept_and_cancel_do_not_reset_calibration(main_window_ha
     monkeypatch.setattr(hardware_ui.HardwareSelectionController, "on_exec", accept)
     window.on_hardware_window_init()
     assert window.mic["input_config"]["sample_rate"] == 51200
-    assert window.sequence_window.mic_channels == [7, 1]
+    assert window.mic_channels == [7, 1]
     assert controls.calibrations.path.read_bytes() == raw
     assert "legacy calibration refresh" not in main_window_harness.events
     saved, old = controls.path.read_bytes(), window.mic
@@ -865,57 +861,24 @@ def test_main_shared_recording_busy_guards_hardware_and_calibration(main_window_
 
 
 def _configure_main_calibration_admission(
-    window, bridge, *, current_type="SPL", old_type="SPL",
+    window, bridge, *,
     can_start=True, hardware_busy=False, playback=False, closing=False,
 ):
-    from ui.sequence.sequence_widget_recording_process_ops import (
-        SequenceWidgetRecordingProcessOpsMixin,
-    )
-
-    sequence = window.sequence_window
-    sequence.recording_bridge = bridge
-    current = {"display_sequence": ["current"],
-               "current": {"type": current_type}}
-    old = {"display_sequence": ["old"], "old": {"type": old_type}}
-    processor = object()
-    sequence.analysis_config = current
-    sequence._build_recent_session_config_snapshot = lambda: {
-        "analysis_config": deepcopy(current),
-    }
-    sequence._recording_process_contexts = {
-        "old": SimpleNamespace(
-            enabled_analysis_identifiers=(old_type,),
-            recent_session_config_snapshot={"analysis_config": old},
-            processor=processor,
-        )
-    }
-    sequence._record_workflow_busy = True
-    sequence._recording_closed = False
-    sequence._closing = closing
-    sequence.player_status_flag = True
-    sequence.streaming_processor = processor
-    sequence._condition_playback_controller = SimpleNamespace(
-        is_audio_playing=lambda: playback)
-    for name in (
-        "_can_start_recording_workflow",
-        "_can_start_calibration_workflow",
-    ):
-        setattr(sequence, name, MethodType(
-            getattr(SequenceWidgetRecordingProcessOpsMixin, name), sequence))
+    window._closing = closing
+    window._configuration_editor_open = playback
     bridge.service.busy = True
     bridge.service.can_start_recording = can_start
     bridge.hardware_busy = hardware_busy
 
 
-@pytest.mark.parametrize("current_type", ["SPL", "ED", "future-analysis"])
-def test_main_calibration_action_waits_for_recording_publication(
-    main_window_harness, monkeypatch, current_type,
+def test_main_calibration_action_allows_released_hardware_during_publication(
+    main_window_harness, monkeypatch,
 ):
     window = main_window_harness.create()
     window.access_lvl = "Engineer"
     window.mic = {"backend": "sounddevice", "name": "test-input"}
     _configure_main_calibration_admission(
-        window, main_window_harness.bridge, current_type=current_type)
+        window, main_window_harness.bridge)
     constructed = []
 
     class CalibrationDialog:
@@ -933,20 +896,16 @@ def test_main_calibration_action_waits_for_recording_publication(
         window.on_calibration_window_init)
 
     window._update_hardware_busy_state()
-    assert not window.hardware_action_selection.isEnabled()
-    assert not window.hardware_action_calibration.isEnabled()
+    assert window.hardware_action_selection.isEnabled()
+    assert window.hardware_action_calibration.isEnabled()
     window.hardware_action_calibration.trigger()
 
-    assert constructed == []
+    assert len(constructed) == 1
 
 
 @pytest.mark.parametrize(
     "case,overrides",
     [
-        ("ineligible-old", {"old_type": "future-analysis"}),
-        ("ineligible-old-ed", {"old_type": "ED"}),
-        ("ineligible-old-and-current", {
-            "old_type": "future-analysis", "current_type": "ED"}),
         ("active-capture", {"can_start": False, "hardware_busy": True}),
         ("capacity-full", {"can_start": False}),
         ("playback", {"playback": True}),
@@ -1059,7 +1018,7 @@ def test_main_accepted_native_signature_change_publishes_then_releases(
                          controls.path.read_bytes(), callback)) or "pending")
     def accept_selection(**kwargs):
         if change == "rate":
-            window.sequence_window.sequence_config = [{"seq1": {"acq": {"detail": {"sample_rate": 44100}}}}]
+            window.editor_context.queue_data = [{"seq1": {"acq": {"detail": {"sample_rate": 44100}}}}]
         return True, None, [], new_mic, new_channels
     monkeypatch.setitem(main_window_harness.namespace, "open_hardware_selection_window", accept_selection)
 
@@ -1089,7 +1048,7 @@ def test_main_release_failure_warns_without_rolling_back_persisted_setting(
         path=controls.path)
     persisted = controls.path.read_bytes()
     def accept_selection(**kwargs):
-        window.sequence_window.sequence_config = [{"seq1": {"acq": {"detail": {"sample_rate": 44100}}}}]
+        window.editor_context.queue_data = [{"seq1": {"acq": {"detail": {"sample_rate": 44100}}}}]
         return True, None, [], replacement, [7, 1]
     monkeypatch.setitem(main_window_harness.namespace, "open_hardware_selection_window", accept_selection)
 
@@ -1465,8 +1424,8 @@ def test_cross_api_restart_main_dialog_restores_legacy_context_before_accept(
     monkeypatch.setattr(hardware_ui.HardwareSelectionController, "on_exec", interact)
     window.on_hardware_window_init()
     if outcome == "accept":
-        assert window.mic == window.sequence_window.mic == controls.old_mic
-        assert window.mic_channels == window.sequence_window.mic_channels == [1]
+        assert window.mic == controls.old_mic
+        assert window.mic_channels == [1]
         assert not hasattr(window, "speaker")
         assert controls.defaults.pair.writes == [(0, 1)] and controls.defaults.pair.raw == [1, 9]
         payload = json.loads(controls.path.read_text(encoding="utf-8"))
@@ -1520,6 +1479,9 @@ def test_default_mainwindow_constructs_with_baseline_sequence(controls, ui_qapp,
     import main_window
     from PyQt5 import sip
     from unit_test.ui.test_workbench_recording_startup import RecordingBridge
+    from base.unified_hid_device_manager import UnifiedHardwareManager
+    monkeypatch.setattr(UnifiedHardwareManager, "start_scanner_listeners", lambda _: True)
+    monkeypatch.setattr(UnifiedHardwareManager, "stop_scanner_listeners", lambda _: None)
     monkeypatch.setattr(main_window, "restore_or_default", lambda **kw: (None, None, [], []))
     monkeypatch.setattr(main_window.QMessageBox, "warning", lambda *args: None)
     from base import load_config
@@ -1532,10 +1494,6 @@ def test_default_mainwindow_constructs_with_baseline_sequence(controls, ui_qapp,
     if legacy_config is not None:
         legacy_path.write_text(legacy_config, encoding="utf-8")
     monkeypatch.setattr(load_config, "DEFAULT_DIR", config_root.as_posix() + "/")
-    from base.product_test_progress import ProductTestProgressStore
-    from ui.sequence import sequence_widget_progress_ops
-    monkeypatch.setattr(sequence_widget_progress_ops, "ProductTestProgressStore",
-                        lambda: ProductTestProgressStore(tmp_path / "progress.json"))
     monkeypatch.setattr(main_window.MainWindow, "get_current_version", lambda self: "test")
     for name in ("critical", "information", "question"):
         monkeypatch.setattr(main_window.QMessageBox, name, lambda *a, **kw: main_window.QMessageBox.No)
@@ -1552,16 +1510,20 @@ def test_default_mainwindow_constructs_with_baseline_sequence(controls, ui_qapp,
         window = main_window.MainWindow(recording_bridge=bridge,
             ve_profile_store=controls.profiles, ve_calibration_store=controls.calibrations,
             discovery_factory=ControlledDiscovery, hardware_selection_path=controls.path)
-        assert window.sequence_window.recording_bridge is bridge
+        assert window.recording_bridge is bridge
         toolbar = window.sequence_window.toolsbar
-        assert toolbar.serial_trigger_btn.toolTip()
         assert toolbar.barcode_scanner_box is not None
         assert toolbar.lineedit_s_or_n.isEnabled() == toolbar.barcode_scanner_box.isChecked()
         assert window._calibration_admission_available()
         window._update_hardware_busy_state()
     finally:
         if window is not None:
-            window._close_ve_discovery()
+            window.close()
+            for _ in range(100):
+                if getattr(window, "_exit_cleanup_complete", False):
+                    break
+                QTest.qWait(10)
+            assert window._exit_cleanup_complete
             sip.delete(window)
         bridge.shutdown()
         assert bridge.service.closed.is_set()

@@ -394,10 +394,20 @@ class UnifiedHardwareManager(QObject):
         self.logger.info(
             "[scanner][manager] start_scanner_and_sensor_listeners 被调用"
         )
+        return self._start_input_listeners(include_sensor=True)
+
+    def start_scanner_listeners(self):
+        """Start barcode input only, leaving sensor/test-trigger ownership alone."""
+        self.logger.info("[scanner][manager] start_scanner_listeners 被调用")
+        return self._start_input_listeners(include_sensor=False)
+
+    def _start_input_listeners(self, *, include_sensor):
+        # Hardware/configuration is the shared recovery boundary for both APIs.
         try:
             self.ensure_config_loaded()
             self._start_scanner_by_source()
-            self._start_sensor_hotkey_if_enabled()
+            if include_sensor:
+                self._start_sensor_hotkey_if_enabled()
             return True
         except Exception as e:
             # Last-resort guard: a crash here must not kill the UI --
@@ -576,8 +586,7 @@ class UnifiedHardwareManager(QObject):
         (e.g. keyboard unhook) cannot leave the others leaking threads.
         """
         self.logger.info("[scanner][manager] stop_scanner_and_sensor_listeners 被调用")
-        self._stop_hid_scanner_internal()
-        self._stop_serial_barcode_worker()
+        self.stop_scanner_listeners()
 
         if self.hotkey_registered:
             try:
@@ -587,6 +596,11 @@ class UnifiedHardwareManager(QObject):
                 self.logger.warning(f"热键移除异常: {e}")
             finally:
                 self.hotkey_registered = False
+
+    def stop_scanner_listeners(self):
+        """Stop barcode backends without unhooking another consumer's sensor."""
+        self._stop_hid_scanner_internal()
+        self._stop_serial_barcode_worker()
 
     def start_serial_discrete_input_listener(self, config_data=None, full_frame_candidates=None):
         normalized_candidates = None

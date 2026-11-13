@@ -932,14 +932,19 @@ def test_main_window_passes_parent_context_to_real_queue_editor(editor, monkeypa
     monkeypatch.setattr(main_window, "AnalysisModelSelect", construct)
     monkeypatch.setattr(window, "exec", execute)
     refreshes = []
-    host = SimpleNamespace(mic=None, speaker=None, mic_channels=[0], speaker_channels=[],
-                           _on_configuration_deleted=lambda _target: None,
-                           sequence_window=SimpleNamespace(
-                               on_sequence_config_updated=lambda: refreshes.append(True),
-                               update_player_btn_is_paused=lambda: None))
+    host = SimpleNamespace(
+        mic=None, mic_channels=[0], _configuration_deletion_error="", _closing=False,
+        _configuration_editor_open=True,
+        _configuration_deletion_busy=lambda: False,
+        _configuration_deletion_failed=lambda message: pytest.fail(message),
+        _on_configuration_deleted=lambda _target: None,
+        on_workbench_configuration_committed=lambda: refreshes.append(True),
+        workbench_controller=SimpleNamespace(refresh_recording_state=lambda: None),
+    )
     main_window.MainWindow._open_analysis_model_select(host, str(target), provider)
     assert [r.sources for r in observed[0].references] == [{"saved", "draft"}, {"saved"}]
     assert refreshes == []
+    assert host._configuration_editor_open is True
 
 
 def test_import_restores_auto_analysis_without_creating_a_change(editor, monkeypatch):

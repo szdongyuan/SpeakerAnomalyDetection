@@ -6,6 +6,7 @@ from unittest import mock
 import pytest
 
 from unit_test.base.vkinging_fakes import device_info
+from ui.sequence.workbench_editor_context import WorkbenchEditorContext
 from unit_test.test_input_calibration_runtime import DEVICE, ROOT, _load_method
 
 
@@ -18,7 +19,7 @@ def opening(monkeypatch):
     from base import vkinging_calibration_settings as settings
     from base import vkinging_recording_config as recording
     from ui import calibration_window as calibration
-    from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
+    from ui.sequence import workbench_editor_context
 
     forbidden = mock.Mock(side_effect=AssertionError("range handoff performed extra I/O"))
     for module, name in (
@@ -26,7 +27,7 @@ def opening(monkeypatch):
         (calibration, "load_ve_calibration_settings"),
         (recording, "resolve_ve_recording_config"),
         (recording, "resolve_ve_recording_device"),
-        (SequenceWidgetConfigOpsMixin, "_current_ve_recording_device"),
+        (workbench_editor_context, "resolve_editor_ve_device"),
     ):
         monkeypatch.setattr(module, name, forbidden)
     opened = []
@@ -45,7 +46,7 @@ def opening(monkeypatch):
         recording_bridge=object(),
         ve_profile_store=SimpleNamespace(load=forbidden),
         ve_calibration_store=mock.Mock(),
-        sequence_window=SimpleNamespace(sequence_config=[], update_v2pa_factor=mock.Mock()),
+        editor_context=WorkbenchEditorContext(None, [], mock.Mock()),
         _calibration_admission_available=mock.Mock(return_value=True),
         default_logger=mock.Mock(),
     )
@@ -63,9 +64,9 @@ def opening(monkeypatch):
 @pytest.mark.parametrize("index,expected", enumerate((10., 5., 2.5, 1., .5, .1, .02)))
 def test_vk_handoff_uses_current_queue_range_without_io(opening, index, expected):
     host = opening.host
-    host.sequence_window.sequence_config = _queue(
+    host.editor_context.queue_data = _queue(
         {"ve_range_index": index, "sample_rate": "broken"})
-    before_queue = deepcopy(host.sequence_window.sequence_config)
+    before_queue = deepcopy(host.editor_context.queue_data)
     before_device = deepcopy(host.mic)
 
     opening.open()
@@ -81,9 +82,8 @@ def test_vk_handoff_uses_current_queue_range_without_io(opening, index, expected
     assert dialog.ve_profile_store is host.ve_profile_store
     assert dialog.ve_calibration_store is host.ve_calibration_store
     dialog.exec.assert_called_once_with()
-    host.sequence_window.update_v2pa_factor.assert_not_called()
     opening.messages.warning.assert_not_called()
-    assert host.sequence_window.sequence_config == before_queue
+    assert host.editor_context.queue_data == before_queue
     assert host.mic == before_device
 
 
@@ -95,7 +95,7 @@ def test_vk_handoff_uses_current_queue_range_without_io(opening, index, expected
 ] + [(_queue({"ve_range_index": value}), None)
      for value in (True, False, "2", 2., -1, 7, 99, None)])
 def test_vk_unavailable_range_still_opens_without_warning(opening, queue, expected):
-    opening.host.sequence_window.sequence_config = queue
+    opening.host.editor_context.queue_data = queue
     before = deepcopy(queue)
 
     opening.open()
@@ -104,23 +104,11 @@ def test_vk_unavailable_range_still_opens_without_warning(opening, queue, expect
     assert dialog.kwargs["test_full_scale_peak_volts"] == expected
     dialog.exec.assert_called_once_with()
     opening.messages.warning.assert_not_called()
-    assert opening.host.sequence_window.sequence_config == before
-
-
-@pytest.mark.parametrize("missing", ["sequence_window", "sequence_config"])
-def test_vk_missing_sequence_context_is_unavailable(opening, missing):
-    if missing == "sequence_window":
-        del opening.host.sequence_window
-    else:
-        del opening.host.sequence_window.sequence_config
-    opening.open()
-    assert opening.opened[0].kwargs["test_full_scale_peak_volts"] is None
-    opening.messages.warning.assert_not_called()
-
+    assert opening.host.editor_context.queue_data == before
 
 def test_reopening_takes_new_snapshot_without_changing_existing_dialog(opening):
     queue = _queue({"ve_range_index": 2})
-    opening.host.sequence_window.sequence_config = queue
+    opening.host.editor_context.queue_data = queue
     opening.open()
     queue[0]["seq1"]["acq"]["detail"]["ve_range_index"] = 5
     opening.open()
@@ -130,15 +118,13 @@ def test_reopening_takes_new_snapshot_without_changing_existing_dialog(opening):
 
 def test_soundcard_opening_preserves_original_kwargs_and_success_refresh(opening):
     opening.host.mic = DEVICE.copy()
-    opening.host.sequence_window.sequence_config = _queue({"ve_range_index": 2})
+    opening.host.editor_context.queue_data = _queue({"ve_range_index": 2})
     opening.open()
     dialog, = opening.opened
     assert dialog.kwargs == {
         "input_device": opening.host.mic, "input_channels": opening.host.mic_channels,
         "recording_bridge": opening.host.recording_bridge,
     }
-    opening.host.sequence_window.update_v2pa_factor.assert_called_once_with()
-
 
 @pytest.mark.parametrize("blocked", ["busy", "unavailable"])
 def test_existing_admission_blocks_dialog_creation(opening, blocked):

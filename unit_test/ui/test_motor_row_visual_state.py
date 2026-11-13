@@ -9,9 +9,7 @@ from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
 
 @pytest.fixture
 def panel(qt_app):
-    widget = MotorDetectionLeftPanel(None, condition_configs=[
-        {"key": "a", "condition_name": "a"}, {"key": "b", "condition_name": "b"},
-    ], queue_catalog={})
+    widget = MotorDetectionLeftPanel()
     widget.setAttribute(Qt.WA_DontShowOnScreen)
     widget.set_station_count(2)
     widget.set_station_row_count(1, 2)
@@ -43,9 +41,7 @@ def test_station_status_palette_and_real_text_pixels(panel, qt_app, tmp_path, fo
     assert panel.station_panel.findChild(QLabel, "stationForward2").text() == "--"
 
 
-def test_station_fold_is_independent_of_backend_recording_selection(panel, qt_app):
-    selected = []
-    panel.condition_selected.connect(selected.append)
+def test_station_fold_is_independent_of_backend_result_updates(panel, qt_app):
     first = panel.station_panel.findChild(QPushButton, "stationHeader1")
     second = panel.station_panel.findChild(QPushButton, "stationHeader2")
     first.click()
@@ -53,13 +49,12 @@ def test_station_fold_is_independent_of_backend_recording_selection(panel, qt_ap
     qt_app.processEvents()
     assert first.isChecked() and second.isChecked()
     assert panel.station_panel.findChild(QTableWidget, "stationTable1").isVisible()
-    panel.set_condition_result("b", "采集中", "running")
-    assert selected == ["b"]
-    assert panel.condition_state.rows["b"]["result"] == "采集中"
+    panel.set_station_results(2, "OK", "NG")
+    assert panel.station_panel.findChild(QLabel, "stationForward2").text() == "OK"
+    assert panel.station_panel.findChild(QLabel, "stationReverse2").text() == "NG"
     assert first.isChecked() and second.isChecked()
     first.click()
     assert not first.isChecked() and second.isChecked()
-    assert selected == ["b"]
     assert panel.get_station_data(1)["rows"][0] == ["metric", "12", "34"]
 
 

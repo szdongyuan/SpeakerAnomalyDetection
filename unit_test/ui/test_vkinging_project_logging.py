@@ -8,11 +8,9 @@ import pytest
 from unit_test.logging_test_support import isolated_project_logger, managed_handlers
 
 from base import log_manager
-from base.vkinging_prewarm_lifetime import VePrewarmLifetime
 from ui import acquisition_config_window as acquisition_ui
 from ui import hardware_window as hardware_ui
 from ui import vkinging_hardware_controls as hardware_controls
-from ui.sequence.sequence_widget_recording_process_ops import SequenceWidgetRecordingProcessOpsMixin
 from ui.vkinging_presentation import ve_failure_text
 from unit_test.base.vkinging_fakes import device_info
 from unit_test.ui.test_vkinging_hardware import controls, main_window_harness, confirm, select_device
@@ -42,7 +40,8 @@ def test_main_initializes_logger_before_ui_and_discovery(main_window_harness, mo
     monkeypatch.setattr(log_manager.LogManager, "set_log_handler", acquire)
 
     def inspect(window):
-        assert acquire.call_args_list == [mock.call("core"), mock.call("core")]
+        assert acquire.call_args_list[0] == mock.call("core")
+        acquire.assert_any_call("core.video")
         assert window.default_logger is logger
         assert window.video_controller._logger is logger
         assert window.ve_discovery is None
@@ -154,38 +153,6 @@ def test_main_faults_reach_core_and_keep_gui_safe(
     assert_core_fault(caplog, machine_id, cause,
                       logging.ERROR if boundary == "prewarm" else logging.WARNING)
     assert visible and machine_id not in visible and cause not in visible
-
-
-def recording_host(logger, cause):
-    return SimpleNamespace(default_logger=logger, ve_prewarm_lifetime=VePrewarmLifetime(),
-        mic=device_info(), mic_channels=[7, 1], ve_calibration_store=object(),
-        ve_profile_store=SimpleNamespace(load=mock.Mock(side_effect=OSError(cause))))
-
-
-def test_recording_admission_reuses_existing_logger_without_acquisition(monkeypatch):
-    logger = mock.Mock()
-    host = recording_host(logger, "raw admission fault")
-    acquire = mock.Mock(side_effect=AssertionError("Recording already owns its logger"))
-    monkeypatch.setattr(log_manager.LogManager, "set_log_handler", acquire)
-    assert not SequenceWidgetRecordingProcessOpsMixin._ve_prewarm_admission_available(host)
-    logger.warning.assert_called_once_with("VE recording configuration machine_id=%s: %s",
-        "test-machine-1", "raw admission fault")
-    acquire.assert_not_called()
-
-
-def test_recording_admission_core_routing_preserves_identity_deduplication(caplog):
-    cause = "raw admission fault"
-    host = recording_host(log_manager.LogManager.set_log_handler("core"), cause)
-    admit = SequenceWidgetRecordingProcessOpsMixin._ve_prewarm_admission_available
-    assert not admit(host)
-    assert not admit(host)
-    first = assert_core_fault(caplog, "test-machine-1", cause)
-    assert len(first) == 1
-    caplog.clear()
-    host.mic = device_info(machine_id="other-complete-private-id")
-    assert not admit(host)
-    assert len(assert_core_fault(caplog, "other-complete-private-id", cause)) == 1
-    assert host._ve_recording_config_error == cause
 
 
 def test_real_discovery_fault_is_written_to_project_file(

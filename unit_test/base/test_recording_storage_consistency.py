@@ -1,6 +1,5 @@
 import os
 import sqlite3
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -8,8 +7,7 @@ import pytest
 from base import recording_management
 from base.db_manager import DataSave
 from base.recording_management import RecordingManager
-from consts import error_code, model_consts
-from ui.sequence.sequence_widget_streaming_ops import SequenceWidgetStreamingOpsMixin
+from consts import error_code
 
 
 class _DatabaseContext:
@@ -44,10 +42,6 @@ class _UpdateDatabase:
     def update_table_data(self, *args, **kwargs):
         self.calls.append((args, kwargs))
         return self.update_result
-
-
-class _RelabelWidget(SequenceWidgetStreamingOpsMixin):
-    pass
 
 
 def _audio_info(file_path):
@@ -393,67 +387,3 @@ def test_external_audio_path_round_trips_through_sqlite(tmp_path, monkeypatch):
         ).fetchone()
     assert stored_path == os.path.abspath(target_path).replace("\\", "/")
     assert stored_label == "OK"
-
-
-def test_relabel_rolls_file_back_when_database_update_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr(recording_management.running_consts, "DEFAULT_DIR", str(tmp_path / "application"))
-    root = tmp_path / "factory_audio"
-    source_dir = root / "S004-1" / "not_labeled"
-    source_dir.mkdir(parents=True)
-    source_path = source_dir / "sample_6000_107c610bb999.wav"
-    source_path.write_bytes(b"RIFF")
-    monkeypatch.setattr(
-        RecordingManager,
-        "update_audio_label",
-        lambda *_args, **_kwargs: (
-            error_code.INVALID_UPDATE,
-            "No data has been updated",
-        ),
-    )
-    recorded_info = _audio_info(source_path)
-    recorded_info[model_consts.RECORDING_ROOT_CONFIG_KEY] = str(root)
-
-    code, _message, final_path, updated_info = _RelabelWidget()._relabel_stored_audio_record(
-        str(source_path),
-        recorded_info,
-        "OK",
-    )
-
-    assert code == error_code.INVALID_UPDATE
-    assert Path(final_path) == source_path
-    assert source_path.is_file()
-    assert not (root / "S004-1" / "OK" / source_path.name).exists()
-    assert updated_info["labels"] == "not_labeled"
-    assert Path(updated_info["file_path"]) == source_path
-
-
-def test_relabel_tries_original_mixed_separator_database_path(tmp_path, monkeypatch):
-    root = tmp_path / "factory_audio"
-    source_dir = root / "S004-1" / "not_labeled"
-    source_dir.mkdir(parents=True)
-    source_path = source_dir / "sample_6000_107c610bb999.wav"
-    source_path.write_bytes(b"RIFF")
-    mixed_db_path = r"stored_data\S004-1/not_labeled/sample_6000_107c610bb999.wav"
-    attempted_paths = []
-
-    def update_audio_label(_manager, _updated_info, old_file_path):
-        attempted_paths.append(old_file_path)
-        if old_file_path == mixed_db_path:
-            return error_code.OK, "updated"
-        return error_code.INVALID_UPDATE, "not found"
-
-    monkeypatch.setattr(RecordingManager, "update_audio_label", update_audio_label)
-    recorded_info = _audio_info(source_path)
-    recorded_info["file_path"] = mixed_db_path
-    recorded_info[model_consts.RECORDING_ROOT_CONFIG_KEY] = str(root)
-
-    code, _message, final_path, updated_info = _RelabelWidget()._relabel_stored_audio_record(
-        str(source_path),
-        recorded_info,
-        "OK",
-    )
-
-    assert code == error_code.OK
-    assert attempted_paths[0] == mixed_db_path
-    assert Path(final_path) == root / "S004-1" / "OK" / source_path.name
-    assert updated_info["labels"] == "OK"

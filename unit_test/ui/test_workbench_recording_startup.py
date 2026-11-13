@@ -174,13 +174,18 @@ def startup(ui_qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(VideoController, "start_preview", lambda self: None)
     monkeypatch.setattr(main_window.MainWindow, "get_current_version", lambda self: "test")
     monkeypatch.setattr(QtWidgets.QMessageBox, "warning", Mock())
+    from ui.sequence.workbench_input_ops import LoadUiConfig
+    from base.unified_hid_device_manager import UnifiedHardwareManager
+    monkeypatch.setattr(LoadUiConfig, "load_last_recorded_info", staticmethod(lambda _: {}))
+    monkeypatch.setattr(UnifiedHardwareManager, "start_scanner_listeners", lambda _: True)
+    monkeypatch.setattr(UnifiedHardwareManager, "stop_scanner_listeners", lambda _: None)
     windows = []
-    state = SimpleNamespace(analysis_service=AnalysisServiceStub())
+    state = SimpleNamespace(analysis_service=AnalysisServiceStub(), launch_options={})
 
     class Window(main_window.MainWindow):
         def __init__(self, **kwargs):
             windows.append(self)
-            kwargs.setdefault("analysis_service", state.analysis_service)
+            kwargs.setdefault("analysis_service", state.launch_options.get("analysis_service", state.analysis_service))
             super().__init__(**kwargs)
 
     monkeypatch.setattr(main_window, "MainWindow", Window)
@@ -189,6 +194,7 @@ def startup(ui_qapp, monkeypatch, tmp_path):
         monkeypatch.setattr(main_window, "LoginWindow", lambda: SimpleNamespace(on_exec=lambda: execute(windows[-1])))
 
     def launch(execute, *, launcher=False, **options):
+        state.launch_options = options
         login(execute)
         if not launcher:
             return Window(recording_bridge=bridge, **options)
@@ -260,7 +266,6 @@ def test_daily_round_is_loaded_before_login_without_migrating_sample(startup, mo
         assert sequence.toolsbar.sample_number_lineedit.text() == expected
         assert sequence.toolsbar.sample_number_lineedit.isReadOnly()
         assert not sequence.player_btn.isEnabled()
-        sequence.toolsbar.current_round_spinbox.setValue(9999)
         assert sequence.toolsbar.sample_number_lineedit.text() == expected
         return "Engineer", "test"
 
@@ -300,13 +305,13 @@ def test_saved_missing_soundcard_never_uses_legacy_fallback_and_can_be_reselecte
     assert device.snapshot.channels == (0, 1, 2)
     assert window.mic_channels == [1]
 
-    refresh = window.sequence_window.refresh_channel_windows
+    refresh = window.workbench_recording_device.invalidate_selection
 
     def refresh_after_save():
-        assert device.snapshot is None
         refresh()
+        assert device.snapshot is None
 
-    monkeypatch.setattr(window.sequence_window, "refresh_channel_windows", refresh_after_save)
+    monkeypatch.setattr(window.workbench_recording_device, "invalidate_selection", refresh_after_save)
     window.on_hardware_window_init()
     assert len(bridge.probes) == 3
     bridge.answer_probe()
@@ -402,7 +407,7 @@ def test_ve_prewarms_discovered_full_inventory_at_profile_rate_before_login(star
         device = window.workbench_recording_device
         assert bridge.started and window.ve_discovery.service.starts == 1
         assert not bridge.probes
-        window.sequence_window.sequence_config = [{"seq1": {"acq": {"detail": {"sample_rate": 96000}}}}]
+        window.editor_context.queue_data = [{"seq1": {"acq": {"detail": {"sample_rate": 96000}}}}]
         bridge.change_worker(1)
         window.ve_discovery.service.answer(inventory)
         ui_qapp.processEvents()

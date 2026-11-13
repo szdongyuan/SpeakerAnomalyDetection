@@ -9,7 +9,6 @@ from PyQt5.QtWidgets import QFileDialog, QMessageBox, QPushButton
 
 from base.sequence_queue_references import QueueReferenceDraft, SequenceQueueReferenceScanner
 from ui.operation_sequence import AnalysisModelSelect
-from ui.sequence.analysis_task_builder import AnalysisTaskBuildError, build_analysis_task_request
 from unit_test.product_config_fixtures import make_manager, make_project
 
 
@@ -171,12 +170,6 @@ def test_recording_confirm_with_incomplete_parent_saves_without_product_warning(
     assert not warnings
     assert not widget.dirty
     assert json.loads(path.read_text(encoding="utf-8"))[0]["seq1"]["acq"]["detail"]["total_time"] == 4.0
-
-
-def test_wav_queue_cannot_enter_old_analysis_builder():
-    with pytest.raises(AnalysisTaskBuildError, match="尚未接通"):
-        build_analysis_task_request(condition_key="condition", wav_path="unused.wav", source="recording",
-            sequence_config=[{"seq1": {"analysis_channel_basis": "wav"}}], analysis_config={})
 
 
 @pytest.mark.parametrize("broken", ["invalid_json", "missing", "invalid_conditions", "invalid_condition"])

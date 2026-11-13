@@ -1,31 +1,14 @@
 from unittest.mock import Mock
 
 import pytest
-from PyQt5.QtWidgets import QCheckBox, QLineEdit, QWidget
 
-from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
-
-
-class BarcodeHost(SequenceWidgetBarcodeOpsMixin, QWidget):
-    def __init__(self):
-        super().__init__()
-        self.lineedit_s_or_n = QLineEdit(self)
-        self.lineedit_type = QLineEdit(self)
-        self.lineedit_count = QLineEdit(self)
-        self.barcode_scanner_box = QCheckBox(self)
-        self.barcode_scanner_box.setChecked(True)
-        self.default_logger = Mock()
-        self._warn_invalid_barcode = Mock()
-        self._last_committed_barcode = None
-        self._last_committed_barcode_time = 0.0
-        self._barcode_commit_dedup_window_sec = 0.8
+from unit_test.ui.test_workbench_input_ops import host
 
 
 @pytest.fixture
-def barcode_host(qt_app):
-    host = BarcodeHost()
-    yield host
-    host.close()
+def barcode_host(host, monkeypatch):
+    monkeypatch.setattr(host, '_warn_invalid_barcode', Mock())
+    return host
 
 
 @pytest.mark.parametrize("source", [

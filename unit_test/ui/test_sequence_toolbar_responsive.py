@@ -57,53 +57,29 @@ def field_labels(toolbar):
             for editor in (toolbar.lineedit_type, toolbar.using_file_combobox,
                            toolbar.sample_number_lineedit)]
 
-
-def test_workbench_round_is_read_only_and_legacy_sample_remains_editable(toolbar_host, ui_qapp):
-    window, legacy, _ = toolbar_host
-    toolbar = SequenceToolsBar(workbench_mode=True)
-    legacy.parentWidget().layout().insertWidget(1, toolbar)
-    ui_qapp.processEvents()
-    try:
-        editor = toolbar.sample_number_lineedit
-        label = field_labels(toolbar)[2]
-        assert label.text() == label._short_text == "轮次："
-        assert editor.isReadOnly()
-        assert editor.accessibleName() == "轮次"
-        assert "轮次" in editor.toolTip() and "输入" not in editor.toolTip()
-        assert "轮次" in editor.accessibleDescription() and "输入" not in editor.accessibleDescription()
-        editor.setText("10000")
-        editor.setFocus()
-        editor.selectAll()
-        QTest.keyClicks(editor, "42")
-        assert editor.text() == "10000"
-        assert toolbar.current_round_spinbox.isHidden()
-        assert toolbar.current_round_spinbox.focusPolicy() == Qt.NoFocus
-        assert toolbar.current_round_spinbox.lineEdit().focusPolicy() == Qt.NoFocus
-        row = toolbar.layout().itemAt(1).layout()
-        assert row.count() == legacy.layout().itemAt(1).layout().count() - 3
-        assert row.indexOf(toolbar.current_round_spinbox) < 0
-        assert field_labels(legacy)[2].text() == "样本编号："
-        assert not legacy.sample_number_lineedit.isReadOnly()
-        legacy.sample_number_lineedit.setText("")
-        QTest.keyClicks(legacy.sample_number_lineedit, "007")
-        assert legacy.sample_number_lineedit.text() == "007"
-    finally:
-        toolbar.close()
-        toolbar.deleteLater()
-        ui_qapp.processEvents()
-
+def test_workbench_round_is_read_only(toolbar_host, ui_qapp):
+    _, toolbar, _ = toolbar_host
+    editor = toolbar.sample_number_lineedit
+    assert field_labels(toolbar)[2].text() == "轮次："
+    assert editor.isReadOnly()
+    assert editor.accessibleName() == "轮次"
+    editor.setText("10000")
+    editor.selectAll()
+    QTest.keyClicks(editor, "42")
+    assert editor.text() == "10000"
+    for name in ("data_btn", "replayer_btn", "serial_trigger_btn", "reset_round_button", "current_round_spinbox", "condition_mode_combobox"):
+        assert not hasattr(toolbar, name)
 
 def ordered_controls(toolbar):
     labels = field_labels(toolbar)
-    groups = [[toolbar.player_btn, toolbar.data_btn, toolbar.serial_trigger_btn],
+    groups = [[toolbar.player_btn],
               [labels[0], toolbar.lineedit_type],
               [labels[1], toolbar.using_file_combobox],
               [labels[2], toolbar.sample_number_lineedit],
-              [toolbar.reset_round_button],
               [toolbar.barcode_scanner_box, toolbar.lineedit_s_or_n]]
     dividers = sorted((w for w in toolbar.findChildren(QFrame)
                        if w.frameShape() == QFrame.VLine), key=lambda w: w.x())
-    assert len(dividers) == 6
+    assert len(dividers) == 5
     return [widget for group, divider in zip(groups, dividers) for widget in [*group, divider]]
 
 
@@ -111,9 +87,9 @@ def assert_row(window, toolbar, width):
     assert window.width() == width
     assert toolbar.width() == width - 2
     assert toolbar.height() == 42
-    assert 617 <= toolbar.minimumSizeHint().width() <= 1028
+    assert 400 <= toolbar.minimumSizeHint().width() <= 1028
     controls = ordered_controls(toolbar)
-    assert len(controls) == 18
+    assert len(controls) == 14
     assert all(widget.isVisible() for widget in controls)
     rects = [QRect(widget.mapTo(toolbar, QPoint()), widget.size())
              for widget in controls]
@@ -127,167 +103,13 @@ def assert_row(window, toolbar, width):
                    toolbar.sample_number_lineedit):
         assert widget.width() >= 55
         assert widget.height() == 35
-    expected_action_width = 48 if toolbar.serial_trigger_btn.compact else 120
-    assert toolbar.player_btn.width() == expected_action_width
-    assert toolbar.data_btn.width() == expected_action_width
-    assert toolbar.player_btn.height() == toolbar.data_btn.height() == 40
-    assert toolbar.serial_trigger_btn.width() == (48 if toolbar.serial_trigger_btn.compact else 124)
-    assert toolbar.reset_round_button.width() == 52
+    assert toolbar.player_btn.width() in (48, 120)
+    assert toolbar.player_btn.height() == 40
     horizontal = [w for w in toolbar.findChildren(QFrame) if w.frameShape() == QFrame.HLine]
     assert len(horizontal) == 2
     assert sorted(w.y() for w in horizontal) == [0, 41]
     assert all(w.width() == toolbar.width() and w.height() == 1 for w in horizontal)
     assert all(w.width() == 1 and w.height() == 40 for w in controls if isinstance(w, QFrame) and w.frameShape() == QFrame.VLine)
-    assert toolbar.replayer_btn.isHidden()
-    assert toolbar.condition_mode_combobox.isHidden()
-
-
-@pytest.mark.parametrize("width", [1030, 1920])
-def test_round_field_removed_without_leaving_a_layout_slot(width, toolbar_host, ui_qapp):
-    window, toolbar, _ = toolbar_host
-    window.resize(width, 760)
-    ui_qapp.processEvents()
-    round_value = toolbar.current_round_spinbox
-    assert round_value.isHidden()
-    assert round_value.parentWidget() is toolbar
-    assert not round_value.isWindow()
-    assert not any(label.isVisible() and (
-        label.buddy() is round_value or "轮次" in label.text()
-    ) for label in toolbar.findChildren(QLabel))
-    row = toolbar.layout().itemAt(1).layout()
-    controls = [row.itemAt(index).widget() for index in range(row.count())]
-    assert round_value not in controls
-    assert all(control.isVisible() for control in controls)
-    sample_index = controls.index(toolbar.sample_number_lineedit)
-    reset_index = controls.index(toolbar.reset_round_button)
-    sn_index = controls.index(toolbar.barcode_scanner_box)
-    assert reset_index == sample_index + 2
-    assert sn_index == reset_index + 2
-    assert isinstance(controls[reset_index - 1], QFrame)
-    assert isinstance(controls[reset_index + 1], QFrame)
-    spacing = 1 if toolbar.serial_trigger_btn.compact else row.spacing()
-    for left, right in zip(controls[sample_index:sn_index], controls[sample_index + 1:sn_index + 1]):
-        assert right.x() - (left.x() + left.width()) == spacing
-    toolbar.player_btn.setFocus()
-    for _ in range(len(toolbar.findChildren(QWidget)) + 1):
-        QTest.keyClick(window.focusWidget(), Qt.Key_Tab)
-        assert not round_value.hasFocus()
-        assert not round_value.lineEdit().hasFocus()
-    round_value.setValue(7)
-    assert round_value.value() == 7
-    toolbar.reset_round_button.clicked.connect(lambda: round_value.setValue(1))
-    QTest.mouseClick(toolbar.reset_round_button, Qt.LeftButton)
-    assert round_value.value() == 1
-
-
-@pytest.mark.parametrize("width", [1030, 1920])
-def test_workbench_analysis_action_removed_without_a_layout_slot(width, toolbar_host, ui_qapp):
-    window, legacy, _ = toolbar_host
-    toolbar = SequenceToolsBar(workbench_mode=True)
-    legacy.parentWidget().layout().insertWidget(1, toolbar)
-    window.resize(width, 760)
-    ui_qapp.processEvents()
-    try:
-        button = toolbar.data_btn
-        assert button.isHidden()
-        assert button.parentWidget() is toolbar
-        assert not button.isWindow()
-        assert button.focusPolicy() == Qt.NoFocus
-        row = toolbar.layout().itemAt(1).layout()
-        controls = [row.itemAt(index).widget() for index in range(row.count())]
-        assert button not in controls
-        assert controls[:2] == [toolbar.player_btn, toolbar.serial_trigger_btn]
-        spacing = 1 if toolbar.serial_trigger_btn.compact else row.spacing()
-        assert toolbar.serial_trigger_btn.x() - (
-            toolbar.player_btn.x() + toolbar.player_btn.width()) == spacing
-
-        for update in (lambda: button.setEnabled(True), button.set_idle,
-                       lambda: button.set_analyzing(1, 2, "正转"),
-                       lambda: button.set_completed("正转"),
-                       lambda: button.set_failed("正转")):
-            update()
-            ui_qapp.processEvents()
-            assert button.isHidden()
-            assert button.focusPolicy() == Qt.NoFocus
-        toolbar.player_btn.setFocus()
-        for _ in range(len(window.findChildren(QWidget)) + 1):
-            QTest.keyClick(window.focusWidget(), Qt.Key_Tab)
-            assert not button.hasFocus()
-
-        recordings = QSignalSpy(toolbar.player_btn.clicked)
-        QTest.mouseClick(toolbar.player_btn, Qt.LeftButton)
-        assert len(recordings) == 1
-        toolbar.using_file_combobox.addItem("合成产品", "synthetic.json")
-        assert toolbar.using_file_combobox.isVisible()
-        assert toolbar.using_file_combobox.currentData() == "synthetic.json"
-        assert toolbar.condition_mode_combobox.isHidden()
-        assert toolbar.condition_mode_combobox.focusPolicy() == Qt.NoFocus
-
-        legacy.data_btn.setEnabled(True)
-        assert legacy.data_btn.isVisible()
-        assert legacy.data_btn.focusPolicy() != Qt.NoFocus
-        assert legacy.layout().itemAt(1).layout().indexOf(legacy.data_btn) >= 0
-        manual_analysis = QSignalSpy(legacy.data_btn.clicked)
-        QTest.mouseClick(legacy.data_btn, Qt.LeftButton)
-        assert len(manual_analysis) == 1
-    finally:
-        toolbar.close()
-        toolbar.deleteLater()
-        ui_qapp.processEvents()
-
-
-@pytest.mark.parametrize("width", [1030, 1920])
-@pytest.mark.parametrize("scale", [1, 1.25, 1.5])
-def test_workbench_mode_removed_without_layout_slot(width, scale, toolbar_host, ui_qapp, tmp_path, monkeypatch):
-    from consts import ui_style_const
-
-    window, legacy, _ = toolbar_host
-    for name, style in vars(ui_style_const).items():
-        if name.startswith("toolbar_") and isinstance(style, str):
-            monkeypatch.setattr(ui_style_const, name, re.sub(
-                r"font-size:\s*(\d+)px",
-                lambda match: f"font-size: {round(int(match[1]) * scale)}px",
-                style,
-            ))
-    toolbar = SequenceToolsBar(workbench_mode=True)
-    legacy.parentWidget().layout().replaceWidget(legacy, toolbar)
-    legacy.hide()
-    toolbar.show()
-    window.resize(width, 760)
-    ui_qapp.processEvents()
-    combo = toolbar.condition_mode_combobox
-    row = toolbar.layout().itemAt(1).layout()
-    controls = [row.itemAt(i).widget() for i in range(row.count())]
-    assert combo.isHidden()
-    assert combo.focusPolicy() == Qt.NoFocus
-    assert combo.parentWidget() is toolbar and not combo.isWindow()
-    assert combo not in controls
-    assert toolbar.reset_round_button.isHidden()
-    assert toolbar.reset_round_button not in controls
-    assert not any(label.buddy() is combo or "模式" in label.text()
-                   for label in toolbar.findChildren(QLabel))
-    assert [combo.itemData(i) for i in range(combo.count())] == ["test", "mark"]
-    assert combo.currentData() == "test"
-    sample_index = controls.index(toolbar.sample_number_lineedit)
-    scanner_index = controls.index(toolbar.barcode_scanner_box)
-    assert scanner_index == sample_index + 2
-    assert controls[sample_index + 1].frameShape() == QFrame.VLine
-    assert sum(isinstance(w, QFrame) and w.frameShape() == QFrame.VLine for w in controls) == 5
-    assert all(widget.isVisible() and toolbar.rect().contains(widget.geometry()) for widget in controls)
-    assert all(a.geometry().right() < b.x() for a, b in zip(controls, controls[1:]))
-    for label in field_labels(toolbar):
-        text = label._display_text()
-        assert "…" not in text
-        assert label._text_rect().contains(label.fontMetrics().boundingRect(
-            label._text_rect(), int(label.alignment()) | Qt.TextSingleLine, text,
-        ))
-    assert toolbar.lineedit_s_or_n.width() >= 125
-    toolbar.player_btn.setFocus()
-    for _ in range(len(window.findChildren(QWidget)) + 1):
-        QTest.keyClick(window.focusWidget(), Qt.Key_Tab)
-        assert not combo.hasFocus()
-    assert toolbar.grab().save(str(tmp_path / f"workbench-toolbar-{width}-font{scale}.png"))
-
 
 @pytest.mark.parametrize("width", [1030, 1280, 1440, 1920])
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5])
@@ -301,8 +123,9 @@ def test_single_row_at_real_parent_width(width, scale, toolbar_host, ui_qapp, mo
     assert_row(window, toolbar, width)
     assert toolbar.lineedit_type.font().pixelSize() == round(18 * scale)
     assert workspace.height() > 650
-    expected = (["型号：", "配置：", "样本："] if toolbar.serial_trigger_btn.compact
-                else ["型号：", "使用配置：", "样本编号："])
+    compact = toolbar.width() < toolbar.layout().itemAt(1).layout().sizeHint().width()
+    expected = (["型号：", "配置：", "轮次："] if compact
+                else ["型号：", "使用配置：", "轮次："])
     for label, text in zip(field_labels(toolbar), expected):
         assert label._display_text() == text
         assert "…" not in text
@@ -321,9 +144,9 @@ def test_single_row_at_real_parent_width(width, scale, toolbar_host, ui_qapp, mo
     rect = switch.style().subElementRect(QStyle.SE_CheckBoxContents, option, switch)
     assert rect.contains(switch.fontMetrics().boundingRect(rect, Qt.AlignLeft | Qt.AlignVCenter, switch.text()))
     if width == 1030:
-        assert toolbar.serial_trigger_btn.compact
+        assert compact
     if width == 1920 and scale == 1:
-        assert not toolbar.serial_trigger_btn.compact
+        assert not compact
     if width == 1920:
         assert toolbar.lineedit_type.width() == 160
         assert toolbar.using_file_combobox.width() == 200
@@ -336,7 +159,6 @@ def fill_fields(toolbar):
     toolbar.lineedit_type.setText("中文完整型号-MODEL-0123456789")
     toolbar.sample_number_lineedit.setText("完整样本编号-1234567890")
     toolbar.using_file_combobox.addItem("完整中文配置-CONFIG-1234567890", {"id": 17})
-    toolbar.current_round_spinbox.setValue(9999)
     toolbar.barcode_scanner_box.setChecked(True)
     toolbar.lineedit_s_or_n.setEnabled(True)
     toolbar.lineedit_s_or_n.setText("SN-完整条码-012345678901234567890123456789")
@@ -363,7 +185,7 @@ def test_wide_row_restores_labels_and_preserves_hidden_round(toolbar_host, ui_qa
     from ui.sequence.toolbar_eliding_widgets import ElidingLabel
 
     window, toolbar, _ = toolbar_host
-    toolbar.current_round_spinbox.setValue(9999)
+    toolbar.sample_number_lineedit.setText("10000")
     toolbar.player_btn.setFocus()
     window.resize(1920, 760)
     ui_qapp.processEvents()
@@ -371,9 +193,7 @@ def test_wide_row_restores_labels_and_preserves_hidden_round(toolbar_host, ui_qa
     for widget in ordered_controls(toolbar):
         if isinstance(widget, ElidingLabel):
             assert widget._display_text() == widget.text()
-    assert toolbar.current_round_spinbox.value() == 9999
-    assert toolbar.current_round_spinbox.isHidden()
-
+    assert toolbar.sample_number_lineedit.text() == "10000"
 
 def test_resize_preserves_values_focus_selection_and_signals(toolbar_host, ui_qapp):
     window, toolbar, _ = toolbar_host
@@ -384,9 +204,7 @@ def test_resize_preserves_values_focus_selection_and_signals(toolbar_host, ui_qa
     spies = [QSignalSpy(editor.textChanged) for editor in editors]
     spies += [QSignalSpy(editor.returnPressed) for editor in editors]
     spies += [QSignalSpy(toolbar.using_file_combobox.currentTextChanged),
-              QSignalSpy(toolbar.current_round_spinbox.valueChanged),
               QSignalSpy(toolbar.barcode_scanner_box.toggled),
-              QSignalSpy(toolbar.reset_round_button.clicked),
               QSignalSpy(toolbar.player_btn.clicked)]
     toolbar.lineedit_s_or_n.setFocus()
     toolbar.lineedit_s_or_n.setSelection(3, 8)
@@ -401,42 +219,32 @@ def test_resize_preserves_values_focus_selection_and_signals(toolbar_host, ui_qa
         assert [editor.text() for editor in editors] == originals
         assert toolbar.using_file_combobox.currentText() == "完整中文配置-CONFIG-1234567890"
         assert toolbar.using_file_combobox.currentData() == {"id": 17}
-        assert toolbar.current_round_spinbox.value() == 9999
     assert all(len(spy) == 0 for spy in spies)
     toolbar.lineedit_s_or_n.selectAll()
     toolbar.lineedit_s_or_n.copy()
     assert ui_qapp.clipboard().text() == originals[-1]
 
-
-def test_production_blocked_config_and_barcode_updates_keep_full_hints(toolbar_host, ui_qapp, tmp_path):
-    from base.product_test_project_config import ProductTestProjectConfigManager
-    from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
-    from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
-
-    class Operations(SequenceWidgetBarcodeOpsMixin, SequenceWidgetConfigOpsMixin):
-        def _get_product_program_registry(self):
-            self.active_product_program_file = self.registry["active_file"]
-            return self.registry
-
+def test_production_blocked_config_and_barcode_updates_keep_full_hints(toolbar_host, ui_qapp, tmp_path, monkeypatch):
+    monkeypatch.setattr("ui.sequence.workbench_input_ops.LoadUiConfig.load_last_recorded_info", lambda _: {})
+    monkeypatch.setattr("ui.sequence.workbench_input_ops.save_recorded_data_to_json", lambda **_: None)
+    from types import SimpleNamespace
+    from ui.sequence.sequence_widget import SequenceWindow
+    from ui.sequence.workbench_input_ops import WorkbenchInputOpsMixin
     _, toolbar, _ = toolbar_host
+    class Operations(WorkbenchInputOpsMixin, QWidget):
+        def __init__(self):
+            super().__init__()
+            self.toolsbar = toolbar
+            self.lineedit_type = toolbar.lineedit_type
+            self.lineedit_s_or_n = toolbar.lineedit_s_or_n
+            self.barcode_scanner_box = toolbar.barcode_scanner_box
+            self.using_file_combobox = toolbar.using_file_combobox
+            self.default_logger = logging.getLogger(__name__)
+            self.hw_manager = SimpleNamespace(sig_barcode=SimpleNamespace(connect=lambda _: None, disconnect=lambda _: None),
+                                              stop_scanner_listeners=lambda: None)
+            self.init_workbench_input(lambda: True)
     operations = Operations()
-    operations.product_program_manager = ProductTestProjectConfigManager(
-        program_dir=tmp_path, registry_path=tmp_path / "registry.json",
-        queue_registry_path=tmp_path / "queues.json")
-    for file_name in ("old.json", "current.json"):
-        (tmp_path / file_name).write_text("{}", encoding="utf-8")
-    operations.using_file_combobox = toolbar.using_file_combobox
-    operations.lineedit_s_or_n = toolbar.lineedit_s_or_n
-    operations.lineedit_type = toolbar.lineedit_type
-    operations.lineedit_count = toolbar.lineedit_count
-    operations.barcode_scanner_box = toolbar.barcode_scanner_box
-    operations.barcode_scanner_box.setChecked(True)
-    operations._last_committed_barcode = None
-    operations.default_logger = logging.getLogger(__name__)
-    operations.registry = {"active_file": "current.json", "configs": [
-        {"project_name": "OLD", "file": "old.json"},
-        {"project_name": "当前完整配置-CURRENT-0123456789", "file": "current.json"},
-    ]}
+    toolbar.barcode_scanner_box.setChecked(True)
     combo = toolbar.using_file_combobox
     editor = toolbar.lineedit_s_or_n
     combo.setToolTip("选择配置")
@@ -444,7 +252,7 @@ def test_production_blocked_config_and_barcode_updates_keep_full_hints(toolbar_h
     editor.setText("OLD")
     spies = [QSignalSpy(combo.currentTextChanged), QSignalSpy(combo.currentIndexChanged),
              QSignalSpy(editor.textChanged), QSignalSpy(editor.returnPressed)]
-    operations.update_using_file_combobox()
+    SequenceWindow.show_workbench_products(operations, [("old.json", "OLD"), ("current.json", "当前完整配置-CURRENT-0123456789")], "current.json")
     barcode = "CURRENT-SN-012345678901234567890123456789"
     operations._commit_barcode(barcode, source="serial")
     ui_qapp.processEvents()
@@ -453,17 +261,17 @@ def test_production_blocked_config_and_barcode_updates_keep_full_hints(toolbar_h
     assert combo.currentData() == "current.json"
     for widget, value, hint in ((editor, barcode, "扫描条码"),
                                 (combo, combo.currentText(), "选择配置")):
-        assert widget.toolTip() == f"{hint}\n{value}"
+        assert value in widget.toolTip()
         assert value in widget.accessibleDescription()
         local = widget.rect().center()
         QApplication.sendEvent(widget, QHelpEvent(QEvent.ToolTip, local, widget.mapToGlobal(local)))
         assert QToolTip.text() == widget.toolTip()
     assert all(len(spy) == 0 for spy in spies)
     QToolTip.hideText()
-
+    operations.close_workbench_input()
+    operations.deleteLater()
 
 def test_popup_scan_reset_and_status_survive_resize(toolbar_host, ui_qapp):
-    from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
 
     window, toolbar, _ = toolbar_host
     fill_fields(toolbar)
@@ -487,53 +295,20 @@ def test_popup_scan_reset_and_status_survive_resize(toolbar_host, ui_qapp):
     QTest.keyClicks(toolbar.lineedit_s_or_n, barcode)
     QTest.keyClick(toolbar.lineedit_s_or_n, Qt.Key_Return)
     assert submissions == [barcode]
-    resets = QSignalSpy(toolbar.reset_round_button.clicked)
-    toolbar.reset_round_button.clicked.connect(lambda: toolbar.current_round_spinbox.setValue(1))
-    QTest.mouseClick(toolbar.reset_round_button, Qt.LeftButton)
-    assert len(resets) == 1 and toolbar.current_round_spinbox.value() == 1
     toggles = QSignalSpy(toolbar.barcode_scanner_box.toggled)
     QTest.mouseClick(toolbar.barcode_scanner_box, Qt.LeftButton)
     QTest.keyClick(toolbar.barcode_scanner_box, Qt.Key_Space)
     assert len(toggles) == 2 and toolbar.barcode_scanner_box.isChecked()
 
-    class StatusHost(QWidget, SequenceWidgetSerialTriggerOpsMixin):
-        pass
-
-    status_host = StatusHost()
-    status_host.serial_trigger_btn = toolbar.serial_trigger_btn
-    status_host.on_serial_trigger_status_changed(
-        {"connected": True, "has_response": True, "message": "ok"})
-    toolbar.data_btn.setEnabled(True)
-    toolbar.data_btn.set_analyzing(7, 20, "A口")
     for width in (1920, 1030):
         window.resize(width, 760)
         ui_qapp.processEvents()
         assert_row(window, toolbar, width)
-        assert toolbar.serial_trigger_btn.text() == "已连接"
-        assert toolbar.data_btn.isEnabled()
-        assert toolbar.data_btn.analysis_state == toolbar.data_btn.STATE_ANALYZING
-        assert toolbar.data_btn.status_badge.text() == "7/20"
-        assert toolbar.data_btn.rect().contains(toolbar.data_btn.status_badge.geometry())
-    for index, width in enumerate((1920, 1030, 1920)):
-        window.resize(width, 760)
-        ui_qapp.processEvents()
-        if index == 0:
-            toolbar.data_btn.set_analyzing(1234, 9999, "A口")
-            wide_badge_width = toolbar.data_btn.status_badge.width()
-        if width == 1920:
-            assert toolbar.data_btn.status_badge.width() == wide_badge_width
-        assert toolbar.data_btn.rect().contains(toolbar.data_btn.status_badge.geometry())
-        assert toolbar.data_btn.analysis_state == toolbar.data_btn.STATE_ANALYZING
-        assert toolbar.data_btn.status_badge.text() == "1234/9999"
-        assert "1234/9999" in toolbar.data_btn.toolTip()
-        assert "A口" in toolbar.data_btn.toolTip()
-
+        assert toolbar.lineedit_s_or_n.text() == barcode
 
 def test_render_toolbar_review_images(toolbar_host, ui_qapp, tmp_path):
     window, toolbar, _ = toolbar_host
     fill_fields(toolbar)
-    toolbar.data_btn.setEnabled(True)
-    toolbar.data_btn.set_analyzing(7, 20, "A口")
     toolbar.player_btn.setFocus()
     for width in (1030, 1920):
         window.resize(width, 760)
@@ -569,7 +344,7 @@ def test_mode_boundary_is_stable_in_both_directions(scale, toolbar_host, ui_qapp
             ui_qapp.processEvents()
             toolbar.grab()
             assert_row(window, toolbar, width)
-            snapshots.append((toolbar.serial_trigger_btn.compact,
+            snapshots.append((toolbar.width() < row.sizeHint().width(),
                               tuple(label._display_text() for label in field_labels(toolbar)),
                               tuple(w.geometry().getRect() for w in ordered_controls(toolbar))))
         assert all(state == snapshots[0] for state in snapshots)
@@ -577,112 +352,3 @@ def test_mode_boundary_is_stable_in_both_directions(scale, toolbar_host, ui_qapp
         if width in results:
             assert results[width] == snapshots[0]
         results[width] = snapshots[0]
-
-
-@pytest.mark.parametrize("scale", [1, 1.25, 1.5])
-def test_serial_states_paint_without_losing_native_status(scale, toolbar_host, ui_qapp, monkeypatch, tmp_path):
-    from consts import ui_style_const
-    from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
-
-    class StatusHost(QWidget, SequenceWidgetSerialTriggerOpsMixin):
-        pass
-
-    window, toolbar, _ = toolbar_host
-    scale_fonts(toolbar, scale)
-    ui_qapp.processEvents()
-    button = toolbar.serial_trigger_btn
-    row = toolbar.layout().itemAt(1).layout()
-    wide_width = max(1920, row.sizeHint().width() + 2)
-    host = StatusHost()
-    host.serial_trigger_btn = button
-    painted = []
-    display = button._display_text
-    monkeypatch.setattr(button, "_display_text", lambda: (painted.append(display()) or painted[-1]))
-    clicked = QSignalSpy(button.clicked)
-    cases = [(None, "未连接", ui_style_const.COLOR_TEXT_MUTED),
-             ({"connected": True, "has_response": False, "message": "port opened"}, "已打开", ui_style_const.COLOR_NG),
-             ({"connected": True, "has_response": True, "message": "response received"}, "已连接", ui_style_const.COLOR_OK),
-             ({"connected": False, "has_response": True, "message": "closed"}, "未连接", ui_style_const.COLOR_TEXT_MUTED)]
-    for index, (status, text, color) in enumerate(cases):
-        if status is not None:
-            host.on_serial_trigger_status_changed(status)
-        for width in (1030, wide_width, 1030, wide_width, 1030):
-            window.resize(width, 760)
-            ui_qapp.processEvents()
-            image = button.grab().toImage()
-            assert painted[-1] == ("" if width == 1030 else text)
-            assert button.text() == text
-            assert text in button.toolTip() and text in button.accessibleName()
-            assert text in button.accessibleDescription()
-            assert "串口离散输入触发配置" in button.toolTip()
-            assert "串口离散输入触发配置" in button.accessibleDescription()
-            if status:
-                assert status["message"] in button.toolTip()
-                assert status["message"] in button.accessibleDescription()
-            assert button.height() == 40 and button.isEnabled()
-            if width == 1030:
-                assert button.width() == 48
-                dot = button.status_dot_rect()
-                icon = button.compact_icon_rect()
-                assert dot.width() == dot.height() == 4
-                assert button.rect().adjusted(1, 1, -1, -1).contains(dot.toRect())
-                assert not dot.toRect().intersects(icon)
-                assert not button.icon().isNull()
-                assert image.pixelColor(dot.center().toPoint()) == QColor(color)
-                # Actual icon pixels must differ from the empty background.
-                background = image.pixelColor(3, button.height() // 2)
-                assert any(image.pixelColor(x, y) != background
-                           for x in range(icon.left(), icon.right() + 1)
-                           for y in range(icon.top(), icon.bottom() + 1))
-            else:
-                assert button.width() == 124
-                assert button.status_dot_rect().isEmpty()
-            assert toolbar.grab().save(str(tmp_path / f"serial-{index}-{width}-font{round(scale * 100)}.png"))
-        QTest.mouseClick(button, Qt.LeftButton)
-        assert len(clicked) == index + 1
-    host.close()
-
-
-def test_serial_click_uses_production_signal_and_configuration_entry(toolbar_host, ui_qapp, monkeypatch):
-    from types import SimpleNamespace
-    from ui.sequence import sequence_widget_serial_trigger_ops as serial_ops
-    from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
-
-    class Host(QWidget, SequenceWidgetUiOpsMixin, serial_ops.SequenceWidgetSerialTriggerOpsMixin):
-        pass
-
-    window, toolbar, _ = toolbar_host
-    host = Host()
-    host.toolsbar = toolbar
-    def unused(*args):
-        pass
-    for name in ("_start_selected_condition_manual_analysis", "clicked_scanner",
-                 "on_reset_statistics_clicked", "on_mark_btn_clicked", "update_using_file_combobox",
-                 "on_using_file_combobox_changed"):
-        setattr(host, name, unused)
-    host._barcode_router = SimpleNamespace(on_barcode_return_pressed=unused, on_barcode_text_changed=unused)
-    host.count_board = SimpleNamespace(mode="test",
-                                      reset_btn=QPushButton(), mark_btn=QPushButton())
-    host._serial_trigger_config = {"enabled": False, "port": "TEST"}
-    from consts import error_code
-    monkeypatch.setattr(serial_ops.LoadUiConfig, "load_serial_discrete_input_config",
-                        lambda: (error_code.OK, host._serial_trigger_config))
-    host.hw_manager = SimpleNamespace(get_serial_discrete_input_status=lambda: {"connected": False})
-    dialogs = []
-    class Dialog:
-        def __init__(self, config, *, runtime_status, test_connection_callback, parent):
-            dialogs.append((config, runtime_status, test_connection_callback, parent))
-        def exec(self):
-            return None
-    monkeypatch.setattr(serial_ops, "SerialDiscreteInputConfigDialog", Dialog)
-    host.set_member_connect()
-    for index, width in enumerate((1030, 1920, 1030), 1):
-        window.resize(width, 760)
-        ui_qapp.processEvents()
-        QTest.mouseClick(toolbar.serial_trigger_btn, Qt.LeftButton)
-        assert len(dialogs) == index
-        assert dialogs[-1][0] == host._serial_trigger_config
-        assert dialogs[-1][1] == {"connected": False}
-        assert dialogs[-1][2] == host._test_serial_trigger_connection
-        assert dialogs[-1][3] is host
-    host.close()

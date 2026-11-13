@@ -20,6 +20,7 @@ from base.recording_service import RecordingSession
 from base import vkinging_calibration_settings as settings_module
 from base.vkinging_stores import VECalibrationStore, VEInputProfileStore
 from ui import calibration_window as calibration
+from ui.sequence.workbench_editor_context import WorkbenchEditorContext
 from ui.vkinging_presentation import ve_failure_text
 from unit_test.base.test_vkinging_calibration import descriptor_for, sine_volts
 from unit_test.base.vkinging_fakes import device_info, input_config
@@ -1181,15 +1182,13 @@ def test_main_dialog_handoff_reaches_input_child_without_queue_reads(setup, monk
     window = SimpleNamespace(
         mic=device, mic_channels=[7, 1], speaker=None, recording_bridge=setup.bridge,
         ve_profile_store=setup.profiles, ve_calibration_store=setup.calibrations,
-        sequence_window=SimpleNamespace(
-            update_v2pa_factor=setup.forbidden, ve_profile_store=setup.profiles,
-            ve_calibration_store=setup.calibrations,
-            sequence_config=([{"seq1": {"acq": {"detail": queue_detail}}}] if queue_detail else [])),
+        editor_context=WorkbenchEditorContext(
+            None, ([{"seq1": {"acq": {"detail": queue_detail}}}] if queue_detail else []), setup.forbidden),
         _calibration_admission_available=lambda: True)
     open_dialog = _load_method(ROOT / "main_window.py", "MainWindow", "on_calibration_window_init",
                               {"CalibrationWindow": calibration.CalibrationWindow})
-    from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
-    with mock.patch.object(SequenceWidgetConfigOpsMixin, "_current_ve_recording_device",
+    from ui.sequence import workbench_editor_context
+    with mock.patch.object(workbench_editor_context, "resolve_editor_ve_device",
                            side_effect=AssertionError("queue read")) as queue_load, \
             mock.patch.object(setup.profiles, "load", side_effect=AssertionError("profile read")) as profile_load:
         open_dialog(window)

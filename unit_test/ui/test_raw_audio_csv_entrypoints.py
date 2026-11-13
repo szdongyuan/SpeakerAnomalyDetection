@@ -80,6 +80,7 @@ def test_main_owns_fallback_and_shares_with_sequence(ui_qapp, monkeypatch, injec
         sequence = QWidget()
         sequence.left_panel = Mock()
         sequence.plot_grid = Mock()
+        sequence.show_workbench_round = Mock()
         sequence.set_workbench_active_product = Mock()
         sequence.show_workbench_products = Mock()
         sequence.set_workbench_product_selection_enabled = Mock()
@@ -92,56 +93,11 @@ def test_main_owns_fallback_and_shares_with_sequence(ui_qapp, monkeypatch, injec
         monkeypatch.setattr(window, "set_title", lambda: QWidget())
         monkeypatch.setattr(window, "_create_menu_row", lambda menu: QWidget())
         window.init_sequence_widget()
-        assert factory.call_args.kwargs["raw_audio_csv_bridge"].service is window.raw_audio_csv_service
+        assert factory.call_args.kwargs == {"can_commit": window._workbench_scanner_admission_available}
         assert window.raw_audio_csv_service._process is None
     finally:
         window.raw_audio_csv_service.begin_shutdown()
         assert window.raw_audio_csv_service.closed.wait(3)
         window.raw_audio_csv_bridge.close_delivery()
         window.video_controller.shutdown()
-        window.deleteLater()
-
-
-def test_standalone_sequence_runtime_owns_service(ui_qapp):
-    from ui.sequence.sequence_widget_raw_csv_ops import SequenceWidgetRawCsvOpsMixin
-    class Window(SequenceWidgetRawCsvOpsMixin, QWidget):
-        pass
-    window = Window()
-    window._initialize_raw_audio_csv_runtime()
-    try:
-        assert window._owns_raw_audio_csv_service
-        assert window.raw_audio_csv_bridge.service is window.raw_audio_csv_service
-        before = window.raw_audio_csv_service.snapshot()
-        assert window._raw_audio_csv_snapshot() == before
-        assert window._raw_audio_csv_snapshot() == before
-        assert window.raw_audio_csv_service._process is None
-    finally:
-        window.raw_audio_csv_service.begin_shutdown()
-        assert window.raw_audio_csv_service.closed.wait(3)
-        window.raw_audio_csv_bridge.close_delivery()
-        window.deleteLater()
-
-
-def test_hidden_sequence_initialization_close_keeps_borrowed_service_open(ui_qapp):
-    from base.raw_audio_csv_service import RawAudioCsvService
-    from ui.raw_audio_csv_service_bridge import RawAudioCsvServiceBridge
-    from ui.sequence.sequence_widget import SequenceWindow
-    class Window(SequenceWindow):
-        def __init__(self, bridge):
-            QWidget.__init__(self)
-            self._cleanup_streaming_resources = Mock()
-            self._initialize_raw_audio_csv_runtime(raw_audio_csv_bridge=bridge)
-    service = RawAudioCsvService()
-    bridge = RawAudioCsvServiceBridge(service, ui_qapp)
-    window = Window(bridge)
-    try:
-        assert not window.isVisible()
-        window.close()
-        assert service.snapshot().phase == "open"
-        assert not bridge.delivery_closed
-        assert not window._owns_raw_audio_csv_service
-    finally:
-        service.begin_shutdown()
-        assert service.closed.wait(3)
-        bridge.close_delivery()
         window.deleteLater()

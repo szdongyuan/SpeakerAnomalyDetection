@@ -34,6 +34,7 @@ from ui.sequence.motor_workbench_controller import (
     MotorWorkbenchController, WorkbenchProductSelectionPorts, WorkbenchRecordingPorts,
 )
 from ui.sequence.sequence_widget import SequenceWindow
+from ui.sequence.workbench_editor_context import WorkbenchEditorContext
 from ui.vkinging_presentation import device_display_name, ve_failure_text
 from ui.workbench_recording_archive_bridge import WorkbenchRecordingArchiveBridge
 
@@ -64,6 +65,9 @@ class MainWindow(QMainWindow):
         self.analysis_service = analysis_service
         self._analysis_timer = None
         self.default_logger = LogManager.set_log_handler("core")
+        self._configuration_editor_open = False
+        self._configuration_deletion_error = ""
+        self.editor_context = WorkbenchEditorContext.load(self.default_logger)
         self.ve_prewarm_lifetime = ve_prewarm_lifetime
         if recording_bridge is None:
             recording_bridge = getattr(app, "_recording_bridge", None)
@@ -223,8 +227,6 @@ class MainWindow(QMainWindow):
     def _init_ve_hardware_runtime(self, *, prepare_workbench=False):
         from PyQt5.QtCore import QTimer
         from ui.vkinging_hardware_controls import VEDiscoveryBridge
-        self.sequence_window.ve_profile_store = self.ve_profile_store
-        self.sequence_window.ve_calibration_store = self.ve_calibration_store
         self.ve_discovery = VEDiscoveryBridge(self, discovery_factory=self.ve_discovery_factory)
         self.ve_discovery.result_ready.connect(self._on_ve_discovery_result)
         QApplication.instance().aboutToQuit.connect(self._close_ve_discovery)
@@ -265,6 +267,7 @@ class MainWindow(QMainWindow):
             hardware_available=lambda snapshot: (
                 self.ve_prewarm_lifetime.admission_for(snapshot.ve_signature) == "allowed"
                 and not self._hardware_busy()
+                and not self._configuration_editor_open
             ),
             read_wav_identity=lambda: (
                 sequence.lineedit_type.text(),
@@ -289,49 +292,56 @@ class MainWindow(QMainWindow):
         hardware_busy = getattr(bridge, "hardware_busy", None)
         if hardware_busy is None:
             hardware_busy = getattr(getattr(bridge, "service", None), "busy", False)
-        return bool(getattr(self.sequence_window, "player_status_flag", False)
-                    or hardware_busy)
+        return bool(hardware_busy)
+
+    def _workbench_configuration_busy(self, *, include_editor=True):
+        controller = getattr(self, "workbench_controller", None)
+        lifetime = getattr(self, "ve_prewarm_lifetime", None)
+        return bool(
+            getattr(self, "_closing", False)
+            or self._configuration_deletion_error
+            or (include_editor and getattr(self, "_configuration_editor_open", False))
+            or (controller is not None and controller.recording_busy)
+            or self._hardware_busy()
+            or getattr(getattr(self.recording_bridge, "service", None), "busy", False)
+            or getattr(getattr(self, "analysis_service", None), "pending_task_count", 0)
+            or (lifetime is not None and lifetime.admission_for(None) != "allowed")
+        )
 
     def _hardware_selection_admission_available(self):
-        snapshot = self.ve_prewarm_lifetime.snapshot()
-        if snapshot.state == "pending":
-            return False
-        return not self._hardware_busy()
+        return bool(not getattr(self, "_closing", False)
+                    and not getattr(self, "_configuration_editor_open", False)
+                    and self.ve_prewarm_lifetime.snapshot().state != "pending"
+                    and not self._hardware_busy())
 
     def _calibration_admission_available(self):
-        """Use fast admission only through the sequence's scoped policy.
-
-        Hardware selection remains guarded by ``_hardware_busy``.  Calibration
-        may overlap an eligible result finalizer, but native capture/release and
-        shutdown ownership still make opening a new calibration dialog unsafe.
-        """
-        lifetime = self.ve_prewarm_lifetime
-        if lifetime.admission_for(None) != "allowed":
-            return False
+        """Calibration may overlap finalization once native hardware is free."""
         bridge = getattr(self, "recording_bridge", None)
-        hardware_busy = getattr(bridge, "hardware_busy", None)
-        if hardware_busy is None:
-            return not self._hardware_busy()
-        if hardware_busy:
-            return False
-        can_start = getattr(
-            getattr(self, "sequence_window", None),
-            "_can_start_calibration_workflow",
-            None,
-        )
-        if not callable(can_start):
-            return not self._hardware_busy()
-        return bool(can_start())
+        return bool(not getattr(self, "_closing", False)
+                    and not getattr(self, "_configuration_editor_open", False)
+                    and self.ve_prewarm_lifetime.admission_for(None) == "allowed"
+                    and not self._hardware_busy()
+                    and getattr(getattr(bridge, "service", None), "can_start_recording", True))
+
+    def _workbench_scanner_admission_available(self):
+        return self._calibration_admission_available()
+
+    def _configuration_deletion_busy(self):
+        return bool(self._configuration_deletion_error
+                    or self._workbench_configuration_busy(include_editor=False))
+
+    def _configuration_deletion_failed(self, message):
+        self._configuration_deletion_error = str(message)
 
     def _ve_signature(self, mic, channels):
-        from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
         if (mic or {}).get("backend") != "vkinging":
             return None
         if not mic.get("available"):
             return None
         try:
             from base.vkinging_input import ve_acquisition_signature
-            mic = SequenceWidgetConfigOpsMixin._current_ve_recording_device(self.sequence_window, mic)
+            mic = self.editor_context.resolve_ve_device(
+                mic, self.ve_profile_store, self.ve_calibration_store)
             signature = ve_acquisition_signature(mic, channels, mic["input_config"]["sample_rate"])
         except (ValueError, OSError) as exc:
             # Timer and late-result callers cannot propagate configuration I/O
@@ -359,15 +369,11 @@ class MainWindow(QMainWindow):
 
     def _refresh_ve_admission_controls(self):
         """Synchronize visible actions after a process-lifetime state change."""
-        refresh_recording = getattr(
-            self.sequence_window, "update_player_btn_is_paused", None)
-        if callable(refresh_recording):
-            refresh_recording()
+        self.workbench_controller.refresh_recording_state()
         self._update_hardware_busy_state()
 
     def _try_start_ve_prewarm(self, device, channels, source, *, request=None):
         """Validate and atomically consume the process's one prewarm chance."""
-        from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
         if (device or {}).get("backend") != "vkinging":
             return "not_ve"
         if not device.get("available"):
@@ -378,8 +384,8 @@ class MainWindow(QMainWindow):
         token = f"ve-selection-{uuid4().hex}"
         if request is None:
             try:
-                device = SequenceWidgetConfigOpsMixin._current_ve_recording_device(
-                    self.sequence_window, device)
+                device = self.editor_context.resolve_ve_device(
+                    device, self.ve_profile_store, self.ve_calibration_store)
                 request = VePrewarmRequest.create(
                     f"ve-prewarm-{uuid4().hex}", device, channels, device["input_config"]["sample_rate"], attempt=1)
             except (TypeError, ValueError, OSError) as exc:
@@ -550,10 +556,7 @@ class MainWindow(QMainWindow):
         if (event.result.devices or diagnostic) and input_diagnostic and input_diagnostic != diagnostic:
             self.default_logger.warning(
                 "VE input unavailable for MachineId %s: %s", self.mic.get("machine_id"), input_diagnostic)
-        self.sequence_window.mic = self.mic
-        self.sequence_window.mic_channels = list(self.mic_channels)
         self.update_statusbar()
-        self.sequence_window.refresh_channel_windows()
         workbench_device = getattr(self, "workbench_recording_device", None)
         if workbench_device is None:
             self._try_start_ve_prewarm(self.mic, self.mic_channels, "startup discovery")
@@ -577,7 +580,6 @@ class MainWindow(QMainWindow):
         self._init_ve_hardware_runtime(prepare_workbench=True)
         self.showMaximized()
         self.on_login_window_init()
-        self.sequence_window.refresh_channel_windows()
         self._init_analysis_runtime()
 
     def set_title(self):
@@ -670,15 +672,7 @@ class MainWindow(QMainWindow):
         # create sequence widget, and set main window layout
         main_window = QWidget()
         layout = QVBoxLayout()
-        self.sequence_window = SequenceWindow(
-            recording_bridge=self.recording_bridge,
-            ve_prewarm_lifetime=self.ve_prewarm_lifetime,
-            raw_audio_csv_bridge=self.raw_audio_csv_bridge,
-            workbench_mode=True,
-        )
-        if hasattr(self, "ve_profile_store"):
-            self.sequence_window.ve_profile_store = self.ve_profile_store
-            self.sequence_window.ve_calibration_store = self.ve_calibration_store
+        self.sequence_window = SequenceWindow(can_commit=self._workbench_scanner_admission_available)
         sequence = self.sequence_window
         card = self.video_controller.attach_panel(sequence.left_panel.video_monitor_panel)
         self.workbench_controller = MotorWorkbenchController(
@@ -700,12 +694,7 @@ class MainWindow(QMainWindow):
             product_manager=ProductTestProjectConfigManager(),
             show_catalog=sequence.show_workbench_products,
             set_enabled=sequence.set_workbench_product_selection_enabled,
-            is_busy=lambda: (
-                sequence._product_configuration_refresh_busy()
-                or bool(getattr(getattr(self, "analysis_service", None), "pending_task_count", 0))
-                or bool(getattr(self.recording_bridge, "hardware_busy", False))
-                or bool(getattr(getattr(self.recording_bridge, "service", None), "busy", False))
-            ),
+            is_busy=self._workbench_configuration_busy,
             is_closing=lambda: (
                 getattr(self, "_closing", False) or getattr(self, "_recording_close_requested", False)
             ),
@@ -732,11 +721,6 @@ class MainWindow(QMainWindow):
         main_window.setLayout(layout)
         main_window.setMouseTracking(True)  # local variable start mouse tracking
         self.setCentralWidget(main_window)
-        # Transmit the selected input to the sequence widget
-        self.sequence_window.mic = self.mic
-        self.sequence_window.mic_channels = self.mic_channels
-        if (self.mic or {}).get("backend") != "vkinging":
-            self.sequence_window.update_v2pa_factor()
 
     def _expand_sequence_workspace(self):
         """Let the logged-in workspace consume the remaining window height."""
@@ -839,26 +823,19 @@ class MainWindow(QMainWindow):
             )
 
     def analysis_model_select(self):
-        # Test items for configuring speakers
-        if getattr(
-            self.sequence_window,
-            "_analysis_round_config_locked",
-            False,
-        ):
-            QMessageBox.information(
-                self,
-                "配置已锁定",
-                "当前轮次尚未完成，暂时不能修改测试队列配置。",
-            )
+        if self._workbench_configuration_busy():
+            QMessageBox.information(self, "配置忙碌", "当前工作台忙碌，请等待完成后再修改配置。")
             return
-        self._open_analysis_model_select(self.sequence_window.using_config_path)
+        self._open_analysis_model_select(self.editor_context.selected_path)
 
     def _open_analysis_model_select(self, using_config_path, parent_draft_provider=None):
+        if self._configuration_deletion_error or getattr(self, "_closing", False):
+            QMessageBox.information(self, "配置忙碌", "当前工作台忙碌，请等待完成后再修改配置。")
+            return
         context = ({"parent_draft_provider": parent_draft_provider}
                    if parent_draft_provider is not None else {})
-        sequence = self.sequence_window
-        was_open = getattr(sequence, "_test_queue_config_dialog_open", False)
-        sequence._test_queue_config_dialog_open = True
+        was_open = self._configuration_editor_open
+        self._configuration_editor_open = True
         try:
             analysis_model_select_dialog = AnalysisModelSelect(
                 using_config_path,
@@ -866,30 +843,22 @@ class MainWindow(QMainWindow):
                 mic_channels=self.mic_channels,
                 ve_profile_provider=lambda device: self.ve_profile_store.load(
                     device, self.ve_calibration_store),
-                deletion_busy=lambda: sequence._configuration_deletion_busy(),
+                deletion_busy=self._configuration_deletion_busy,
                 deletion_completed=self._on_configuration_deleted,
-                deletion_failed=lambda message: sequence._configuration_deletion_failed(message),
-                deletion_error=lambda: getattr(sequence, "_configuration_deletion_error", ""),
+                deletion_failed=self._configuration_deletion_failed,
+                deletion_error=lambda: self._configuration_deletion_error,
                 **context,
             )
             analysis_model_select_dialog.exec()
         finally:
-            sequence._test_queue_config_dialog_open = was_open
-            sequence.update_player_btn_is_paused()
+            self._configuration_editor_open = was_open
+            self.workbench_controller.refresh_recording_state()
 
     def on_product_test_program_config(self):
-        if getattr(
-            self.sequence_window,
-            "_analysis_round_config_locked",
-            False,
-        ):
-            QMessageBox.information(
-                self,
-                "配置已锁定",
-                "当前轮次尚未完成，暂时不能修改产品测试配置。",
-            )
+        if self._workbench_configuration_busy():
+            QMessageBox.information(self, "配置忙碌", "当前工作台忙碌，请等待完成后再修改配置。")
             return
-        self.sequence_window._product_test_program_config_dialog_open = True
+        self._configuration_editor_open = True
         try:
             dialog = ProductTestProjectConfigDialog(
                 None,
@@ -897,23 +866,26 @@ class MainWindow(QMainWindow):
                 self,
                 contextual_queue_editor_callback=self._open_analysis_model_select,
                 input_device_provider=lambda: self.mic,
-                deletion_busy=lambda: self.sequence_window._configuration_deletion_busy(),
+                deletion_busy=self._configuration_deletion_busy,
                 deletion_completed=self._on_configuration_deleted,
-                deletion_failed=lambda message: self.sequence_window._configuration_deletion_failed(message),
-                deletion_error=lambda: getattr(self.sequence_window, "_configuration_deletion_error", ""),
+                deletion_failed=self._configuration_deletion_failed,
+                deletion_error=lambda: self._configuration_deletion_error,
             )
             dialog.projects_changed.connect(self.on_workbench_configuration_committed)
             dialog.exec()
         finally:
-            self.sequence_window._product_test_program_config_dialog_open = False
-            self.sequence_window.update_player_btn_is_paused()
+            self._configuration_editor_open = False
+            self.workbench_controller.refresh_recording_state()
 
     def on_workbench_configuration_committed(self):
-        """Refresh after the configuration editor has committed its files."""
+        """Apply committed files while preserving failed-deletion and exit state."""
+        if self._configuration_deletion_error or getattr(self, "_closing", False):
+            return
+        # In-flight requests retain their frozen configuration during this refresh.
         self.workbench_controller.refresh_configuration()
 
     def _on_configuration_deleted(self, target):
-        self.sequence_window._configuration_deleted(target)
+        self.editor_context.configuration_deleted(target)
         self.on_workbench_configuration_committed()
 
     def show_statusbar_layout(self):
@@ -1073,15 +1045,10 @@ class MainWindow(QMainWindow):
             else:
                 workbench_device.invalidate_selection()
         self.update_statusbar()
-        self.sequence_window.mic = self.mic
-        self.sequence_window.mic_channels = self.mic_channels
-        if (self.mic or {}).get("backend") != "vkinging":
-            self.sequence_window.update_v2pa_factor()
-        self.sequence_window.refresh_channel_windows()
         if (previous_input != recording_input_selection_key(mic, mic_channels)
                 or self._hardware_analysis_sync_pending):
             self._hardware_analysis_sync_pending = (
-                not self.sequence_window.synchronize_hardware_analysis_channels()
+                not self.editor_context.update_channels(self.mic_channels)
             )
         prewarm_owns_transition = False
         if is_ve:
@@ -1121,10 +1088,7 @@ class MainWindow(QMainWindow):
         calibration_options = {}
         input_device = self.mic
         if (self.mic or {}).get("backend") == "vkinging":
-            from base.input_calibration_range import resolve_test_full_scale_peak_volts
-
-            sequence = getattr(self, "sequence_window", None)
-            peak = resolve_test_full_scale_peak_volts(getattr(sequence, "sequence_config", None))
+            peak = self.editor_context.test_full_scale_peak_volts()
             calibration_options = dict(ve_profile_store=self.ve_profile_store,
                                        ve_calibration_store=self.ve_calibration_store,
                                        test_full_scale_peak_volts=peak)
@@ -1138,8 +1102,6 @@ class MainWindow(QMainWindow):
             dlg.ve_profile_store = self.ve_profile_store
             dlg.ve_calibration_store = self.ve_calibration_store
         dlg.exec()
-        if dlg.input_calibration_flag and (self.mic or {}).get("backend") != "vkinging":
-            self.sequence_window.update_v2pa_factor()
 
     def on_window_close(self):
         # close the window
@@ -1174,24 +1136,6 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         sequence = getattr(self, "sequence_window", None)
-        has_pending_analysis = getattr(
-            sequence,
-            "_analysis_has_pending_tasks",
-            None,
-        )
-        if callable(has_pending_analysis) and has_pending_analysis():
-            event.ignore()
-            if getattr(self, "_closing", False):
-                # A recording can enqueue analysis during asynchronous video
-                # shutdown. Allow the operator to close again once it finishes;
-                # the sequence's recording admission remains closed.
-                self.setEnabled(True)
-            QMessageBox.information(
-                self,
-                "分析任务未完成",
-                "还有分析任务未完成，请等待分析结束后再退出。",
-            )
-            return
         if not getattr(self, "_closing", False):
             self._closing = True
             if getattr(self, "_analysis_timer", None) is not None:
@@ -1199,9 +1143,6 @@ class MainWindow(QMainWindow):
             workbench_device = getattr(self, "workbench_recording_device", None)
             if workbench_device is not None:
                 workbench_device.close()
-            begin_close = getattr(sequence, "_begin_raw_audio_csv_close", None)
-            if callable(begin_close):
-                begin_close(application_exit=True)
             # Creation ownership is independent of application exit authority:
             # the launcher-injected service must drain here too.
             csv_bridge = getattr(self, "raw_audio_csv_bridge", None)
@@ -1221,21 +1162,12 @@ class MainWindow(QMainWindow):
                 video.closed.connect(self.close)
                 video.shutdown()
             return
-        save_progress = getattr(sequence, "_save_product_test_progress_before_exit", None)
-        if (not getattr(sequence, "workbench_mode", False) and callable(save_progress)
-                and not getattr(self, "_product_progress_saved", False)):
-            self._product_progress_saved = True
-            save_progress()
         bridge = getattr(self, "recording_bridge", None)
         if (bridge is not None and not bridge.service.closed.is_set()
                 and not getattr(self, "_recording_shutdown_reported", False)):
             event.ignore()
             if not getattr(self, "_recording_close_requested", False):
                 self._recording_close_requested = True
-                sequence = getattr(self, "sequence_window", None)
-                cancel = getattr(sequence, "_cancel_process_recording", None)
-                if callable(cancel):
-                    cancel()
                 self.setEnabled(False)
                 bridge.shutdown(self._finish_recording_shutdown)
             return
@@ -1263,12 +1195,9 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
 
-        # Children observe application exit only after the shared drain ends.
         if sequence is not None:
-            sequence._application_csv_drain_complete = True
-            close_sequence = getattr(sequence, "close", None)
-            if callable(close_sequence):
-                close_sequence()
+            sequence.close_workbench_input()
+            sequence.close()
         self._close_all_subwindows()
 
         self._exit_cleanup_complete = True

@@ -150,28 +150,6 @@ def test_real_supervisor_state_is_delivered_on_gui_thread(ui_qapp):
         assert service.closed.wait(3)
 
 
-def test_result_presentation_uses_original_task_once(ui_qapp):
-    from ui.raw_audio_csv_service_bridge import RawAudioCsvServiceBridge
-    from ui.sequence.sequence_widget_raw_csv_ops import SequenceWidgetRawCsvOpsMixin
-    class Window(SequenceWidgetRawCsvOpsMixin, QWidget):
-        def __init__(self, bridge):
-            super().__init__()
-            self._on_raw_audio_csv_export_failed = Mock()
-            self._initialize_raw_audio_csv_runtime(raw_audio_csv_bridge=bridge)
-    service = EventService()
-    bridge = RawAudioCsvServiceBridge(service)
-    window = Window(bridge)
-    window._owned_raw_audio_csv_tasks.add("task")
-    service.emit(terminal())
-    service.emit(terminal())
-    ui_qapp.processEvents()
-    window._on_raw_audio_csv_export_failed.assert_called_once_with("old.wav", "disk full")
-    window.close()
-    assert not window._owns_raw_audio_csv_service
-    service.begin_shutdown.assert_not_called()
-    bridge.close_delivery()
-
-
 def test_correlated_parent_timing_survives_disabled_logging_and_delayed_qt(tmp_path, ui_qapp):
     import logging
     import os

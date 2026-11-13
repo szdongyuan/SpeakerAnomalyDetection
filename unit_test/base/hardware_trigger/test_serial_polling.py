@@ -11,9 +11,13 @@ from base.hardware_trigger import serial_discrete_input_worker as worker_module
 from base.hardware_trigger.serial_polling import parse_polling_settings
 from base.load_config import LoadUiConfig
 from base.unified_hid_device_manager import UnifiedHardwareManager
-from unit_test.test_serial_product_condition_runtime import _Logger
-from unit_test.test_serial_product_ports import A, B, IDLE, PortHost
 
+
+import logging
+
+A = "A5 5A 01 01 0D 0A"
+B = "A5 5A 01 02 0D 0A"
+IDLE = "A5 5A 00 00 0D 0A"
 
 QUERY = "FE 02 00 00 00 04 6D C6"
 
@@ -54,15 +58,14 @@ def test_interval_boundaries(interval):
 
 @pytest.mark.parametrize("polling", [False, True])
 @pytest.mark.parametrize("idle", ["", IDLE])
-def test_transport_triggers_all_ordered_product_gears(monkeypatch, polling, idle):
-    host = PortHost((A, B), (A, B), idle=idle)
+def test_transport_forwards_ordered_full_frames(monkeypatch, polling, idle):
     config = configuration(polling)
     config["port_switch_idle_code"] = idle
-    host._serial_trigger_config = config
-    monkeypatch.setattr(worker_module.LogManager, "set_log_handler", lambda name: _Logger())
-    worker = worker_module.SerialDiscreteInputWorker(config, host._serial_full_frame_candidates())
+    monkeypatch.setattr(worker_module.LogManager, "set_log_handler", logging.getLogger)
+    worker = worker_module.SerialDiscreteInputWorker(config, (A, B, IDLE))
     # Includes an early gear and a duplicate at the port boundary.
-    frames = [B, A, B, B] + ([IDLE] if idle else []) + [A, B]
+    expected_frames = [B, A, B, B] + ([IDLE] if idle else []) + [A, B]
+    frames = list(expected_frames)
 
     class Port:
         is_open = True
@@ -108,15 +111,10 @@ def test_transport_triggers_all_ordered_product_gears(monkeypatch, polling, idle
     manager.serial_worker = worker
     worker.sig_state_changed.connect(manager._on_serial_state_changed)
 
-    def process(payload):
-        previous = len(host.started)
-        host.on_serial_full_frame_received(payload)
-        if len(host.started) > previous:
-            host.complete_current()
-
-    manager.sig_serial_full_frame.connect(process)
+    received = []
+    manager.sig_serial_full_frame.connect(lambda payload: received.append(payload['raw_hex']))
     worker.run()
-    assert host.started == [c["key"] for c in host.product_test_condition_configs]
+    assert received == expected_frames
     assert bool(port.writes) is polling
     assert all(seconds == 0.001 for seconds in cycles)
     assert not port.is_open
@@ -176,25 +174,6 @@ def test_connection_failure_closes_port(monkeypatch, failure):
     result = UnifiedHardwareManager().test_serial_discrete_input_connection(configuration(True))
     assert not result["ok"] and not result["raw_hex"]
     assert port.closed
-
-
-@pytest.mark.parametrize("polling", [False, True])
-def test_product_connection_entry_keeps_polling_settings(polling):
-    from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
-
-    received = []
-
-    def check(config):
-        received.append(config)
-        return {"ok": True, "raw_hex": A}
-
-    host = SimpleNamespace(hw_manager=SimpleNamespace(
-        serial_config={}, serial_worker=None, test_serial_discrete_input_connection=check,
-    ))
-    config = configuration(polling)
-    result = SequenceWidgetSerialTriggerOpsMixin._test_serial_trigger_connection(host, config)
-    assert result["connected"] and result["has_response"]
-    assert received[0]["polling_settings"] == config["polling_settings"]
 
 
 @pytest.mark.parametrize("field,value", [("enabled", True), ("query_command_hex", "01 02"), ("interval_ms", 100)])
@@ -272,7 +251,7 @@ def test_save_removes_legacy_fields_preserves_sequence_and_validates(tmp_path, m
 
 @pytest.mark.parametrize("retry_wait", [False, True])
 def test_stop_wakes_real_thread_wait_without_waiting_full_interval(monkeypatch, retry_wait):
-    monkeypatch.setattr(worker_module.LogManager, "set_log_handler", lambda name: _Logger())
+    monkeypatch.setattr(worker_module.LogManager, "set_log_handler", logging.getLogger)
     config = configuration(True)
     config["polling_settings"]["interval_ms"] = 1200
     ports = []
@@ -327,7 +306,7 @@ def test_stop_wakes_real_thread_wait_without_waiting_full_interval(monkeypatch, 
 
 
 def test_stop_before_run_does_not_get_cleared(monkeypatch):
-    monkeypatch.setattr(worker_module.LogManager, "set_log_handler", lambda name: _Logger())
+    monkeypatch.setattr(worker_module.LogManager, "set_log_handler", logging.getLogger)
     opened = []
     monkeypatch.setattr(worker_module, "serial", SimpleNamespace(Serial=lambda **kwargs: opened.append(kwargs)))
     worker = worker_module.SerialDiscreteInputWorker(configuration(True), [A])

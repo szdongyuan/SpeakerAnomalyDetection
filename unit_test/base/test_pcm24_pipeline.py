@@ -8,11 +8,12 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from base.analysis_worker import _load_wav_once
+from base.analysis.contracts import AnalysisChannel, AnalysisTask
+from base.analysis.wav_input import load_task_wav, resolve_calibration
 from base.raw_audio_csv_exporter import export_raw_audio_csv
 from base.recording_process_protocol import RecordingResult
+from base.recording_final_result import prepare_main_recording_result
 from base.wav_calibration_metadata import read_wav_calibration_metadata
-from ui.sequence.analysis_task_builder import build_analysis_task_request
 from unit_test.base.test_recording_capture import request
 from unit_test.base.test_recording_finalization import capture_audio, read_result
 from unit_test.base.test_vkinging_capture import start_capture
@@ -110,31 +111,38 @@ def test_capture_to_analysis_and_csv_keeps_pcm24_values(tmp_path, purpose, backe
         # Calibration captures deliberately skip product metadata and startup trim.
         assert not descriptor.metadata_appended
         assert read_wav_calibration_metadata(req.path) is None
-    assert descriptor.sample_digest == hashlib.sha256(expected.astype("<f4").tobytes()).hexdigest()
-    result = read_result(descriptor, req, block_frames=65536)
-    assert result.error is None and result.handles_released
-    np.testing.assert_array_equal(result.audio.multi, expected)
-    np.testing.assert_array_equal(result.audio.mono, expected.mean(axis=1, dtype=np.float32))
-    assert result.audio.multi.dtype == np.float32
     if purpose == "main":
-        assert not result.audio.multi.flags.writeable
+        prepared = prepare_main_recording_result(descriptor, req)
+        assert prepared.is_prepared_for(req)
+        actual, saved_rate = sf.read(req.path, dtype="float32", always_2d=True)
+        assert saved_rate == req.sample_rate
+        assert len(prepared.waveforms) == columns
+        for index, (times, values) in enumerate(prepared.waveforms):
+            np.testing.assert_array_equal(times, np.arange(len(expected)) / req.sample_rate)
+            np.testing.assert_array_equal(values, expected[:, index])
+    else:
+        assert descriptor.sample_digest == hashlib.sha256(expected.astype("<f4").tobytes()).hexdigest()
+        result = read_result(descriptor, req, block_frames=65536)
+        assert result.error is None and result.handles_released
+        np.testing.assert_array_equal(result.audio.mono, expected.mean(axis=1, dtype=np.float32))
+        actual = result.audio.multi
+    np.testing.assert_array_equal(actual, expected)
+    assert actual.dtype == np.float32
 
     analysis_channels = req.channels if purpose == "main" else (0,)
-    task = build_analysis_task_request(
-        condition_key="pcm24", wav_path=req.path, source="手动查看",
-        sequence_config=[{"seq1": {"acq": {"mode": "RECORD_ONLY"}}}],
-        saved_active_input_channels=list(req.channels),
-        analysis_config={"display_sequence": ["SPL"], "SPL": {
-            "type": "SPL", "analysis_channels": list(analysis_channels),
-            "limit_checked": False, "weighting": "Z"}},
+    task = AnalysisTask(
+        "pcm24", "station", None, "condition", None, req.path, None,
+        tuple(AnalysisChannel(i, f"CH{physical + 1}", "sound_pressure", physical_channel_index=physical)
+              for i, physical in enumerate(analysis_channels)), (), {"mode": "none"},
     )
-    analysis_audio, rate = _load_wav_once(task)
-    np.testing.assert_array_equal(analysis_audio, result.audio.multi)
+    analysis_audio, rate, inspected = load_task_wav(task)
+    np.testing.assert_array_equal(analysis_audio, actual)
     assert rate == req.sample_rate
-    assert [item.raw_channel for item in task.channel_mapping] == list(analysis_channels)
+    assert [channel.physical_channel_index for channel in task.channels] == list(analysis_channels)
     if purpose == "main":
         factors = [10.0, 10.0] if backend == "ve" else [2.5 + i for i in range(columns)]
-        assert {item.raw_channel: item.v2pa_factor for item in task.instances} == dict(zip(req.channels, factors))
+        assert {channel.physical_channel_index: resolve_calibration(channel, inspected)[0]
+                for channel in task.channels} == dict(zip(req.channels, factors))
     target = tmp_path / "raw.csv"
     export_raw_audio_csv(req.path, target, req.channels, block_frames=65536)
     with target.open(encoding="utf-8-sig", newline="") as stream:

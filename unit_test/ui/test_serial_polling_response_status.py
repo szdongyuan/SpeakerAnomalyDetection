@@ -3,14 +3,14 @@
 from types import SimpleNamespace
 
 import pytest
-from PyQt5.QtWidgets import QPushButton
 
 from base.hardware_trigger import serial_discrete_input_worker as worker_module
 from base.load_config import LoadUiConfig
 from base.unified_hid_device_manager import UnifiedHardwareManager
-from unit_test.test_serial_product_condition_runtime import _Logger
-from unit_test.test_serial_product_ports import A, B, PortHost
-from unit_test.ui.test_serial_listener_reconfiguration import progress
+import logging
+
+A = "A5 5A 01 01 0D 0A"
+B = "A5 5A 01 02 0D 0A"
 
 
 def run_timeline(monkeypatch, timeline, *, polling=True, product_frames=True, empty_read=False):
@@ -19,20 +19,12 @@ def run_timeline(monkeypatch, timeline, *, polling=True, product_frames=True, em
         "serial_settings": {"port": "FAKE"},
         "polling_settings": {"enabled": polling},
     })
-    host = PortHost((A, B))
-    host._serial_trigger_config = config
-    host.serial_trigger_btn = QPushButton()
-    host.feed(A)
-    host.complete_current()
-    host._manual_product_condition_results["group_1:condition_1"] = "OK"
-    before = progress(host)
-    monkeypatch.setattr(worker_module.LogManager, "set_log_handler", lambda name: _Logger())
+    monkeypatch.setattr(worker_module.LogManager, "set_log_handler", logging.getLogger)
     worker = worker_module.SerialDiscreteInputWorker(config, [A, B] if product_frames else None)
     manager = UnifiedHardwareManager()
     manager.serial_config = config
     manager.serial_worker = worker
     worker.sig_status.connect(manager._on_serial_worker_status)
-    manager.sig_serial_trigger_status.connect(host.on_serial_trigger_status_changed)
     clock = SimpleNamespace(now=0.0)
     monkeypatch.setattr(worker_module, "time", SimpleNamespace(monotonic=lambda: clock.now))
     statuses = []
@@ -69,11 +61,10 @@ def run_timeline(monkeypatch, timeline, *, polling=True, product_frames=True, em
     def advance_clock(_seconds):
         nonlocal current
         if current is not None:
-            snapshots.append((clock.now, host.serial_trigger_btn.text(), progress(host)))
+            snapshots.append((clock.now, "已连接" if manager.get_serial_discrete_input_status()["has_response"] else "已打开", manager.get_serial_discrete_input_status()))
         current = next(events, None)
         if current is None:
             # The test stops observation intentionally, independently of response timeout.
-            manager.sig_serial_trigger_status.disconnect(host.on_serial_trigger_status_changed)
             return True
         clock.now, port.data = current
         return False
@@ -82,8 +73,7 @@ def run_timeline(monkeypatch, timeline, *, polling=True, product_frames=True, em
     monkeypatch.setattr(worker_module, "serial", SimpleNamespace(Serial=lambda **kwargs: port))
     worker.run()
     assert not port.is_open
-    assert all(snapshot == before for _, _, snapshot in snapshots)
-    assert host.discarded_groups == []
+    assert all(snapshot["connected"] for _, _, snapshot in snapshots)
     assert bool(port.writes) == polling
     return snapshots, [(at, status) for at, status in statuses if status["running"]]
 
