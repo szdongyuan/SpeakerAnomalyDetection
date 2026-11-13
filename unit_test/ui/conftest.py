@@ -10,6 +10,15 @@ from PyQt5.QtWidgets import QMenu
 
 
 @pytest.fixture(autouse=True)
+def isolate_workbench_round_state(tmp_path, monkeypatch):
+    from base.workbench_round_store import WorkbenchRoundStore
+
+    target = tmp_path / "workbench_round_state.json"
+    monkeypatch.setattr(WorkbenchRoundStore, "default_path", staticmethod(lambda: target))
+    return target
+
+
+@pytest.fixture(autouse=True)
 def isolate_recording_defaults(tmp_path, monkeypatch):
     from base.recording_defaults import RecordingDefaultsStore
 

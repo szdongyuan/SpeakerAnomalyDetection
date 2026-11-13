@@ -14,6 +14,8 @@ class SequenceWidgetTestMetadataOpsMixin:
         self._test_round_product_model = None
         self._test_metadata_validation_open = False
         self._test_metadata_last_error = None
+        if getattr(self, "workbench_mode", False):
+            return
         self._restore_test_metadata_ui_state()
         self.toolsbar.current_round_spinbox.valueChanged.connect(
             self._sync_test_round_label
@@ -27,6 +29,8 @@ class SequenceWidgetTestMetadataOpsMixin:
         self._sync_test_round_label()
 
     def _restore_test_metadata_ui_state(self):
+        if getattr(self, "workbench_mode", False):
+            return
         saved_state = LoadUiConfig.load_last_recorded_info(self.default_logger)
         if not isinstance(saved_state, dict):
             return
@@ -40,6 +44,8 @@ class SequenceWidgetTestMetadataOpsMixin:
             self.toolsbar.current_round_spinbox.setValue(current_test_round)
 
     def _persist_test_metadata_ui_state(self):
+        if getattr(self, "workbench_mode", False):
+            return
         round_edit = self.toolsbar.current_round_spinbox
         round_edit.interpretText()
         save_recorded_data_to_json(
@@ -48,6 +54,8 @@ class SequenceWidgetTestMetadataOpsMixin:
         )
 
     def _sync_test_round_label(self, *_):
+        if getattr(self, "workbench_mode", False):
+            return
         metadata = self._test_round_metadata
         round_number = (
             metadata["test_round"]
@@ -143,7 +151,7 @@ class SequenceWidgetTestMetadataOpsMixin:
     def _end_test_round_metadata(self):
         self._test_round_metadata = None
         self._test_round_product_model = None
-        self.toolsbar.sample_number_lineedit.setReadOnly(False)
+        self.toolsbar.sample_number_lineedit.setReadOnly(getattr(self, "workbench_mode", False))
         self.toolsbar.current_round_spinbox.setReadOnly(False)
         self._sync_test_round_label()
 

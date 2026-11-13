@@ -13,6 +13,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from base.workbench_config_values import WorkbenchChannel, WorkbenchCondition
+from base.workbench_round_counter import WorkbenchRoundCounter
+from base.workbench_round_store import RoundSnapshot, WorkbenchRoundStateError
 from base.workbench_configuration_loader import WorkbenchConfiguration, WorkbenchConfigurationError
 from base.workbench_analysis_input import (
     AnalysisRecordingContext, WorkbenchAnalysisInput, WorkbenchAnalysisInputError,
@@ -68,6 +70,8 @@ class _RecordingRound:
     condition_ids: tuple[str, ...]
     stations: tuple[tuple[str, int, tuple[str, ...]], ...]
     product_code: str
+    round_snapshot: RoundSnapshot | None = None
+    expected_analysis_keys: frozenset[tuple[str, str]] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -133,6 +137,45 @@ class MotorWorkbenchController:
         self._activated_round_ids: set[str] = set()
         self._result_state = WorkbenchResultState()
         self._set_daily_records = None
+        self._round_counter: WorkbenchRoundCounter | None = None
+        self._show_round = None
+        self._notify_round_error = None
+        self._round_error = None
+
+    def bind_round_counter(self, counter, show_round, notify_error) -> None:
+        """Attach the persisted daily number; standalone legacy callers may omit it."""
+        self._round_counter = counter
+        self._show_round = show_round
+        self._notify_round_error = notify_error
+        self.refresh_recording_state()
+
+    def _update_round_counter(self, operation, *args) -> bool:
+        """Handle the store's semantic errors at the GUI boundary, retaining retries."""
+        try:
+            operation(*args)
+        except WorkbenchRoundStateError as error:
+            message = str(error)
+            changed = message != self._round_error
+            # Modal notifications may pump the periodic GUI refresh themselves.
+            self._round_error = message
+            if changed:
+                logging.getLogger("core").warning("Workbench round state: %s", message)
+                self._notify_round_error(message)
+            return False
+        self._round_error = None
+        self._show_round(self._round_counter.current_snapshot.number)
+        return True
+
+    def _refresh_round_counter(self, day=None) -> bool:
+        if self._round_counter is not None and self._in_flight is not None:
+            context = self._in_flight.round_context
+            if context.round_id not in self._activated_round_ids:
+                # Admission may pump GUI events before the bridge accepts. Keep
+                # the already persisted WAV identity until acceptance/rejection.
+                day = context.round_snapshot.day
+        return (self._round_counter is None or self._update_round_counter(
+            self._round_counter.refresh, day if day is not None else datetime.now().date(),
+        ))
 
     def refresh_configuration(self) -> None:
         """Read the active configuration and replace both displays if it changed."""
@@ -149,7 +192,8 @@ class MotorWorkbenchController:
             return
 
         source_identity = self._repository.source_identity if config is not None else ""
-        source_changed = self._product_selection is not None and source_identity != self._applied_source_identity
+        source_changed = ((self._product_selection is not None or self._round_counter is not None)
+                          and source_identity != self._applied_source_identity)
         if config != self._applied_config or source_changed:
             self._apply_configuration(config)
         else:
@@ -314,6 +358,11 @@ class MotorWorkbenchController:
         )
         if snapshot is None:
             return
+        if self._round_counter is not None and payload.get("execution_status") == "分析完成":
+            self._update_round_counter(
+                self._round_counter.analysis_completed, context["round_id"],
+                (context["condition_id"], context["station_id"]), datetime.now().date(),
+            )
         if is_current:
             self._station_panel.show_station_result(
                 context["station_ordinal"], snapshot.forward, snapshot.reverse,
@@ -416,7 +465,8 @@ class MotorWorkbenchController:
         previous = self.get_analysis_config()
         analysis = config.analysis if config is not None else None
         analysis_version = self._analysis_version
-        source_changed = self._product_selection is not None and source_identity != self._applied_source_identity
+        source_changed = ((self._product_selection is not None or self._round_counter is not None)
+                          and source_identity != self._applied_source_identity)
         if analysis != previous or source_changed:
             analysis_version = uuid4().hex if analysis is not None else None
             self._latest_analysis_tasks.clear()
@@ -433,6 +483,18 @@ class MotorWorkbenchController:
         self._plot_bindings = bindings
         self._metric_keys = projection.metric_keys if projection is not None else {}
         self._display_revision += 1
+        if self._round_counter is not None:
+            if self._recording_round is not None:
+                pending = self._in_flight.round_context if self._in_flight is not None else None
+                day = (pending.round_snapshot.day
+                       if pending is not None and pending.round_id not in self._activated_round_ids
+                       else datetime.now().date())
+                self._update_round_counter(
+                    self._round_counter.abandon_round,
+                    self._recording_round.round_id, day,
+                )
+            self._condition_index = 0
+            self._configuration_revision += 1
         self._recording_round = None
         self._current_round_id = None
         self._publish_product_selection()
@@ -473,8 +535,11 @@ class MotorWorkbenchController:
 
     def refresh_recording_state(self) -> None:
         self.refresh_product_selection_state()
+        round_ready = self._refresh_round_counter()
         if self._recording is not None:
             snapshot, detail = self._recording_admission()
+            if not round_ready:
+                snapshot, detail = None, self._round_error
             self._recording.set_button_state(snapshot is not None, detail, self._in_flight is not None)
 
     def start_recording(self) -> None:
@@ -482,6 +547,9 @@ class MotorWorkbenchController:
         recorded_at = datetime.now()
         ports = self._recording
         if ports is None:
+            return
+        if not self._refresh_round_counter(recorded_at.date()):
+            ports.set_button_state(False, self._round_error, self._in_flight is not None)
             return
         snapshot, detail = self._recording_admission()
         if snapshot is None:
@@ -493,13 +561,30 @@ class MotorWorkbenchController:
         product_model, sample_number, serial_number = ports.read_wav_identity()
         round_context = self._recording_round
         if self._condition_index == 0 or round_context is None:
+            round_snapshot = None
+            expected_keys = frozenset()
+            if self._round_counter is not None:
+                if not self._update_round_counter(self._round_counter.prepare_new_round, recorded_at.date()):
+                    ports.set_button_state(False, self._round_error, False)
+                    return
+                round_snapshot = self._round_counter.current_snapshot
+                sample_number = str(round_snapshot.number)
+                expected_keys = frozenset(
+                    (c.condition_id, station.station_id)
+                    for c in config.analysis.context.conditions
+                    if config.analysis.test_queues[c.test_queue].analysis_config["display_sequence"]
+                    for station in config.analysis.stations_for(c.condition_id)
+                )
             round_context = _RecordingRound(
                 uuid4().hex, analysis_version, self._applied_source_identity, self._display_revision,
                 recorded_at, tuple(c.condition_id for c in config.recording.context.conditions),
                 tuple((station.station_id, ordinal, self._metric_keys[station.station_id])
                       for ordinal, station in enumerate(config.analysis.context.stations, 1)),
                 sample_number,
+                round_snapshot, expected_keys,
             )
+        elif self._round_counter is not None:
+            sample_number = str(round_context.round_snapshot.number)
         attempt = _InFlightRecording(
             uuid4().hex, self._configuration_revision, condition.condition_name,
             config.recording.context.project_name, recorded_at.date(), recorded_at, round_context,
@@ -555,6 +640,10 @@ class MotorWorkbenchController:
         if context.round_id in self._activated_round_ids:
             return
         self._activated_round_ids.add(context.round_id)
+        if self._round_counter is not None:
+            self._round_counter.open_round(
+                context.round_id, context.round_snapshot, context.expected_analysis_keys,
+            )
         self._result_state.open_round(
             context.round_id, analysis_version=context.analysis_version,
             source_identity=context.source_identity, recorded_at=context.recorded_at,
@@ -562,6 +651,10 @@ class MotorWorkbenchController:
             product_code=context.product_code,
         )
         if context.display_revision != self._display_revision:
+            if self._round_counter is not None:
+                self._update_round_counter(
+                    self._round_counter.abandon_round, context.round_id, datetime.now().date(),
+                )
             return
         self._recording_round = context
         self._current_round_id = context.round_id
@@ -602,6 +695,13 @@ class MotorWorkbenchController:
         if attempt is not None:
             self._in_flight = None
             self._activate_recording_round(attempt)
+            if self._round_counter is not None and self._condition_index == 0:
+                # A failed first condition has no saved WAV identity to continue.
+                # A later condition retries the existing, partially saved round.
+                self._update_round_counter(
+                    self._round_counter.abandon_round,
+                    attempt.round_context.round_id, datetime.now().date(),
+                )
         return attempt
 
     def _recording_completed(self, session, result):
@@ -634,6 +734,11 @@ class MotorWorkbenchController:
         self._in_flight = None
         if attempt.configuration_revision == self._configuration_revision:
             self._condition_index = (self._condition_index + 1) % len(self._applied_config.recording.context.conditions)
+            if self._condition_index == 0 and self._round_counter is not None:
+                self._update_round_counter(
+                    self._round_counter.recordings_completed,
+                    attempt.round_context.round_id, datetime.now().date(),
+                )
         self.refresh_recording_state()
         if error is not None:
             logging.getLogger("core").warning(

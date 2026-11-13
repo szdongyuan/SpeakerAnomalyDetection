@@ -1,6 +1,7 @@
 """Exercise both application entry paths without a native recording device."""
 
 import json
+from datetime import date, datetime
 from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -240,6 +241,31 @@ def test_soundcard_preparation_can_finish_inside_first_login(startup, launcher):
     assert device.login_ready
     assert device.snapshot.device["index"] == 7
     assert window.mic_channels == [0]
+
+
+@pytest.mark.parametrize("saved_day, expected", [(date(2026, 11, 12), "10000"), (date(2026, 11, 11), "1")])
+def test_daily_round_is_loaded_before_login_without_migrating_sample(startup, monkeypatch, saved_day, expected):
+    from base.load_config import LoadUiConfig
+    from base.workbench_round_store import RoundSnapshot, WorkbenchRoundStore
+    from ui.sequence import motor_workbench_controller as controller_module
+
+    monkeypatch.setattr(controller_module, "datetime", SimpleNamespace(now=lambda: datetime(2026, 11, 12, 9)))
+    monkeypatch.setattr(LoadUiConfig, "load_last_recorded_info", staticmethod(
+        lambda _logger: {"sample_number": "007", "current_test_round": 777},
+    ))
+    WorkbenchRoundStore().save(RoundSnapshot(saved_day, 10000))
+
+    def login(window):
+        sequence = window.sequence_window
+        assert sequence.toolsbar.sample_number_lineedit.text() == expected
+        assert sequence.toolsbar.sample_number_lineedit.isReadOnly()
+        assert not sequence.player_btn.isEnabled()
+        sequence.toolsbar.current_round_spinbox.setValue(9999)
+        assert sequence.toolsbar.sample_number_lineedit.text() == expected
+        return "Engineer", "test"
+
+    startup.launch(login)
+    assert WorkbenchRoundStore().load() == RoundSnapshot(date(2026, 11, 12), int(expected))
 
 
 def test_saved_missing_soundcard_never_uses_legacy_fallback_and_can_be_reselected(startup, monkeypatch):
