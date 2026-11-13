@@ -15,6 +15,8 @@ from base.log_manager import LogManager
 from base.db_manager import DataSave
 from base.hardware_selection import restore_or_default
 from base.motor_workbench_config import MotorWorkbenchConfigRepository
+from base.workbench_round_counter import WorkbenchRoundCounter
+from base.workbench_round_store import WorkbenchRoundStore
 from base.product_test_project_config import ProductTestProjectConfigManager
 from base.sound_device_manager import SoundDeviceManager
 from base.workbench_recording_archive import WorkbenchRecordingArchive
@@ -688,6 +690,11 @@ class MainWindow(QMainWindow):
         )
         card.settings_requested.connect(self.workbench_controller.open_video_settings)
         controller = self.workbench_controller
+        controller.bind_round_counter(
+            WorkbenchRoundCounter(WorkbenchRoundStore()),
+            sequence.show_workbench_round,
+            lambda detail: QMessageBox.warning(self, "工作台轮次", detail),
+        )
         controller.bind_result_summary(sequence.left_panel.set_daily_records)
         controller.bind_product_selection(WorkbenchProductSelectionPorts(
             product_manager=ProductTestProjectConfigManager(),

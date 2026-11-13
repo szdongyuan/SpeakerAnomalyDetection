@@ -325,6 +325,40 @@ def workbench(qt_app, tmp_path, monkeypatch, config_files, request):
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
+def test_main_window_round_ignores_legacy_metadata(workbench, monkeypatch, isolate_workbench_round_state):
+    from ui.sequence import sequence_widget_test_metadata_ops as metadata_module
+    from ui.sequence import sequence_widget_ui_ops as ui_module
+
+    workbench.legacy_recorded_info.update(sample_number="007", current_test_round=777)
+    save = Mock()
+    monkeypatch.setattr(metadata_module, "save_recorded_data_to_json", save)
+    window = workbench.open_window()
+    sequence = window.sequence_window
+    assert sequence.toolsbar.sample_number_lineedit.text() == "1"
+    assert sequence.toolsbar.sample_number_lineedit.isReadOnly()
+    assert json.loads(isolate_workbench_round_state.read_text())["round_number"] == 1
+    sequence.toolsbar.current_round_spinbox.setValue(888)
+    sequence.toolsbar.sample_number_lineedit.editingFinished.emit()
+    sequence.toolsbar.current_round_spinbox.editingFinished.emit()
+    assert sequence.toolsbar.sample_number_lineedit.text() == "1"
+    save.assert_not_called()
+    sequence.show_workbench_round(10000)
+    sequence._restore_test_metadata_ui_state()
+    sequence._persist_test_metadata_ui_state()
+    sequence._sync_test_round_label()
+    sequence._end_test_round_metadata()
+    assert sequence.toolsbar.sample_number_lineedit.text() == "10000"
+    assert sequence.left_panel.condition_state.current_round == 10000
+    assert sequence.toolsbar.sample_number_lineedit.isReadOnly()
+    save.assert_not_called()
+    save_page = Mock()
+    monkeypatch.setattr(ui_module, "save_recorded_data_to_json", save_page)
+    sequence.lineedit_type.setText("MODEL-2")
+    sequence.lineedit_s_or_n.setText("SN-2")
+    sequence._persist_sequence_page_state()
+    save_page.assert_called_once_with(product_model="MODEL-2", scanner_barcode="SN-2", sequence_mode=None)
+
+
 def _assert_station_headers_name_only(grid):
     assert grid._headers
     for header in grid._headers.values():
@@ -1274,8 +1308,8 @@ def test_real_toolbar_waits_for_login_and_resource_admission_then_delivers_group
     assert (first_wav.station_id, second_wav.station_id) == ("s1", "s2")
     wav_dir = Path(product["result_root_directory"]) / "电机" / "audio"
     assert Path(group.final_path) == Path(request.path).parent == wav_dir
-    assert Path(first_wav.path) == wav_dir / "2026-11-10_14-03-16-123_工位1_工况1_M-02_007.wav"
-    assert Path(second_wav.path) == wav_dir / "2026-11-10_14-03-16-123_工位2_工况1_M-02_007.wav"
+    assert Path(first_wav.path) == wav_dir / "2026-11-10_14-03-16-123_工位1_工况1_M-02_1.wav"
+    assert Path(second_wav.path) == wav_dir / "2026-11-10_14-03-16-123_工位2_工况1_M-02_1.wav"
     assert Path(first_wav.path).is_absolute()
     assert [(c.channel_id, c.physical_channel_index, c.wav_channel_index) for c in first_wav.channels] == [
         ("ch1", 7, 0), ("ch2", 1, 1),
@@ -1347,6 +1381,158 @@ def _recording_program(files, audio_root, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", Mock())
     monkeypatch.setattr(QMessageBox, "warning", Mock())
     return product
+
+
+@pytest.fixture
+def daily_round_window(startup, config_files, tmp_path, monkeypatch):
+    from ui.sequence import motor_workbench_controller as controller_module
+    from unit_test.ui.test_workbench_recording_startup import AnalysisServiceStub, RecordingBridge
+    from unit_test.ui.test_workbench_result_sync import result_event
+
+    _recording_program(config_files, tmp_path / "audio", monkeypatch)
+    clock = SimpleNamespace(value=datetime(2026, 11, 12, 12))
+    monkeypatch.setattr(controller_module, "datetime", SimpleNamespace(now=lambda: clock.value))
+    requests = []
+
+    def open_window():
+        bridge, service = RecordingBridge(), AnalysisServiceStub()
+
+        def start(request, callbacks):
+            requests.append((request, callbacks))
+            return SimpleNamespace(request=request)
+
+        bridge.start = start
+
+        def login(window):
+            bridge.change_worker(1)
+            bridge.answer_probe()
+            return "Engineer", "test"
+
+        startup.login(login)
+        window = main_module.MainWindow(recording_bridge=bridge, analysis_service=service)
+        window.sequence_window.lineedit_type.setText("M-02")
+        window.sequence_window.toolsbar.sample_number_lineedit.setText("007")
+        window.sequence_window.barcode_scanner_box.setChecked(True)
+        window.sequence_window.lineedit_s_or_n.setText("SN-008")
+        window._update_hardware_busy_state()
+        return window
+
+    def start(window):
+        button = window.sequence_window.player_btn
+        _wait_for_qt(button.isEnabled)
+        before = len(requests)
+        QTest.mouseClick(button, Qt.LeftButton)
+        assert len(requests) == before + 1
+        return requests[-1]
+
+    def finish(window):
+        request, callbacks = requests[-1]
+        group = request.station_group
+        stations = tuple(StationWav(s.station_id, str(Path(group.final_path) / s.filename), s.channels)
+                         for s in group.stations)
+        for station in stations:
+            Path(station.path).parent.mkdir(parents=True, exist_ok=True)
+            sf.write(station.path, np.zeros((8, len(station.channels))), request.sample_rate)
+        completed = []
+        window.workbench_recording_completed.connect(completed.append)
+        callbacks.workbench_completed(SimpleNamespace(request=request), WorkbenchRecordingCompletion(
+            request.request_id, group.project_id, group.condition_id, request.sample_rate, 8, stations,
+        ))
+        _wait_for_qt(lambda: completed and window.sequence_window.player_btn.isEnabled())
+        window.workbench_recording_completed.disconnect(completed.append)
+        return window.analysis_service.submissions[-1]["tasks"]
+
+    def record(window):
+        start(window)
+        return finish(window)
+
+    def deliver(window, tasks):
+        window.analysis_service.events.extend(result_event(task) for task in tasks)
+        window.workbench_controller.poll_analysis_events()
+
+    return SimpleNamespace(window=open_window(), open=open_window, requests=requests, clock=clock,
+                           start=start, finish=finish, record=record, deliver=deliver)
+
+
+@pytest.mark.parametrize("analysis_first", [True, False])
+def test_main_window_daily_round_wavs_and_two_advancement_entries(daily_round_window, analysis_first):
+    from base.workbench_round_store import WorkbenchRoundStore
+
+    r, window = daily_round_window, daily_round_window.window
+    editor = window.sequence_window.toolsbar.sample_number_lineedit
+    first, second = r.record(window), r.record(window)
+    assert editor.text() == "1"
+    assert [request.station_group.condition_id for request, _ in r.requests] == ["c1", "c2"]
+    for task in [*first, *second]:
+        path = Path(task["wav_path"])
+        assert "_M-02_1_SN-008.wav" in path.name
+        assert sf.info(path).frames == 8
+    if analysis_first:
+        r.deliver(window, [*second, *first])
+        assert editor.text() == "2"
+    r.clock.value = datetime(2026, 11, 12, 12, 0, 1)
+    newer_first = r.record(window)
+    assert editor.text() == "2"
+    assert all("_M-02_2_SN-008.wav" in Path(task["wav_path"]).name for task in newer_first)
+    r.deliver(window, [*first, *second, *first])
+    assert editor.text() == "2"
+    newer_second = r.record(window)
+    r.deliver(window, [*newer_second, *newer_first])
+    assert editor.text() == "3"
+    assert WorkbenchRoundStore().load().number == 3
+
+
+@pytest.mark.parametrize("exit_state", ["partial", "complete", "advanced", "new-day"])
+def test_main_window_restart_restores_number_but_starts_first_condition(daily_round_window, exit_state):
+    from base.workbench_round_store import WorkbenchRoundStore
+
+    r, window = daily_round_window, daily_round_window.window
+    first = r.record(window)
+    expected = "1"
+    if exit_state != "partial":
+        second = r.record(window)
+        if exit_state in ("advanced", "new-day"):
+            r.deliver(window, [*first, *second])
+            expected = "2"
+    window.close()
+    _wait_for_qt(lambda: getattr(window, "_exit_cleanup_complete", False))
+    if exit_state == "new-day":
+        r.clock.value = datetime(2026, 11, 13, 9)
+        expected = "1"
+    reopened = r.open()
+    assert reopened.sequence_window.toolsbar.sample_number_lineedit.text() == expected
+    r.clock.value = r.clock.value.replace(second=2)
+    tasks = r.record(reopened)
+    assert r.requests[-1][0].station_group.condition_id == "c1"
+    assert all(f"_M-02_{expected}_SN-008.wav" in Path(task["wav_path"]).name for task in tasks)
+    assert WorkbenchRoundStore().load().number == int(expected)
+
+
+@pytest.mark.parametrize("in_progress", [False, True])
+def test_main_window_existing_timer_refreshes_midnight_and_keeps_inflight_identity(daily_round_window, in_progress):
+    from base.workbench_round_store import WorkbenchRoundStore
+
+    r, window = daily_round_window, daily_round_window.window
+    first, second = r.record(window), r.record(window)
+    r.deliver(window, [*first, *second])
+    editor = window.sequence_window.toolsbar.sample_number_lineedit
+    assert editor.text() == "2"
+    assert window._hardware_busy_timer.interval() == 100 and window._hardware_busy_timer.isActive()
+    if in_progress:
+        r.start(window)
+    r.clock.value = datetime(2026, 11, 13, 0, 0, 1)
+    if in_progress:
+        QTest.qWait(150)
+        assert editor.text() == "2"
+        old_first = r.finish(window)
+        assert editor.text() == "2"
+        old_second = r.record(window)
+        assert all("_M-02_2_SN-008.wav" in Path(task["wav_path"]).name for task in [*old_first, *old_second])
+        assert all(Path(task["wav_path"]).name.startswith("2026-11-13") for task in old_second)
+        r.deliver(window, [*old_first, *old_second])
+    _wait_for_qt(lambda: editor.text() == "1")
+    saved = WorkbenchRoundStore().load()
+    assert saved.day == r.clock.value.date() and saved.number == 1
 
 
 def test_main_window_paired_results_update_station_and_daily_summary(
@@ -1916,8 +2102,8 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
         _wait_for_qt(lambda: len(completions) == 1 and button.isEnabled())
         first_paths = set(audio_root.rglob("*.wav"))
         assert first_paths == {
-            wav_dir / "2026-11-09_13-14-15-123_工位1_工况1_M-02_007_SN-008.wav",
-            wav_dir / "2026-11-09_13-14-15-123_工位2_工况1_M-02_007_SN-008.wav",
+            wav_dir / "2026-11-09_13-14-15-123_工位1_工况1_M-02_1_SN-008.wav",
+            wav_dir / "2026-11-09_13-14-15-123_工位2_工况1_M-02_1_SN-008.wav",
         }
         from base.workbench_analysis_input import build_analysis_payload
         tasks = build_analysis_payload(analysis_inputs)["tasks"]
@@ -1948,7 +2134,7 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
         with closing(sqlite3.connect(startup.database_path)) as database, database:
             database.execute("""
                 CREATE TRIGGER fail_workbench_archive BEFORE INSERT ON audio_data_table
-                WHEN NEW.file_path = 'audio/电机/audio/2026-11-09_13-14-15-123_工位2_工况1_M-02_007_2_SN-008.wav'
+                WHEN NEW.file_path = 'audio/电机/audio/2026-11-09_13-14-15-123_工位2_工况1_M-02_2_SN-008.wav'
                 BEGIN SELECT RAISE(ABORT, 'injected workbench archive failure'); END
             """)
         QTest.mouseClick(button, Qt.LeftButton)
@@ -1987,11 +2173,11 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
                 ("s2", "工位2", (0,)),
             ]
             condition = "工况1" if first else "工况2"
-            collision = "_2" if index >= 2 else ""
+            round_number = 2 if index >= 2 else 1
             assert len(completed.stations) == len(expected)
             assert not Path(request.path).exists()
             for station, (station_id, station_name, columns) in zip(completed.stations, expected):
-                filename = f"2026-11-09_13-14-15-123_{station_name}_{condition}_M-02_007{collision}_SN-008.wav"
+                filename = f"2026-11-09_13-14-15-123_{station_name}_{condition}_M-02_{round_number}_SN-008.wav"
                 assert station.station_id == station_id and Path(station.path) == wav_dir / filename
                 expected_paths.add(Path(station.path))
                 assert [(channel.physical_channel_index, channel.wav_channel_index) for channel in station.channels] == [
@@ -2098,7 +2284,7 @@ def test_real_toolbar_archives_click_snapshot_across_midnight_and_product_switch
         _wait_for_qt(archive_entered.is_set)
         old_dir = old_root / "电机" / "audio"
         old_paths = {
-            old_dir / f"2026-11-09_23-59-59-000_{station}_工况1_M-02_007_SN-OLD.wav"
+            old_dir / f"2026-11-09_23-59-59-000_{station}_工况1_M-02_1_SN-OLD.wav"
             for station in ("工位1", "工位2")
         }
         assert set(old_dir.iterdir()) == old_paths
@@ -2120,7 +2306,7 @@ def test_real_toolbar_archives_click_snapshot_across_midnight_and_product_switch
         second = completions[1]
         assert (second.project_id, second.condition_id) == ("second", "c2")
         assert sequence.barcode_scanner_box.isChecked()
-        new_path = new_root / "第二产品" / "audio" / "2026-11-10_00-00-01-000_工位2_工况2_M-03_009.wav"
+        new_path = new_root / "第二产品" / "audio" / "2026-11-10_00-00-01-000_工位2_工况2_M-03_1.wav"
         assert tuple(Path(station.path) for station in second.stations) == (new_path,)
         expected_rows[new_path.as_posix()] = ("第二产品", sf.info(new_path).samplerate, "2026-11-10",
                                              "not_labeled", None, None)

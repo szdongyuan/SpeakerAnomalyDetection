@@ -205,7 +205,8 @@ class SequenceToolsBar(QWidget):
         for text, short_text, widget, preferred in (
             ("型号：", "型号：", self.lineedit_type, 160),
             ("使用配置：", "配置：", self.using_file_combobox, 200),
-            ("样本编号：", "样本：", self.sample_number_lineedit, 100),
+            ("轮次：" if self._workbench_mode else "样本编号：",
+             "轮次：" if self._workbench_mode else "样本：", self.sample_number_lineedit, 100),
         ):
             label = ToolbarFieldLabel(text, short_text)
             label.setFixedHeight(40)
@@ -299,6 +300,13 @@ class SequenceToolsBar(QWidget):
         self.sample_number_lineedit.setToolTip("请输入样本编号")
         self.sample_number_lineedit.setAccessibleName("样本编号")
         self.sample_number_lineedit.setAccessibleDescription("请输入样本编号")
+        if self._workbench_mode:
+            self.sample_number_lineedit.setReadOnly(True)
+            self.sample_number_lineedit.setToolTip("每日共用轮次，自动更新")
+            self.sample_number_lineedit.setAccessibleName("轮次")
+            self.sample_number_lineedit.setAccessibleDescription("每日共用轮次，自动更新")
+            self.current_round_spinbox.setFocusPolicy(Qt.NoFocus)
+            self.current_round_spinbox.lineEdit().setFocusPolicy(Qt.NoFocus)
         self.current_round_spinbox.setObjectName("currentRoundSpinBox")
         self.current_round_spinbox.setRange(1, 9999)
         self.current_round_spinbox.setValue(1)

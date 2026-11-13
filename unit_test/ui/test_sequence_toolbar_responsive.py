@@ -58,6 +58,41 @@ def field_labels(toolbar):
                            toolbar.sample_number_lineedit)]
 
 
+def test_workbench_round_is_read_only_and_legacy_sample_remains_editable(toolbar_host, ui_qapp):
+    window, legacy, _ = toolbar_host
+    toolbar = SequenceToolsBar(workbench_mode=True)
+    legacy.parentWidget().layout().insertWidget(1, toolbar)
+    ui_qapp.processEvents()
+    try:
+        editor = toolbar.sample_number_lineedit
+        label = field_labels(toolbar)[2]
+        assert label.text() == label._short_text == "轮次："
+        assert editor.isReadOnly()
+        assert editor.accessibleName() == "轮次"
+        assert "轮次" in editor.toolTip() and "输入" not in editor.toolTip()
+        assert "轮次" in editor.accessibleDescription() and "输入" not in editor.accessibleDescription()
+        editor.setText("10000")
+        editor.setFocus()
+        editor.selectAll()
+        QTest.keyClicks(editor, "42")
+        assert editor.text() == "10000"
+        assert toolbar.current_round_spinbox.isHidden()
+        assert toolbar.current_round_spinbox.focusPolicy() == Qt.NoFocus
+        assert toolbar.current_round_spinbox.lineEdit().focusPolicy() == Qt.NoFocus
+        row = toolbar.layout().itemAt(1).layout()
+        assert row.count() == legacy.layout().itemAt(1).layout().count() - 3
+        assert row.indexOf(toolbar.current_round_spinbox) < 0
+        assert field_labels(legacy)[2].text() == "样本编号："
+        assert not legacy.sample_number_lineedit.isReadOnly()
+        legacy.sample_number_lineedit.setText("")
+        QTest.keyClicks(legacy.sample_number_lineedit, "007")
+        assert legacy.sample_number_lineedit.text() == "007"
+    finally:
+        toolbar.close()
+        toolbar.deleteLater()
+        ui_qapp.processEvents()
+
+
 def ordered_controls(toolbar):
     labels = field_labels(toolbar)
     groups = [[toolbar.player_btn, toolbar.data_btn, toolbar.serial_trigger_btn],
