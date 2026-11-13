@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QPushButton, 
 
 from base.log_manager import LogManager
 from base.db_manager import DataSave
+from base.audio_label_repository import AudioLabelRepository
 from base.hardware_selection import restore_or_default
 from base.motor_workbench_config import MotorWorkbenchConfigRepository
 from base.workbench_round_counter import WorkbenchRoundCounter
@@ -25,6 +26,7 @@ from consts import ui_style_const
 from consts.model_consts import DATABASE_PATH
 from consts.running_consts import DEFAULT_DIR
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
+from ui.audio_label_sync_bridge import AudioLabelSyncBridge
 from ui.calibration_window import CalibrationWindow
 from ui.hardware_window import open_hardware_selection_window
 from ui.login_window import AddAccountWindow, ChangePwdWindow, LoginWindow
@@ -64,6 +66,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.analysis_service = analysis_service
         self._analysis_timer = None
+        self._analysis_poll_in_progress = False
+        self._analysis_service_closed_seen = False
+        self._analysis_events_drained = True  # No producer until runtime assembly.
         self.default_logger = LogManager.set_log_handler("core")
         self._configuration_editor_open = False
         self._configuration_deletion_error = ""
@@ -179,9 +184,34 @@ class MainWindow(QMainWindow):
             self.analysis_service = AnalysisService()
         self.workbench_controller.bind_analysis_service(
             self.analysis_service, self._on_analysis_event)
+        self.audio_label_sync_bridge = AudioLabelSyncBridge(AudioLabelRepository(DATABASE_PATH), self)
+        self.workbench_controller.bind_audio_label_sync(self.audio_label_sync_bridge.submit)
+        self.audio_label_sync_bridge.failed.connect(self._on_audio_label_failed)
+        self.audio_label_sync_bridge.closed.connect(self.close)
+        self._analysis_events_drained = False
         self._analysis_timer = QTimer(self)
         self._analysis_timer.setInterval(50)
-        self._analysis_timer.timeout.connect(self.workbench_controller.poll_analysis_events)
+        self._analysis_timer.timeout.connect(self._poll_analysis_events)
+
+    def _poll_analysis_events(self):
+        # A subscriber can enter a nested Qt loop or call close() during this batch.
+        # Backend `closed` alone cannot prove every returned terminal was consumed.
+        if self._analysis_poll_in_progress:
+            return
+        self._analysis_poll_in_progress = True
+        try:
+            self.workbench_controller.poll_analysis_events()
+        finally:
+            self._analysis_poll_in_progress = False
+        if self.analysis_service.closed and self._analysis_service_closed_seen:
+            self._analysis_events_drained = True
+            self._analysis_timer.stop()
+            if getattr(self, "_closing", False):
+                self.close()
+
+    def _on_audio_label_failed(self, job, error):
+        self.default_logger.warning("Audio label task %s (%s): %s", job.task_id, job.wav_path, error)
+        self.statusBar().showMessage(f"音频标签保存失败：{error}")
 
     def _activate_analysis_runtime(self):
         if self._analysis_timer.isActive() or getattr(self, "_closing", False):
@@ -192,7 +222,7 @@ class MainWindow(QMainWindow):
     def _begin_analysis_shutdown(self):
         self.workbench_controller.begin_analysis_shutdown()
         # Closing before the first activation must still drive an empty service closed.
-        if not self.analysis_service.closed:
+        if not self._analysis_events_drained:
             self._analysis_timer.start()
 
     def _on_analysis_event(self, event):
@@ -220,9 +250,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"分析进程就绪：{ready}/{len(states)}", 3000)
         self.workbench_analysis_event.emit(event)
         if kind == "service_closed":
-            self._analysis_timer.stop()
-            if getattr(self, "_closing", False):
-                self.close()
+            self._analysis_service_closed_seen = True
 
     def _init_ve_hardware_runtime(self, *, prepare_workbench=False):
         from PyQt5.QtCore import QTimer
@@ -926,7 +954,15 @@ class MainWindow(QMainWindow):
             LogManager.set_log_handler("core"),
             raw_audio_csv_service=self.raw_audio_csv_service,
             recording_service=self.recording_bridge.service)
-        dlg.exec()
+        bridge = getattr(self, "audio_label_sync_bridge", None)
+        if bridge is None:
+            dlg.exec()
+            return
+        connection = bridge.changed.connect(dlg.apply_audio_label_update)
+        try:
+            dlg.exec()
+        finally:
+            bridge.changed.disconnect(connection)
 
 
     def on_ai_model_manager(self):
@@ -1189,11 +1225,21 @@ class MainWindow(QMainWindow):
             return
 
         analysis = getattr(self, "analysis_service", None)
-        if analysis is not None and not analysis.closed:
+        if (analysis is not None and self._analysis_timer is not None
+                and (not self._analysis_events_drained or self._analysis_poll_in_progress)):
             self.statusBar().showMessage(
                 f"正在关闭分析进程（剩余任务 {analysis.pending_task_count} 个），等待资源释放后退出…")
             event.ignore()
             return
+
+        labels = getattr(self, "audio_label_sync_bridge", None)
+        if labels is not None:
+            labels.begin_shutdown()
+            if not labels.is_closed:
+                self.statusBar().showMessage(
+                    f"正在保存音频标签（剩余任务 {labels.pending} 个），等待资源释放后退出…")
+                event.ignore()
+                return
 
         if sequence is not None:
             sequence.close_workbench_input()

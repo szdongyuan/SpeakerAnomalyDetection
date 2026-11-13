@@ -7,6 +7,8 @@ from types import SimpleNamespace
 import pytest
 from PyQt5.QtWidgets import QLabel, QTableWidget
 
+from base.audio_label_sync import AudioLabelJob
+from base.workbench_analysis_config import AnalysisTestQueue
 from ui.sequence.motor_information_summary_panel import MotorInformationSummaryPanel
 from unit_test.ui.test_motor_workbench_controller import (
     config, workbench, recording_workbench, paired_recording_workbench, configuration_with,
@@ -145,6 +147,8 @@ def test_old_reverse_latest_task_cannot_overwrite_new_round_but_completes_histor
     ("payload", "station_id"), ("payload", "condition_id"), ("payload", "task_id"),
 ])
 def test_mismatched_identity_is_diagnosed_before_context_merge(sync, caplog, location, field):
+    jobs = []
+    sync.w.controller.bind_audio_label_sync(jobs.append)
     first, second = sync.record(), sync.record()
     incoming = result_event(first["right"], [instance()])
     (incoming if location == "event" else incoming["payload"])[field] = "wrong-identity"
@@ -155,6 +159,7 @@ def test_mismatched_identity_is_diagnosed_before_context_merge(sync, caplog, loc
     assert first["right"]["task_id"] in caplog.text
     assert field in caplog.text and "wrong-identity" in caplog.text
     assert "right" in caplog.text and "warm" in caplog.text
+    assert jobs == []
     assert sync.events[-1]["payload"] is incoming["payload"]
     sync.deliver(result_event(second["right"], [instance()]))
     assert labels(sync.summary)[0] == "0"
@@ -245,6 +250,8 @@ def test_optional_summary_port_and_unexpected_consumer_errors(sync, monkeypatch)
     sync.deliver(result_event(first["right"], [instance()]), result_event(second["right"], [instance()]))
     assert len(sync.w.controller._result_state.records_for(sync.clock.now().date())) == 1
     newer = sync.record()
+    jobs = []
+    sync.w.controller.bind_audio_label_sync(jobs.append)
 
     def fail_render(*_):
         raise RuntimeError("unexpected rendering error")
@@ -252,3 +259,112 @@ def test_optional_summary_port_and_unexpected_consumer_errors(sync, monkeypatch)
     monkeypatch.setattr(sync.panel, "show_station_result", fail_render)
     with pytest.raises(RuntimeError, match="unexpected rendering error"):
         sync.deliver(result_event(newer["right"], [instance()]))
+    assert jobs == [AudioLabelJob(newer["right"]["task_id"], newer["right"]["wav_path"], "OK")]
+    # The first receive accepted this terminal even though rendering then failed.
+    sync.deliver(result_event(newer["right"], [instance()]))
+    assert len(jobs) == 1
+
+
+@pytest.mark.parametrize("items,failed,label", [
+    ([instance(judgement="OK"), instance("FFT", "FFT", "NG")], False, "NG"),
+    ([instance(), instance("FFT", "FFT", None, execution_status="分析失败")], False, "OK"),
+    ([instance(judgement="unknown")], False, "not_labeled"),
+    ([], True, "not_labeled"),
+    ([instance(judgement=None, execution_status="分析失败")], True, "not_labeled"),
+    ([{**instance(), "artifacts": [{"status": "failed", "error": {
+        "stage": "saving", "message": "access denied"}}]}], False, "OK"),
+])
+def test_one_direction_queues_its_own_wav_without_waiting(sync, items, failed, label):
+    jobs = []
+    sync.w.controller.bind_audio_label_sync(jobs.append)
+    task = sync.record()["right"]
+    incoming = result_event(task, items, failed=failed)
+    sync.deliver(incoming)
+    assert jobs == [AudioLabelJob(task["task_id"], task["wav_path"], label)]
+    assert labels(sync.summary)[0] == "0"
+    assert sync.events[-1]["payload"] is incoming["payload"]
+    sync.deliver(incoming, result_event({**task, "task_id": "unknown"}, items))
+    assert len(jobs) == 1
+
+
+@pytest.mark.parametrize("payload", [None, [], {}, {"condition_id": "warm"}])
+def test_invalid_result_has_no_label_job(sync, payload):
+    jobs = []
+    sync.w.controller.bind_audio_label_sync(jobs.append)
+    task = sync.record()["right"]
+    sync.deliver({**result_event(task), "payload": payload})
+    assert jobs == []
+
+
+@pytest.mark.parametrize("change", ["round", "configuration", "source"])
+def test_late_result_uses_frozen_wav_after_current_identity_changes(sync, change):
+    from ui.sequence.motor_workbench_controller import WorkbenchProductSelectionPorts
+
+    w = sync.w
+    w.controller.bind_product_selection(WorkbenchProductSelectionPorts(
+        product_manager=None, show_catalog=lambda *_: None, set_enabled=lambda *_: None,
+        is_busy=lambda: False, is_closing=lambda: False, notify_error=lambda *_: None))
+    jobs = []
+    w.controller.bind_audio_label_sync(jobs.append)
+    first, second = sync.record(), sync.record()
+    old_task = second["right"]
+    old_path = old_task["wav_path"]
+    # The backend's mutable submission data must not own the controller's path.
+    old_task["wav_path"] = "changed-by-backend.wav"
+    if change == "configuration":
+        w.repository.result = configuration_with(w.config, project_name="new product")
+    elif change == "source":
+        w.repository.source_identity = "another.json"
+    w.identity.sample = "new sample"
+    w.controller.refresh_configuration()
+    new_task = sync.record()["right"]
+    assert new_task["wav_path"] != old_path
+    sync.deliver(result_event(new_task, [instance()]))
+    before = sync.panel.get_station_data(1)
+    sync.deliver(result_event(old_task, [instance(judgement="NG")]))
+    assert sync.events[-1]["is_current"] is False
+    assert sync.panel.get_station_data(1) == before
+    assert jobs == [AudioLabelJob(new_task["task_id"], new_task["wav_path"], "OK"),
+                    AudioLabelJob(old_task["task_id"], old_path, "NG")]
+
+
+def test_shutdown_still_queues_accepted_analysis_terminal(sync):
+    jobs = []
+    sync.w.controller.bind_audio_label_sync(jobs.append)
+    task = sync.record()["right"]
+    sync.w.controller.begin_analysis_shutdown()
+    sync.deliver(result_event(task, [instance()]))
+    assert jobs == [AudioLabelJob(task["task_id"], task["wav_path"], "OK")]
+
+
+@pytest.mark.parametrize("outcome", ["rejected", "skipped"])
+def test_rejected_or_skipped_analysis_has_no_label_job(sync, outcome):
+    jobs = []
+    sync.w.controller.bind_audio_label_sync(jobs.append)
+    if outcome == "rejected":
+        def reject(payload):
+            sync.service.submissions.append(payload)
+            return {"accepted": False, "accepted_task_ids": [], "issues": []}
+        sync.service.submit_batch = reject
+    else:
+        queues = {name: AnalysisTestQueue("wav", {"display_sequence": []})
+                  for name in sync.w.config.analysis.test_queues}
+        sync.w.repository.result = configuration_with(sync.w.config, test_queues=queues)
+        sync.w.controller.refresh_configuration()
+    sync.w.controller.start_recording()
+    sync.w.complete()
+    assert not sync.w.controller._analysis_tasks
+    if sync.service.submissions:
+        sync.deliver(*(result_event(task, [instance()])
+                       for task in sync.service.submissions[-1]["tasks"]))
+    assert jobs == []
+
+
+def test_optional_label_sink_can_be_unbound(sync):
+    jobs = []
+    sync.w.controller.bind_audio_label_sync(jobs.append)
+    sync.w.controller.bind_audio_label_sync(None)
+    task = sync.record()["right"]
+    sync.deliver(result_event(task, [instance()]))
+    assert sync.panel.get_station_data(1)["forward"] == "OK"
+    assert jobs == []
