@@ -7,10 +7,12 @@ from types import MappingProxyType
 from base.workbench_analysis_config import WorkbenchAnalysisConfig
 from base.workbench_config_values import WorkbenchCondition
 from base.workbench_ui_config import WorkbenchPlotCell, WorkbenchUiConfig
-from ui.sequence.workbench_units import format_workbench_spl_unit
+from base.analysis_curve_style import resolve_curve_colors, show_threshold_lines
+from base.workbench_config_values import _thaw_json
 from ui.sequence.workbench_plot_display import (
     ConditionSegmentDisplay, ConditionPlotDisplay, WorkbenchPlotCellDisplay,
 )
+from ui.sequence.workbench_units import format_workbench_spl_unit
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,10 @@ def _station_display(
 
 
 def _plot_unit(analysis: Mapping[str, object]) -> str:
+    if analysis.get('type') == 'LOUD':
+        from base.loudness_analysis_adapter import loudness_unit
+
+        return loudness_unit(analysis)
     return format_workbench_spl_unit(analysis.get("weighting"))
 
 
@@ -146,6 +152,10 @@ def _configured_plot_cell(cell, station_id, analysis_config, durations):
         panels.append(ConditionSegmentDisplay(
             condition_id, name, durations.get(condition_id), selected,
             'Hz' if cell.analysis_type == 'FFT' else 's', unit, warning,
+            tuple(resolve_curve_colors(_thaw_json(analysis)).items())
+            if not warning and settings.get('analysis_style') else (),
+            cell.analysis_type,
+            show_threshold_lines(_thaw_json(analysis)) if not warning else True,
         ))
     units = {panel.y_unit for panel in panels if not panel.warning}
     if len(units) > 1:
@@ -189,7 +199,9 @@ def build_ui_projection(
             column_names=(), cells=(), bindings=(),
             preview_time_modes=preview_time_modes,
         )
-    padding = layout.columns - len(context.stations)
+    dynamic_columns = layout.column_source == 'product_stations'
+    columns = len(context.stations) if dynamic_columns else layout.columns
+    padding = columns - len(context.stations)
     names = tuple(station.station_name for station in context.stations) + ("",) * padding
     station_conditions = tuple(
         tuple(condition for condition in context.conditions
@@ -200,10 +212,10 @@ def build_ui_projection(
     binding_rows = []
     empty_cell = WorkbenchPlotCellDisplay()
     for row in layout.cells:
-        displays = [empty_cell] * layout.columns
-        bindings: list[_PlotBindings] = [(None, None)] * layout.columns
+        displays = [empty_cell] * columns
+        bindings: list[_PlotBindings] = [(None, None)] * columns
         for column, (station, conditions) in enumerate(zip(context.stations, station_conditions)):
-            cell = row[column]
+            cell = row[0] if dynamic_columns else row[column]
             if cell.display_settings is not None:
                 displays[column], bindings[column] = _configured_plot_cell(
                     cell, station.station_id, analysis_config, ui_config.condition_durations,

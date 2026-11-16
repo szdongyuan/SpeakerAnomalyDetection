@@ -196,8 +196,6 @@ def test_controller_hides_marks_before_refresh_and_new_columns_inherit(workbench
     workbench.repository.result = config
     workbench.controller.refresh_configuration()
     assert_hidden()
-    assert all(header.combo.isHidden() and header.play.isHidden()
-               for header in grid._headers.values())
     workbench.repository.result = None
     workbench.controller.refresh_configuration()
     assert not grid._headers

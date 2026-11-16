@@ -1,6 +1,7 @@
 """Resolve and validate plot templates without Qt, file I/O or analysis execution."""
 
 from copy import deepcopy
+from dataclasses import replace
 import math
 import re
 
@@ -177,7 +178,7 @@ def _cell(data, style, conditions, field):
             CELL_FIELDS - {"plot_style", "condition_display", "display_downsampling", "spectrogram", "value_unit", "data_source"})
     for key in ("title", "analysis_item_name"):
         _text(data[key], f"{field}.{key}")
-    _choice(data["analysis_type"], ("SPL", "FFT", "Spec", "VIBRATION_RMS"), f"{field}.analysis_type")
+    _choice(data["analysis_type"], ("SPL", "FFT", "LOUD", "Spec", "VIBRATION_RMS"), f"{field}.analysis_type")
     _choice(data["chart_type"], ("heatmap",) if data['analysis_type'] == 'Spec' else ("line",), f"{field}.chart_type")
     if data['analysis_type'] == 'VIBRATION_RMS':
         _choice(data.get('value_unit'), ('m/s²', 'g'), f'{field}.value_unit')
@@ -246,6 +247,8 @@ def _cell(data, style, conditions, field):
 
 def parse_plot_templates(data):
     """Expand defaults -> named template -> position override into immutable cells."""
+    if isinstance(data, dict) and 'schema_version' in data:
+        return _parse_station_templates(data)
     _object(data, "$", ("rows", "columns", "cells", "plot_templates", "default_plot_style", "default_condition_display"),
             ("rows", "columns", "cells", "plot_templates"))
     rows = _number(data["rows"], "rows", 1, integer=True)
@@ -288,3 +291,38 @@ def parse_plot_templates(data):
             resolved_row.append(_cell(template, style, conditions, field))
         resolved.append(tuple(resolved_row))
     return WorkbenchPlotLayout(rows, columns, tuple(resolved))
+
+
+def _parse_station_templates(data):
+    """V2 stores one cell per row; projection repeats it for actual stations."""
+    fields = ('schema_version', 'column_source', 'row_templates', 'plot_templates',
+              'default_plot_style', 'default_condition_display')
+    _object(data, '$', fields, fields[:4])
+    if type(data['schema_version']) is not int or data['schema_version'] != 2:
+        raise ValueError('schema_version: 仅支持版本 2')
+    _choice(data['column_source'], ('product_stations',), 'column_source')
+    rows = _array(data['row_templates'], 'row_templates')
+    normalized = {key: value for key, value in data.items()
+                  if key in ('plot_templates', 'default_plot_style', 'default_condition_display')}
+    normalized.update(rows=len(rows), columns=1, cells=[[row] for row in rows])
+    # Reject competing threshold policies rather than silently ignoring them.
+    styles = [('default_plot_style', data.get('default_plot_style', {}))]
+    templates = data['plot_templates']
+    if not isinstance(templates, dict) or not templates:
+        raise ValueError('plot_templates: 必须包含至少一个模板')
+    for name, template in templates.items():
+        if isinstance(template, dict) and template.get('data_source') != 'simulated':
+            styles.append((f'plot_templates.{name}.plot_style', template.get('plot_style', {})))
+    for index, row in enumerate(rows):
+        if isinstance(row, dict):
+            overrides = row.get('overrides', {})
+            if isinstance(overrides, dict):
+                styles.append((f'row_templates[{index}].overrides.plot_style', overrides.get('plot_style', {})))
+    for field, style in styles:
+        if isinstance(style, dict) and {'limit_lines', 'exceedance_highlight'} & style.keys():
+            raise ValueError(f'{field}: v2 阈值及超限样式跟随分析项和公共绘图规则')
+    layout = parse_plot_templates(normalized)
+    cells = tuple(tuple(replace(cell, display_settings={
+        **cell.display_settings, 'analysis_style': cell.display_settings['data_source'] == 'analysis_result',
+    }) for cell in row) for row in layout.cells)
+    return replace(layout, cells=cells, column_source='product_stations')

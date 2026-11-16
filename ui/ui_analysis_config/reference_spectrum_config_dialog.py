@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from base.analysis_curve_style import show_threshold_lines
 from base.core_algorithm.response import ReferenceSpectrumAnalyzer, ReferenceSpectrumParams
 from base.reference_spectrum_cache import (
     REFERENCE_DATA_NOT_GENERATED,
@@ -101,6 +102,10 @@ class ReferenceSpectrumConfigWindow(SemanticAnalysisConfigDialogBase):
             "display",
             widget=self._create_channel_name_group(),
         )
+        self.show_threshold_lines_box = QCheckBox("显示阈值线", self)
+        self.show_threshold_lines_box.setChecked(show_threshold_lines(self.load_config))
+        self.show_threshold_lines_box.setToolTip("控制各分析图的阈值线显示，不影响判定及超限高亮。")
+        self.add_or_append_semantic_widget("display", self.show_threshold_lines_box)
 
     def _create_reference_group(self):
         group = QGroupBox("参考样本")
@@ -581,6 +586,10 @@ class ReferenceSpectrumConfigWindow(SemanticAnalysisConfigDialogBase):
 
     def get_default_config(self):
         config = {
+            "display": {
+                **(self.load_config.get("display") or {}),
+                "show_threshold_lines": self.show_threshold_lines_box.isChecked(),
+            },
             "reference_source_path": self.reference_source_path_edit.text().strip(),
             "reference_data_path": self._reference_data_path
             or self._build_default_reference_data_path(self.reference_source_path_edit.text().strip()),

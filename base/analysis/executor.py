@@ -7,6 +7,7 @@ import numpy as np
 
 from base.analysis_algorithm_adapters import calculate_analysis_instance
 from base.analysis_config_validation import ai_execution_issue
+from base.loudness_analysis_adapter import loudness_limit_data
 
 from .contracts import AnalysisTask
 from .evaluation import evaluate_instance
@@ -154,6 +155,15 @@ def _judge(instance, calculation, result):
                     or evaluation["unit"] == result["display_payload"]["y_unit"]):
                 for side in ("upper", "lower"):
                     result["display_payload"][side] = evaluation[side]
+                if instance.analysis_type == "LOUD":
+                    # Resolve only the visual bounds on the legacy display geometry.
+                    # The verdict and exported samples above still use full raw data.
+                    presentation = result["display_payload"]["plot_curve"]
+                    _, _, upper, lower, _, _ = loudness_limit_data(instance.parameters, {
+                        **calculation, "curve": presentation,
+                        "loudness_curves": calculation["plot_loudness_curves"],
+                    })
+                    presentation.update(upper=upper, lower=lower)
         result.update(
             judgement_status="completed", judgement=evaluation["judgement"],
             violations=evaluation["violations"],

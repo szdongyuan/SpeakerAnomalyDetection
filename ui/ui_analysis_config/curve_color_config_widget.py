@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from base.analysis_curve_style import show_threshold_lines
 from consts import ui_style_const
 from consts.acoustic_analysis.curve_style_consts import (
     CURVE_COLOR_FIELDS,
@@ -30,7 +31,7 @@ from ui.curve_style import (
     normalize_curve_color,
     resolve_curve_colors,
 )
-from ui.custom_ui_widget.widgets import Label, PushButton
+from ui.custom_ui_widget.widgets import CheckBox, Label, PushButton
 
 
 class PresetColorDialog(ConfigDialogBase):
@@ -197,7 +198,7 @@ class CurveColorConfigWidget(QWidget):
 
     def _create_expand_button(self):
         button = QToolButton(self)
-        button.setText("曲线颜色设置")
+        button.setText("曲线显示设置")
         button.setCheckable(True)
         button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         button.setCursor(Qt.PointingHandCursor)
@@ -213,6 +214,14 @@ class CurveColorConfigWidget(QWidget):
         layout = QVBoxLayout(content_widget)
         layout.setContentsMargins(16, 2, 0, 0)
         layout.setSpacing(10)
+        self.show_threshold_lines_box = CheckBox("显示阈值线", content_widget)
+        self.show_threshold_lines_box.setStyleSheet(
+            f"color: {ui_style_const.COLOR_TEXT}; "
+            "font-size: 15px; font-weight: 400;"
+        )
+        self.show_threshold_lines_box.setChecked(show_threshold_lines(self.load_config))
+        self.show_threshold_lines_box.setToolTip("控制各分析图的阈值线显示，不影响判定及超限高亮。")
+        layout.addWidget(self.show_threshold_lines_box)
         for key, label in CURVE_COLOR_FIELDS:
             layout.addLayout(self._create_color_row(key, label))
         layout.addWidget(self._create_label("示意预览", True))
@@ -306,4 +315,6 @@ class CurveColorConfigWidget(QWidget):
         return dict(self._colors)
 
     def get_config(self):
-        return build_curve_color_config(self.load_config, self._colors)
+        config = build_curve_color_config(self.load_config, self._colors)
+        config["display"]["show_threshold_lines"] = self.show_threshold_lines_box.isChecked()
+        return config

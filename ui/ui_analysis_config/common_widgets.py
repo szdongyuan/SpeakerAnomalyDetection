@@ -696,7 +696,7 @@ class SemanticAnalysisConfigDialogBase(AnalysisConfigDialogBase):
         return content_layout
 
     def enable_curve_color_config(self, load_config, threshold_widget=None):
-        """Mount curve colors in the display section and optionally bind thresholds."""
+        """Mount curve display controls and optionally bind threshold colors."""
         self.curve_color_widget = CurveColorConfigWidget(load_config, self)
         self.curve_color_widget.expanded_changed.connect(self._on_display_config_expanded)
         self.add_or_append_semantic_widget("display", self.curve_color_widget)

@@ -25,6 +25,7 @@ class WorkbenchPlotLayout(_SnapshotValue):
     rows: int
     columns: int
     cells: tuple[tuple[WorkbenchPlotCell, ...], ...]
+    column_source: str = 'fixed'
 
     def __post_init__(self):
         object.__setattr__(self, "cells", tuple(tuple(row) for row in self.cells))

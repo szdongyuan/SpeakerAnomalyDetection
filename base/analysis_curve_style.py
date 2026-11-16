@@ -5,6 +5,14 @@ import re
 from consts.acoustic_analysis.curve_style_consts import DEFAULT_CURVE_COLORS
 
 
+def show_threshold_lines(config):
+    """Resolve display-only visibility; old configurations keep their limits."""
+    display = config.get("display", {}) if isinstance(config, dict) else {}
+    if not isinstance(display, dict):
+        return True
+    return display.get("show_threshold_lines", True) is not False
+
+
 def normalize_curve_color(value, fallback):
     """Return an uppercase #RRGGBB color or the supplied fallback."""
     if not isinstance(value, str):
@@ -36,6 +44,7 @@ def build_curve_color_config(config, colors):
 
 
 __all__ = [
+    "show_threshold_lines",
     "build_curve_color_config",
     "normalize_curve_color",
     "resolve_curve_colors",

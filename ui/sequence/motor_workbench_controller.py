@@ -24,8 +24,8 @@ from base.workbench_analysis_input import (
     build_analysis_payload, make_analysis_recording_context,
 )
 from ui.sequence.workbench_ui_projection import build_ui_projection, WorkbenchUiProjection, _PlotBindings
-from ui.sequence.workbench_result_state import WorkbenchResultState
 from ui.sequence.workbench_plot_presenter import WorkbenchPlotPresenter
+from ui.sequence.workbench_result_state import WorkbenchResultState
 from base.recording_service import RecordingCallbacks
 from base.workbench_recording_protocol import WorkbenchRecordingCompletion
 from base.workbench_recording_request import (
@@ -109,8 +109,8 @@ class MotorWorkbenchController:
         self._repository = repository
         self._station_panel = station_panel
         self._plot_grid = plot_grid
-        self._plot_grid.set_mark_buttons_visible(False)
         self._plot_presenter = WorkbenchPlotPresenter(plot_grid)
+        self._plot_grid.set_mark_buttons_visible(False)
         self._set_active_product = set_active_product
         self._show_video_settings = show_video_settings
         self._initialized = False
@@ -140,6 +140,7 @@ class MotorWorkbenchController:
         self._current_round_id: str | None = None
         self._activated_round_ids: set[str] = set()
         self._result_state = WorkbenchResultState()
+        self._plot_columns = {}
         self._set_daily_records = None
         self._wav_state = WorkbenchWavState()
         self._set_daily_wav_records = None
@@ -343,7 +344,8 @@ class MotorWorkbenchController:
                 key = context["station_id"], context["condition_id"]
                 current = (context["analysis_version"] == self._analysis_version
                            and self._latest_analysis_tasks.get(key) == task_id
-                           and context["round_id"] == self._current_round_id)
+                           and context["round_id"] == self._current_round_id
+                           and self._plot_presenter.matches_request(context))
                 if event["event_type"] == "task_result":
                     self._consume_analysis_result(event, context, current)
                 event = {**event, **context, "is_current": current}
@@ -398,6 +400,9 @@ class MotorWorkbenchController:
                 context["station_ordinal"], snapshot.forward, snapshot.reverse,
                 snapshot.result, snapshot.rows,
             )
+            column = self._plot_columns.get(context["station_id"])
+            if snapshot.complete and column is not None:
+                self._plot_grid.set_station_result(column, snapshot.result)
         if snapshot.complete and self._set_daily_records is not None:
             today = datetime.now().date()
             self._set_daily_records(self._result_state.records_for(today), today)
@@ -509,6 +514,11 @@ class MotorWorkbenchController:
         logging.getLogger("core").info("Applying workbench configuration from %s", source_identity)
         self._station_panel.show_workbench_stations(stations)
         self._plot_grid.show_workbench_layout(names, cells)
+        self._plot_columns = {
+            station.station_id: column
+            for column, station in enumerate(analysis.context.stations if analysis else ())
+            if column < len(names)
+        }
         self._plot_presenter.configure(projection, invalidate_requests=analysis_version != self._analysis_version)
         if self._product_selection is None:
             self._set_active_product(product_name)
@@ -693,6 +703,7 @@ class MotorWorkbenchController:
             return
         self._recording_round = context
         self._current_round_id = context.round_id
+        self._plot_grid.clear_station_results()
         for _, ordinal, keys in context.stations:
             self._station_panel.show_station_result(
                 ordinal, "--", "--", "--", [[key, "--", "--"] for key in keys],

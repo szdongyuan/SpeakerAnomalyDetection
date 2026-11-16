@@ -60,7 +60,7 @@
 - 样式翻译在 `station_plot_style.py`；控件不读取文件、不启动分析、不生成示例曲线。真实结果通过已有控制器的分析事件轮询进入展示层。
 - 模板 `display_downsampling` 只控制显示：none 全点；keep_every_nth_point 配 keep_one_point_every_n_points 正整数；preserve_min_max 配 pixel_bucket_width 正整数（默认 1）。曲线完整数据保留，主图和详情按各自视口取点。取点实现位于 `curve_sampling.py` / `sampled_plot_curve.py`，自动纵轴范围使用完整数据；上下限不降采样。x 有限，y 的 null/NaN 保留为断线。不得影响算法、判定或 CSV。
 - 模板图标题栏提供放大按钮。`plot_detail_dialog.py` 复用 `ConditionPlotCell` 和内存中的工况曲线，允许缩放和拖动；关闭后重新打开恢复完整视图，不单独设置恢复按钮。同图只打开一个窗口。源图更新和清空同步到详情，切换配置销毁源图时关闭详情。详情不读取 CSV、不调用分析服务。
-- 放大入口采用 16px 蓝灰色向外双箭头，点击区域 24px，由 Qt 绘制，无新增图片依赖。工作台工位标题栏只显示名称，高度 36px；不显示列下拉框、播放或手动 OK/NG。主工作台不提供顶部模式选择，配置刷新和产品切换不重新显示这些列控件。独立使用 StationPlotGrid 的通用列控件 API 保留。
+- 放大入口采用 16px 蓝灰色向外双箭头，点击区域 24px，由 Qt 绘制，无新增图片依赖。工作台工位标题栏固定高度 44px，使用 Microsoft YaHei UI（微软雅黑 UI）18px 常规字重，水平、垂直居中，默认与 OK/NG 状态保持相同高度。该字体仅用于工位标题，不修改全局字体。默认只显示名称；当前轮最终结果出来后显示“工位名称 · OK/NG”，所有状态保持中性浅灰蓝底色；工位名称和分隔点始终保持深蓝灰色常规字重，仅 OK/NG 结果文字分别使用深绿色/深红色并加粗，配对应颜色的 2px 底部细线；长名称省略时为结果文字保留空间，不对整条标题背景着色。恢复默认时移除结果文字与彩色底线，恢复普通分隔线。标题不显示测试中、待测试。不显示列下拉框、播放或手动 OK/NG。主工作台不提供顶部模式选择，配置刷新和产品切换不重新显示这些列控件。独立使用 StationPlotGrid 的通用列控件 API 保留。
 - WAV 显示通道从 1 开始，Qt 图框 API 的 row/column 从 0 开始。通道转换统一由展示映射处理。
 - 新配置的解析和渲染分别在 `unit_test/base/test_workbench_plot_config.py` 和 `unit_test/ui/test_condition_plot_layout.py` 验证；测试不得依赖用户的本地 JSON。
 
@@ -70,13 +70,23 @@
 - `workbench_plot_presenter.py` 只负责 GUI 线程中的工位/工况区域更新与展示状态；`workbench_plot_results.py` 将任务的 `display_payload` 转为曲线、上下限或时频矩阵，不读 CSV、不计算指标、不执行阈值判定。
 - 按 `station_id`、`condition_id`、`config_key`、`analysis_type`、`channel_index` 精确匹配；通道索引从 0 转为 WAV 显示通道号（从 1 开始）。绘图配置只选择展示范围，不改变分析任务。
 - 控制器按现有工况顺序循环；首工况开始采集时清空上轮所有区域，其他工况开始时只清空自身。旧请求、旧配置和重复终态事件不得覆盖当前结果。状态与完整曲线同步到详情窗口。
-- 单项或单通道失败保留其他有效曲线；错误通过区域文字、悬停提示及日志呈现。总体 SPL 阈值不能绘制成瞬时曲线上下限；仅文件保存失败不丢弃已计算的曲线。
+- 工位标题复用 `WorkbenchResultState` 的 `complete/result`，由控制器在身份校验及当前轮次检查后更新，不从绘图项重新判定。新轮次录制获接收时经 `_activate_recording_round()` 清除所有标题结果，拒绝启动保留原结果，同轮第二工况不重复重置。重新应用配置恢复默认标题；无绘图布局时不更新标题。
+- 单项或单通道失败保留其他有效曲线；错误通过区域文字、悬停提示及日志呈现。总体 SPL 阈值可作为标注“总体上限/下限”的水平参考线，不能用于瞬时曲线逐点判定；仅文件保存失败不丢弃已计算的曲线。
 - `unit_test/ui/test_workbench_plot_results.py` 覆盖结果映射、状态、迟到事件和真实 WAV 常驻进程集成；硬件采集需另行现场验收。
 
 ## 超限、时频图和振动 RMS 展示
 
-- 工作台通过当前绘图组件独立绘制。上下限插值和 OK/NG 使用后端完整数据判定；前端只把 `violations` 的时间/频率区间映射成高亮。高亮不降采样，孤立超限点有圆点标记。总体 SPL 限值只显示判定和悬停摘要，不转换为瞬时曲线限值。
-- `plot_style.exceedance_highlight` 控制超限颜色、线型、线宽及点大小；不控制后端判定。工况标题显示后端判定，部分失败仍有状态提示，未判定不能显示成 OK。
+- 阈值绘图共用 `workbench_plot_results.build_condition_result` → `ConditionPlotCell` → `station_plot_style.draw_curves`：分析后端提供同坐标的 `display_payload.x/y/upper/lower`、单位和 `violations`，显示层统一绘制 `curve/upper/lower/exceedance`，不得为每种分析项重复实现阈值比较或绘图。新增类型只接入分析结果适配、绘图模板类型及坐标单位；通过公共绘图测试不代表该类型的分析执行器已经接入。
+- `LOUD` 折线模板接收现有响度分析结果，横轴为秒，纵轴单位跟随分析项 `advanced.curve_y_unit`（sone/phon），不使用声压级的 dB 单位。曲线阈值和超限区间复用公共结果映射；稳态平均、最大瞬态等标量判定不伪造逐点阈值。绘图模板不修改分析项判定配置。FFT 与响度的真实 WAV 阈值、主图/详情及清空回归位于 `unit_test/ui/test_workbench_analysis_thresholds.py`。
+- 主图与详情调用 `ui/plotting`；远端已删除的分析窗口不恢复，公共模块不得依赖旧窗口。上下限插值和 OK/NG 使用后端完整数据判定；前端只把 `violations` 的时间/频率区间映射成高亮。高亮不降采样，孤立超限点有圆点标记。总体 SPL 限值以工况内水平参考线展示，不转换为瞬时逐点判定。
+- `plot_style.exceedance_highlight` 控制超限颜色、线型、线宽及点大小；不控制后端判定。工况标题不显示 OK/NG，后端判定保留在悬停提示中；部分失败等状态提示和模拟数据标注继续显示。主图与详情保持一致。
+
+上述 `plot_style` 阈值样式覆盖仅适用于旧版布局。v2 使用 `schema_version: 2`、`column_source: product_stations` 和 `row_templates`，按产品的实际工位数量及顺序展开；不再固定四列。分析项提供曲线和阈值颜色，公共绘图提供对应算法原有线型与线宽；v2 拒绝重复定义 `limit_lines` / `exceedance_highlight`。JSON 保留图表选择、通道筛选、显示范围、网格、图例和显示采样。完整设计见 `docs/workbench_shared_plotting.md`。
+
+响度分段曲线保留全部原始样本，以首末原始值延展分析区间边缘，不能用第二个点替换首点；后端展示坐标使用 `base/analysis_plot_geometry.py`。后端 `display_payload.plot_curve` 保存展示坐标及对应限值，原始 `x/y/upper/lower`、判定及 CSV 不变；高亮仍依据原始点的后端超限区间。响度阈值单位与显示单位不一致时，主图和详情均不绘制该阈值或其高亮，原判定保留。稳态/最大响度标量限值可在同量纲坐标轴画水平参考线，特征响度超限总量不得画在响度时间曲线上。
+- FFT 差值模式不叠加绝对参考谱；overlay 模式保留灰色参考层。固定横轴范围使用 `ui/plotting/geometry.py` 裁剪线段，保留边界交点及 NaN 断线；对数坐标在变换后的坐标中插值，不改变源数据、判定和导出。
+- 主图和详情 Spec 使用后端完整、已标定且无 80 dB 截底的矩阵。颜色范围属于显示设置，不是判定阈值。曲线、孤立超限点和矩阵一致性回归见 `unit_test/ui/test_plot_surface_consistency.py`，裁剪边界见 `unit_test/ui/test_plot_geometry.py`。
+- Spec 主图与详情共用 `ui/plotting/geometry.py` 的采样格边界和 `SpectrogramImage` 渲染，不能把采样中心当作图像外边界。对数频率先按真实 Hz 计算格边界，再转换显示坐标；颜色范围只影响显示，原矩阵不变。主图与详情的坐标对照位于 `unit_test/ui/test_spec_coordinate_parity.py`。
 - `Spec` 使用 `chart_type: heatmap`，每个图框在每个工况只选择一个 WAV 通道。`ConditionHeatmapCell` 复用工况分区、状态、放大窗口，`spectrogram_data.py` 校验 frequency × time 矩阵，`spectrogram_image.py` 按真实频率行边界绘制。线性时间帧和非等距频率支持；对数频率显示排除 DC，原矩阵保留。
 - 各工况共享一条色标；`spectrogram.color_range` 可为 auto（当前图框全部工况矩阵范围）或 fixed（min_db/max_db）。色标不是阈值，不推断 OK/NG。当前 Spec 后端单位为变换幅度 dB re 20 µPa。
 - `VIBRATION_RMS` 是预留的展示类型，使用 `line`、时间轴及显式 `value_unit: m/s²` 或 `g`，只接受 acceleration 通道。后端执行器尚未支持振动 RMS，本批不添加算法或更改分析任务协议。测试 RMS 数据仅验证绘图，不作为实际测量结果或后端验收。后续后端接入须核对类型名和单位约定。
@@ -87,7 +97,7 @@
 - 时频图纵轴统一显示 kHz（例如 10000 Hz 显示 10），只缩放刻度文字；后端矩阵、频率坐标和 JSON 频率范围仍使用 Hz，线性与对数轴均适用。
 - 扩展测试位于 `unit_test/ui/test_workbench_extended_plots.py`：真实测试 WAV 的 SPL 插值判定及 STFT/CQT 矩阵进入图框，RMS 使用模拟回传数据；校验单点高亮、单位不匹配、矩阵方向/坐标、共同色标、裁剪、状态与详情同步。
 
-- SPL 使用工况范围内的蓝灰色水平虚线标注后端 `metrics.overall_spl`，虚线置于曲线下层。数值只显示一位小数及计权单位，不加“总体”前缀；在各工况坐标轴上方居中对齐，与工况名称之间留出 12px 间距，不得用图内文字或白底标签遮挡曲线。多通道分行并标明 CH 编号。该线表示测量总体值，不是阈值；不从绘图点重新计算，不汇总不同通道。未返回有效总体值时不画线、不编造数字。主图与详情共用此展示，新一轮清空时同步移除。
+- SPL 仅以数值标注后端 `metrics.overall_spl`，不绘制总体值水平参考线。数值只显示一位小数及计权单位，不加“总体”前缀；在各工况坐标轴上方居中对齐，与工况名称之间留出 12px 间距，不得用图内文字或白底标签遮挡曲线。多通道分行并标明 CH 编号。该数值表示测量总体值，不是阈值；不从绘图点重新计算，不汇总不同通道。未返回有效总体值时不显示数值。主图与详情共用此展示，新一轮清空时同步移除。
 - SPL 数值区域由展示映射按配置中的显示通道数预留，结果到达、部分工况完成或清空均不得改变绘图区大小。顶部图例与图标题、放大按钮共用标题行，溢出项通过“更多”菜单查看；显式配置底部图例时仍保留底部位置。主图和详情共用相同布局规则。
 - 工况画布的实际数据区最小高度为 120px。控件最小高度还需包含标题、SPL 数值预留、坐标轴和底部图例；时频图设置外向刻度后重新计算。工作台沿用现有滚动区域，小窗口通过纵向滚动查看其他行，不压缩数据区来强行显示所有图。
 - 同一布局的折线图统一按最多的 SPL 数值行数预留顶部区域，RMS 等无总体数值的图也保留该空间；时频图不增加数值区。预留在配置投影时确定，不随结果改变。折线图不绘制顶部边线，并隐藏恰好位于纵轴范围顶端的网格横线；内部网格和顶部刻度文字保持不变。

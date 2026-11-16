@@ -374,7 +374,8 @@ def _load_active_configuration(program_registry_path, queue_registry_path, plot_
     station_data = _array(product.get("stations"), path, "stations")
     if not 1 <= len(station_data) <= 4:
         raise WorkbenchConfigurationError(f"{path}: stations must contain between 1 and 4 entries")
-    if plot_layout is not None and len(station_data) > plot_layout.columns:
+    if (plot_layout is not None and plot_layout.column_source == 'fixed'
+            and len(station_data) > plot_layout.columns):
         raise WorkbenchConfigurationError(
             f"{path}: {len(station_data)} stations "
             f"exceed the {plot_layout.columns} columns in {plot_layout_path}"

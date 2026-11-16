@@ -6,8 +6,8 @@ import numpy as np
 import pyqtgraph as pg
 
 from ui.sequence.condition_plot_cell import ConditionPlotCell
-from ui.sequence.spectrogram_data import bin_edges
-from ui.sequence.spectrogram_image import SpectrogramImage
+from ui.plotting.geometry import bin_edges, frequency_bin_geometry
+from ui.plotting.heatmap import draw_binned_image
 
 
 class ConditionHeatmapCell(ConditionPlotCell):
@@ -81,17 +81,13 @@ class ConditionHeatmapCell(ConditionPlotCell):
         y_bounds = []
         for key, data in self._condition_heatmaps.items():
             frequency, matrix = data['frequency_hz'], data['values_db']
-            edges = bin_edges(frequency)
-            if self._settings['y_axis']['scale'] == 'log':
-                first = 1 if frequency[0] == 0 else 0  # DC cannot be represented on a log axis.
-                frequency, matrix, edges = frequency[first:], matrix[first:], edges[first:]
-            edges[0] = max(frequency[0] / 2 if self._log_axes[1] else 0, edges[0])
+            first, edges = frequency_bin_geometry(frequency, logarithmic=self._log_axes[1])
+            matrix = matrix[first:]
             y_bounds.append((edges[0], edges[-1]))
             if self._log_axes[1]:
                 edges = np.log10(edges)
-            image = SpectrogramImage(matrix, self._map_x(key, bin_edges(data['time_s'])), edges,
+            image = draw_binned_image(plot, matrix, self._map_x(key, bin_edges(data['time_s'])), edges,
                                      levels, color_map, self._spans[key])
-            plot.addItem(image)
             self._images.append(image)
         self._image = self._images[0] if self._images else None
         axis = self._settings['y_axis']

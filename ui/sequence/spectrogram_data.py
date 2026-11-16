@@ -2,6 +2,7 @@
 
 import numpy as np
 
+from ui.plotting.geometry import bin_edges
 
 def validate_spectrogram(payload):
     if not isinstance(payload, dict) or payload.get('kind') != 'spectrogram':
@@ -22,10 +23,3 @@ def validate_spectrogram(payload):
     if np.isinf(values).any() or not np.isfinite(values).any():
         raise ValueError('时频矩阵没有有效数值或含无穷值')
     return dict(time_s=time, frequency_hz=frequency, values_db=values)
-
-
-def bin_edges(centres):
-    """Samples are bin centres, not image endpoints; never shift peaks by half a bin."""
-    middle = (centres[:-1] + centres[1:]) / 2
-    return np.r_[centres[0] - (middle[0] - centres[0]), middle,
-                 centres[-1] + (centres[-1] - middle[-1])]

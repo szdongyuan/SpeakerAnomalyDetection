@@ -105,6 +105,9 @@ def test_curve_color_widget_updates_preview_and_nested_config(qapp):
     widget.expanded_changed.connect(expanded_states.append)
 
     assert widget.is_expanded() is False
+    assert widget.expand_button.text() == "曲线显示设置"
+    assert widget.content_widget.layout().itemAt(0).widget() is widget.show_threshold_lines_box
+    assert not widget.show_threshold_lines_box.isVisibleTo(widget)
     assert widget.expand_button.arrowType() == Qt.RightArrow
     collapsed_height = widget.sizeHint().height()
     widget.set_expanded(True)
@@ -113,6 +116,7 @@ def test_curve_color_widget_updates_preview_and_nested_config(qapp):
     config = widget.get_config()
 
     assert widget.is_expanded() is True
+    assert widget.show_threshold_lines_box.isVisibleTo(widget)
     assert widget.expand_button.arrowType() == Qt.DownArrow
     assert expanded_states == [True]
     assert expanded_height > collapsed_height
@@ -310,4 +314,5 @@ def test_shared_dialog_base_appends_display_and_binds_threshold(qapp):
     display_layout = dialog._semantic_section_contents["display"].layout()
     assert dialog.semantic_group_keys() == ["display", "judgment"]
     assert display_layout.count() == 2
+    assert display_layout.itemAt(1).widget() is dialog.curve_color_widget
     assert threshold_widget._curve_color_widget is dialog.curve_color_widget

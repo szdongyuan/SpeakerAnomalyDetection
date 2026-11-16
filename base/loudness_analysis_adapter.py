@@ -12,6 +12,7 @@ from base.analysis_limit_evaluation import (
 )
 from base.core_algorithm.sound_quality.loudness import LoudnessMethod
 from base.core_algorithm.sound_quality.service import run_sound_quality
+from base.analysis_plot_geometry import loudness_time_curve
 
 
 _SUMMARY_METRICS = (
@@ -62,6 +63,12 @@ def calculate_loudness(signal, sample_rate, config, v2pa_factor, **context):
     if any(not np.isfinite(output.summary[key]) for key in _SUMMARY_METRICS):
         raise ValueError("响度计算未产生有限汇总指标")
     unit = loudness_unit(config)
+    end_s = (window[1] / sample_rate if window is not None else
+             raw.metadata.get('analysis_source_end_s', len(signal) / sample_rate))
+    plot_curves = {}
+    for curve_unit, values in curves.items():
+        plot_x, plot_curves[curve_unit] = loudness_time_curve(
+            time_s, values, method=method, start_s=offset, end_s=end_s)
     display = output.display_payload
     for curve in display["curves"]:
         if curve["key"] == "loudness_time":
@@ -75,6 +82,8 @@ def calculate_loudness(signal, sample_rate, config, v2pa_factor, **context):
         "metrics": {**output.summary, "unit": unit, "method": method},
         "curve": {"x": time_s, "y": curves[unit], "upper": [], "lower": []},
         "loudness_curves": curves,
+        "plot_curve": {"x": plot_x, "y": plot_curves[unit], "upper": [], "lower": []},
+        "plot_loudness_curves": plot_curves,
         "plot": {"kind": "loudness", **display},
     }
     if config.get("limit_checked", False):

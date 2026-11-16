@@ -38,6 +38,19 @@ def test_downsampling_default_and_cell_override_are_independent():
     assert result.cells[0][2].display_settings['display_downsampling'] == {'method': 'none'}
 
 
+@pytest.mark.parametrize('values', [
+    {'empty_data_range_min': 0},
+    {'empty_data_range_min': 10, 'empty_data_range_max': 0},
+    {'empty_data_range_min': True, 'empty_data_range_max': 100},
+    {'empty_data_range_min': 0, 'empty_data_range_max': float('inf')},
+    {'empty_data_range_min': 0, 'empty_data_range_max': 100, 'scale': 'log'},
+    {'empty_data_range_min': 0, 'empty_data_range_max': 100, 'auto_range': False},
+])
+def test_invalid_empty_y_range_is_rejected(values):
+    data = template_layout()
+    data['plot_templates']['spl']['y_axis'].update(values)
+    with pytest.raises(ValueError, match='y_axis'):
+        parse_plot_templates(data)
 
 
 @pytest.mark.parametrize('values', [
