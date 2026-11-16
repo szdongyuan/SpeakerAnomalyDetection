@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import QDialog, QLabel, QPushButton, QScrollArea, QSizePoli
 
 from consts.ui_style_const import MAIN_UI_SMALL_FONT_FAMILY_NAME
 from ui.sequence.motor_information_summary_panel import MotorInformationSummaryPanel
-from unit_test.daily_record_cases import make_daily_records
+from unit_test.daily_record_cases import make_daily_records, make_daily_wav_records
 
 
 @pytest.fixture
@@ -275,40 +275,78 @@ def dialog_values(dialog):
                  for name in ("date", "total", "ok", "ng", "unmarked", "rate"))
 
 
-def test_daily_records_update_both_summaries_and_use_latest_snapshot_on_first_open(summary, qt_app):
-    day = date(2026, 11, 4)
-    records = make_daily_records(41, day)
-    records[0]["forward"] = "NG"  # Final result is independent of direction.
-    assert summary.set_daily_records(records, day) is None
-    expected = (day.isoformat(), "41", "14", "14", "13", "34.1%")
-    assert summary_values(summary) == expected
+def test_round_and_wav_snapshots_have_independent_statistics_and_dates(summary, qt_app):
+    round_day = date(2026, 11, 4)
+    wav_day = date(2026, 11, 5)
+    rounds = make_daily_records(1, round_day)
+    rounds[0]["result"] = "NG"
+    wavs = make_daily_wav_records(2, wav_day)
+    assert summary.set_daily_records(rounds, round_day) is None
+    assert summary.set_daily_wav_records(wavs, wav_day) is None
+    round_expected = (round_day.isoformat(), "1", "0", "1", "0", "0.0%")
+    wav_expected = (wav_day.isoformat(), "2", "1", "1", "0", "50.0%")
+    assert summary_values(summary) == round_expected
     assert summary._details_dialog is None
-    records[0]["result"] = "NG"
-    records.clear()
+    rounds.clear()
+    wavs[0]["result"] = "NG"
+    wavs.clear()
     summary.findChild(QPushButton, "summaryDetails").click()
     qt_app.processEvents()
     dialog = summary._details_dialog
-    assert dialog_values(dialog) == expected
-    assert dialog.table.rowCount() == 20
-    dialog.next_button.click()
-    assert dialog.page_label.text() == "2 / 3"
+    assert dialog_values(dialog) == wav_expected
+    assert dialog.table.rowCount() == 2
+    assert [dialog.table.item(i, 4).text() for i in range(2)] == ["NG", "OK"]
     dialog.result_combo.setCurrentIndex(dialog.result_combo.findData("OK"))
     dialog.search_edit.setText("case")
-    assert dialog.table.rowCount() == 14
-    assert summary_values(summary) == expected
-    assert dialog_values(dialog) == expected
-    clear_day = date(2026, 11, 5)
-    assert summary.set_daily_records([], clear_day) is None
-    expected = (clear_day.isoformat(), "0", "0", "0", "0", "--")
-    assert summary_values(summary) == dialog_values(dialog) == expected
+    assert dialog.table.rowCount() == 1
+    assert summary_values(summary) == round_expected
+    assert dialog_values(dialog) == wav_expected
+    clear_day = date(2026, 11, 6)
+    assert summary.set_daily_wav_records([], clear_day) is None
+    assert summary_values(summary) == round_expected
+    assert dialog_values(dialog) == (clear_day.isoformat(), "0", "0", "0", "0", "--")
     assert dialog.table.rowCount() == 0
+    assert dialog.result_combo.currentData() == "OK"
+    assert dialog.search_edit.text() == "case"
     dialog.close()
+
+
+def test_round_snapshot_alone_does_not_create_wav_details(summary):
+    day = date(2026, 11, 4)
+    summary.set_daily_records(make_daily_records(41, day), day)
+    summary.findChild(QPushButton, "summaryDetails").click()
+    dialog = summary._details_dialog
+    assert summary_values(summary) == (day.isoformat(), "41", "14", "14", "13", "34.1%")
+    assert dialog_values(dialog) == (date.today().isoformat(), "0", "0", "0", "0", "--")
+    assert dialog.table.rowCount() == 0
+
+
+def test_round_replacement_and_clear_leave_wav_filters_page_date_and_statistics_intact(summary):
+    day = date(2026, 11, 4)
+    summary.set_daily_wav_records(make_daily_wav_records(123, day), day)
+    summary.findChild(QPushButton, "summaryDetails").click()
+    dialog = summary._details_dialog
+    dialog.station_combo.setCurrentIndex(dialog.station_combo.findData(2))
+    dialog.result_combo.setCurrentIndex(dialog.result_combo.findData("NG"))
+    dialog.search_edit.setText(" case ")
+    dialog.next_button.click()
+    assert dialog.page_label.text() == "2 / 3"
+    before = (dialog_values(dialog), dialog.page_label.text(), dialog.table.rowCount(),
+              dialog.table.item(0, 2).text(), dialog.station_combo.currentData(),
+              dialog.result_combo.currentData(), dialog.search_edit.text())
+    other_day = date(2026, 11, 6)
+    for records in (make_daily_records(1, other_day), []):
+        summary.set_daily_records(records, other_day)
+        assert (dialog_values(dialog), dialog.page_label.text(), dialog.table.rowCount(),
+                dialog.table.item(0, 2).text(), dialog.station_combo.currentData(),
+                dialog.result_combo.currentData(), dialog.search_edit.text()) == before
+    assert summary_values(summary) == (other_day.isoformat(), "0", "0", "0", "0", "--")
 
 
 @pytest.mark.parametrize("close_method", ["escape", "system"])
 def test_daily_dialog_reuses_instance_and_preserves_filters_and_page(summary, qt_app, close_method):
     day = date(2026, 11, 4)
-    summary.set_daily_records(make_daily_records(123, day), day)
+    summary.set_daily_wav_records(make_daily_wav_records(123, day), day)
     button = summary.findChild(QPushButton, "summaryDetails")
     button.click()
     dialog = summary._details_dialog
@@ -338,9 +376,12 @@ def test_daily_dialog_reuses_instance_and_preserves_filters_and_page(summary, qt
     dialog.close()
 
 
-def test_invalid_daily_replacement_preserves_snapshot_ui_and_window_state(summary):
+@pytest.mark.parametrize("snapshot_kind", ["round", "wav"])
+@pytest.mark.parametrize("invalid_kind", ["result", "station", "container", "date"])
+def test_invalid_daily_replacement_preserves_snapshot_ui_and_window_state(summary, snapshot_kind, invalid_kind):
     day = date(2026, 11, 4)
-    summary.set_daily_records(make_daily_records(123, day), day)
+    summary.set_daily_records(make_daily_records(3, day), day)
+    summary.set_daily_wav_records(make_daily_wav_records(123, day), day)
     summary.findChild(QPushButton, "summaryDetails").click()
     dialog = summary._details_dialog
     dialog.station_combo.setCurrentIndex(dialog.station_combo.findData(2))
@@ -348,27 +389,42 @@ def test_invalid_daily_replacement_preserves_snapshot_ui_and_window_state(summar
     dialog.search_edit.setText("case")
     dialog.next_button.click()
     before = (summary_values(summary), dialog_values(dialog), dialog.page_label.text(),
-              dialog.table.rowCount(), dialog.table.item(0, 2).text())
+              dialog.table.rowCount(), dialog.table.item(0, 2).text(),
+              summary._daily_records.records, summary._daily_wav_records.records)
     new_day = date(2026, 11, 5)
-    invalid = make_daily_records(2, new_day)
-    invalid[-1]["result"] = "invalid"
-    with pytest.raises(ValueError, match="result"):
-        summary.set_daily_records(invalid, new_day)
+    make_records = make_daily_records if snapshot_kind == "round" else make_daily_wav_records
+    publish = summary.set_daily_records if snapshot_kind == "round" else summary.set_daily_wav_records
+    invalid = make_records(2, new_day)
+    if invalid_kind == "result":
+        invalid[-1]["result"] = "invalid"
+        error, field = ValueError, "result"
+    elif invalid_kind == "station":
+        invalid[-1]["station_id"] = False
+        error, field = TypeError, "station_id"
+    elif invalid_kind == "container":
+        invalid = iter(invalid)
+        error, field = TypeError, "records"
+    else:
+        new_day = invalid[0]["completed_at"]
+        error, field = TypeError, "record_date"
+    with pytest.raises(error, match=field):
+        publish(invalid, new_day)
     assert (summary_values(summary), dialog_values(dialog), dialog.page_label.text(),
-            dialog.table.rowCount(), dialog.table.item(0, 2).text()) == before
+            dialog.table.rowCount(), dialog.table.item(0, 2).text(),
+            summary._daily_records.records, summary._daily_wav_records.records) == before
     assert dialog.station_combo.currentData() == 2
     assert dialog.result_combo.currentData() == "NG"
     assert dialog.search_edit.text() == "case"
     assert summary._details_dialog is dialog
-    # A valid replacement refreshes an existing (even hidden) dialog and resets its page.
     dialog.close()
-    summary.set_daily_records(make_daily_records(63, new_day), new_day)
+    new_day = date(2026, 11, 5)
+    summary.set_daily_wav_records(make_daily_wav_records(63, new_day), new_day)
     assert dialog.page_label.text() == "1 / 2"
     assert dialog.station_combo.currentData() == 2
     assert dialog.result_combo.currentData() == "NG"
     assert dialog.search_edit.text() == "case"
-    assert summary_values(summary) == dialog_values(dialog)
     assert dialog.date_label.text() == new_day.isoformat()
+    assert summary_values(summary) == before[0]
 
 
 def test_daily_summary_instances_keep_data_and_dialog_conditions_independent(summary, qt_app):
@@ -376,7 +432,9 @@ def test_daily_summary_instances_keep_data_and_dialog_conditions_independent(sum
     try:
         day = date(2026, 11, 4)
         summary.set_daily_records(make_daily_records(21, day), day)
+        summary.set_daily_wav_records(make_daily_wav_records(21, day), day)
         other.set_daily_records(make_daily_records(1, day), day)
+        other.set_daily_wav_records(make_daily_wav_records(1, day), day)
         summary.findChild(QPushButton, "summaryDetails").click()
         first = summary._details_dialog
         first.next_button.click()
@@ -389,6 +447,7 @@ def test_daily_summary_instances_keep_data_and_dialog_conditions_independent(sum
         second.search_edit.setText("no match")
         assert first.search_edit.text() == ""
         other.set_daily_records([], day)
+        other.set_daily_wav_records([], day)
         assert summary_values(summary)[1] == "21"
         assert first.table.rowCount() == 1
         second.close()
@@ -446,5 +505,24 @@ def test_destroying_previous_host_clears_deleted_dialog_wrapper_for_surviving_su
         if not sip.isdeleted(host):
             host.deleteLater()
         new_host.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        qt_app.processEvents()
+
+
+def test_left_panel_forwards_independent_wav_snapshot(qt_app):
+    from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
+
+    left = MotorDetectionLeftPanel()
+    try:
+        day = date(2026, 11, 4)
+        assert left.set_daily_records(make_daily_records(1, day), day) is None
+        assert left.set_daily_wav_records(make_daily_wav_records(2, day), day) is None
+        summary = left.dashboard_panel.summary_panel
+        summary.findChild(QPushButton, "summaryDetails").click()
+        assert summary_values(summary) == (day.isoformat(), "1", "1", "0", "0", "100.0%")
+        assert dialog_values(summary._details_dialog) == (day.isoformat(), "2", "1", "1", "0", "50.0%")
+        summary._details_dialog.close()
+    finally:
+        left.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         qt_app.processEvents()

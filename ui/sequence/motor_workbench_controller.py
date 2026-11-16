@@ -16,6 +16,7 @@ from base.audio_label_policy import audio_label_for_results
 from base.audio_label_sync import AudioLabelJob
 from base.workbench_config_values import WorkbenchChannel, WorkbenchCondition
 from base.workbench_round_counter import WorkbenchRoundCounter
+from base.workbench_wav_state import WorkbenchWavState
 from base.workbench_round_store import RoundSnapshot, WorkbenchRoundStateError
 from base.workbench_configuration_loader import WorkbenchConfiguration, WorkbenchConfigurationError
 from base.workbench_analysis_input import (
@@ -140,6 +141,8 @@ class MotorWorkbenchController:
         self._activated_round_ids: set[str] = set()
         self._result_state = WorkbenchResultState()
         self._set_daily_records = None
+        self._wav_state = WorkbenchWavState()
+        self._set_daily_wav_records = None
         self._round_counter: WorkbenchRoundCounter | None = None
         self._show_round = None
         self._notify_round_error = None
@@ -298,6 +301,16 @@ class MotorWorkbenchController:
         """Attach the optional complete daily snapshot consumer on the GUI thread."""
         self._set_daily_records = set_daily_records
 
+    def bind_wav_details(self, set_daily_wav_records: Callable | None) -> None:
+        """Attach the independent saved-WAV consumer and publish today's snapshot."""
+        self._set_daily_wav_records = set_daily_wav_records
+        self._publish_wav_details()
+
+    def _publish_wav_details(self) -> None:
+        if self._set_daily_wav_records is not None:
+            today = datetime.now().date()
+            self._set_daily_wav_records(self._wav_state.records_for(today), today)
+
     def bind_audio_label_sync(self, submit: Callable[[AudioLabelJob], None] | None) -> None:
         """Attach the optional label job sink; persistence belongs to its owner."""
         self._submit_audio_label = submit
@@ -388,6 +401,10 @@ class MotorWorkbenchController:
         if snapshot.complete and self._set_daily_records is not None:
             today = datetime.now().date()
             self._set_daily_records(self._result_state.records_for(today), today)
+        if self._wav_state.update_result(
+            context["request_id"], context["station_id"], payload.get("instance_results", ()),
+        ):
+            self._publish_wav_details()
 
     def _submit_saved_recording(self, item: WorkbenchAnalysisInput, round_context: _RecordingRound) -> None:
         """Submit published file paths, never sample buffers or the current configuration."""
@@ -733,6 +750,16 @@ class MotorWorkbenchController:
         self._in_flight = archiving
         self._activate_recording_round(attempt)
         self.refresh_recording_state()
+        station_numbers = {station_id: ordinal
+                           for station_id, ordinal, _ in attempt.round_context.stations}
+        condition_index = attempt.round_context.condition_ids.index(attempt.analysis_context.condition_id)
+        condition = ("正转", "反转")[condition_index] if condition_index < 2 else attempt.condition_name
+        if self._wav_state.register_recording(
+            attempt.request_id, attempt.recorded_at, condition,
+            tuple((station.station_id, station_numbers[station.station_id], station.path)
+                  for station in result.stations),
+        ):
+            self._publish_wav_details()
         try:
             self._recording.submit_archive(
                 result, attempt.product_name, attempt.recorded_on,

@@ -61,14 +61,22 @@ def main():
         QTest.qWait(30)
         app.processEvents()
 
-    def records(count, long_code=False):
+    def wav_records(count, long_name=False):
         day = date(2026, 11, 4)
         return [dict(completed_at=datetime.combine(day, datetime.min.time()) + timedelta(seconds=i),
                      station_id=i % 3 + 1,
-                     product_code=("长产品编号-" * 12 if long_code else "CASE-") + f"{i + 1:03}",
-                     forward=("OK", "NG", "--")[i % 3],
-                     reverse=("NG", "--", "OK")[i % 3],
+                     file_name=("20261104_工位1_长文件名称_" * 8 if long_name else "20261104_CASE-")
+                     + f"{i + 1:03}.wav",
+                     condition=("正转", "反转", "低速保持", "负载测试")[i % 4],
                      result=("OK", "未标记", "NG")[i % 3]) for i in range(count)]
+
+    def round_records(count):
+        """Independent completed rounds, never inferred from the WAV fixture."""
+        day = date(2026, 11, 4)
+        return [dict(completed_at=datetime.combine(day, datetime.min.time()) + timedelta(seconds=i),
+                     station_id=i % 3 + 1,
+                     product_code=f"ROUND-{i + 1:03}", forward="OK", reverse="NG", result="NG")
+                for i in range(count)]
 
     def rect(value):
         return [value.x(), value.y(), value.width(), value.height()]
@@ -81,6 +89,19 @@ def main():
         dialog = summary._details_dialog
         if dialog is None:
             return None
+        headers = [dialog.table.horizontalHeaderItem(c).text()
+                   for c in range(dialog.table.columnCount())]
+        assert headers == ["完成时间", "工位", "文件名称", "工况", "结果", "操作"], headers
+        file_tooltips = [dialog.table.item(r, 2).toolTip()
+                         for r in range(dialog.table.rowCount())]
+        assert all(tooltip == dialog.table.item(r, 2).text()
+                   for r, tooltip in enumerate(file_tooltips)), file_tooltips
+        assert all(tooltip.endswith(".wav") for tooltip in file_tooltips), file_tooltips
+        condition_tooltips = [dialog.table.item(r, 3).toolTip()
+                              for r in range(dialog.table.rowCount())]
+        assert all(tooltip == dialog.table.item(r, 3).text()
+                   for r, tooltip in enumerate(condition_tooltips)), condition_tooltips
+        assert dialog.table.columnWidth(4) >= dialog.fontMetrics().horizontalAdvance("未标记") + 24
         critical = {}
         for name in ("station_label", "station_combo", "result_label", "result_combo", "search_edit",
                      "record_count_label", "page_label", "prev_button", "next_button"):
@@ -91,6 +112,10 @@ def main():
                                   global_origin=[control.mapToGlobal(QPoint()).x(),
                                                  control.mapToGlobal(QPoint()).y()])
         return dict(summary=labels(dialog), row_count=dialog.table.rowCount(),
+                    headers=headers, file_tooltips=file_tooltips, condition_tooltips=condition_tooltips,
+                    column_widths=[dialog.table.columnWidth(c)
+                                   for c in range(dialog.table.columnCount())],
+                    horizontal_scroll_maximum=dialog.table.horizontalScrollBar().maximum(),
                     matched_count=dialog.record_count_label.text(), page=dialog.page_label.text(),
                     visible=dialog.isVisible(), modal=app.activeModalWidget() is dialog,
                     content_geometry=rect(dialog.geometry()), frame_geometry=rect(dialog.frameGeometry()),
@@ -100,7 +125,7 @@ def main():
                               pixel_height=dialog.fontMetrics().height()),
                     filters=dict(station=dialog.station_combo.currentData(),
                                  result=dialog.result_combo.currentData(), query=dialog.search_edit.text()),
-                    rows=[[dialog.table.item(r, c).text() for c in range(7)]
+                    rows=[[dialog.table.item(r, c).text() for c in range(dialog.table.columnCount())]
                           for r in range(dialog.table.rowCount())])
 
     def render(widget, name):
@@ -133,7 +158,8 @@ def main():
         dashboard = MotorDashboardPanel(host)
         layout.addWidget(dashboard, 1)
         dashboard.summary_panel.findChild(QPushButton, "summaryDetails").setShortcut("Alt+D")
-        dashboard.summary_panel.set_daily_records(records(41), date(2026, 11, 4))
+        dashboard.summary_panel.set_daily_records(round_records(7), date(2026, 11, 4))
+        dashboard.summary_panel.set_daily_wav_records(wav_records(41), date(2026, 11, 4))
         state = dict(click_count=0, heartbeat=0, main_text="", events=[])
 
         def event(name, **values):
@@ -185,15 +211,21 @@ def main():
                     font_files=[str(p) for p in font_paths], platform=app.platformName(), renders=[])
     for name, count in (("empty", 0), ("full-20", 20), ("last-21", 21),
                         ("last-39", 39), ("combined", 41), ("no-match", 41),
-                        ("narrow", 41), ("long-code", 20), ("dark-host", 20)):
+                        ("narrow", 41), ("long-file-name", 20), ("dark-host", 20),
+                        ("separate-counts", 2)):
         host = MotorDashboardPanel()
         try:
             host.resize(450, 760)
             if name == "dark-host":
                 host.setStyleSheet("QWidget { background: #17212e; color: #ffffff; }")
             summary = host.summary_panel
-            if count:
-                summary.set_daily_records(records(count, name == "long-code"), date(2026, 11, 4))
+            rounds = round_records(0 if not count else 1 if name == "separate-counts" else 7)
+            wavs = wav_records(count, name == "long-file-name")
+            if name == "separate-counts":
+                wavs[0].update(station_id=1, condition="正转", result="OK")
+                wavs[1].update(station_id=1, condition="反转", result="NG")
+            summary.set_daily_records(rounds, date(2026, 11, 4))
+            summary.set_daily_wav_records(wavs, date(2026, 11, 4))
             host.show()
             settle()
             summary.findChild(QPushButton, "summaryDetails").click()
@@ -206,21 +238,39 @@ def main():
                 dialog.result_combo.setCurrentIndex(dialog.result_combo.findData("OK"))
                 dialog.search_edit.setText(" case-0 ")
             elif name == "no-match":
-                dialog.search_edit.setText("not-a-product")
+                dialog.search_edit.setText("not-a-file.wav")
             elif name == "narrow":
                 dialog.resize(480, min(570, dialog.height()))
             settle()
             entry = dialog_evidence(summary)
             entry.update(name=name, main_summary=labels(summary))
             expected_rows = {"empty": 0, "last-21": 1, "last-39": 19,
-                             "combined": 14, "no-match": 0}.get(name, 20)
+                             "combined": 14, "no-match": 0, "separate-counts": 2}.get(name, 20)
             assert entry["row_count"] == expected_rows, entry
-            assert entry["summary"] == entry["main_summary"], entry
+            for source, data in ((entry["summary"], wavs), (entry["main_summary"], rounds)):
+                assert source["date"] == "2026-11-04", source
+                assert source["total"] == str(len(data)), source
+                for field, result in (("ok", "OK"), ("ng", "NG"), ("unmarked", "未标记")):
+                    assert source[field] == str(sum(row["result"] == result for row in data)), source
+                expected_rate = (f"{100 * sum(row['result'] == 'OK' for row in data) / len(data):.1f}%"
+                                 if data else "--")
+                assert source["rate"] == expected_rate, source
+            if name == "separate-counts":
+                assert entry["main_summary"]["ng"] == "1" and entry["main_summary"]["rate"] == "0.0%", entry
+                assert entry["summary"]["ok"] == "1" and entry["summary"]["rate"] == "50.0%", entry
             assert dialog.screen().availableGeometry().contains(dialog.frameGeometry()), entry
             for control_name, control in entry["controls"].items():
                 assert control["visible_region"][2] > 0 and control["visible_region"][3] > 0, control_name
             render(dialog, name + ".png")
             render(summary, name + "-summary.png")
+            if name == "narrow":
+                scrollbar = dialog.table.horizontalScrollBar()
+                scrollbar.setValue(scrollbar.maximum())
+                settle()
+                for column in (3, 4, 5):
+                    assert dialog.table.viewport().rect().intersects(
+                        dialog.table.visualItemRect(dialog.table.item(0, column))), column
+                render(dialog, name + "-right.png")
             evidence["renders"].append(entry)
             print(f"{name}: {entry['row_count']} rows, page {entry['page']}")
         finally:
