@@ -4,20 +4,21 @@ from dataclasses import fields
 from html import escape
 from numbers import Integral
 
-from PyQt5.QtCore import QEvent, QRect, QSignalBlocker, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QIcon, QPainter, QPixmap, QTransform
+from PyQt5.QtCore import QEvent, QSignalBlocker, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QScrollBar, QSizePolicy, QStyle, QStyleOptionSlider, QToolTip,
+    QScrollArea, QSizePolicy, QStyle, QToolTip,
     QVBoxLayout, QWidget, QWIDGETSIZE_MAX,
 )
 
 from consts.running_consts import DEFAULT_DIR
 from consts.ui_style_const import (
-    MAIN_UI_SMALL_FONT_FAMILY, MOTOR_WORKBENCH_SCROLLBAR_STYLE,
+    MAIN_UI_SMALL_FONT_FAMILY,
     TOOLBAR_ICON_BUTTON_HEIGHT, TOOLBAR_ICON_BUTTON_WIDTH,
     main_window_tooltip_style, toolbar_combobox_style,
 )
+from ui.sequence.workbench_scrollbar import WorkbenchHorizontalScrollBar
 from ui.sequence.station_plot_cell import StationPlotCell
 from ui.sequence.condition_plot_cell import ConditionPlotCell
 from ui.sequence.condition_heatmap_cell import ConditionHeatmapCell
@@ -26,28 +27,6 @@ from ui.sequence.workbench_plot_display import ConditionPlotDisplay, WorkbenchPl
 
 _CONTROL_VERTICAL_PADDING = 8
 _CONTROL_ROW_HEIGHT = TOOLBAR_ICON_BUTTON_HEIGHT + 2 * _CONTROL_VERTICAL_PADDING
-
-
-class _PlotHorizontalScrollBar(QScrollBar):
-    """Use Qt's built-in triangle PNGs while retaining native interactions."""
-
-    def __init__(self, parent):
-        super().__init__(Qt.Horizontal, parent)
-        arrow = QPixmap(':/qt-project.org/styles/commonstyle/images/titlebar-shade-16.png')
-        self._left_arrow = arrow.transformed(QTransform().rotate(-90))
-        self._right_arrow = arrow.transformed(QTransform().rotate(90))
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        option = QStyleOptionSlider()
-        self.initStyleOption(option)
-        with QPainter(self) as painter:
-            for control, arrow in ((QStyle.SC_ScrollBarSubLine, self._left_arrow),
-                                   (QStyle.SC_ScrollBarAddLine, self._right_arrow)):
-                button = self.style().subControlRect(QStyle.CC_ScrollBar, option, control, self)
-                target = QRect(0, 0, 12, 14)
-                target.moveCenter(button.center())
-                painter.drawPixmap(target, arrow)
 
 
 class _ElidedLabel(QLabel):
@@ -284,10 +263,8 @@ class StationPlotGrid(QWidget):
         self._scroll = QScrollArea(self)
         self._scroll.setObjectName('stationPlotScroll')
         self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setHorizontalScrollBar(_PlotHorizontalScrollBar(self._scroll))
-        scrollbar = self._scroll.horizontalScrollBar()
-        scrollbar.setObjectName('workbenchPlotHorizontalScrollBar')
-        scrollbar.setStyleSheet(MOTOR_WORKBENCH_SCROLLBAR_STYLE)
+        self._scroll.setHorizontalScrollBar(WorkbenchHorizontalScrollBar(
+            self._scroll, object_name='workbenchPlotHorizontalScrollBar'))
         self._content = QWidget()
         self._plot_layout = QGridLayout(self._content)
         self._plot_layout.setContentsMargins(0, 0, 0, 0)

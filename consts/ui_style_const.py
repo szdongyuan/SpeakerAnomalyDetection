@@ -69,28 +69,36 @@ QScrollBar#workbenchStationVerticalScrollBar::sub-page:vertical,
 QScrollBar#workbenchStationVerticalScrollBar::add-page:vertical {
     background: #fafafa;
 }
-QScrollBar#workbenchPlotHorizontalScrollBar:horizontal {
+QScrollBar#workbenchPlotHorizontalScrollBar:horizontal,
+QScrollBar#detailsHorizontalScrollBar:horizontal {
     background: #fafafa; height: 14px; margin: 0px 14px; border: none;
 }
-QScrollBar#workbenchPlotHorizontalScrollBar::handle:horizontal {
+QScrollBar#workbenchPlotHorizontalScrollBar::handle:horizontal,
+QScrollBar#detailsHorizontalScrollBar::handle:horizontal {
     background: #8b8b8b; border-radius: 4px; margin: 3px 0px; min-width: 20px;
 }
-QScrollBar#workbenchPlotHorizontalScrollBar::sub-line:horizontal {
+QScrollBar#workbenchPlotHorizontalScrollBar::sub-line:horizontal,
+QScrollBar#detailsHorizontalScrollBar::sub-line:horizontal {
     background: #fafafa; border: none; width: 14px;
     subcontrol-origin: margin; subcontrol-position: left;
 }
-QScrollBar#workbenchPlotHorizontalScrollBar::add-line:horizontal {
+QScrollBar#workbenchPlotHorizontalScrollBar::add-line:horizontal,
+QScrollBar#detailsHorizontalScrollBar::add-line:horizontal {
     background: #fafafa; border: none; width: 14px;
     subcontrol-origin: margin; subcontrol-position: right;
 }
-QScrollBar#workbenchPlotHorizontalScrollBar::left-arrow:horizontal {
+QScrollBar#workbenchPlotHorizontalScrollBar::left-arrow:horizontal,
+QScrollBar#detailsHorizontalScrollBar::left-arrow:horizontal {
     image: none;
 }
-QScrollBar#workbenchPlotHorizontalScrollBar::right-arrow:horizontal {
+QScrollBar#workbenchPlotHorizontalScrollBar::right-arrow:horizontal,
+QScrollBar#detailsHorizontalScrollBar::right-arrow:horizontal {
     image: none;
 }
 QScrollBar#workbenchPlotHorizontalScrollBar::sub-page:horizontal,
-QScrollBar#workbenchPlotHorizontalScrollBar::add-page:horizontal {
+QScrollBar#detailsHorizontalScrollBar::sub-page:horizontal,
+QScrollBar#workbenchPlotHorizontalScrollBar::add-page:horizontal,
+QScrollBar#detailsHorizontalScrollBar::add-page:horizontal {
     background: #fafafa;
 }
 """
