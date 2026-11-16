@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
 )
 
 from consts.motor_daily_details_style import MOTOR_DAILY_DETAILS_STYLE
+from ui.sequence.workbench_scrollbar import WorkbenchHorizontalScrollBar
 
 
 class MotorDailyDetailsDialog(QDialog):
@@ -107,6 +108,8 @@ class MotorDailyDetailsDialog(QDialog):
         body.addLayout(filters)
 
         self.table = QTableWidget(0, 6, self)
+        self.table.setHorizontalScrollBar(WorkbenchHorizontalScrollBar(
+            self.table, object_name="detailsHorizontalScrollBar"))
         scrollbar = self.table.verticalScrollBar()
         scrollbar.setObjectName("detailsVerticalScrollBar")
         # Refresh rules cached while QTableWidget was constructing its children.
@@ -136,6 +139,7 @@ class MotorDailyDetailsDialog(QDialog):
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.empty_label.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.table.viewport().installEventFilter(self)
+        self.table.installEventFilter(self)
 
         footer = self._footer = QHBoxLayout()
         footer.setSpacing(8)
@@ -161,7 +165,7 @@ class MotorDailyDetailsDialog(QDialog):
         available = self.screen().availableGeometry()
         self.setMinimumSize(min(480, available.width() - 20),
                             min(layout.minimumSize().height(), available.height() - 60))
-        self.resize(min(820, available.width() - 20), min(790, available.height() - 60))
+        self.resize(min(1000, available.width() - 20), min(790, available.height() - 60))
         self.station_combo.currentIndexChanged.connect(self._filters_changed)
         self.result_combo.currentIndexChanged.connect(self._filters_changed)
         self.search_edit.textChanged.connect(self._filters_changed)
@@ -241,24 +245,30 @@ class MotorDailyDetailsDialog(QDialog):
         if watched is self.table.viewport() and event.type() == QEvent.Resize:
             self.empty_label.setGeometry(self.table.viewport().rect())
             self._resize_columns()
+        elif watched is self.table and event.type() in (QEvent.FontChange, QEvent.ApplicationFontChange):
+            self._resize_columns()
         return super().eventFilter(watched, event)
 
     def _resize_columns(self):
+        metrics = self.table.fontMetrics()
+        header_metrics = self.table.horizontalHeader().fontMetrics()
         widths = []
         for index in range(self.table.columnCount()):
             text = self.table.horizontalHeaderItem(index).text()
-            minimum = self.fontMetrics().horizontalAdvance(text) + 24
+            minimum = header_metrics.horizontalAdvance(text) + 24
             if index == 0:
-                minimum = max(minimum, self.fontMetrics().horizontalAdvance("23:59:59") + 24)
+                minimum = max(minimum, metrics.horizontalAdvance("23:59:59") + 24)
             widths.append(minimum)
         # Reserve complete result labels and readable configured condition names.
         # Bound long conditions so filenames and the trailing columns remain usable.
-        condition_width = max((self.fontMetrics().horizontalAdvance(row.condition)
+        condition_width = max((metrics.horizontalAdvance(row.condition)
                                for row in self._store.records), default=0)
         widths[3] = max(widths[3], min(220, condition_width + 24))
-        widths[4] = max(widths[4], self.fontMetrics().horizontalAdvance("未标记") + 24)
+        widths[4] = max(widths[4], metrics.horizontalAdvance("未标记") + 24)
         # Give filenames the remaining space while retaining readable fixed columns.
-        widths[2] = max(220, widths[2],
+        reference_name = "2026-11-16_15-00-00-123_工位01_正转_型号ABC123_999_6901234567890.wav"
+        filename_minimum = metrics.horizontalAdvance(reference_name) + 24
+        widths[2] = max(filename_minimum, widths[2],
                         self.table.viewport().width() - sum(widths[:2] + widths[3:]))
         for index, width in enumerate(widths):
             self.table.setColumnWidth(index, width)

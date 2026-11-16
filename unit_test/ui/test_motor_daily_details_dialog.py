@@ -3,11 +3,11 @@
 from datetime import date
 
 import pytest
-from PyQt5.QtCore import QCoreApplication, QEvent, Qt
+from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QRect, Qt
 from PyQt5 import sip
 from PyQt5.QtTest import QTest
-from PyQt5.QtGui import QColor, QFont, QPalette
-from PyQt5.QtWidgets import QAbstractItemView, QApplication, QLabel, QWidget
+from PyQt5.QtGui import QColor, QFont, QMouseEvent, QPalette
+from PyQt5.QtWidgets import QAbstractItemView, QApplication, QLabel, QStyle, QStyleOptionSlider, QWidget
 
 from base.motor_daily_wav_records import DailyWavRecordStore
 from ui.sequence.motor_daily_details_dialog import MotorDailyDetailsDialog
@@ -451,6 +451,8 @@ def test_long_file_name_keeps_full_text_tooltip_and_readable_columns(make_dialog
     item = dialog.table.item(0, 2)
     assert item.text() == item.toolTip() == name
     assert dialog.table.textElideMode() == Qt.ElideRight
+    assert dialog.table.fontMetrics().elidedText(
+        name, Qt.ElideRight, dialog.table.columnWidth(2) - 24) != name
     assert dialog.table.columnWidth(2) > max(dialog.table.columnWidth(i) for i in (0, 1, 3, 4, 5))
     for i in range(6):
         header = dialog.table.horizontalHeaderItem(i)
@@ -467,6 +469,8 @@ def test_refresh_sizes_result_and_configured_condition_without_resizing_window(m
     records = make_daily_wav_records(21, day)
     for record in records:
         record.update(condition="低速保持", result="未标记")
+    dialog.resize(480, dialog.height())
+    qt_app.processEvents()
     before_size = dialog.size()
     store.replace(records, day)
     dialog.refresh_records()
@@ -474,7 +478,10 @@ def test_refresh_sizes_result_and_configured_condition_without_resizing_window(m
     assert dialog.size() == before_size
     for column, text in ((3, "低速保持"), (4, "未标记")):
         assert dialog.table.columnWidth(column) >= dialog.table.fontMetrics().horizontalAdvance(text) + 24
+    dialog.search_edit.setText(".wav")
+    assert dialog.size() == before_size
     dialog.next_button.click()
+    assert dialog.size() == before_size
     assert dialog.table.item(0, 3).toolTip() == "低速保持"
     records[0]["condition"] = "低速保持工况"
     store.replace(records, day)
@@ -502,3 +509,176 @@ def test_very_long_condition_has_bounded_width_and_complete_tooltip(make_dialog,
     for column in (4, 5):
         assert dialog.table.viewport().rect().contains(
             dialog.table.visualItemRect(dialog.table.item(0, column)))
+
+
+@pytest.mark.parametrize("point_size", [9.75, 14])
+@pytest.mark.parametrize("content", ["reference", "short", "empty"])
+def test_reference_filename_fits_at_actual_table_font(make_dialog, qt_app, point_size, content):
+    dialog, store, _ = make_dialog()
+    name = "2026-11-16_15-00-00-123_工位01_正转_型号ABC123_999_6901234567890.wav"
+    day = date(2026, 11, 4)
+    records = make_daily_wav_records(0 if content == "empty" else 1, day)
+    if records:
+        records[0]["file_name"] = name if content == "reference" else "short.wav"
+    store.replace(records, day)
+    dialog.table.setStyleSheet(f"QTableWidget {{ font: {point_size}pt 'Microsoft YaHei UI'; }}")
+    dialog.refresh_records()
+    dialog.resize(480, dialog.height())
+    qt_app.processEvents()
+    assert dialog.table.font().pointSizeF() == pytest.approx(point_size)
+    metrics = dialog.table.fontMetrics()
+    width = dialog.table.columnWidth(2)
+    assert width >= metrics.horizontalAdvance(name) + 24
+    assert metrics.elidedText(name, Qt.ElideRight, width - 24) == name
+    if content == "reference":
+        item = dialog.table.item(0, 2)
+        assert item.text() == item.toolTip() == name
+
+
+@pytest.mark.parametrize("screen_width, expected_width", [(1600, 1000), (640, 620)])
+def test_initial_width_uses_available_screen(monkeypatch, qt_app, screen_width, expected_width):
+    from types import SimpleNamespace
+    monkeypatch.setattr(MotorDailyDetailsDialog, "screen", lambda self: SimpleNamespace(
+        availableGeometry=lambda: QRect(0, 0, screen_width, 1000)))
+    dialog = MotorDailyDetailsDialog(DailyWavRecordStore())
+    try:
+        assert dialog.width() == expected_width
+    finally:
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+
+def test_table_font_change_reflows_columns_without_resetting_window(make_dialog, qt_app):
+    dialog, _, _ = make_dialog(1)
+    dialog.resize(480, dialog.height())
+    qt_app.processEvents()
+    size = dialog.size()
+    before = dialog.table.columnWidth(2)
+    dialog.table.setStyleSheet("QTableWidget { font: 18pt 'Microsoft YaHei UI'; }")
+    qt_app.processEvents()
+    assert dialog.table.font().pointSizeF() == pytest.approx(18)
+    name = "2026-11-16_15-00-00-123_工位01_正转_型号ABC123_999_6901234567890.wav"
+    metrics = dialog.table.fontMetrics()
+    assert dialog.table.columnWidth(2) > before
+    assert dialog.table.columnWidth(2) >= metrics.horizontalAdvance(name) + 24
+    assert metrics.elidedText(name, Qt.ElideRight, dialog.table.columnWidth(2) - 24) == name
+    for column, text in ((0, "23:59:59"), (4, "未标记")):
+        assert dialog.table.columnWidth(column) >= metrics.horizontalAdvance(text) + 24
+    assert dialog.size() == size
+
+
+@pytest.mark.parametrize("host_style", ["", "QWidget { background: #17212e; color: white; }"])
+def test_horizontal_scrollbar_has_workbench_reference_pixels(make_dialog, qt_app, host_style):
+    dialog, _, _ = make_dialog(41, host_style)
+    dialog.resize(480, dialog.height())
+    qt_app.processEvents()
+    bar = dialog.table.horizontalScrollBar()
+    assert dialog.minimumWidth() == dialog.width() == 480
+    assert bar.isVisible() and bar.maximum() > 0
+    assert bar.height() == 14
+    bar.setValue(bar.maximum() // 2)
+    image = bar.grab().toImage()
+    dpr = image.devicePixelRatio()
+
+    def color(x, y):
+        return image.pixelColor(int(x * dpr), int(y * dpr))
+
+    gray = [(x, y) for x in range(14, bar.width() - 14)
+            for y in range(bar.height()) if color(x, y).name() == "#8b8b8b"]
+    assert gray
+    left, right = min(x for x, _ in gray), max(x for x, _ in gray)
+    assert (min(y for _, y in gray), max(y for _, y in gray)) == (3, 10)
+    assert right - left + 1 >= 20
+    middle = (left + right) // 2
+    assert all(color(middle, y).name() == "#8b8b8b" for y in range(3, 11))
+    assert color(left, 3).name() != "#8b8b8b"
+    assert color(middle, 0).name() == color(15, 7).name() == "#fafafa"
+    for start, end, points_left in ((0, 14, True), (bar.width() - 14, bar.width(), False)):
+        ink = []
+        for x in range(start, end):
+            for y in range(bar.height()):
+                pixel = color(x, y)
+                channels = (pixel.red(), pixel.green(), pixel.blue())
+                assert max(channels) - min(channels) <= 3
+                if pixel.red() < 128:
+                    ink.append((x, y))
+        assert ink
+        first, last = min(x for x, _ in ink), max(x for x, _ in ink)
+        first_count = sum(x == first for x, _ in ink)
+        last_count = sum(x == last for x, _ in ink)
+        assert (first_count < last_count) if points_left else (first_count > last_count)
+
+
+def test_horizontal_scrollbar_native_controls_preserve_view_and_store(make_dialog, qt_app):
+    dialog, store, _ = make_dialog(123)
+    dialog.station_combo.setCurrentIndex(dialog.station_combo.findData(1))
+    dialog.result_combo.setCurrentIndex(dialog.result_combo.findData("OK"))
+    dialog.search_edit.setText(" cAsE ")
+    dialog.next_button.click()
+    dialog.resize(480, dialog.height())
+    qt_app.processEvents()
+
+    def state():
+        return (store.records, store.summary, displayed_file_names(dialog),
+                dialog.station_combo.currentData(), dialog.result_combo.currentData(),
+                dialog.search_edit.text(), dialog._page, dialog.page_label.text(),
+                dialog.total_label.text(), dialog.record_count_label.text(), dialog.size())
+
+    before = state()
+    bar = dialog.table.horizontalScrollBar()
+    assert bar.isVisible() and bar.maximum() > 0
+    bar.setValue(bar.maximum() // 2)
+    initial = bar.value()
+    QTest.mouseClick(bar, Qt.LeftButton, pos=QPoint(bar.width() - 7, bar.height() // 2))
+    assert bar.value() == min(bar.maximum(), initial + bar.singleStep())
+    QTest.mouseClick(bar, Qt.LeftButton, pos=QPoint(7, bar.height() // 2))
+    assert bar.value() == initial
+    option = QStyleOptionSlider()
+    bar.initStyleOption(option)
+    handle = bar.style().subControlRect(QStyle.CC_ScrollBar, option, QStyle.SC_ScrollBarSlider, bar)
+    start = handle.center()
+    end = start + QPoint(50, 0)
+    QTest.mousePress(bar, Qt.LeftButton, pos=start)
+    QCoreApplication.sendEvent(bar, QMouseEvent(
+        QEvent.MouseMove, QPointF(end), Qt.NoButton, Qt.LeftButton, Qt.NoModifier,
+    ))
+    QTest.mouseRelease(bar, Qt.LeftButton, pos=end)
+    assert bar.value() > initial
+    bar.setFocus()
+    assert bar.hasFocus()
+    QTest.keyClick(bar, Qt.Key_Home)
+    assert bar.value() == bar.minimum()
+    increase_key = Qt.Key_Left if bar.invertedControls() else Qt.Key_Right
+    decrease_key = Qt.Key_Right if bar.invertedControls() else Qt.Key_Left
+    QTest.keyClick(bar, increase_key)
+    assert bar.value() == min(bar.maximum(), bar.minimum() + bar.singleStep())
+    QTest.keyClick(bar, decrease_key)
+    assert bar.value() == bar.minimum()
+    QTest.keyClick(bar, Qt.Key_End)
+    assert bar.value() == bar.maximum()
+    assert dialog.table.viewport().rect().contains(
+        dialog.table.visualItemRect(dialog.table.item(0, 5)))
+    assert state() == before
+    dialog.next_button.click()
+    qt_app.processEvents()
+    assert dialog.size() == before[-1]
+    dialog.refresh_records()
+    qt_app.processEvents()
+    assert dialog.minimumWidth() == dialog.width() == 480
+    assert dialog.size() == before[-1]
+
+
+@pytest.mark.parametrize("screen_width", [1600, 640, 460])
+def test_minimum_width_keeps_existing_small_screen_rule(monkeypatch, qt_app, screen_width):
+    from types import SimpleNamespace
+    monkeypatch.setattr(MotorDailyDetailsDialog, "screen", lambda self: SimpleNamespace(
+        availableGeometry=lambda: QRect(0, 0, screen_width, 1000)))
+    dialog = MotorDailyDetailsDialog(DailyWavRecordStore())
+    try:
+        expected = min(480, screen_width - 20)
+        assert dialog.minimumWidth() == expected
+        dialog.resize(1, dialog.height())
+        assert dialog.width() == expected
+    finally:
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)

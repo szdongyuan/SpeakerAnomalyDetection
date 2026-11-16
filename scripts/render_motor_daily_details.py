@@ -102,6 +102,14 @@ def main():
         assert all(tooltip == dialog.table.item(r, 3).text()
                    for r, tooltip in enumerate(condition_tooltips)), condition_tooltips
         assert dialog.table.columnWidth(4) >= dialog.fontMetrics().horizontalAdvance("未标记") + 24
+        metrics = dialog.table.fontMetrics()
+        filename_fit = []
+        for row in range(dialog.table.rowCount()):
+            text = dialog.table.item(row, 2).text()
+            width = dialog.table.columnWidth(2)
+            filename_fit.append(dict(text=text, text_width=metrics.horizontalAdvance(text),
+                                     padding=24, column_width=width,
+                                     elided_text=metrics.elidedText(text, Qt.ElideRight, width - 24)))
         critical = {}
         for name in ("station_label", "station_combo", "result_label", "result_combo", "search_edit",
                      "record_count_label", "page_label", "prev_button", "next_button"):
@@ -111,11 +119,20 @@ def main():
                                   enabled=control.isEnabled(),
                                   global_origin=[control.mapToGlobal(QPoint()).x(),
                                                  control.mapToGlobal(QPoint()).y()])
+        scrollbar = dialog.table.horizontalScrollBar()
         return dict(summary=labels(dialog), row_count=dialog.table.rowCount(),
-                    headers=headers, file_tooltips=file_tooltips, condition_tooltips=condition_tooltips,
+                    headers=headers, file_tooltips=file_tooltips, filename_fit=filename_fit,
+                    table_font=dict(family=QFontInfo(dialog.table.font()).family(),
+                                    point_size=dialog.table.font().pointSizeF(),
+                                    pixel_height=metrics.height()), condition_tooltips=condition_tooltips,
                     column_widths=[dialog.table.columnWidth(c)
                                    for c in range(dialog.table.columnCount())],
                     horizontal_scroll_maximum=dialog.table.horizontalScrollBar().maximum(),
+                    horizontal_scrollbar=dict(height=scrollbar.height(),
+                                              minimum=scrollbar.minimum(), maximum=scrollbar.maximum(),
+                                              value=scrollbar.value(), visible=scrollbar.isVisible(),
+                                              geometry=rect(scrollbar.geometry())),
+                    minimum_window_width=dialog.minimumWidth(),
                     matched_count=dialog.record_count_label.text(), page=dialog.page_label.text(),
                     visible=dialog.isVisible(), modal=app.activeModalWidget() is dialog,
                     content_geometry=rect(dialog.geometry()), frame_geometry=rect(dialog.frameGeometry()),
@@ -212,7 +229,7 @@ def main():
     for name, count in (("empty", 0), ("full-20", 20), ("last-21", 21),
                         ("last-39", 39), ("combined", 41), ("no-match", 41),
                         ("narrow", 41), ("long-file-name", 20), ("dark-host", 20),
-                        ("separate-counts", 2)):
+                        ("separate-counts", 2), ("barcode-13", 1)):
         host = MotorDashboardPanel()
         try:
             host.resize(450, 760)
@@ -221,6 +238,8 @@ def main():
             summary = host.summary_panel
             rounds = round_records(0 if not count else 1 if name == "separate-counts" else 7)
             wavs = wav_records(count, name == "long-file-name")
+            if name == "barcode-13":
+                wavs[0]["file_name"] = "2026-11-16_15-00-00-123_工位01_正转_型号ABC123_999_6901234567890.wav"
             if name == "separate-counts":
                 wavs[0].update(station_id=1, condition="正转", result="OK")
                 wavs[1].update(station_id=1, condition="反转", result="NG")
@@ -245,7 +264,7 @@ def main():
             entry = dialog_evidence(summary)
             entry.update(name=name, main_summary=labels(summary))
             expected_rows = {"empty": 0, "last-21": 1, "last-39": 19,
-                             "combined": 14, "no-match": 0, "separate-counts": 2}.get(name, 20)
+                             "combined": 14, "no-match": 0, "separate-counts": 2, "barcode-13": 1}.get(name, 20)
             assert entry["row_count"] == expected_rows, entry
             for source, data in ((entry["summary"], wavs), (entry["main_summary"], rounds)):
                 assert source["date"] == "2026-11-04", source
@@ -258,19 +277,37 @@ def main():
             if name == "separate-counts":
                 assert entry["main_summary"]["ng"] == "1" and entry["main_summary"]["rate"] == "0.0%", entry
                 assert entry["summary"]["ok"] == "1" and entry["summary"]["rate"] == "50.0%", entry
+            if name == "barcode-13":
+                fit = entry["filename_fit"][0]
+                assert fit["text"] == entry["file_tooltips"][0] == wavs[0]["file_name"], entry
+                assert fit["column_width"] >= fit["text_width"] + fit["padding"], entry
+                assert fit["elided_text"] == fit["text"], entry
+                print(f"barcode-13 font={entry['table_font']} fit={fit}")
             assert dialog.screen().availableGeometry().contains(dialog.frameGeometry()), entry
             for control_name, control in entry["controls"].items():
                 assert control["visible_region"][2] > 0 and control["visible_region"][3] > 0, control_name
             render(dialog, name + ".png")
             render(summary, name + "-summary.png")
-            if name == "narrow":
-                scrollbar = dialog.table.horizontalScrollBar()
+            scrollbar = dialog.table.horizontalScrollBar()
+            if scrollbar.isVisible() and scrollbar.maximum() > 0:
+                assert scrollbar.height() == 14, entry
+                original_value = scrollbar.value()
+                scrollbar.setValue(scrollbar.maximum() // 2)
+                settle()
+                crop_name = name + "-horizontal-scrollbar.png"
+                render(scrollbar, crop_name)
+                entry["horizontal_scrollbar_crop"] = dict(image=crop_name, value=scrollbar.value())
+                scrollbar.setValue(original_value)
+            if name in ("narrow", "barcode-13", "long-file-name"):
                 scrollbar.setValue(scrollbar.maximum())
                 settle()
                 for column in (3, 4, 5):
                     assert dialog.table.viewport().rect().intersects(
                         dialog.table.visualItemRect(dialog.table.item(0, column))), column
                 render(dialog, name + "-right.png")
+                entry["horizontal_scrollbar_right_value"] = scrollbar.value()
+            if name == "narrow":
+                assert dialog.minimumWidth() == dialog.width() == 480, entry
             evidence["renders"].append(entry)
             print(f"{name}: {entry['row_count']} rows, page {entry['page']}")
         finally:
