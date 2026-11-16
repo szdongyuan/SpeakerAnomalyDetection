@@ -81,7 +81,7 @@
 - 主图与详情调用 `ui/plotting`；远端已删除的分析窗口不恢复，公共模块不得依赖旧窗口。上下限插值和 OK/NG 使用后端完整数据判定；前端只把 `violations` 的时间/频率区间映射成高亮。高亮不降采样，孤立超限点有圆点标记。总体 SPL 限值以工况内水平参考线展示，不转换为瞬时逐点判定。
 - `plot_style.exceedance_highlight` 控制超限颜色、线型、线宽及点大小；不控制后端判定。工况标题不显示 OK/NG，后端判定保留在悬停提示中；部分失败等状态提示和模拟数据标注继续显示。主图与详情保持一致。
 
-上述 `plot_style` 阈值样式覆盖仅适用于旧版布局。v2 使用 `schema_version: 2`、`column_source: product_stations` 和 `row_templates`，按产品的实际工位数量及顺序展开；不再固定四列。分析项提供曲线和阈值颜色，公共绘图提供对应算法原有线型与线宽；v2 拒绝重复定义 `limit_lines` / `exceedance_highlight`。JSON 保留图表选择、通道筛选、显示范围、网格、图例和显示采样。完整设计见 `docs/workbench_shared_plotting.md`。
+上述 `plot_style` 阈值样式覆盖仅适用于旧版布局。v2 使用 `schema_version: 2`、`column_source: product_stations` 和 `row_templates`，按产品的实际工位数量及顺序展开；不再固定四列。分析项提供曲线和阈值颜色，公共绘图提供对应算法原有线型与线宽；v2 拒绝重复定义 `limit_lines` / `exceedance_highlight`。JSON 保留图表选择、通道筛选、显示范围、网格、图例和显示采样。
 
 响度分段曲线保留全部原始样本，以首末原始值延展分析区间边缘，不能用第二个点替换首点；后端展示坐标使用 `base/analysis_plot_geometry.py`。后端 `display_payload.plot_curve` 保存展示坐标及对应限值，原始 `x/y/upper/lower`、判定及 CSV 不变；高亮仍依据原始点的后端超限区间。响度阈值单位与显示单位不一致时，主图和详情均不绘制该阈值或其高亮，原判定保留。稳态/最大响度标量限值可在同量纲坐标轴画水平参考线，特征响度超限总量不得画在响度时间曲线上。
 - FFT 差值模式不叠加绝对参考谱；overlay 模式保留灰色参考层。固定横轴范围使用 `ui/plotting/geometry.py` 裁剪线段，保留边界交点及 NaN 断线；对数坐标在变换后的坐标中插值，不改变源数据、判定和导出。
