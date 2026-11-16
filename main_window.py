@@ -718,6 +718,7 @@ class MainWindow(QMainWindow):
             lambda detail: QMessageBox.warning(self, "工作台轮次", detail),
         )
         controller.bind_result_summary(sequence.left_panel.set_daily_records)
+        controller.bind_wav_details(sequence.left_panel.set_daily_wav_records)
         controller.bind_product_selection(WorkbenchProductSelectionPorts(
             product_manager=ProductTestProjectConfigManager(),
             show_catalog=sequence.show_workbench_products,

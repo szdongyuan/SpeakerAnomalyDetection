@@ -1,19 +1,21 @@
-"""Summary and modal details for an explicitly supplied daily record snapshot."""
+"""Round summary and modal WAV details from independent daily snapshots."""
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from consts.ui_style_const import MOTOR_INFORMATION_SUMMARY_STYLE
 from base.motor_daily_records import DailyRecordStore
+from base.motor_daily_wav_records import DailyWavRecordStore
 from ui.sequence.motor_daily_details_dialog import MotorDailyDetailsDialog
 
 
 class MotorInformationSummaryPanel(QWidget):
-    """Own daily records independently of station and test-round business state."""
+    """Render independent round and saved-WAV snapshots supplied by the caller."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._daily_records = DailyRecordStore()
+        self._daily_wav_records = DailyWavRecordStore()
         self._details_dialog = None
         self.setObjectName("motorInformationSummaryPanel")
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -76,12 +78,16 @@ class MotorInformationSummaryPanel(QWidget):
                              (self.ng_label, summary.ng), (self.unmarked_label, summary.unmarked),
                              (self.rate_label, summary.pass_rate)):
             label.setText(str(value))
+
+    def set_daily_wav_records(self, records, record_date=None):
+        """Replace saved-WAV details independently of the round summary."""
+        self._daily_wav_records.replace(records, record_date)
         if self._details_dialog is not None:
             self._details_dialog.refresh_records()
 
     def _open_details(self):
         if self._details_dialog is None:
-            dialog = MotorDailyDetailsDialog(self._daily_records, self.window())
+            dialog = MotorDailyDetailsDialog(self._daily_wav_records, self.window())
             self._details_dialog = dialog
             # Split sections can put the dialog under a different Qt owner.
             self.destroyed.connect(dialog.deleteLater)

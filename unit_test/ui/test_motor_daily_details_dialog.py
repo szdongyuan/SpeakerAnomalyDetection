@@ -9,9 +9,9 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtGui import QColor, QFont, QPalette
 from PyQt5.QtWidgets import QAbstractItemView, QApplication, QLabel, QWidget
 
-from base.motor_daily_records import DailyRecordStore
+from base.motor_daily_wav_records import DailyWavRecordStore
 from ui.sequence.motor_daily_details_dialog import MotorDailyDetailsDialog
-from unit_test.daily_record_cases import make_daily_records
+from unit_test.daily_record_cases import make_daily_wav_records
 
 
 @pytest.fixture
@@ -19,8 +19,8 @@ def make_dialog(qt_app):
     hosts = []
 
     def create(count=0, host_style=""):
-        store = DailyRecordStore()
-        store.replace(make_daily_records(count, date(2026, 11, 4)), date(2026, 11, 4))
+        store = DailyWavRecordStore()
+        store.replace(make_daily_wav_records(count, date(2026, 11, 4)), date(2026, 11, 4))
         host = QWidget()
         hosts.append(host)
         host.setStyleSheet(host_style)
@@ -39,7 +39,7 @@ def make_dialog(qt_app):
     qt_app.processEvents()
 
 
-def test_empty_dialog_is_native_application_modal_and_has_seven_columns(make_dialog):
+def test_empty_dialog_is_native_application_modal_and_has_six_columns(make_dialog):
     dialog, _, host = make_dialog()
     assert dialog.isWindow()
     assert dialog.windowTitle() == "当日测试明细"
@@ -52,9 +52,9 @@ def test_empty_dialog_is_native_application_modal_and_has_seven_columns(make_dia
     assert dialog.windowModality() == Qt.ApplicationModal
     assert QApplication.activeModalWidget() is dialog
     assert not dialog.testAttribute(Qt.WA_DeleteOnClose)
-    assert dialog.table.columnCount() == 7
-    assert [dialog.table.horizontalHeaderItem(i).text() for i in range(7)] == [
-        "完成时间", "工位", "产品编号", "正转", "反转", "最终结果", "操作",
+    assert dialog.table.columnCount() == 6
+    assert [dialog.table.horizontalHeaderItem(i).text() for i in range(6)] == [
+        "完成时间", "工位", "文件名称", "工况", "结果", "操作",
     ]
     assert dialog.table.rowCount() == 0
     assert dialog.empty_label.text() == "没有符合条件的记录"
@@ -74,7 +74,7 @@ def test_initial_date_statistics_and_options_follow_store(make_dialog):
     assert dialog.station_combo.count() == 1
     assert dialog.station_combo.currentText() == "全部工位"
     assert [dialog.result_combo.itemText(i) for i in range(4)] == ["全部结果", "OK", "NG", "未标记"]
-    assert dialog.search_edit.placeholderText() == "搜索产品编号"
+    assert dialog.search_edit.placeholderText() == "搜索文件名称"
     assert dialog.rate_label.palette().color(QPalette.WindowText) == QColor("#617183")
 
 
@@ -93,29 +93,29 @@ def test_search_has_reference_width_and_sits_at_right_of_filter_row(make_dialog)
     assert dialog.search_edit.x() > dialog.result_combo.geometry().right() + 8
 
 
-def displayed_codes(dialog):
+def displayed_file_names(dialog):
     return [dialog.table.item(row, 2).text() for row in range(dialog.table.rowCount())]
 
 
-def test_filters_use_complete_station_options_and_final_result(make_dialog):
+def test_filters_use_complete_station_options_and_wav_result(make_dialog):
     dialog, store, _ = make_dialog(9)
     assert [dialog.station_combo.itemData(i) for i in range(4)] == [None, 1, 2, 3]
-    assert displayed_codes(dialog) == [row.product_code for row in store.records]
+    assert displayed_file_names(dialog) == [row.file_name for row in store.records]
     before = [label.text() for label in (dialog.total_label, dialog.ok_label,
               dialog.ng_label, dialog.unmarked_label, dialog.rate_label)]
     assert before == ["9", "3", "3", "3", "33.3%"]
     dialog.station_combo.setCurrentIndex(dialog.station_combo.findData(2))
     dialog.result_combo.setCurrentIndex(dialog.result_combo.findData("NG"))
     dialog.search_edit.setText("  case-005  ")
-    assert displayed_codes(dialog) == ["CASE-005"]
-    assert dialog.table.item(0, 3).text() == "OK"  # Final NG is independent.
-    assert dialog.table.item(0, 5).text() == "NG"
+    assert displayed_file_names(dialog) == ["CASE-005.wav"]
+    assert dialog.table.item(0, 3).text() == "正转"
+    assert dialog.table.item(0, 4).text() == "NG"
     assert not dialog.empty_label.isVisible()
     assert dialog.station_combo.count() == 4
     assert [label.text() for label in (dialog.total_label, dialog.ok_label,
             dialog.ng_label, dialog.unmarked_label, dialog.rate_label)] == before
     dialog.search_edit.clear()
-    assert displayed_codes(dialog) == ["CASE-008", "CASE-005", "CASE-002"]
+    assert displayed_file_names(dialog) == ["CASE-008.wav", "CASE-005.wav", "CASE-002.wav"]
     assert dialog.station_combo.currentData() == 2
     assert dialog.result_combo.currentData() == "NG"
     dialog.search_edit.setText("NO MATCH")
@@ -136,11 +136,15 @@ def test_table_is_read_only_stably_sorted_and_aligned(make_dialog):
     assert not dialog.table.horizontalHeader().sectionsClickable()
     assert not dialog.table.verticalHeader().isVisible()
     for row_index, record in enumerate(store.records):
-        assert [dialog.table.item(row_index, col).text() for col in range(7)] == [
+        assert [dialog.table.item(row_index, col).text() for col in range(6)] == [
             record.completed_at.strftime("%H:%M:%S"), str(record.station_id),
-            record.product_code, record.forward, record.reverse, record.result, "查看",
+            record.file_name, record.condition, record.result, "查看",
         ]
-        for col in range(7):
+        assert dialog.table.item(row_index, 2).toolTip() == record.file_name
+        assert dialog.table.item(row_index, 4).foreground().color() == QColor(
+            {"OK": "#00824e", "NG": "#c32b42"}.get(record.result, "#617183"))
+        assert dialog.table.item(row_index, 5).foreground().color() == QColor("#2463aa")
+        for col in range(6):
             item = dialog.table.item(row_index, col)
             assert not item.flags() & Qt.ItemIsEditable
             assert item.textAlignment() == int(Qt.AlignLeft | Qt.AlignVCenter if col == 2 else Qt.AlignCenter)
@@ -152,16 +156,16 @@ def test_table_is_read_only_stably_sorted_and_aligned(make_dialog):
 ])
 def test_pagination_has_exact_rows_and_boundary_buttons(make_dialog, count, rows_per_page):
     dialog, store, _ = make_dialog(count)
-    all_codes = []
+    all_file_names = []
     for index, row_count in enumerate(rows_per_page):
         assert dialog.page_label.text() == f"{index + 1} / {len(rows_per_page)}"
         assert dialog.table.rowCount() == row_count
         assert dialog.record_count_label.text() == f"共 {count} 条 · 每页 20 条"
         assert dialog.prev_button.isEnabled() == (index > 0)
         assert dialog.next_button.isEnabled() == (index < len(rows_per_page) - 1)
-        all_codes.extend(displayed_codes(dialog))
+        all_file_names.extend(displayed_file_names(dialog))
         dialog.next_button.click()
-    assert all_codes == [record.product_code for record in store.records]
+    assert all_file_names == [record.file_name for record in store.records]
     if len(rows_per_page) > 1:
         dialog.prev_button.click()
         assert dialog.page_label.text() == f"{len(rows_per_page) - 1} / {len(rows_per_page)}"
@@ -204,7 +208,7 @@ def test_refresh_replaces_summary_options_and_resets_page_preserving_conditions(
     dialog.next_button.click()
     assert dialog._page == 2
     day = date(2026, 11, 3)
-    records = make_daily_records(66, day)
+    records = make_daily_wav_records(66, day)
     records[1]["station_id"] = 8
     store.replace(records, day)
     dialog.refresh_records()
@@ -240,17 +244,18 @@ def test_refresh_replaces_summary_options_and_resets_page_preserving_conditions(
 def test_refresh_search_is_literal_and_order_keeps_duplicate_records(make_dialog):
     dialog, store, _ = make_dialog()
     day = date(2026, 11, 4)
-    records = make_daily_records(4, day)
-    for row, code, station in zip(records, ("A[.]+", "A[.]+", "Axxx", "Other"), (8, 2, 8, 2)):
+    records = make_daily_wav_records(4, day)
+    for row, file_name, station in zip(
+            records, ("A[.]+.wav", "A[.]+.wav", "Axxx.wav", "Other.wav"), (8, 2, 8, 2)):
         row["completed_at"] = records[0]["completed_at"]
-        row["product_code"] = code
+        row["file_name"] = file_name
         row["station_id"] = station
     store.replace(records, day)
     dialog.refresh_records()
     assert [dialog.station_combo.itemData(i) for i in range(3)] == [None, 2, 8]
-    assert displayed_codes(dialog) == ["A[.]+", "A[.]+", "Axxx", "Other"]
+    assert displayed_file_names(dialog) == ["A[.]+.wav", "A[.]+.wav", "Axxx.wav", "Other.wav"]
     dialog.search_edit.setText(" a[.]+ ")
-    assert displayed_codes(dialog) == ["A[.]+", "A[.]+"]
+    assert displayed_file_names(dialog) == ["A[.]+.wav", "A[.]+.wav"]
     assert [dialog.table.item(i, 1).text() for i in range(2)] == ["8", "2"]
 
 
@@ -260,14 +265,14 @@ def test_invalid_replace_does_not_change_window_or_store(make_dialog):
     dialog.result_combo.setCurrentIndex(1)
     dialog.search_edit.setText("CASE")
     dialog.next_button.click()
-    before = (store.records, store.summary, dialog.date_label.text(), displayed_codes(dialog),
+    before = (store.records, store.summary, dialog.date_label.text(), displayed_file_names(dialog),
               dialog.page_label.text(), dialog._station_id, dialog._result, dialog._query,
               dialog.total_label.text(), dialog.record_count_label.text())
-    records = make_daily_records(2, date(2026, 11, 4))
+    records = make_daily_wav_records(2, date(2026, 11, 4))
     records[1]["station_id"] = False
     with pytest.raises(TypeError, match="station_id"):
         store.replace(records, date(2026, 11, 4))
-    assert (store.records, store.summary, dialog.date_label.text(), displayed_codes(dialog),
+    assert (store.records, store.summary, dialog.date_label.text(), displayed_file_names(dialog),
             dialog.page_label.text(), dialog._station_id, dialog._result, dialog._query,
             dialog.total_label.text(), dialog.record_count_label.text()) == before
 
@@ -280,7 +285,7 @@ def test_close_releases_modality_and_reopen_keeps_conditions_and_page(make_dialo
     dialog.search_edit.setText(" CASE ")
     dialog.next_button.click()
     assert dialog._page == 2
-    before = displayed_codes(dialog)
+    before = displayed_file_names(dialog)
     if close_method == "system":
         dialog.close()
     else:
@@ -296,7 +301,7 @@ def test_close_releases_modality_and_reopen_keeps_conditions_and_page(make_dialo
     assert dialog.result_combo.currentData() == "OK"
     assert dialog.search_edit.text() == " CASE "
     assert dialog._page == 2
-    assert displayed_codes(dialog) == before
+    assert displayed_file_names(dialog) == before
 
 
 def test_dialog_conditions_and_stores_are_isolated(make_dialog):
@@ -320,9 +325,9 @@ def test_view_text_has_no_mouse_or_keyboard_action(make_dialog, qt_app):
     dialog, store, _ = make_dialog(3)
     before_windows = set(QApplication.topLevelWidgets())
     before_records = store.records
-    before_codes = displayed_codes(dialog)
-    item = dialog.table.item(0, 6)
-    assert dialog.table.cellWidget(0, 6) is None
+    before_file_names = displayed_file_names(dialog)
+    item = dialog.table.item(0, 5)
+    assert dialog.table.cellWidget(0, 5) is None
     QTest.mouseClick(dialog.table.viewport(), Qt.LeftButton,
                      pos=dialog.table.visualItemRect(item).center())
     QTest.mouseDClick(dialog.table.viewport(), Qt.LeftButton,
@@ -333,7 +338,7 @@ def test_view_text_has_no_mouse_or_keyboard_action(make_dialog, qt_app):
     qt_app.processEvents()
     assert dialog.isVisible()
     assert set(QApplication.topLevelWidgets()) == before_windows
-    assert displayed_codes(dialog) == before_codes
+    assert displayed_file_names(dialog) == before_file_names
     assert store.records is before_records
     assert dialog._page == 1
 
@@ -395,7 +400,7 @@ def test_refresh_reflows_footer_when_count_grows_with_large_font(make_dialog, qt
         dialog, store, _ = make_dialog(1)
         dialog.resize(530, dialog.height())
         qt_app.processEvents()
-        store.replace(make_daily_records(123, date(2026, 11, 4)), date(2026, 11, 4))
+        store.replace(make_daily_wav_records(123, date(2026, 11, 4)), date(2026, 11, 4))
         dialog.refresh_records()
         qt_app.processEvents()
         for label in (dialog.record_count_label, dialog.page_label):
@@ -417,7 +422,7 @@ def test_dark_host_styles_do_not_leak_into_light_dialog(make_dialog, qt_app):
     assert dialog.ok_label.palette().color(QPalette.WindowText) == QColor("#00824e")
     assert dialog.ng_label.palette().color(QPalette.WindowText) == QColor("#c32b42")
     assert dialog.unmarked_label.palette().color(QPalette.WindowText) == QColor("#617183")
-    assert dialog.table.item(0, 6).foreground().color() == QColor("#2463aa")
+    assert dialog.table.item(0, 5).foreground().color() == QColor("#2463aa")
 
 
 def test_host_font_rules_do_not_override_dialog_typography(make_dialog, qt_app):
@@ -430,3 +435,70 @@ def test_host_font_rules_do_not_override_dialog_typography(make_dialog, qt_app):
     host.setStyleSheet("QWidget { font: 80px 'Courier New'; }")
     qt_app.processEvents()
     assert dialog.date_label.font().pointSizeF() == pytest.approx(expected_size)
+
+
+def test_long_file_name_keeps_full_text_tooltip_and_readable_columns(make_dialog, qt_app):
+    dialog, store, _ = make_dialog()
+    day = date(2026, 11, 4)
+    records = make_daily_wav_records(1, day)
+    name = "真实 WAV 文件名_" * 20 + ".wav"
+    records[0]["file_name"] = name
+    records[0]["product_code"] = "UNRELATED-PRODUCT"
+    store.replace(records, day)
+    dialog.refresh_records()
+    dialog.resize(820, dialog.height())
+    qt_app.processEvents()
+    item = dialog.table.item(0, 2)
+    assert item.text() == item.toolTip() == name
+    assert dialog.table.textElideMode() == Qt.ElideRight
+    assert dialog.table.columnWidth(2) > max(dialog.table.columnWidth(i) for i in (0, 1, 3, 4, 5))
+    for i in range(6):
+        header = dialog.table.horizontalHeaderItem(i)
+        assert dialog.table.columnWidth(i) >= dialog.fontMetrics().horizontalAdvance(header.text()) + 24
+    dialog.search_edit.setText("UNRELATED-PRODUCT")
+    assert dialog.table.rowCount() == 0
+    dialog.search_edit.setText("  .WAV  ")
+    assert displayed_file_names(dialog) == [name]
+
+
+def test_refresh_sizes_result_and_configured_condition_without_resizing_window(make_dialog, qt_app):
+    dialog, store, _ = make_dialog()
+    day = date(2026, 11, 4)
+    records = make_daily_wav_records(21, day)
+    for record in records:
+        record.update(condition="低速保持", result="未标记")
+    before_size = dialog.size()
+    store.replace(records, day)
+    dialog.refresh_records()
+    qt_app.processEvents()
+    assert dialog.size() == before_size
+    for column, text in ((3, "低速保持"), (4, "未标记")):
+        assert dialog.table.columnWidth(column) >= dialog.table.fontMetrics().horizontalAdvance(text) + 24
+    dialog.next_button.click()
+    assert dialog.table.item(0, 3).toolTip() == "低速保持"
+    records[0]["condition"] = "低速保持工况"
+    store.replace(records, day)
+    dialog.refresh_records()
+    qt_app.processEvents()
+    assert dialog.size() == before_size
+    assert dialog.table.columnWidth(3) >= dialog.table.fontMetrics().horizontalAdvance("低速保持工况") + 24
+
+
+def test_very_long_condition_has_bounded_width_and_complete_tooltip(make_dialog, qt_app):
+    dialog, store, _ = make_dialog()
+    day = date(2026, 11, 4)
+    records = make_daily_wav_records(1, day)
+    condition = "已冻结的额外工况名称" * 20
+    records[0]["condition"] = condition
+    store.replace(records, day)
+    dialog.refresh_records()
+    dialog.resize(480, dialog.height())
+    qt_app.processEvents()
+    assert dialog.table.item(0, 3).text() == dialog.table.item(0, 3).toolTip() == condition
+    assert dialog.table.columnWidth(3) <= 220
+    assert dialog.table.columnWidth(2) >= 220
+    scrollbar = dialog.table.horizontalScrollBar()
+    scrollbar.setValue(scrollbar.maximum())
+    for column in (4, 5):
+        assert dialog.table.viewport().rect().contains(
+            dialog.table.visualItemRect(dialog.table.item(0, column)))

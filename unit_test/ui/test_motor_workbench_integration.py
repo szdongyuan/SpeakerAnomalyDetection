@@ -1663,16 +1663,20 @@ def test_main_window_paired_results_update_station_and_daily_summary(
     window.workbench_analysis_event.connect(events.append)
     summary = sequence.left_panel.dashboard_panel.summary_panel
     panel = sequence.left_panel.station_panel
+    saved_names = []
     for _ in range(2):
         controller.start_recording()
         request, callbacks = submissions[-1]
         group = request.station_group
+        saved_names.extend(s.filename for s in group.stations)
         callbacks.workbench_completed(SimpleNamespace(request=request), WorkbenchRecordingCompletion(
             request.request_id, group.project_id, group.condition_id, request.sample_rate,
             request.target_samples - request.trim_samples,
             tuple(StationWav(s.station_id, str(Path(group.final_path) / s.filename), s.channels)
                   for s in group.stations),
         ))
+        assert sorted(row.file_name for row in summary._daily_wav_records.records) == sorted(saved_names)
+        assert summary.total_label.text() == "0"
     first, second = [batch["tasks"][0] for batch in startup.analysis_service.submissions]
     metric = analysis["display_sequence"][0]
     item = instance(metric, metrics={"overall_spl": 42.5, "unit": "dB(A)"})
@@ -1691,6 +1695,24 @@ def test_main_window_paired_results_update_station_and_daily_summary(
     assert (summary.total_label.text(), summary.ng_label.text(), summary.rate_label.text()) == ("1", "1", "0.0%")
     assert len([event for event in events if event["event_type"] == "task_result"]) == 2
     assert summary._details_dialog is None
+    summary._open_details()
+    details = summary._details_dialog
+    assert details.table.columnCount() == 6
+    assert details.table.rowCount() == 4
+    assert {details.table.item(row, 2).text() for row in range(4)} == set(saved_names)
+    assert (details.total_label.text(), details.ok_label.text(), details.ng_label.text(),
+            details.unmarked_label.text(), details.rate_label.text()) == ("4", "1", "1", "2", "25.0%")
+    details.station_combo.setCurrentIndex(details.station_combo.findData(1))
+    details.search_edit.setText(Path(first["wav_path"]).name)
+    assert details.table.rowCount() == 1
+    # Replaying either authenticated snapshot cannot overwrite the other source.
+    day = summary._daily_records.record_date
+    sequence.left_panel.set_daily_records(controller._result_state.records_for(day), day)
+    assert details.table.rowCount() == 1 and details.search_edit.text() == Path(first["wav_path"]).name
+    sequence.left_panel.set_daily_wav_records(controller._wav_state.records_for(day), day)
+    assert (summary.total_label.text(), summary.ng_label.text(), summary.rate_label.text()) == ("1", "1", "0.0%")
+    assert details.station_combo.currentData() == 1 and details.table.rowCount() == 1
+    details.close()
 
 
 @pytest.mark.parametrize("output_location", ["inside", "outside"])

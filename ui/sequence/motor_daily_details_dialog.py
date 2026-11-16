@@ -80,7 +80,7 @@ class MotorDailyDetailsDialog(QDialog):
         for text, value in (("全部结果", None), ("OK", "OK"), ("NG", "NG"), ("未标记", "未标记")):
             self.result_combo.addItem(text, value)
         self.search_edit = QLineEdit(self)
-        self.search_edit.setPlaceholderText("搜索产品编号")
+        self.search_edit.setPlaceholderText("搜索文件名称")
         self.search_edit.setMinimumWidth(130)
         self.search_edit.setMaximumWidth(200)
         for control in (self.station_combo, self.result_combo, self.search_edit):
@@ -106,14 +106,14 @@ class MotorDailyDetailsDialog(QDialog):
         filters.addWidget(self.search_edit, 1)
         body.addLayout(filters)
 
-        self.table = QTableWidget(0, 7, self)
+        self.table = QTableWidget(0, 6, self)
         scrollbar = self.table.verticalScrollBar()
         scrollbar.setObjectName("detailsVerticalScrollBar")
         # Refresh rules cached while QTableWidget was constructing its children.
         scrollbar.style().unpolish(scrollbar)
         scrollbar.style().polish(scrollbar)
         self.table.setHorizontalHeaderLabels([
-            "完成时间", "工位", "产品编号", "正转", "反转", "最终结果", "操作",
+            "完成时间", "工位", "文件名称", "工况", "结果", "操作",
         ])
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
@@ -212,14 +212,18 @@ class MotorDailyDetailsDialog(QDialog):
         self.table.setRowCount(len(page.rows))
         for row_index, record in enumerate(page.rows):
             values = (record.completed_at.strftime("%H:%M:%S"), str(record.station_id),
-                      record.product_code, record.forward, record.reverse, record.result, "查看")
+                      record.file_name, record.condition, record.result, "查看")
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setFlags(Qt.ItemIsEnabled)
                 item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter if column == 2 else Qt.AlignCenter)
-                if column in (3, 4, 5):
+                if column == 2:
+                    item.setToolTip(record.file_name)
+                elif column == 3:
+                    item.setToolTip(record.condition)
+                if column == 4:
                     item.setForeground(QColor({"OK": "#00824e", "NG": "#c32b42"}.get(value, "#617183")))
-                elif column == 6:
+                elif column == 5:
                     item.setForeground(QColor("#2463aa"))
                 self.table.setItem(row_index, column, item)
         self.empty_label.setVisible(not page.rows)
@@ -229,6 +233,7 @@ class MotorDailyDetailsDialog(QDialog):
         self.next_button.setEnabled(page.page < page.page_count)
         self.table.horizontalScrollBar().setValue(0)
         self.table.verticalScrollBar().setValue(0)
+        self._resize_columns()
         self._adapt_filters()
         self._adapt_footer()
 
@@ -239,14 +244,24 @@ class MotorDailyDetailsDialog(QDialog):
         return super().eventFilter(watched, event)
 
     def _resize_columns(self):
-        widths = (18, 9, 23, 12, 12, 15, 11)
-        viewport_width = self.table.viewport().width()
-        for index, proportion in enumerate(widths):
+        widths = []
+        for index in range(self.table.columnCount()):
             text = self.table.horizontalHeaderItem(index).text()
             minimum = self.fontMetrics().horizontalAdvance(text) + 24
             if index == 0:
                 minimum = max(minimum, self.fontMetrics().horizontalAdvance("23:59:59") + 24)
-            self.table.setColumnWidth(index, max(minimum, viewport_width * proportion // 100))
+            widths.append(minimum)
+        # Reserve complete result labels and readable configured condition names.
+        # Bound long conditions so filenames and the trailing columns remain usable.
+        condition_width = max((self.fontMetrics().horizontalAdvance(row.condition)
+                               for row in self._store.records), default=0)
+        widths[3] = max(widths[3], min(220, condition_width + 24))
+        widths[4] = max(widths[4], self.fontMetrics().horizontalAdvance("未标记") + 24)
+        # Give filenames the remaining space while retaining readable fixed columns.
+        widths[2] = max(220, widths[2],
+                        self.table.viewport().width() - sum(widths[:2] + widths[3:]))
+        for index, width in enumerate(widths):
+            self.table.setColumnWidth(index, width)
 
     def showEvent(self, event):
         super().showEvent(event)
