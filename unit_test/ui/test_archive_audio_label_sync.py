@@ -10,10 +10,12 @@ from base.recording_management import RecordingManager
 from consts import error_code
 from consts.running_consts import DEFAULT_DIR
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
+from unit_test.ui.archive_audio_filter_fakes import use_legacy_filter_metadata
 
 
 @pytest.fixture
 def archive(ui_qapp, tmp_path, monkeypatch):
+    use_legacy_filter_metadata(monkeypatch)
     rows = [
         (str(i), str(tmp_path / f"recording-{i}.wav"), "型号一", 44100,
          "2026-11-13", "not_labeled" if i % 2 == 0 else "OK", f"ABC/{i}/XY", None)

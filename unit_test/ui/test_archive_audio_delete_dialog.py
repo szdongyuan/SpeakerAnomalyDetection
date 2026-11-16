@@ -15,6 +15,7 @@ from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from ui.archive_audio_delete_dialog import ArchiveAudioDeleteDialog
 from ui.archive_audio_filter_dialog import ArchiveAudioFilterDialog
 from unit_test.base.test_audio_record_package import make_recording
+from unit_test.ui.archive_audio_filter_fakes import use_legacy_filter_metadata
 
 
 @pytest.fixture(scope="module")
@@ -38,6 +39,7 @@ def test_confirmation_displays_all_counts_and_enter_confirms(qapp):
 
 @pytest.fixture
 def archive(qapp, tmp_path, monkeypatch):
+    use_legacy_filter_metadata(monkeypatch)
     first = make_recording(tmp_path / "results")
     second = make_recording(tmp_path / "results", project="ProjectB")
     rows = [

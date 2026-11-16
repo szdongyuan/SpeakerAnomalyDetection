@@ -24,7 +24,7 @@ from scipy.io import wavfile as scipy_wavfile
 from base.audio_record_delete import (
     count_audio_deletion_files, delete_audio_recordings, plan_audio_record_deletion,
 )
-from base.audio_record_filter import filter_audio_records, parse_audio_filter_metadata
+from base.audio_record_filter import filter_audio_records, parse_archive_audio_filter_metadata
 from base.audio_record_package import (
     audio_record_mutation_paths, collect_audio_package_files, select_audio_package_files,
 )
@@ -127,7 +127,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
             cached = previous.get(row[0])
             metadata = (
                 cached[1] if cached is not None and cached[0] == row[1]
-                else parse_audio_filter_metadata(row[1])
+                else parse_archive_audio_filter_metadata(row[1])
             )
             current[row[0]] = (row[1], metadata)
         self._audio_filter_cache = current

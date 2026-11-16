@@ -8,7 +8,7 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QDialog, QFileDialog, QMessageBox, QPushButton
 
 from base.analysis_report_source import ProjectReportIndex
-from base.audio_record_filter import parse_audio_filter_metadata
+from base.audio_record_filter import parse_archive_audio_filter_metadata
 from consts import error_code
 from ui.analysis_report_export_dialog import AnalysisReportExportDialog
 from ui.analysis_report_wav_dialog import AnalysisReportWavDialog, CandidateTableModel
@@ -18,6 +18,7 @@ from ui.archive_audio_filter_dialog import ArchiveAudioFilterDialog
 from ui.archive_audio_package_dialog import ArchiveAudioPackageDialog
 from ui.custom_ui_widget.audio_data_manage_dialog import AudioDataManageDialog
 from unit_test.base.test_audio_record_filter import audio_row
+from unit_test.base.test_current_audio_record_filter import current_recording_path
 from unit_test.ui.test_analysis_report_export_dialog import _index, FFT_IDENTITY, SPL_IDENTITY
 
 
@@ -187,11 +188,12 @@ def test_wav_filter_enter_applies_selection(dialogs, tmp_path, enter, ui_qapp):
 
 
 def test_archive_filter_protects_inputs_then_applies_without_reset(dialogs, enter, ui_qapp):
-    rows = [audio_row("one")]
-    dialog = dialogs(ArchiveAudioFilterDialog(rows, {r[0]: parse_audio_filter_metadata(r[1]) for r in rows}))
+    rows = [audio_row("one", current_recording_path())]
+    metadata = {r[0]: parse_archive_audio_filter_metadata(r[1]) for r in rows}
+    dialog = dialogs(ArchiveAudioFilterDialog(rows, metadata))
     recorded = clicks(dialog)
     dialog.date_filter_combobox.setEditText("2026-09-13")
-    for widget in (dialog.combos["select_port"], dialog.date_filter_combobox.lineEdit()):
+    for widget in (dialog.combos["select_station"], dialog.date_filter_combobox.lineEdit()):
         press(widget, enter, ui_qapp)
         assert recorded == []
     press(dialog.reset_button, enter, ui_qapp)

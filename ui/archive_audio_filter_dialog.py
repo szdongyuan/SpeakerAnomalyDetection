@@ -25,10 +25,8 @@ _MAX_SAMPLE_RATE = 192000
 
 _SELECT_FIELDS = (
     ("select_product_model", "产品型号", "全部型号"),
-    ("select_sample_number", "样本编号", "全部样本"),
-    ("select_test_round", "测试轮次", "全部轮次"),
-    ("select_port", "端口", "全部端口"),
-    ("select_condition", "档位", "全部档位"),
+    ("select_station", "工位", "全部工位"),
+    ("select_condition", "工况", "全部工况"),
 )
 
 
@@ -67,8 +65,8 @@ class ArchiveAudioFilterDialog(ConfigDialogBase):
         self.barcode_lineedit = QLineEdit()
         self.barcode_lineedit.setAccessibleName("条形码")
         self.barcode_lineedit.setPlaceholderText("完整条形码，留空不限")
-        grid.addWidget(QLabel("条形码"), 6, 1)
-        grid.addWidget(self.barcode_lineedit, 7, 1)
+        grid.addWidget(QLabel("条形码"), 4, 1)
+        grid.addWidget(self.barcode_lineedit, 5, 1)
         layout.addLayout(grid)
 
         labels_row, self.label_boxes = self._checkbox_row(
@@ -212,7 +210,7 @@ class ArchiveAudioFilterDialog(ConfigDialogBase):
                 for row in rows
             }
             options = [
-                (f"第 {value} 轮" if key == "select_test_round" else str(value), value, "")
+                (str(value), value, "")
                 for value in sorted((v for v in values if v is not None), key=natural_sort_key)
             ]
             if None in values:
