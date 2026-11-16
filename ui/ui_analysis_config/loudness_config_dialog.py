@@ -46,6 +46,7 @@ from ui.ui_analysis_config.manual_limit_segments import (
     validate_constant_limit_config,
 )
 from ui.ui_analysis_config.threshold_config_widget import ThresholdConfigWidget
+from base.analysis_curve_style import show_threshold_lines
 
 
 class LoudnessConfigPanel(QWidget):
@@ -302,6 +303,10 @@ class LoudnessConfigPanel(QWidget):
         specific_colormap_layout.addStretch(1)
         self.specific_colormap_widget.setLayout(specific_colormap_layout)
         self.specific_colormap_widget.setVisible(self.show_specific_box.isChecked())
+        self.show_threshold_lines_box = CheckBox("显示阈值线")
+        self.show_threshold_lines_box.setChecked(show_threshold_lines(self.load_config))
+        self.show_threshold_lines_box.setToolTip("控制各分析图的阈值线显示，不影响判定及超限高亮。")
+        graph_layout.addWidget(self.show_threshold_lines_box)
         graph_layout.addWidget(self.show_curve_box)
         graph_layout.addWidget(self.curve_y_unit_widget)
         graph_layout.addWidget(self.show_specific_profile_box)
@@ -559,6 +564,7 @@ class LoudnessConfigPanel(QWidget):
             "field_type": "free",
             "method": self.METHOD_LABEL_TO_VALUE.get(self.method_combo.currentText(), "time_varying_iso532_1"),
             "display": {
+                "show_threshold_lines": self.show_threshold_lines_box.isChecked(),
                 "summary_metrics": summary_metrics,
                 "curves": curves,
                 "heatmaps": heatmaps,

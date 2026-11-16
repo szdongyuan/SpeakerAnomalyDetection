@@ -7,7 +7,7 @@ from numbers import Real
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt, QTimer, QSize, pyqtSignal
-from PyQt5.QtWidgets import QGraphicsLineItem, QLabel, QSizePolicy, QToolButton
+from PyQt5.QtWidgets import QLabel, QSizePolicy, QToolButton
 
 from consts.ui_style_const import MAIN_UI_SMALL_FONT_FAMILY
 from ui.sequence.station_plot_cell import StationPlotCell
@@ -15,6 +15,7 @@ from ui.sequence.station_plot_legend import StationPlotLegend
 from ui.sequence.station_plot_style import expand_plot_icon
 from ui.sequence.station_plot_validation import validate_curve_series
 from ui.sequence.sampled_plot_curve import SampledPlotCurve
+from ui.plotting.geometry import clip_curve_x
 
 
 class ConditionPlotCell(StationPlotCell):
@@ -33,7 +34,6 @@ class ConditionPlotCell(StationPlotCell):
         self._condition_series = {}
         self._condition_states = {}
         self._condition_summaries = {}
-        self._overall_spl_items = []
         # Reserve summary rows from the display binding, not arriving results.
         value_rows = display.condition_plot.summary_rows
         self._heading_height = 20
@@ -278,9 +278,11 @@ class ConditionPlotCell(StationPlotCell):
         for raw, item in zip(series, snapshot):
             if type(raw.get('wav_channel')) is not int or raw['wav_channel'] not in allowed:
                 raise ValueError('曲线的 WAV 通道不在当前工况显示配置中')
-            if raw.get('role', 'curve') not in ('curve', 'upper', 'lower', 'exceedance'):
-                raise ValueError('curve role must be curve, upper, lower or exceedance')
+            if raw.get('role', 'curve') not in ('curve', 'baseline', 'upper', 'lower', 'exceedance'):
+                raise ValueError('curve role must be curve, baseline, upper, lower or exceedance')
             item.update(wav_channel=raw['wav_channel'], role=raw.get('role', 'curve'))
+            if raw.get('limit_scope') == 'scalar':
+                item['limit_scope'] = 'scalar'
         self._condition_series[condition_id] = snapshot
         self._condition_states[condition_id] = (status, detail)
         self._condition_summaries[condition_id] = deepcopy(summaries)
@@ -341,7 +343,7 @@ class ConditionPlotCell(StationPlotCell):
         style = self._settings['plot_style']
         if role == 'exceedance':
             return style['exceedance_highlight']['visible']
-        return role == 'curve' or style['limit_lines']['visible']
+        return role in ('curve', 'baseline') or style['limit_lines']['visible']
 
     def dispose(self):
         self.close_detail()
@@ -350,7 +352,6 @@ class ConditionPlotCell(StationPlotCell):
         super().dispose()
 
     def _redraw(self):
-        self._overall_spl_items = []
         self._layout_axis()
         curves = []
         for key, condition in self.conditions.items():
@@ -358,11 +359,21 @@ class ConditionPlotCell(StationPlotCell):
             for item in self._condition_series.get(key, ()):
                 if bounds is None:
                     continue
-                mask = (item['x'] >= bounds[0]) & (item['x'] <= bounds[1])
+                if item['role'] in ('upper', 'lower') and not condition.show_threshold_lines:
+                    continue
+                visible_x, visible_y = clip_curve_x(
+                    item['x'], item['y'], bounds,
+                    log_x=self._settings['x_axis']['scale'] == 'log',
+                    log_y=self._settings['y_axis']['scale'] == 'log')
                 name = item['name'] or f'CH{item["wav_channel"]}'
                 if item['role'] != 'curve':
-                    name = f'CH{item["wav_channel"]} ' + {'upper': '上限', 'lower': '下限', 'exceedance': '超限'}[item['role']]
-                curve = dict(item, name=name, x=self._map_x(key, item['x'][mask]), y=item['y'][mask])
+                    name = f'CH{item["wav_channel"]} ' + {'upper': '上限', 'lower': '下限', 'exceedance': '超限', 'baseline': '参考'}[item['role']]
+                    if item.get('limit_scope') == 'scalar':
+                        name = name.replace('上限', '总体上限').replace('下限', '总体下限')
+                curve = dict(item, name=name, x=self._map_x(key, visible_x), y=visible_y)
+                if condition.curve_colors:
+                    curve['analysis_colors'] = dict(condition.curve_colors)
+                    curve['analysis_type'] = condition.analysis_type
                 if curve['color'] is None:
                     del curve['color']
                 curves.append(curve)
@@ -387,21 +398,7 @@ class ConditionPlotCell(StationPlotCell):
         has_data = any(item['x'].size for item in self._series)
         self.plot_widget.getPlotItem().getAxis('left').setStyle(
             tickLength=0 if y_range is None and not has_data else -5)
-        self._draw_overall_spl()
         self._draw_condition_overlays()
-
-    def _draw_overall_spl(self):
-        """Reference measured overall values, independently of threshold curves."""
-        for key in self.conditions:
-            start, end = self._spans[key]
-            for value, text in self._overall_spl_values(key):
-                y = math.log10(value) if self._log_axes[1] else value
-                line = QGraphicsLineItem(start, y, end, y)
-                line.setPen(pg.mkPen('#607F9C', width=1, style=Qt.DashLine))
-                line.setZValue(-1)  # Keep the measured curve above its reference line.
-                self.plot_widget.addItem(line, ignoreBounds=not self._settings['y_axis']['auto_range'])
-                self._overall_spl_items.append((key, line, text, y))
-        self.plot_widget.getViewBox().updateAutoRange()
 
     def _overall_spl_values(self, key):
         condition = self.conditions[key]
@@ -431,12 +428,8 @@ class ConditionPlotCell(StationPlotCell):
         self._position_labels()
 
     def _condition_heading(self, key):
-        summaries = self._condition_summaries.get(key, ())
         status, _ = self._condition_states.get(key, ('', ''))
-        completed = [s.get('judgement') for s in summaries if s.get('judgement_status') == 'completed']
-        judgement = 'NG' if 'NG' in completed else 'OK' if summaries and len(completed) == len(summaries) and all(j == 'OK' for j in completed) else ''
-        annotation = ' · '.join(text for text in (status, judgement) if text)
-        lines = [self.conditions[key].name + (f' · {annotation}' if self._has_condition_data(key) and annotation else '')]
+        lines = [self.conditions[key].name + (f' · {status}' if self._has_condition_data(key) and status else '')]
         return lines
 
     def _position_labels(self, *_):

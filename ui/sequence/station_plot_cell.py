@@ -7,6 +7,8 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from consts.ui_style_const import MAIN_UI_SMALL_FONT_FAMILY_NAME
+from ui.plotting.renderers import draw_curve
+from ui.plotting.heatmap import create_image, update_image
 from ui.sequence.station_plot_header import StationPlotHeader, StationPlotSubheader
 from ui.sequence.station_plot_style import StyledGridAxis, apply_style, draw_curves
 from ui.sequence.station_plot_validation import (
@@ -189,8 +191,8 @@ class StationPlotCell(QWidget):
         snapshot = validate_curve_series(series, context=context, allow_gaps=allow_gaps)
         if self._display_style is not None:
             for item in series:
-                if item.get('role', 'curve') not in ('curve', 'upper', 'lower', 'exceedance'):
-                    raise ValueError('curve role must be curve, upper, lower or exceedance')
+                if item.get('role', 'curve') not in ('curve', 'baseline', 'upper', 'lower', 'exceedance'):
+                    raise ValueError('curve role must be curve, baseline, upper, lower or exceedance')
         self._clear_data()
         self._series = snapshot
         if self._display_style is not None:
@@ -203,7 +205,7 @@ class StationPlotCell(QWidget):
         for index, item in enumerate(snapshot):
             if item['x'].size:
                 color = item['color'] or self._curve_colors[index % len(self._curve_colors)]
-                plot.plot(item['x'], item['y'], name=item['name'], pen=pg.mkPen(color, width=1.5))
+                draw_curve(plot, item['x'], item['y'], name=item['name'], pen=pg.mkPen(color, width=1.5))
         self._apply_ranges()
 
     def set_heatmap_data(self, values, *, extent=None, levels=None, colormap='viridis'):
@@ -216,11 +218,10 @@ class StationPlotCell(QWidget):
         if snapshot['values'] is not None:
             self._heatmap = snapshot
             plot = self.plot_widget.getPlotItem()
-            self._image = pg.ImageItem(axisOrder='row-major')
-            self._image.setImage(snapshot['values'], autoLevels=False, levels=snapshot['levels'])
+            self._image = create_image(plot, axisOrder='row-major')
+            update_image(self._image, snapshot['values'], autoLevels=False, levels=snapshot['levels'])
             x_min, x_max, y_min, y_max = snapshot['extent']
             self._image.setRect(QRectF(x_min, y_min, x_max - x_min, y_max - y_min))
-            plot.addItem(self._image)
             self._colorbar = pg.ColorBarItem(
                 values=snapshot['levels'], colorMap=snapshot['colormap'], interactive=False)
             self._colorbar.axis.setPen('#AFC0D6')

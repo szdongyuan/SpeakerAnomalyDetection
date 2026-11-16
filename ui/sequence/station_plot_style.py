@@ -4,7 +4,7 @@ import pyqtgraph as pg
 from PyQt5.QtCore import QPointF, Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
-from ui.sequence.sampled_plot_curve import SampledPlotCurve
+from ui.plotting.renderers import draw_curve, analysis_curve_pen
 
 
 def expand_plot_icon():
@@ -97,7 +97,9 @@ def draw_curves(cell, raw_series, snapshots):
         if not data['x'].size:
             continue
         role = raw.get('role', 'curve')
-        if role == 'exceedance':
+        if role == 'baseline':
+            curve_pen = analysis_curve_pen('baseline', {})
+        elif role == 'exceedance':
             highlight = style['exceedance_highlight']
             if not highlight['visible']:
                 continue
@@ -113,14 +115,19 @@ def draw_curves(cell, raw_series, snapshots):
                 'line_style': channel.get('curve_line_style', style['curve_line_style']),
                 'line_width': channel.get('curve_line_width', style['curve_line_width']),
             })
+        if raw.get('analysis_colors'):
+            curve_pen = analysis_curve_pen(role, raw['analysis_colors'], raw.get('analysis_type', ''))
+            channel = channel_styles.get(raw.get('wav_channel'), {})
+            if role == 'curve' and 'curve_color' in channel:
+                curve_pen.setColor(QColor(channel['curve_color']))
         sampling = getattr(cell, '_display_downsampling', None)
         if sampling is not None and role == 'curve':
-            plot.addItem(SampledPlotCurve(data['x'], data['y'], sampling,
-                                         name=data['name'], pen=curve_pen))
+            draw_curve(plot, data['x'], data['y'], sampling=sampling,
+                       name=data['name'], pen=curve_pen)
         else:
             options = {}
             if role == 'exceedance':
                 # A violation can consist of one sample, which has no line segment.
                 options = dict(symbol='o', symbolSize=highlight['marker_size'],
-                               symbolPen=None, symbolBrush=highlight['color'])
-            plot.plot(data['x'], data['y'], name=data['name'], pen=curve_pen, connect='finite', **options)
+                               symbolPen=None, symbolBrush=curve_pen.color())
+            draw_curve(plot, data['x'], data['y'], name=data['name'], pen=curve_pen, connect='finite', **options)

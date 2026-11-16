@@ -68,6 +68,13 @@ def test_result_matches_source_service_on_each_calibrated_wav_column(loud_task, 
         curve = item["display_payload"]
         np.testing.assert_allclose(curve["y"], values, rtol=1e-10)
         np.testing.assert_allclose(curve["x"], reference.raw_result.time_s + 0.1)
+        presentation = curve['plot_curve']
+        if method == 'per_segment':
+            np.testing.assert_allclose(presentation['x'], np.r_[0.1, np.asarray(curve['x']), 0.6])
+            np.testing.assert_allclose(presentation['y'], np.r_[values[0], values, values[-1]])
+        else:
+            np.testing.assert_allclose(presentation['x'], curve['x'])
+            np.testing.assert_allclose(presentation['y'], values)
         for key in reference_config["required_summary_metrics"]:
             assert item["metrics"][key] == pytest.approx(reference.summary[key], rel=1e-10)
         assert curve["y_unit"] == unit and curve["x_unit"] == "s"

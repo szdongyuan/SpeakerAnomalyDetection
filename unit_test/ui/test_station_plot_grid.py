@@ -45,6 +45,79 @@ def curves(cell):
     return cell.plot_widget.getPlotItem().listDataItems()
 
 
+def test_workbench_station_results_use_neutral_headers_with_accent_and_reset(grid, qt_app):
+    grid.show_workbench_columns(('工位1', '工位2'))
+    grid.set_station_result(0, 'OK')
+    grid.set_station_result(1, 'NG')
+    qt_app.processEvents()
+    for column, result, foreground in (
+            (0, 'OK', '#237a3b'), (1, 'NG', '#b42318')):
+        header = controls(grid, column)
+        document = QTextDocument()
+        document.setHtml(header.name.text())
+        assert document.toPlainText() == f'工位{column + 1} · {result}'
+        result_format = document.find(result).charFormat()
+        assert result_format.foreground().color().name() == foreground
+        assert result_format.font().bold()
+        assert not document.find(f'工位{column + 1}').charFormat().font().bold()
+        assert header.height() == 44
+        assert header.name.font().pixelSize() == 18
+        assert header.name.font().family() == 'Microsoft YaHei UI'
+        assert not header.name.font().bold()
+        assert header.name.alignment() == Qt.AlignCenter
+        image = header.grab().toImage()
+        assert image.pixelColor(2, 2).name() == '#f4f7fc'
+        assert image.pixelColor(2, image.height() - 3).name() == '#f4f7fc'
+        for y in (image.height() - 2, image.height() - 1):
+            assert image.pixelColor(image.width() // 2, y).name() == foreground
+        assert header.name.palette().color(QPalette.WindowText).name() == '#183957'
+        assert cells(grid)[0, column].plot_widget.backgroundBrush().color().name() == '#ffffff'
+        assert header.combo.isHidden() and header.play.isHidden()
+        assert header.ok.isHidden() and header.ng.isHidden()
+
+    grid.clear_station_results()
+    qt_app.processEvents()
+    for column in range(2):
+        header = controls(grid, column)
+        assert header.name.text() == f'工位{column + 1}'
+        assert header.height() == 44
+        assert header.name.font().pixelSize() == 18
+        assert header.name.font().family() == 'Microsoft YaHei UI'
+        assert not header.name.font().bold()
+        assert header.grab().toImage().pixelColor(2, 2).name() == '#f4f7fc'
+        image = header.grab().toImage()
+        assert image.pixelColor(image.width() // 2, image.height() - 1).name() == '#cddaea'
+        assert header.name.palette().color(QPalette.WindowText).name() == '#183957'
+
+    grid.set_station_result(0, 'NG')
+    grid.show_workbench_columns(('新工位1', '新工位2'))
+    assert controls(grid, 0).name.toolTip() == '新工位1'
+    assert controls(grid, 0).grab().toImage().pixelColor(2, 2).name() == '#f4f7fc'
+
+
+def test_long_station_name_keeps_colored_result_visible_and_literal(grid, qt_app):
+    station = '<b>工位 & 名称</b>' * 20
+    grid.show_workbench_columns((station,))
+    grid.resize(320, 300)
+    for result, color in (('OK', '#237a3b'), ('NG', '#b42318')):
+        grid.set_station_result(0, result)
+        qt_app.processEvents()
+        name = controls(grid, 0).name
+        document = QTextDocument()
+        document.setDefaultFont(name.font())
+        document.setDocumentMargin(0)
+        document.setHtml(name.text())
+        text = document.toPlainText()
+        assert text.startswith('<b>') and '…' in text
+        assert text.endswith(' · ' + result)
+        assert document.idealWidth() <= name.width() + 1
+        assert document.find(result).charFormat().foreground().color().name() == color
+        assert name.toolTip() == station + ' · ' + result
+    grid.clear_station_results()
+    assert name.textFormat() == Qt.PlainText
+    assert name.toolTip() == station
+
+
 def test_plot_scrollbar_reference_pixels_native_controls_and_header_sync(grid, qt_app):
     grid.set_grid_size(2, 4)
     grid.resize(530, 330)

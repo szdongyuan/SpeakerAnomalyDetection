@@ -13,6 +13,9 @@ class ConditionSegmentDisplay:
     x_unit: str = ''
     y_unit: str = ''
     warning: str = ''
+    curve_colors: tuple[tuple[str, str], ...] = ()
+    analysis_type: str = ''
+    show_threshold_lines: bool = True
 
 
 @dataclass(frozen=True)

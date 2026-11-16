@@ -232,7 +232,7 @@ def test_existing_controller_builds_one_canvas_per_chart(grid, configuration, qt
         for header in grid._headers.values():
             assert header.name.isVisible()
             assert all(control.isHidden() for control in (header.combo, header.play, header.ok, header.ng))
-    assert grid._header_scroll.height() == 36
+    assert grid._header_scroll.height() == 44
     assert cell.expand_button.iconSize().width() == 16
     assert cell.expand_button.width() == 24
     assert not cell.expand_button.icon().isNull()
@@ -502,6 +502,33 @@ def test_mouse_gestures_cannot_change_overview_ranges(grid, configuration, qt_ap
     assert not plot.autoBtn.isVisible()
 
 
+def test_configured_empty_y_range_shows_ticks_then_auto_ranges_and_restores(grid, configuration, qt_app):
+    data = template_layout()
+    data['plot_templates']['spl']['y_axis'].update(empty_data_range_min=0, empty_data_range_max=100)
+    configuration = replace(configuration, ui=replace(configuration.ui, layout=parse_plot_templates(data)))
+    show(grid, configuration, qt_app)
+    cell = grid._cells[0, 0]
+    axis = cell.plot_widget.getPlotItem().getAxis('left')
+    view = cell.plot_widget.getViewBox()
+    assert axis.style['showValues']
+    assert axis.style['tickLength'] == -5
+    assert view.viewRange()[1] == pytest.approx([0, 100])
+    cell.open_detail()
+    qt_app.processEvents()
+    detail = cell._detail_dialog.cell
+    assert detail.plot_widget.getPlotItem().getAxis('left').style['showValues']
+    assert detail.plot_widget.getViewBox().viewRange()[1] == pytest.approx([0, 100])
+    cell.set_condition_curve_data('c1', [curve(low=150, high=200)])
+    assert view.viewRange()[1][0] > 100
+    assert view.viewRange()[1][1] >= 200
+    assert detail.plot_widget.getViewBox().viewRange()[1][1] >= 200
+    cell.clear_plot()
+    assert view.viewRange()[1] == pytest.approx([0, 100])
+    assert detail.plot_widget.getViewBox().viewRange()[1] == pytest.approx([0, 100])
+    assert axis.style['showValues']
+    cell.set_condition_curve_data('c1', [dict(curve(), y=[None, None, None])])
+    assert view.viewRange()[1] == pytest.approx([0, 100])
+    cell.close_detail()
 
 
 def test_configured_empty_y_range_shows_ticks_then_auto_ranges_and_restores(grid, configuration, qt_app):

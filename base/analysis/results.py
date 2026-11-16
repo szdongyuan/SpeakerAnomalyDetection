@@ -49,6 +49,7 @@ def calculation_payload(instance, calculation, start_time):
             "upper": [], "lower": [], "x_unit": "s", "y_unit": metrics["unit"],
             "reduction": "none", "time_reference": "wav_start",
             "loudness_display": calculation["plot"],
+            "plot_curve": calculation["plot_curve"],
         }
     if kind == "Spec":
         plot = calculation["plot"]

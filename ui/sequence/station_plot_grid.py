@@ -5,7 +5,7 @@ from html import escape
 from numbers import Integral
 
 from PyQt5.QtCore import QEvent, QSignalBlocker, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QIcon, QPixmap
+from PyQt5.QtGui import QFont, QFontMetrics, QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QSizePolicy, QStyle, QToolTip,
@@ -30,12 +30,32 @@ _CONTROL_ROW_HEIGHT = TOOLBAR_ICON_BUTTON_HEIGHT + 2 * _CONTROL_VERTICAL_PADDING
 
 
 class _ElidedLabel(QLabel):
-    def set_full_text(self, text, *, plain_text=False):
-        self.setTextFormat(Qt.PlainText if plain_text else Qt.AutoText)
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._result = ''
+        self._plain_text = False
+
+    def set_full_text(self, text, *, plain_text=False, result=''):
+        self._result = result
+        self._plain_text = plain_text
+        self.setTextFormat(Qt.RichText if result else Qt.PlainText if plain_text else Qt.AutoText)
         self.setToolTip(text)
         self._elide()
 
     def _elide(self):
+        if self._result:
+            # Reserve the bold result so a long station name cannot hide it.
+            suffix = ' · ' + self._result
+            name = self.toolTip()[:-len(suffix)]
+            bold_font = QFont(self.font())
+            bold_font.setBold(True)
+            suffix_width = (self.fontMetrics().horizontalAdvance(' · ')
+                            + QFontMetrics(bold_font).horizontalAdvance(self._result))
+            name = self.fontMetrics().elidedText(name, Qt.ElideRight, max(0, self.width() - suffix_width))
+            color = '#237a3b' if self._result == 'OK' else '#b42318'
+            self.setText(f'{escape(name)} · <span style="color: {color}; font-weight: bold;">'
+                         f'{self._result}</span>')
+            return
         self.setText(self.fontMetrics().elidedText(self.toolTip(), Qt.ElideRight, self.width()))
 
     def resizeEvent(self, event):
@@ -43,7 +63,7 @@ class _ElidedLabel(QLabel):
         self._elide()
 
     def event(self, event):
-        if event.type() == QEvent.ToolTip and self.textFormat() == Qt.PlainText and self.toolTip():
+        if event.type() == QEvent.ToolTip and self._plain_text and self.toolTip():
             # Qt's popup interprets markup independently of the label's text format.
             text = escape(self.toolTip())
             QToolTip.showText(event.globalPos(),
@@ -107,13 +127,14 @@ class _ColumnControls(QWidget):
     def __init__(self, column, marks_visible, parent):
         super().__init__(parent)
         self._name_only = False
+        self._station_name = f'工位 {column + 1}'
         self.setObjectName(f'stationColumn{column}')
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.name = _ElidedLabel(self)
         self.name.setObjectName(f'stationName{column}')
         self.name.setMinimumWidth(0)
         self.name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.name.set_full_text(f'工位 {column + 1}')
+        self.name.set_full_text(self._station_name)
         self.combo = _ColumnComboBox(self)
         self.combo.setObjectName(f'stationOptions{column}')
         self.combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -158,15 +179,27 @@ class _ColumnControls(QWidget):
         self.ng.setVisible(visible and not self._name_only)
         self._resize_combo()
 
-    def show_name_only(self):
+    def show_name_only(self, name):
         self._name_only = True
+        self._station_name = name
         self.name.setAlignment(Qt.AlignCenter)
         self.name.setStyleSheet(
-            f'QLabel {{ font-family: {MAIN_UI_SMALL_FONT_FAMILY}; '
-            'font-size: 16px; font-weight: normal; }')
+            'QLabel { font-family: "Microsoft YaHei UI"; '
+            'font-size: 18px; font-weight: normal; }')
         for control in (self.combo, self.play, self.ok, self.ng):
             control.hide()
         self.layout().setContentsMargins(8, 4, 8, 4)
+        self.set_result('--')
+
+    def set_result(self, result):
+        self.setProperty('stationResult', result)
+        suffix = f' · {result}' if result in {'OK', 'NG'} else ''
+        self.name.set_full_text(self._station_name + suffix, plain_text=True,
+                                result=result if suffix else '')
+        for widget in (self, self.name):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -420,11 +453,10 @@ class StationPlotGrid(QWidget):
         super().closeEvent(event)
 
     def _set_workbench_column_controls(self, names):
-        self._header_scroll.setFixedHeight(36)
+        self._header_scroll.setFixedHeight(44)
         for column, name in enumerate(names):
-            self._headers[column].name.set_full_text(name, plain_text=True)
             self.set_column_options(column, ())
-            self._headers[column].show_name_only()
+            self._headers[column].show_name_only(name)
 
     def _resize_grid(self, rows, columns):
         if (rows, columns) == (self._rows, self._columns):
@@ -478,6 +510,8 @@ class StationPlotGrid(QWidget):
                     border-right: {right}px solid #cddaea;
                     border-bottom: 1px solid #cddaea;
                 }}
+                QWidget#{header.objectName()}[stationResult="OK"] {{ border-bottom: 2px solid #237a3b; }}
+                QWidget#{header.objectName()}[stationResult="NG"] {{ border-bottom: 2px solid #b42318; }}
             ''')
         for (row, column), cell in self._cells.items():
             right = 1 if column < columns - 1 else 0
@@ -498,7 +532,21 @@ class StationPlotGrid(QWidget):
         column = self._column(column, 'set_station_name')
         if not isinstance(name, str):
             raise TypeError(f'set_station_name column {column}: name must be a string')
-        self._headers[column].name.set_full_text(name)
+        header = self._headers[column]
+        header._station_name = name
+        header.name.set_full_text(name)
+
+    def set_station_result(self, column, result):
+        """Display the caller's final result; '--' restores the default title."""
+        column = self._column(column, 'set_station_result')
+        if result not in ('OK', 'NG', '--'):
+            raise ValueError('set_station_result: result must be OK, NG or --')
+        self._headers[column].set_result(result)
+
+    def clear_station_results(self):
+        for header in self._headers.values():
+            if header._name_only:
+                header.set_result('--')
 
     def set_column_options(self, column, options, current_index=None):
         column = self._column(column, 'set_column_options')

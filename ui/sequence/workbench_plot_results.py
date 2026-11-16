@@ -20,6 +20,9 @@ def _exceedance_curve(instance, curve, channel, label, unit):
     """Display backend violation intervals; never rejudge sampled values."""
     if instance.get('judgement_status') != 'completed' or instance.get('judgement') != 'NG':
         return None
+    payload = instance.get('display_payload') or {}
+    if payload.get('limit_unit') and payload['limit_unit'] != payload.get('y_unit'):
+        return None
     mask = np.zeros(curve['x'].size, dtype=bool)
     for violation in instance.get('violations') or ():
         low, high = violation.get('x_start'), violation.get('x_end')
@@ -91,7 +94,8 @@ def build_condition_result(binding, segment, result):
         if payload.get('x_unit') != segment.x_unit or not _unit_matches(payload.get('y_unit'), segment.y_unit):
             issues.append(f'{label}：绘图单位与当前坐标轴不一致')
             continue
-        raw = dict(name=label, x=payload.get('x'), y=payload.get('y'))
+        presentation = payload.get('plot_curve') or payload
+        raw = dict(name=label, x=presentation.get('x'), y=presentation.get('y'))
         try:
             curve, = validate_curve_series([raw], context=label, allow_gaps=True)
             if not curve['x'].size or not np.isfinite(curve['y']).any():
@@ -101,12 +105,32 @@ def build_condition_result(binding, segment, result):
             continue
         # Preserve original WAV-relative time/frequency and all valid points.
         series.append(dict(raw, wav_channel=channel, role='curve'))
+        if (payload.get('baseline') is not None
+                and (instance.get('metrics') or {}).get('display_mode') != 'delta'):
+            baseline = dict(name=label, x=payload['x'], y=payload['baseline'])
+            try:
+                validate_curve_series([baseline], context=f'{label} baseline', allow_gaps=True)
+            except (TypeError, ValueError) as error:
+                issues.append(f'{label} baseline：{error}')
+            else:
+                series.append(dict(baseline, wav_channel=channel, role='baseline'))
         summaries.append(dict(channel=label, wav_channel=channel, judgement=instance.get('judgement'),
                               judgement_status=instance.get('judgement_status'),
                               metrics=instance.get('metrics') or {}))
+        metrics = instance.get('metrics') or {}
+        scalar_limits = any(metrics.get(f'overall_{side}_limit') is not None for side in ('upper', 'lower'))
+        # Integrated specific-loudness excess is not a limit on instantaneous loudness.
+        scalar_limits = (scalar_limits and instance.get('judgement_status') == 'completed'
+                         and metrics.get('limit_metric') != 'specific_loudness_summed_exceedance')
+        if scalar_limits and not _unit_matches(metrics.get('limit_unit') or metrics.get('unit'), segment.y_unit):
+            issues.append(f'{label}：总体阈值单位与当前坐标轴不一致')
+            scalar_limits = False
         for side in ('upper', 'lower'):
-            values = payload.get(side, [])
-            limit = dict(name=label, x=payload['x'], y=values)
+            values = presentation.get(side, [])
+            scalar_value = metrics.get(f'overall_{side}_limit') if scalar_limits else None
+            if scalar_value is not None:
+                values = np.full(curve['x'].size, scalar_value, dtype=float)
+            limit = dict(name=label, x=presentation['x'], y=values)
             try:
                 if isinstance(values, (list, tuple, np.ndarray)) and len(values) == 0:
                     continue
@@ -115,9 +139,14 @@ def build_condition_result(binding, segment, result):
                 issues.append(f'{label} {side}：{error}')
                 continue
             if np.isfinite(checked['y']).any():
-                series.append(dict(limit, wav_channel=channel, role=side))
+                series.append(dict(limit, wav_channel=channel, role=side,
+                                   limit_scope='scalar' if scalar_value is not None else 'curve'))
         try:
-            highlight = _exceedance_curve(instance, curve, channel, label, segment.x_unit)
+            # Added display endpoints must never create or erase raw violations.
+            judgement_curve = (dict(x=np.asarray(payload['x'], dtype=float),
+                                    y=np.asarray(payload['y'], dtype=float))
+                               if presentation is not payload else curve)
+            highlight = _exceedance_curve(instance, judgement_curve, channel, label, segment.x_unit)
             if highlight is not None:
                 series.append(highlight)
         except (TypeError, ValueError, AttributeError) as error:

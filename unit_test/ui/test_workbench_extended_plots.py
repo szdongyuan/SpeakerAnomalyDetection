@@ -8,6 +8,7 @@ import pytest
 import soundfile as sf
 from PyQt5.QtCore import QRectF, Qt
 from PyQt5.QtGui import QImage, QPainter
+from PyQt5.QtWidgets import QGraphicsLineItem
 import pyqtgraph as pg
 
 from base.analysis.contracts import AnalysisChannel, AnalysisInstance, AnalysisTask
@@ -236,7 +237,8 @@ def test_single_sample_violation_survives_stride_and_scalar_has_no_false_line(gr
     assert np.nanmax(lines[0].yData) == 60  # deliberate display stride misses spike
     assert np.nanmax(lines[2].yData) == 95  # independent unsampled backend highlight
     assert lines[2].opts['symbol'] == 'o'
-    assert 'NG' in cell.condition_labels['c1'].text()
+    assert cell.condition_labels['c1'].text() == cell.conditions['c1'].name
+    assert 'NG' in cell.condition_labels['c1'].toolTip()
     scalar = instance(binding, dict(payload, upper=[]), judgement='NG',
                       violations=[dict(x_start=None, x_end=None)],
                       metrics={'overall_spl': 88, 'overall_upper_limit': 80, 'unit': 'dBA'})
@@ -245,12 +247,13 @@ def test_single_sample_violation_survives_stride_and_scalar_has_no_false_line(gr
     cell.set_condition_curve_data('c1', update.series, summaries=update.summaries)
     assert '总体 SPL 88' in cell.condition_labels['c1'].toolTip()
     assert 'CH1 88.0 dB(A)' in cell.overall_labels['c1'].text()
-    assert cell._overall_spl_items[0][1].line().y1() == 88  # measured value, not the limit 80
+    assert not any(isinstance(item, QGraphicsLineItem) for item in cell.plot_widget.getPlotItem().items)
     assert not cell.condition_labels['c1'].testAttribute(Qt.WA_TransparentForMouseEvents)
 
 
 @pytest.mark.parametrize('channels', [[1], [1, 2]])
-def test_overall_spl_references_use_backend_values_and_follow_detail_and_clear(grid, configuration, qt_app, channels):
+@pytest.mark.parametrize('judgement', ['OK', 'NG'])
+def test_overall_spl_labels_use_backend_values_without_lines_and_follow_detail_and_clear(grid, configuration, qt_app, channels, judgement):
     layout = template_layout()
     layout['plot_templates']['spl']['channel_display'] = {
         'show_all_analyzed_channels': False, 'display_wav_channels': channels}
@@ -261,30 +264,29 @@ def test_overall_spl_references_use_backend_values_and_follow_detail_and_clear(g
     cell = grid._cells[0, 0]
     binding = projection.bindings[0][0][0]
     payload = dict(kind='curve', x=[0, 1, 2], y=[40, 40, 40], upper=[], lower=[], x_unit='s', y_unit='dBA')
-    items = [dict(instance(binding, payload, metrics={'overall_spl': 65.46 + i, 'unit': 'dBA'}), channel_index=i)
+    items = [dict(instance(binding, payload, judgement=judgement,
+                           metrics={'overall_spl': 65.46 + i, 'unit': 'dBA'}), channel_index=i)
              for i in range(len(channels))]
     publish(projection, presenter, items)
     qt_app.processEvents()
     for i in range(len(channels)):
         prefix = f'CH{i + 1} ' if len(channels) > 1 else ''
-        key, line, text, value = cell._overall_spl_items[i]
-        assert text == f'{prefix}{65.46 + i:.1f} dB(A)'
+        text = f'{prefix}{65.46 + i:.1f} dB(A)'
         assert text in cell.overall_labels['c1'].text()
-        assert key == 'c1'
-        assert line.line().y1() == line.line().y2() == value == 65.46 + i
-        assert (line.line().x1(), line.line().x2()) == cell._spans['c1']
-        assert line.pen().style() == Qt.DashLine
-        assert line.zValue() < cell.plot_widget.listDataItems()[0].zValue()
-    assert len(cell._overall_spl_items) == len(channels)
     assert '总体' not in cell.condition_labels['c2'].text()
     rect = cell.plot_widget.mapFromScene(cell.plot_widget.getViewBox().sceneBoundingRect()).boundingRect()
     assert cell.condition_labels['c1'].geometry().bottom() < rect.top()
     cell.open_detail()
     qt_app.processEvents()
     detail = cell._detail_dialog.cell
-    assert [text for _, _, text, _ in detail._overall_spl_items] == [
-        text for _, _, text, _ in cell._overall_spl_items]
+    assert detail.overall_labels['c1'].text() == cell.overall_labels['c1'].text()
     for target in (cell, detail):
+        assert target.condition_labels['c1'].text() == target.conditions['c1'].name
+        assert judgement in target.condition_labels['c1'].toolTip()
+        assert not any(isinstance(item, QGraphicsLineItem) for item in target.plot_widget.getPlotItem().items)
+        assert len(target.plot_widget.listDataItems()) == len(channels)
+        assert any(isinstance(item, pg.InfiniteLine) and item.angle == 90
+                   for item in target.plot_widget.getPlotItem().items)
         rect = target.plot_widget.mapFromScene(target.plot_widget.getViewBox().sceneBoundingRect()).boundingRect()
         assert target.condition_labels['c1'].geometry().bottom() < rect.top()
         overall = target.overall_labels['c1']
@@ -298,14 +300,12 @@ def test_overall_spl_references_use_backend_values_and_follow_detail_and_clear(g
     qt_app.processEvents()
     assert '总体' not in cell.condition_labels['c1'].text()
     assert '总体' not in cell._detail_dialog.cell.condition_labels['c1'].text()
-    assert not cell._overall_spl_items
-    assert not cell._detail_dialog.cell._overall_spl_items
     assert not cell.overall_labels['c1'].isVisible()
     assert not cell._detail_dialog.cell.overall_labels['c1'].isVisible()
     cell.close_detail()
 
 
-def test_overall_spl_references_separate_conditions_and_ignore_invalid_values(grid, configuration, qt_app):
+def test_overall_spl_labels_separate_conditions_and_ignore_invalid_values(grid, configuration, qt_app):
     show(grid, configuration, qt_app)
     cell = grid._cells[0, 0]
     series = [dict(wav_channel=1, name='CH1', x=[0, 1, 2], y=[40, 50, 40])]
@@ -314,14 +314,14 @@ def test_overall_spl_references_separate_conditions_and_ignore_invalid_values(gr
     cell.set_condition_curve_data('c1', series, summaries=[summary(45)])
     cell.set_condition_curve_data('c2', series, summaries=[summary(47)])
     qt_app.processEvents()
-    assert len(cell._overall_spl_items) == 2
-    for key, line, text, value in cell._overall_spl_items:
-        assert (line.line().x1(), line.line().x2()) == cell._spans[key]
-        assert text.endswith('dB(Z)')
+    assert cell.overall_labels['c1'].text() == 'CH1 45.0 dB(Z)'
+    assert cell.overall_labels['c2'].text() == 'CH1 47.0 dB(Z)'
     cell.set_condition_curve_data('c1', series, summaries=[summary(None), summary(float('nan'))])
-    assert [key for key, _, _, _ in cell._overall_spl_items] == ['c2']
+    assert not cell.overall_labels['c1'].isVisible()
+    assert cell.overall_labels['c2'].isVisible()
+    assert cell.overall_labels['c2'].text() == 'CH1 47.0 dB(Z)'
     cell.clear_plot()
-    assert not cell._overall_spl_items
+    assert not any(label.isVisible() for label in cell.overall_labels.values())
 
 
 @pytest.mark.parametrize('scale', ['linear', 'log'])

@@ -1,6 +1,7 @@
 """Exercise paired result consumption through recording, submission and polling."""
 
 from datetime import datetime
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,7 +60,7 @@ def sync(paired_recording_workbench, workbench, monkeypatch):
         service.events.extend(incoming)
         w.controller.poll_analysis_events()
 
-    yield SimpleNamespace(w=w, panel=workbench.panel, summary=summary, service=service,
+    yield SimpleNamespace(w=w, panel=workbench.panel, grid=workbench.grid, summary=summary, service=service,
                           events=events, record=record, deliver=deliver, clock=clock,
                           published=published)
     summary.close()
@@ -69,6 +70,10 @@ def sync(paired_recording_workbench, workbench, monkeypatch):
 def labels(summary):
     return tuple(getattr(summary, name + "_label").text()
                  for name in ("total", "ok", "ng", "unmarked", "rate"))
+
+
+def station_title(sync, column=0):
+    return sync.grid._headers[column].name.toolTip()
 
 
 @pytest.mark.parametrize("reverse_first", [False, True])
@@ -81,6 +86,7 @@ def labels(summary):
 def test_station_updates_immediately_final_result_and_summary_wait_for_both(
         sync, reverse_first, forward, reverse, final_result, expected):
     first, second = sync.record(), sync.record()
+    default_title = station_title(sync)
     events = [result_event(first["right"], [instance(judgement=forward, metrics={"overall_spl": 0, "unit": "dB(A)"})]),
               result_event(second["right"], [instance(judgement=reverse, metrics={"overall_spl": 64.125})])]
     if reverse_first:
@@ -96,12 +102,14 @@ def test_station_updates_immediately_final_result_and_summary_wait_for_both(
     table = sync.panel.findChild(QTableWidget, "stationTable1")
     assert table.item(0, 2 if reverse_first else 1).text() == ("64.12" if reverse_first else "0.00 dB(A)")
     assert right["result"] == "--"
+    assert station_title(sync) == default_title
     assert sync.panel.findChild(QLabel, "stationResult1").text() == "--"
     sync.deliver(events[1])
     assert labels(sync.summary) == expected
     assert len(sync.published) == 1
     assert sync.panel.get_station_data(1)["rows"] == [["SPL", "0.00 dB(A)", "64.12"]]
     assert sync.panel.get_station_data(1)["result"] == final_result
+    assert station_title(sync) == default_title + (f' · {final_result}' if final_result in {'OK', 'NG'} else '')
     assert sync.panel.findChild(QLabel, "stationResult1").text() == final_result
     assert sync.panel.get_station_data(2)["forward"] == "--"
     sync.deliver(*events, result_event({**first["right"], "task_id": "unknown"}))
@@ -110,36 +118,46 @@ def test_station_updates_immediately_final_result_and_summary_wait_for_both(
 
 def test_multiple_stations_and_rounds_accumulate_without_waiting_for_other_stations(sync):
     first, second = sync.record(), sync.record()
+    default_titles = [station_title(sync, column) for column in range(2)]
     sync.deliver(result_event(second["left"], [instance(judgement="NG")]),
                  result_event(first["right"], [instance()]))
     assert labels(sync.summary)[0] == "0"
     sync.deliver(result_event(first["left"], [instance()]))
     assert labels(sync.summary) == ("1", "0", "1", "0", "0.0%")
+    assert station_title(sync, 0) == default_titles[0]
+    assert station_title(sync, 1) == default_titles[1] + ' · NG'
     left_before = sync.panel.get_station_data(2)
     sync.deliver(result_event(second["right"], [instance()]))
     assert sync.panel.get_station_data(2) == left_before
     assert labels(sync.summary) == ("2", "1", "1", "0", "50.0%")
+    assert station_title(sync, 0) == default_titles[0] + ' · OK'
+    assert station_title(sync, 1) == default_titles[1] + ' · NG'
     newer_first, newer_second = sync.record(), sync.record()
+    assert [station_title(sync, column) for column in range(2)] == default_titles
     sync.deliver(result_event(newer_first["right"], failed=True),
                  result_event(newer_second["right"], failed=True))
     assert labels(sync.summary) == ("3", "1", "1", "1", "33.3%")
     assert sync.panel.get_station_data(1)["rows"] == [["SPL", "--", "--"]]
+    assert [station_title(sync, column) for column in range(2)] == default_titles
 
 
 def test_old_reverse_latest_task_cannot_overwrite_new_round_but_completes_history(sync):
     first, second = sync.record(), sync.record()
     sync.deliver(result_event(first["right"], [instance(metrics={"overall_spl": 10})]))
     newer_first = sync.record()
+    default_title = station_title(sync)
     sync.deliver(result_event(newer_first["right"], [instance(metrics={"overall_spl": 30})]))
     before = sync.panel.get_station_data(1)
     sync.deliver(result_event(second["right"], [instance(judgement="NG", metrics={"overall_spl": 20})]))
     assert sync.events[-1]["is_current"] is False
     assert sync.panel.get_station_data(1) == before
+    assert station_title(sync) == default_title
     assert before["rows"] == [["SPL", "30.00", "--"]]
     assert labels(sync.summary) == ("1", "0", "1", "0", "0.0%")
     newer_second = sync.record()
     sync.deliver(result_event(newer_second["right"], [instance()]))
     assert labels(sync.summary) == ("2", "1", "1", "0", "50.0%")
+    assert station_title(sync) == default_title + ' · OK'
 
 
 @pytest.mark.parametrize("location,field", [
@@ -153,6 +171,7 @@ def test_mismatched_identity_is_diagnosed_before_context_merge(sync, caplog, loc
     incoming = result_event(first["right"], [instance()])
     (incoming if location == "event" else incoming["payload"])[field] = "wrong-identity"
     before = sync.panel.get_station_data(1)
+    default_title = station_title(sync)
     sync.deliver(incoming)
     assert sync.panel.get_station_data(1) == before
     assert labels(sync.summary)[0] == "0"
@@ -163,6 +182,7 @@ def test_mismatched_identity_is_diagnosed_before_context_merge(sync, caplog, loc
     assert sync.events[-1]["payload"] is incoming["payload"]
     sync.deliver(result_event(second["right"], [instance()]))
     assert labels(sync.summary)[0] == "0"
+    assert station_title(sync) == default_title
 
 
 def test_minimal_legacy_event_forwards_with_diagnostic_without_receiving_terminal(sync, caplog):
@@ -191,13 +211,16 @@ def test_refresh_keeps_history_and_current_display_obeys_configuration_identity(
     w.identity.sample = "new identity"
     w.controller.refresh_configuration()
     before = sync.panel.get_station_data(1)
+    default_title = station_title(sync)
     sync.deliver(result_event(second["right"], [instance(judgement="NG")]))
     if change == "same snapshot":
         assert sync.events[-1]["is_current"] is True
         assert sync.panel.get_station_data(1)["result"] == "NG"
+        assert station_title(sync) == default_title + ' · NG'
     else:
         assert sync.events[-1]["is_current"] is False
         assert sync.panel.get_station_data(1) == before
+        assert station_title(sync) == default_title
     assert labels(sync.summary)[0] == "1"
     assert sync.published[-1][0][0]["product_code"] == "007"
 
@@ -368,3 +391,53 @@ def test_optional_label_sink_can_be_unbound(sync):
     sync.deliver(result_event(task, [instance()]))
     assert sync.panel.get_station_data(1)["forward"] == "OK"
     assert jobs == []
+
+
+
+
+@pytest.mark.parametrize('rejection', ['admission', 'build', 'bridge'])
+def test_final_title_survives_rejected_start_and_resets_on_admitted_round(sync, rejection):
+    first, second = sync.record(), sync.record()
+    default_title = station_title(sync)
+    sync.deliver(result_event(first['right'], [instance()]),
+                 result_event(second['right'], [instance(judgement='NG')]))
+    sync.w.controller.refresh_configuration()
+    assert station_title(sync) == default_title + ' · NG'
+    if rejection == 'admission':
+        sync.w.outcome.hardware_available = False
+    elif rejection == 'build':
+        sync.w.identity.sample = ''
+    else:
+        sync.w.outcome.error = RuntimeError('busy')
+    sync.w.controller.start_recording()
+    assert station_title(sync) == default_title + ' · NG'
+    assert sync.grid._headers[0].property('stationResult') == 'NG'
+
+    sync.w.outcome.hardware_available = True
+    sync.w.identity.sample = '007'
+    sync.w.outcome.error = None
+    sync.w.controller.start_recording()
+    assert station_title(sync) == default_title
+    assert sync.grid._headers[0].property('stationResult') == '--'
+
+
+def test_final_title_resets_when_configuration_changes(sync):
+    first, second = sync.record(), sync.record()
+    default_title = station_title(sync)
+    sync.deliver(result_event(first['right'], [instance()]),
+                 result_event(second['right'], [instance()]))
+    assert station_title(sync) == default_title + ' · OK'
+    sync.w.repository.result = configuration_with(sync.w.config, project_name='新产品')
+    sync.w.controller.refresh_configuration()
+    assert station_title(sync) == default_title
+    assert sync.grid._headers[0].property('stationResult') == '--'
+
+
+def test_final_result_without_plot_layout_still_updates_station_panel(sync):
+    sync.w.repository.result = replace(sync.w.config, ui=replace(sync.w.config.ui, layout=None))
+    sync.w.controller.refresh_configuration()
+    assert not sync.grid._headers
+    first, second = sync.record(), sync.record()
+    sync.deliver(result_event(first['right'], [instance()]),
+                 result_event(second['right'], [instance(judgement='NG')]))
+    assert sync.panel.get_station_data(1)['result'] == 'NG'
