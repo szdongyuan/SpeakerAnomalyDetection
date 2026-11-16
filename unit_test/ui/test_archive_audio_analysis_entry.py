@@ -11,10 +11,12 @@ from base.recording_management import RecordingManager
 from consts import error_code
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
 from unit_test.base.test_audio_analysis_result_source import recording
+from unit_test.ui.archive_audio_filter_fakes import use_legacy_filter_metadata
 from unit_test.ui.test_archive_audio_analysis_dialog import wait_until, close_view
 
 
 def test_current_row_after_filter_order_and_all_display(tmp_path, monkeypatch):
+    use_legacy_filter_metadata(monkeypatch)
     app = QApplication.instance() or QApplication([])
     first, _, _ = recording(tmp_path)
     second, _, _ = recording(tmp_path, project="项目乙")

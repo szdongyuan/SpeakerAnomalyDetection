@@ -31,6 +31,7 @@ METADATA_FILTER_FIELDS = {
     "select_test_round": "test_round",
     "select_port": "port_name",
     "select_condition": "condition_name",
+    "select_station": "station_name",
 }
 
 
@@ -42,6 +43,7 @@ class AudioFilterMetadata:
     test_round: int | None = None
     port_name: str | None = None
     condition_name: str | None = None
+    station_name: str | None = None
 
 
 def parse_recording_stem(stem: str, project: str, model: str, sample: str):
@@ -102,6 +104,27 @@ def parse_audio_filter_metadata(file_path, *, application_root=DEFAULT_DIR):
                 condition_name=parsed["condition"],
             )
     return AudioFilterMetadata()
+
+
+def parse_archive_audio_filter_metadata(file_path, *, application_root=DEFAULT_DIR):
+    """Read current archive project, station and condition fields without I/O."""
+    raw_path = str(file_path or "").strip()
+    if not raw_path:
+        raise ValueError(f"音频路径缺少必要字段：{file_path!r}")
+    normalized = raw_path if ntpath.isabs(raw_path) else ntpath.join(str(application_root), raw_path)
+    path = PureWindowsPath(ntpath.normpath(normalized))
+    parts = path.stem.split("_", 4)
+    if (path.suffix.lower() != ".wav" or path.parent.name.lower() != "audio"
+            or len(parts) < 5 or not all(parts)
+            or not path.parent.parent.name):
+        raise ValueError(f"音频路径不符合日期_时间_工位_工况命名合同：{file_path!r}")
+    project_dir = path.parent.parent
+    return AudioFilterMetadata(
+        project_key=ntpath.normcase(str(project_dir)),
+        project_name=project_dir.name,
+        station_name=parts[2],
+        condition_name=parts[3],
+    )
 
 
 def matches_filter_value(actual, selected):

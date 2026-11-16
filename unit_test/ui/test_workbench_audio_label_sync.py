@@ -532,6 +532,9 @@ def test_real_audio_manager_updates_while_open_and_reloads_committed_label(
         startup, monkeypatch, tmp_path):
     from consts import model_consts
     from ui import archive_audio_data_dialog
+    from unit_test.ui.archive_audio_filter_fakes import use_legacy_filter_metadata
+
+    use_legacy_filter_metadata(monkeypatch)
 
     monkeypatch.setattr(model_consts, "DATABASE_PATH", str(startup.database_path))
     playback = Mock()

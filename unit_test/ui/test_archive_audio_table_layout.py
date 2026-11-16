@@ -8,10 +8,12 @@ from PyQt5.QtWidgets import QToolTip
 from base.recording_management import RecordingManager
 from consts import error_code
 from ui.archive_audio_data_dialog import ArchiveAudioDataDialog
+from unit_test.ui.archive_audio_filter_fakes import use_legacy_filter_metadata
 
 
 @pytest.fixture
 def archive(ui_qapp, monkeypatch):
+    use_legacy_filter_metadata(monkeypatch)
     barcodes = ["LONG/" * 40, "ABC/123/XY", "SN001", None, ""]
     rows = [
         (i, f"C:/sample/Motor01_{'long_recording_name_' * 8}{i}.wav",

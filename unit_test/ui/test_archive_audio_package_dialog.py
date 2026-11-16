@@ -30,6 +30,7 @@ from ui.archive_audio_filter_dialog import ArchiveAudioFilterDialog
 from ui.archive_audio_package_dialog import ArchiveAudioPackageDialog
 from ui.audio_package_thread import AudioPackageThread
 from unit_test.base.test_audio_record_package import make_recording
+from unit_test.ui.archive_audio_filter_fakes import use_legacy_filter_metadata
 
 
 @pytest.fixture(scope="module")
@@ -85,6 +86,7 @@ def audio_database_path(tmp_path, monkeypatch):
 
 @pytest.fixture
 def archive(qapp, audio_database_path, tmp_path, monkeypatch):
+    use_legacy_filter_metadata(monkeypatch)
     first = make_recording(tmp_path / "results")
     second = make_recording(tmp_path / "results", project="ProjectB")
     rows = [
