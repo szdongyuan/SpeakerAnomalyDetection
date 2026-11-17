@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 from base.motor_daily_records import DailyRecordSummary
+from base.record_analysis_reference import RecordAnalysisReference
 
 
 @dataclass(frozen=True)
@@ -13,6 +14,7 @@ class DailyWavRecord:
     file_name: str
     condition: str
     result: str
+    analysis_reference: RecordAnalysisReference | None = None
 
 
 @dataclass(frozen=True)
@@ -68,8 +70,12 @@ class DailyWavRecordStore:
             result = row["result"].strip().upper()
             if result not in ("OK", "NG", "未标记"):
                 raise ValueError(f"records[{index}].result must be OK, NG or 未标记")
+            analysis_reference = row.get("analysis_reference")
+            if analysis_reference is not None and not isinstance(analysis_reference, RecordAnalysisReference):
+                raise TypeError(f"records[{index}].analysis_reference must be a RecordAnalysisReference or None")
             normalized.append(DailyWavRecord(
                 completed_at, station_id, row["file_name"], row["condition"], result,
+                analysis_reference,
             ))
         normalized = tuple(sorted(normalized, key=lambda row: row.completed_at, reverse=True))
         total = len(normalized)

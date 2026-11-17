@@ -210,7 +210,7 @@ def _preparation_issues(task, task_path, station_path, analysis_path):
     def add(path, kind, message):
         issues.append(AnalysisInputIssue(task.task_id, path, kind, message))
 
-    if task.analysis_result_directory is None and any(
+    if task.persist_artifacts and task.analysis_result_directory is None and any(
         instance.analysis_type == "SPL" for instance in task.instances
     ):
         add(f"{task_path}.analysis_result_directory", "MissingOutputDirectory",
@@ -274,6 +274,9 @@ def build_analysis_batch(payload: dict) -> AnalysisBatch:
         output = raw_task.get("analysis_result_directory")
         if output is not None:
             output = _absolute_path(output, f"{path}.analysis_result_directory", task_id)
+        persist_artifacts = raw_task.get("persist_artifacts", True)
+        if type(persist_artifacts) is not bool:
+            _fail(f"{path}.persist_artifacts", "开关必须为布尔值", task_id)
         task = AnalysisTask(
             task_id=task_id,
             station_id=station_id,
@@ -289,6 +292,7 @@ def build_analysis_batch(payload: dict) -> AnalysisBatch:
             channels=channels,
             instances=instances,
             segmented_analysis=_snapshot(segmentation, segment_path, task_id),
+            persist_artifacts=persist_artifacts,
         )
         built.append(task)
         issues.extend(_preparation_issues(task, path, station_path, analysis_path))

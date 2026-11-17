@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from base.motor_daily_wav_records import DailyWavRecordStore
+from base.motor_daily_wav_records import DailyWavRecord, DailyWavRecordStore
 from unit_test.daily_record_cases import make_daily_records, make_daily_wav_records
 
 
@@ -40,7 +40,7 @@ def test_replace_counts_single_file_result_and_sorts_full_precision(day):
     assert [r.file_name for r in store.records] == ["CASE-003.wav", "CASE-002.wav", "CASE-001.wav"]
     assert store.station_ids == (2, 3, 9)
     assert vars(store.summary) == dict(total=3, ok=1, ng=1, unmarked=1, pass_rate="33.3%")
-    assert vars(store.records[-1]) == {key: value for key, value in rows[0].items() if key != "extra"} | {"result": "OK"}
+    assert vars(store.records[-1]) == {key: value for key, value in rows[0].items() if key != "extra"} | {"result": "OK", "analysis_reference": None}
     assert set(make_daily_records(1, day)[0]) == {
         "completed_at", "station_id", "product_code", "forward", "reverse", "result",
     }
@@ -212,3 +212,40 @@ def test_filter_before_pagination_and_instance_isolation(day):
     assert other.records == ()
     other.replace(make_daily_wav_records(1, day), day)
     assert store.summary.total == 125
+
+
+def test_old_display_fields_still_construct_record(day):
+    record = DailyWavRecord(datetime(2026, 11, 16), 9, "record.wav", "正转", "OK")
+    assert record.analysis_reference is None
+
+
+def test_reference_survives_snapshot_sorting_paging_and_caller_mutation(day, tmp_path):
+    from base.record_analysis_reference import RecordAnalysisReference
+    from base.workbench_recording_protocol import StationWavChannel
+
+    reference = RecordAnalysisReference("request", "source", "condition", str(tmp_path / "record.wav"),
+        [StationWavChannel("mic", "Microphone", "sound", "device", 4, 0)])
+    rows = make_daily_wav_records(3, day)
+    rows[0]["analysis_reference"] = reference
+    store, other = DailyWavRecordStore(), DailyWavRecordStore()
+    store.replace(rows, day)
+    before = snapshot(store)
+    rows[0]["analysis_reference"] = None
+    rows.clear()
+    assert store.records[-1].analysis_reference is reference
+    assert store.select_page().rows[-1].analysis_reference is reference
+    assert other.records == ()
+    assert vars(store.summary) == dict(total=3, ok=1, ng=1, unmarked=1, pass_rate="33.3%")
+    assert snapshot(store) == before
+
+
+@pytest.mark.parametrize("value", [{}, "request", 1, object()])
+def test_invalid_reference_preserves_entire_snapshot(day, value):
+    store = DailyWavRecordStore()
+    store.replace(make_daily_wav_records(3, day), day)
+    before = snapshot(store)
+    rows = make_daily_wav_records(2, day)
+    rows[1]["analysis_reference"] = value
+    with pytest.raises(TypeError, match=r"records\[1\].analysis_reference"):
+        store.replace(rows, day)
+    assert snapshot(store) == before

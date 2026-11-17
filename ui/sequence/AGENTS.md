@@ -74,6 +74,17 @@
 - 单项或单通道失败保留其他有效曲线；错误通过区域文字、悬停提示及日志呈现。总体 SPL 阈值可作为标注“总体上限/下限”的水平参考线，不能用于瞬时曲线逐点判定；仅文件保存失败不丢弃已计算的曲线。
 - `unit_test/ui/test_workbench_plot_results.py` 覆盖结果映射、状态、迟到事件和真实 WAV 常驻进程集成；硬件采集需另行现场验收。
 
+## 当日 WAV 记录分析查看
+
+- 成功录制完成时，在归档前从冻结请求及完成描述符保留 `RecordAnalysisReference`：请求 ID、源工位/工况 ID、实际绝对 WAV 路径和 WAV 列通道身份。日记录的显示工位序号、文件名及原记录结果不承担定位职责；旧记录缺少引用时继续参与筛选统计，但查看操作禁用并说明原因。明细操作绑定实际记录，分页和刷新不能捕获可变行号。
+- 明细通过 `record_analysis_requested(record, parent)` 向控制器发意图。`get_current_analysis_snapshot()` 只提供当前成功应用且有效的分析配置及版本；`RecordAnalysisCoordinator` 在打开时冻结它们，按源身份和 WAV 通道顺序构建该文件的全部当前队列项。当前设备离线不阻止查看；配置不存在、不匹配或队列为空时显示明确状态。已打开会话不受后续配置提交影响，重新打开采用新快照。
+- 查看复用 `MainWindow` 的同一个 `AnalysisService`、常驻 worker 和唯一 50ms 分析轮询器，不增加服务或分析定时器。请求显式 `persist_artifacts=False`、结果目录为 `None`；执行器完成原算法与判定后跳过导出，返回内存结果及空 artifacts。普通生产任务默认仍导出 CSV，原标签、工位、画板、日记录、轮次与统计认证及更新链路保持原职责。
+- 控制器先按登记的任务所有权把查看事件交给协调器，其终态需认证任务、源工位和工况。查看结果不能进入生产 presenter、标签提交或统计链路；关闭窗口后仍保留最小任务归属到终态，迟到结果只消费而不渲染。`service_closed` 和同批生产终态继续完整送交原生命周期入口，不能因查看任务分流提前建立标签排空屏障。
+- `record_analysis_results.py` 仅映射内存结果，dialog/presenter/renderers 只管理选择和原生 Qt/pyqtgraph 内容。SPL/FFT 保留后端坐标、单位、判定和超限，FBA 使用独立 BandRenderer 按频段索引等距绘柱，同域多通道在总宽 0.7 内按顺序并排，域身份包含标签和中心坐标；正常绿、返回 exceedance 超限红并标 NG、允许的局部 null/NaN 为零高灰柱，原数据不变；上下限按柱中心绘青色圆点/靛蓝三角折线并保留断线，只显示水平网格。保留离散频段标签、单位、总体值和通道图例，Spec 使用真实矩阵并按通道选择；LOUD 按该配置返回的时间曲线、Bark 特征响度曲线/热图和汇总展示，不添加第六种算法或伪造曲线。未支持项保留标签及实际诊断，局部失败不丢弃其他通道。切换不重算、不读 WAV 或 CSV。摘要只显示人类可读测量值、单位、阈值及判定，完整内部指标保留在模型中；图标题使用可读名称。默认单图按视口伸缩并保留至少 120px 实际绘图区，小窗口和多面板通过区域滚动，失败说明紧凑靠上排列。
+- 每个明细最多一个原生模态子窗口，重复查看同记录只聚焦；查看窗口不提供“返回明细”按钮。Escape、系统关闭及父窗口销毁都释放 presenter、图形和矩阵订阅，并清除柱图与 NG 标注引用，保留明细筛选/页码/滚动与焦点。查看窗口借用服务，不能 shutdown、删除工位或终止 worker；应用关闭仍由 `MainWindow` 消费真实关闭通知及整批终态，再等待原标签桥排空。
+- 新增回归位于 `unit_test/base/test_record_analysis_reference.py`、`unit_test/base/test_record_analysis_request.py` 及 `unit_test/ui/test_record_analysis_{results,dialog,presenter,renderers,coordinator,entry,integration}.py`。真实集成测试只替换采集/登录/配置边界，使用独立校准双通道 WAV、SQLite、真实分析 worker、主窗口原定时器和标签桥，覆盖只读隔离、完整生产正反转、配置冻结、关闭迟到结果、父窗口销毁和混合关闭批次。
+- 可重复视觉证据命令：`python scripts/render_record_analysis_view.py --output-dir .worktrees/record-analysis-view-evidence`。脚本仅在指定目录生成合成 WAV、独立配置、八张截图及 `evidence.json`，在独立计算进程得到真实结果后装配实际窗口组件；不访问用户数据库/配置。证据包含默认与小窗口、多通道、单/多通道 FBA、Spec、LOUD 特征响度及失败项，JSON 记录尺寸、控件边界、选择和完整数据范围；渲染产物不提交。
+
 ## 超限、时频图和振动 RMS 展示
 
 - 阈值绘图共用 `workbench_plot_results.build_condition_result` → `ConditionPlotCell` → `station_plot_style.draw_curves`：分析后端提供同坐标的 `display_payload.x/y/upper/lower`、单位和 `violations`，显示层统一绘制 `curve/upper/lower/exceedance`，不得为每种分析项重复实现阈值比较或绘图。新增类型只接入分析结果适配、绘图模板类型及坐标单位；通过公共绘图测试不代表该类型的分析执行器已经接入。

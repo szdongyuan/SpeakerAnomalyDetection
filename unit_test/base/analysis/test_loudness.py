@@ -4,6 +4,7 @@ import csv
 from copy import deepcopy
 from dataclasses import replace
 import json
+from pathlib import Path
 import time
 
 import numpy as np
@@ -37,6 +38,22 @@ def loud_task(tmp_path):
         tuple(AnalysisInstance("响度", "LOUD", ch, deepcopy(parameters)) for ch in (0, 1)),
         {"mode": "none"},
     )
+
+
+def test_compute_only_loudness_preserves_failed_judgement_and_other_channel(loud_task):
+    config = deepcopy(loud_task.instances[0].parameters)
+    config.update(limit_checked=True, limit_metric="max_transient", scalar_upper_enabled=True,
+                  scalar_upper_value=1, scalar_lower_enabled=True, scalar_lower_value=100)
+    current = replace(loud_task, persist_artifacts=False, analysis_result_directory=None,
+                      instances=(replace(loud_task.instances[0], parameters=config), loud_task.instances[1]))
+    result = execute_task(current)
+    failed, good = result["instance_results"]
+    assert result["execution_status"] == "结果不完整"
+    assert failed["judgement_status"] == "failed" and failed["error"]["stage"] == "judgement"
+    assert failed["metrics"] and failed["display_payload"]["loudness_display"]
+    assert good["execution_status"] == "分析完成" and good["error"] is None
+    assert all(item["artifacts"] == [] for item in result["instance_results"])
+    assert not Path(loud_task.analysis_result_directory).exists()
 
 
 @pytest.mark.parametrize("method", ["per_segment", "time_varying_iso532_1"])

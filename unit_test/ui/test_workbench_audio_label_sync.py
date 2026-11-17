@@ -431,8 +431,16 @@ def test_full_final_batch_is_consumed_before_label_shutdown_even_with_reentrant_
     WorkbenchRecordingArchive(str(startup.database_path)).save(
         paired_recording_workbench.completions[-1], "motor", date(2026, 11, 13))
     repository.update.side_effect = AudioLabelRepository(str(startup.database_path)).update
+    summary = window.sequence_window.left_panel.dashboard_panel.summary_panel
+    summary._open_details()
+    details = summary._details_dialog
+    selected = details._store.records[0]
+    view = window.workbench_controller.open_record_analysis(selected, details)
+    view_task = service.submissions[-1]["tasks"][0]
+    assert view_task["persist_artifacts"] is False
     service.allow_close = False
     window.close()
+    assert not view.isVisible()
     # Drain the earlier recording/archive gates before injecting the last poll.
     wait_until(lambda: window._workbench_archive_close_state == "drained")
     service_closed = {"event_type": "service_closed", "payload": {}}
@@ -441,6 +449,9 @@ def test_full_final_batch_is_consumed_before_label_shutdown_even_with_reentrant_
                  for task, label in zip(tasks, expected_labels)]
     batch = ([service_closed] + terminals if closed_first
              else [terminals[0], service_closed, *terminals[1:]])
+
+    # View terminals remain owned even after begin_shutdown detached their dialog.
+    batch.insert(1 if closed_first else len(batch), result_event(view_task, [instance(judgement="NG")]))
 
     def final_poll():
         service.closed = True  # Backend state becomes visible before consumer runs.

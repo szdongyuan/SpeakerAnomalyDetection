@@ -1,6 +1,6 @@
 """Native application-modal viewer of a caller-owned daily record snapshot."""
 
-from PyQt5.QtCore import QEvent, QSignalBlocker, Qt, QTimer
+from PyQt5.QtCore import QEvent, QSignalBlocker, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
     QAbstractItemView, QApplication, QBoxLayout, QComboBox, QDialog, QHBoxLayout, QHeaderView,
@@ -14,6 +14,8 @@ from ui.sequence.workbench_scrollbar import WorkbenchHorizontalScrollBar
 
 class MotorDailyDetailsDialog(QDialog):
     """Keep viewing conditions on this instance, independently of the store."""
+
+    record_analysis_requested = pyqtSignal(object, object)
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -171,6 +173,7 @@ class MotorDailyDetailsDialog(QDialog):
         self.search_edit.textChanged.connect(self._filters_changed)
         self.prev_button.clicked.connect(lambda: self._change_page(-1))
         self.next_button.clicked.connect(lambda: self._change_page(1))
+        self.table.itemClicked.connect(self._request_record_analysis)
         self.refresh_records()
 
     def refresh_records(self):
@@ -228,7 +231,12 @@ class MotorDailyDetailsDialog(QDialog):
                 if column == 4:
                     item.setForeground(QColor({"OK": "#00824e", "NG": "#c32b42"}.get(value, "#617183")))
                 elif column == 5:
-                    item.setForeground(QColor("#2463aa"))
+                    item.setData(Qt.UserRole, record)
+                    if record.analysis_reference is None:
+                        item.setForeground(QColor("#617183"))
+                        item.setToolTip("缺少音频定位信息")
+                    else:
+                        item.setForeground(QColor("#2463aa"))
                 self.table.setItem(row_index, column, item)
         self.empty_label.setVisible(not page.rows)
         self.page_label.setText(f"{page.page} / {page.page_count}")
@@ -240,6 +248,13 @@ class MotorDailyDetailsDialog(QDialog):
         self._resize_columns()
         self._adapt_filters()
         self._adapt_footer()
+
+    def _request_record_analysis(self, item):
+        if item.column() != 5:
+            return
+        record = item.data(Qt.UserRole)
+        if record.analysis_reference is not None:
+            self.record_analysis_requested.emit(record, self)
 
     def eventFilter(self, watched, event):
         if watched is self.table.viewport() and event.type() == QEvent.Resize:

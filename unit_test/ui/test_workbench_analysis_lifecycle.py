@@ -276,3 +276,16 @@ def test_real_workers_reused_resized_and_closed_by_window(startup, monkeypatch, 
     finally:
         window.close()
         wait_until(lambda: service.closed, timeout=40000)
+
+
+def test_record_view_detaches_before_shared_service_shutdown_once(workbench):
+    calls = []
+    service = AnalysisServiceStub()
+    service.shutdown = lambda: calls.append("service")
+    coordinator = Mock()
+    coordinator.begin_shutdown.side_effect = lambda: calls.append("views")
+    workbench.controller.bind_analysis_service(service, Mock())
+    workbench.controller.bind_record_analysis(coordinator)
+    workbench.controller.begin_analysis_shutdown()
+    workbench.controller.begin_analysis_shutdown()
+    assert calls == ["views", "service"]

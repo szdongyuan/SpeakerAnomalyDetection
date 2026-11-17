@@ -7,6 +7,14 @@ import sys
 import pytest
 
 from base.analysis import build_analysis_batch
+from base.analysis.contracts import AnalysisTask
+
+
+def test_task_positional_constructor_defaults_to_persisting_artifacts():
+    task = AnalysisTask("task", "station", None, "condition", None, "C:/input.wav",
+                        None, (), (), {"mode": "none"})
+    assert task.persist_artifacts is True
+    assert pickle.loads(pickle.dumps(task)).persist_artifacts is True
 
 
 def test_snapshots_isolate_caller_tasks_and_channel_instances(batch_payload):
