@@ -112,6 +112,8 @@ def _execute_instance(task, instance, samples, sample_rate, metadata):
         result["error"] = error_record(stage, error)
         return result
     _judge(instance, calculation, result)
+    if not task.persist_artifacts:
+        return result
     exports = []
     if instance.analysis_type == "SPL":
         exports.append(("overall_spl_csv", save_overall_spl))

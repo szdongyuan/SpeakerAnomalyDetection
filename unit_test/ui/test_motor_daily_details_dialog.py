@@ -143,7 +143,7 @@ def test_table_is_read_only_stably_sorted_and_aligned(make_dialog):
         assert dialog.table.item(row_index, 2).toolTip() == record.file_name
         assert dialog.table.item(row_index, 4).foreground().color() == QColor(
             {"OK": "#00824e", "NG": "#c32b42"}.get(record.result, "#617183"))
-        assert dialog.table.item(row_index, 5).foreground().color() == QColor("#2463aa")
+        assert dialog.table.item(row_index, 5).foreground().color() == QColor("#617183")
         for col in range(6):
             item = dialog.table.item(row_index, col)
             assert not item.flags() & Qt.ItemIsEditable
@@ -422,7 +422,7 @@ def test_dark_host_styles_do_not_leak_into_light_dialog(make_dialog, qt_app):
     assert dialog.ok_label.palette().color(QPalette.WindowText) == QColor("#00824e")
     assert dialog.ng_label.palette().color(QPalette.WindowText) == QColor("#c32b42")
     assert dialog.unmarked_label.palette().color(QPalette.WindowText) == QColor("#617183")
-    assert dialog.table.item(0, 5).foreground().color() == QColor("#2463aa")
+    assert dialog.table.item(0, 5).foreground().color() == QColor("#617183")
 
 
 def test_host_font_rules_do_not_override_dialog_typography(make_dialog, qt_app):
@@ -682,3 +682,56 @@ def test_minimum_width_keeps_existing_small_screen_rule(monkeypatch, qt_app, scr
     finally:
         dialog.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+
+def test_view_intent_binds_current_page_record_only_on_operation_click(make_dialog, qt_app, tmp_path):
+    from base.record_analysis_reference import RecordAnalysisReference
+    from base.workbench_recording_protocol import StationWavChannel
+
+    dialog, store, _ = make_dialog()
+    records = make_daily_wav_records(23, date(2026, 11, 4))
+    for index, row in enumerate(records):
+        row["file_name"] = "same.wav"
+        row["analysis_reference"] = RecordAnalysisReference(
+            f"request-{index}", "source", "condition", str(tmp_path / str(index) / "same.wav"),
+            (StationWavChannel("ch", "CH1", "sound_pressure", "device", 0, 0),))
+    store.replace(records, date(2026, 11, 4))
+    dialog.refresh_records()
+    received = []
+    dialog.record_analysis_requested.connect(lambda *args: received.append(args))
+    for page in (1, 2):
+        if page == 2:
+            dialog.next_button.click()
+        expected = store.select_page(page=page).rows[0]
+        operation = dialog.table.item(0, 5)
+        assert operation.data(Qt.UserRole) == expected
+        assert operation.foreground().color() == QColor("#2463aa")
+        dialog.table.scrollToItem(operation)
+        qt_app.processEvents()
+        QTest.mouseClick(dialog.table.viewport(), Qt.LeftButton,
+                         pos=dialog.table.visualItemRect(operation).center())
+        assert received[-1] == (expected, dialog)
+        for column in range(5):
+            item = dialog.table.item(0, column)
+            dialog.table.scrollToItem(item)
+            QTest.mouseClick(dialog.table.viewport(), Qt.LeftButton,
+                             pos=dialog.table.visualItemRect(item).center())
+        dialog.table.setCurrentCell(0, 5)
+        QTest.keyClick(dialog.table, Qt.Key_Return)
+        QTest.keyClick(dialog.table, Qt.Key_Space)
+        assert len(received) == page
+    assert received[0][0].analysis_reference.wav_path != received[1][0].analysis_reference.wav_path
+
+
+def test_legacy_operation_is_unavailable_with_reason(make_dialog, qt_app):
+    dialog, _, _ = make_dialog(3)
+    received = []
+    dialog.record_analysis_requested.connect(lambda *args: received.append(args))
+    item = dialog.table.item(0, 5)
+    assert item.toolTip() == "缺少音频定位信息"
+    assert item.foreground().color() == QColor("#617183")
+    dialog.table.scrollToItem(item)
+    qt_app.processEvents()
+    QTest.mouseClick(dialog.table.viewport(), Qt.LeftButton,
+                     pos=dialog.table.visualItemRect(item).center())
+    assert received == []

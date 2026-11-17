@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from base.audio_label_policy import aggregate_judgements
+from base.record_analysis_reference import RecordAnalysisReference
 
 
 @dataclass
@@ -15,6 +16,7 @@ class _SavedWav:
     condition: str
     result: str = "未标记"
     terminal_received: bool = False
+    analysis_reference: RecordAnalysisReference | None = None
 
 
 class WorkbenchWavState:
@@ -23,7 +25,7 @@ class WorkbenchWavState:
     def __init__(self):
         self._records = {}
 
-    def register_recording(self, request_id, recorded_at, condition, stations):
+    def register_recording(self, request_id, recorded_at, condition, stations, *, analysis_references=None):
         """Register new (request, source station) identities in arrival order."""
         added = False
         for station_id, station_number, path in stations:
@@ -31,6 +33,9 @@ class WorkbenchWavState:
             if identity not in self._records:
                 self._records[identity] = _SavedWav(
                     recorded_at, station_number, Path(path).name, condition,
+                    analysis_reference=(
+                        analysis_references.get(station_id) if analysis_references is not None else None
+                    ),
                 )
                 added = True
         return added
@@ -54,6 +59,8 @@ class WorkbenchWavState:
                 file_name=record.file_name,
                 condition=record.condition,
                 result=record.result,
+                **({"analysis_reference": record.analysis_reference}
+                   if record.analysis_reference is not None else {}),
             )
             for record in self._records.values()
             if record.recorded_at.date() == day

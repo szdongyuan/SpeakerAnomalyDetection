@@ -73,6 +73,61 @@ def task(tmp_path):
     )
 
 
+@pytest.mark.parametrize("kind", ["SPL", "FFT", "FBA", "LOUD", "Spec"])
+@pytest.mark.parametrize("output", ["existing", "absent", "none"])
+def test_compute_only_keeps_real_results_without_export_or_file_changes(task, tmp_path, monkeypatch, kind, output):
+    from base.analysis import executor
+
+    parameters = {"weighting": "Z", "method": "per_segment",
+                  "advanced": {"curve_y_unit": "sone"},
+                  "display": {"curves": ["loudness_time", "specific_loudness_profile"]}}
+    if kind != "Spec":
+        parameters.update(limit_checked=True, limit_metric="curve_y", limit_mode="manual",
+                          manual_input_mode="constant", constant_upper_enabled=True,
+                          constant_upper_value=0.001, constant_lower_enabled=False)
+    current = replace(task, instances=(AnalysisInstance(kind, kind, 0, parameters),))
+    expected = execute_task(current)
+    assert expected["execution_status"] == "分析完成", expected
+    # Protect pre-existing CSV bytes as well as WAVs and directory structure.
+    existing_csv = Path(task.analysis_result_directory) / "csv" / "keep.csv"
+    existing_csv.parent.mkdir(parents=True, exist_ok=True)
+    existing_csv.write_bytes(b"existing CSV\r\nunchanged\r\n")
+
+    def snapshot():
+        return {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                for path in tmp_path.rglob("*")}
+
+    before = snapshot()
+    export_calls = []
+
+    def forbidden_export(*args, **kwargs):
+        export_calls.append(args)
+        raise AssertionError("compute-only task called an exporter")
+
+    def forbidden_mkdir(*args, **kwargs):
+        pytest.fail("compute-only task attempted to create a directory")
+
+    for name in ("save_curve", "save_loudness_summary", "save_overall_spl"):
+        monkeypatch.setattr(executor, name, forbidden_export)
+    monkeypatch.setattr(Path, "mkdir", forbidden_mkdir)
+    directory = {"existing": task.analysis_result_directory,
+                 "absent": str(tmp_path / "must-not-exist"), "none": None}[output]
+    result = execute_task(replace(current, persist_artifacts=False,
+                                  analysis_result_directory=directory))
+    assert result["execution_status"] == "分析完成", result
+    assert export_calls == []
+    item, = result["instance_results"]
+    assert item["artifacts"] == []
+    assert item["display_payload"] is not None and item["metrics"]
+    expected["instance_results"][0]["artifacts"] = []
+    assert result == expected  # Includes metrics, bounds, judgement and violations.
+    if kind != "Spec":
+        assert item["judgement_status"] == "completed"
+        assert item["judgement"] == "NG" and item["violations"]
+        assert item["display_payload"]["upper"]
+    assert snapshot() == before
+
+
 def test_special_item_names_save_independently_and_keep_stable_paths(task):
     fallback_name = "分析项_" + hashlib.sha256(b"/").hexdigest()[:12]
     names = ("SPL 1", "/", "\\", "...", "SPL/a", "SPL\\a", "spl_a", fallback_name)

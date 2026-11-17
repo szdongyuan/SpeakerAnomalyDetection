@@ -96,3 +96,50 @@ def test_frozen_time_order_days_detached_exports_and_instance_isolation(tmp_path
     assert [r["completed_at"] for r in state.records_for(later.date())] == [later]
     assert other.records_for(when.date()) == []
     assert not other.update_result("r1", "a", [{"judgement": "NG"}])
+
+
+def test_reference_is_keyed_by_source_station_and_only_first_registration_keeps_it(tmp_path):
+    from base.record_analysis_reference import RecordAnalysisReference
+    from base.workbench_recording_protocol import StationWavChannel
+
+    state, other = WorkbenchWavState(), WorkbenchWavState()
+    when = datetime(2026, 11, 16, 23, 59, 59)
+    channel = StationWavChannel("mic", "Microphone", "sound", "device", 3, 0)
+    refs = {
+        source: RecordAnalysisReference("request", source, "condition-id", str(tmp_path / source / "same.wav"), [channel])
+        for source in ("source-z", "source-a")
+    }
+    stations = [(source, number, ref.wav_path) for (source, ref), number in zip(refs.items(), (9, 2))]
+    assert state.register_recording("request", when, "正转", stations, analysis_references=refs)
+    first = refs["source-z"]
+    refs.clear()
+    rows = state.records_for(when.date())
+    assert [row["analysis_reference"].station_id for row in rows] == ["source-z", "source-a"]
+    assert [row["station_id"] for row in rows] == [9, 2]
+    assert rows[0]["analysis_reference"] is first
+    rows[0].clear()
+    assert state.update_result("request", "source-z", [{"judgement": "NG"}])
+    assert not state.update_result("request", "source-z", [{"judgement": "OK"}])
+    assert not state.register_recording("request", when + timedelta(days=1), "反转", stations,
+                                        analysis_references={"source-z": None})
+    assert state.records_for(when.date())[0]["analysis_reference"] is first
+    assert state.records_for(when.date())[0]["result"] == "NG"
+    assert state.records_for((when + timedelta(days=1)).date()) == []
+    assert other.records_for(when.date()) == []
+
+
+def test_missing_reference_keeps_legacy_export_shape_even_on_duplicate(tmp_path):
+    from base.record_analysis_reference import RecordAnalysisReference
+    from base.workbench_recording_protocol import StationWavChannel
+
+    state = WorkbenchWavState()
+    when = datetime(2026, 11, 16, 12)
+    path = str(tmp_path / "same.wav")
+    stations = [("source", 9, path)]
+    state.register_recording("r", when, "正转", stations)
+    ref = RecordAnalysisReference("r", "source", "condition", path,
+                                  [StationWavChannel("mic", "Mic", "sound", "device", 0, 0)])
+    assert not state.register_recording("r", when, "正转", stations, analysis_references={"source": ref})
+    assert state.records_for(when.date()) == [dict(
+        completed_at=when, station_id=9, file_name="same.wav", condition="正转", result="未标记",
+    )]

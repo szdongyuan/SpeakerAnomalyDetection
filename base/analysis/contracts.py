@@ -56,6 +56,7 @@ class AnalysisTask:
     channels: tuple[AnalysisChannel, ...]
     instances: tuple[AnalysisInstance, ...]
     segmented_analysis: dict
+    persist_artifacts: bool = True
 
 
 @dataclass(frozen=True)

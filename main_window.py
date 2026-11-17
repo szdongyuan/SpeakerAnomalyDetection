@@ -184,6 +184,19 @@ class MainWindow(QMainWindow):
             self.analysis_service = AnalysisService()
         self.workbench_controller.bind_analysis_service(
             self.analysis_service, self._on_analysis_event)
+        from ui.sequence.record_analysis_coordinator import RecordAnalysisCoordinator
+        from ui.sequence.record_analysis_dialog import RecordAnalysisDialog
+        from ui.sequence.record_analysis_presenter import RecordAnalysisPresenter
+
+        def create_record_view(record, parent):
+            dialog = RecordAnalysisDialog(parent)
+            dialog.show_record(record)
+            return dialog, RecordAnalysisPresenter(dialog)
+
+        self.workbench_controller.bind_record_analysis(RecordAnalysisCoordinator(
+            self.analysis_service, self.workbench_controller.get_current_analysis_snapshot,
+            create_record_view,
+        ))
         self.audio_label_sync_bridge = AudioLabelSyncBridge(AudioLabelRepository(DATABASE_PATH), self)
         self.workbench_controller.bind_audio_label_sync(self.audio_label_sync_bridge.submit)
         self.audio_label_sync_bridge.failed.connect(self._on_audio_label_failed)
@@ -719,6 +732,8 @@ class MainWindow(QMainWindow):
         )
         controller.bind_result_summary(sequence.left_panel.set_daily_records)
         controller.bind_wav_details(sequence.left_panel.set_daily_wav_records)
+        sequence.left_panel.dashboard_panel.summary_panel.record_analysis_requested.connect(
+            controller.open_record_analysis)
         controller.bind_product_selection(WorkbenchProductSelectionPorts(
             product_manager=ProductTestProjectConfigManager(),
             show_catalog=sequence.show_workbench_products,

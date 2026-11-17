@@ -3,7 +3,6 @@
 from numbers import Real
 
 import numpy as np
-import pyqtgraph as pg
 
 
 def _real_array(value, *, dimensions, context, field, allow_gaps=False):
@@ -104,6 +103,8 @@ def validate_curve_series(series, *, context, allow_gaps=False):
                 raise TypeError(f'{context}: {field}.color must be a color string')
             if not color:
                 raise ValueError(f'{context}: {field}.color is not a valid color string')
+            import pyqtgraph as pg
+
             try:
                 pg.mkColor(color)
             except ValueError as error:
@@ -135,6 +136,8 @@ def validate_heatmap_data(values, *, extent=None, levels=None, colormap='viridis
         levels = (low, high)
     if not isinstance(colormap, str):
         raise TypeError(f'{context}: colormap must be a local color map name')
+    import pyqtgraph as pg
+
     if colormap not in pg.colormap.listMaps():
         raise ValueError(f'{context}: colormap {colormap!r} is not locally available')
     # Skip the library cache so each cell owns an unshared ColorMap instance.

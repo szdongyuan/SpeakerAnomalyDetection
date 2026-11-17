@@ -9,6 +9,7 @@ import pytest
 
 from base.audio_label_sync import AudioLabelJob
 from base.motor_daily_wav_records import DailyWavRecordStore
+from base.record_analysis_reference import RecordAnalysisReference
 from base.workbench_analysis_config import AnalysisTestQueue
 from base.workbench_recording_protocol import StationWav, WorkbenchRecordingCompletion
 from ui.sequence.motor_workbench_controller import MotorWorkbenchController, WorkbenchProductSelectionPorts
@@ -37,6 +38,13 @@ def rows(sync, station=None):
     return [row for row in records if station is None or row["station_id"] == station]
 
 
+def reference_for(s, task):
+    completion = next(c for c in s.w.completions if any(w.path == task["wav_path"] for w in c.stations))
+    actual = next(w for w in completion.stations if w.station_id == task["station_id"])
+    return RecordAnalysisReference(completion.request_id, actual.station_id, completion.condition_id,
+                                   actual.path, actual.channels)
+
+
 def test_saved_files_publish_before_results_with_independent_round_summary(wav_sync):
     s = wav_sync
     first_time = datetime(2026, 11, 11, 12, 0, 1)
@@ -45,7 +53,8 @@ def test_saved_files_publish_before_results_with_independent_round_summary(wav_s
     assert len(rows(s)) == 3
     assert rows(s, 1) == [dict(completed_at=first_time, station_id=1,
                              file_name=Path(first["right"]["wav_path"]).name,
-                             condition="正转", result="未标记")]
+                             condition="正转", result="未标记",
+                             analysis_reference=reference_for(s, first["right"]))]
     assert labels(s.summary) == ("0", "0", "0", "0", "--")
     assert s.published == []
     s.deliver(result_event(first["right"], [instance()]))
@@ -59,7 +68,8 @@ def test_saved_files_publish_before_results_with_independent_round_summary(wav_s
     assert len(rows(s)) == 6
     assert rows(s, 1)[1] == dict(completed_at=second_time, station_id=1,
                                file_name=Path(second["right"]["wav_path"]).name,
-                               condition="反转", result="未标记")
+                               condition="反转", result="未标记",
+                               analysis_reference=reference_for(s, second["right"]))
     s.deliver(result_event(second["right"], [instance(judgement="NG")]))
     assert labels(s.summary) == ("1", "0", "1", "0", "0.0%")
     wav_store = DailyWavRecordStore()
@@ -79,6 +89,11 @@ def test_files_register_before_archive_and_survive_archive_errors(wav_sync, asyn
         assert len(rows(s)) == len(completion.stations)
         assert all(row["result"] == "未标记" for row in rows(s))
         assert not s.service.submissions
+        for actual in completion.stations:
+            reference = next(row["analysis_reference"] for row in rows(s)
+                             if row["file_name"] == Path(actual.path).name)
+            assert reference == RecordAnalysisReference(completion.request_id, actual.station_id,
+                completion.condition_id, actual.path, actual.channels)
         if error_kind == "submit":
             raise OSError("archive unavailable")
         if asynchronous:
@@ -183,7 +198,9 @@ def test_only_authenticated_completion_paths_register_with_frozen_mapping(wav_sy
     assert rows(s) == [] and len(s.wav_published) == before
     # A committed configuration may change during capture. Use the admitted map.
     s.w.repository.result = configuration_with(
-        s.w.config, stations=tuple(reversed(s.w.config.recording.context.stations)),
+        s.w.config, stations=tuple(replace(station, channels=tuple(
+            replace(channel, channel_id="changed-input", signal_type="acceleration")
+            for channel in station.channels)) for station in reversed(s.w.config.recording.context.stations)),
         conditions=tuple(reversed(s.w.config.recording.context.conditions)),
     )
     s.w.controller.refresh_configuration()
@@ -196,7 +213,9 @@ def test_only_authenticated_completion_paths_register_with_frozen_mapping(wav_sy
     callbacks = s.w.callbacks[-1]
     callbacks.workbench_completed(SimpleNamespace(request=request), completion)
     assert rows(s) == [dict(completed_at=datetime(2026, 11, 11, 12), station_id=1,
-                           file_name="actual.saved.wav", condition="正转", result="未标记")]
+                           file_name="actual.saved.wav", condition="正转", result="未标记",
+                           analysis_reference=RecordAnalysisReference(request.request_id, actual.station_id,
+                               completion.condition_id, actual.path, actual.channels))]
     callbacks.workbench_completed(SimpleNamespace(request=request), completion)
     assert len(rows(s)) == 1
 
@@ -215,6 +234,9 @@ def test_identical_basenames_from_separate_requests_are_distinct(wav_sync):
         ))
     assert [row["file_name"] for row in rows(s)] == ["same.wav", "same.wav"]
     assert [row["condition"] for row in rows(s)] == ["正转", "反转"]
+    references = [row["analysis_reference"] for row in rows(s)]
+    assert references[0].record_key != references[1].record_key
+    assert references[0].wav_path != references[1].wav_path
 
 
 @pytest.mark.parametrize("items,failed,expected", [

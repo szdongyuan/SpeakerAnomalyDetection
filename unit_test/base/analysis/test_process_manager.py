@@ -61,6 +61,66 @@ def task(tmp_path):
     )
 
 
+def test_compute_only_then_persisting_task_reuses_real_worker_and_closes(task, tmp_path):
+    from base.wav_calibration_metadata import append_wav_calibration_metadata
+
+    assert append_wav_calibration_metadata(task.wav_path, {"recorded_channels": [
+        {"wav_channel_index": index, "calibrated": True, "v2pa_factor": 2.0,
+         "standard_spl": 94.0}
+        for index in range(2)
+    ]})
+    task = replace(task, channels=tuple(replace(c, v2pa_factor=None) for c in task.channels))
+    before = {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+              for path in tmp_path.rglob("*")}
+    manager = AnalysisProcessManager(task.station_id)
+    try:
+        pid = manager.start()
+        wait_ready(manager)
+        readonly = replace(task, task_id="view-only", persist_artifacts=False,
+                           analysis_result_directory=None)
+        manager.submit(readonly)
+        computed, _ = wait_result(manager, readonly.task_id)
+        assert computed["execution_status"] == "分析完成", computed
+        assert manager.pid == pid and manager.state == "ready"
+        for item in computed["instance_results"]:
+            assert item["artifacts"] == []
+            assert item["display_payload"]["x"]
+            assert item["metrics"]["calibration_source"] == "wav"
+        after = {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                 for path in tmp_path.rglob("*")}
+        assert after == before
+        assert not Path(task.analysis_result_directory).exists()
+
+        saving = replace(task, task_id="production-after-view", persist_artifacts=True)
+        manager.submit(saving)
+        saved, _ = wait_result(manager, saving.task_id)
+        assert saved["execution_status"] == "分析完成", saved
+        assert manager.pid == pid and manager.state == "ready"
+        for expected, item in zip(computed["instance_results"], saved["instance_results"]):
+            assert item["metrics"] == expected["metrics"]
+            assert item["display_payload"] == expected["display_payload"]
+            overall, curve = item["artifacts"]
+            assert all(a["status"] == "saved" and Path(a["path"]).is_file()
+                       for a in (overall, curve))
+            with open(overall["path"], encoding="utf-8-sig", newline="") as stream:
+                row, = csv.DictReader(stream)
+            assert float(row["总体声压级dB"]) == pytest.approx(item["metrics"]["overall_spl"])
+            with open(curve["path"], encoding="utf-8-sig", newline="") as stream:
+                rows = list(csv.DictReader(stream))
+            assert len(rows) == len(item["display_payload"]["x"])
+        assert len(list(Path(task.analysis_result_directory).rglob("*.csv"))) == 4
+    finally:
+        started = time.monotonic()
+        manager.close(timeout=5, terminate_timeout=2)
+        close_seconds = time.monotonic() - started
+    assert close_seconds < 8
+    assert manager.closed and manager.pid is None
+    assert pid not in {child.pid for child in multiprocessing.active_children()}
+    assert f"analysis-io-{pid}" not in {thread.name for thread in threading.enumerate()}
+    print(f"Compute-only resident verification: pid={pid}, same_pid=True, "
+          f"readonly_csv=0, persisted_csv=4, calibration=wav, close_s={close_seconds:.4f}, closed=True")
+
+
 def test_real_wavs_reuse_pid_keep_order_and_save_per_channel(task):
     manager = AnalysisProcessManager(task.station_id)
     samples, rate = sf.read(task.wav_path, always_2d=True)

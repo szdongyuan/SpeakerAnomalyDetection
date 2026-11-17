@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from base.audio_label_policy import audio_label_for_results
 from base.audio_label_sync import AudioLabelJob
+from base.record_analysis_reference import RecordAnalysisReference
 from base.workbench_config_values import WorkbenchChannel, WorkbenchCondition
 from base.workbench_round_counter import WorkbenchRoundCounter
 from base.workbench_wav_state import WorkbenchWavState
@@ -124,6 +125,7 @@ class MotorWorkbenchController:
         self._analysis_version = None
         self._analysis_input_ready = None
         self._analysis_service = None
+        self._record_analysis = None
         self._analysis_event_received = None
         self._submit_audio_label: Callable[[AudioLabelJob], None] | None = None
         self._analysis_active = False
@@ -298,6 +300,16 @@ class MotorWorkbenchController:
         self._analysis_event_received = event_received
         self.refresh_recording_state()
 
+    def bind_record_analysis(self, coordinator) -> None:
+        """Borrow the optional record-view coordinator from the host runtime."""
+        self._record_analysis = coordinator
+
+    def open_record_analysis(self, record, parent):
+        """Forward a saved-record intent without changing production state."""
+        if self._record_analysis is not None:
+            return self._record_analysis.open_record(record, parent)
+        return None
+
     def bind_result_summary(self, set_daily_records: Callable | None) -> None:
         """Attach the optional complete daily snapshot consumer on the GUI thread."""
         self._set_daily_records = set_daily_records
@@ -338,6 +350,8 @@ class MotorWorkbenchController:
         """The host's sole timer drives the backend and delivers events on its thread."""
         events = self._analysis_service.poll_events()
         for event in events:
+            if self._record_analysis is not None and self._record_analysis.handle_analysis_event(event):
+                continue
             task_id = event.get("task_id")
             context = self._analysis_tasks.get(task_id)
             if context is not None:
@@ -471,6 +485,8 @@ class MotorWorkbenchController:
         if self._analysis_closing:
             return
         self._analysis_closing = True
+        if self._record_analysis is not None:
+            self._record_analysis.begin_shutdown()
         self._analysis_service.shutdown()
 
     def bind_recording(self, ports: WorkbenchRecordingPorts) -> None:
@@ -769,6 +785,9 @@ class MotorWorkbenchController:
             attempt.request_id, attempt.recorded_at, condition,
             tuple((station.station_id, station_numbers[station.station_id], station.path)
                   for station in result.stations),
+            analysis_references={station.station_id: RecordAnalysisReference(
+                result.request_id, station.station_id, result.condition_id, station.path, station.channels,
+            ) for station in result.stations},
         ):
             self._publish_wav_details()
         try:
@@ -867,6 +886,12 @@ class MotorWorkbenchController:
 
     def get_analysis_config(self):
         return self._applied_config.analysis if self._applied_config is not None else None
+
+    def get_current_analysis_snapshot(self):
+        """Return the valid applied analysis and version, without reloading files."""
+        if not self._configuration_valid:
+            return None, None
+        return self.get_analysis_config(), self._analysis_version
 
     def get_ui_config(self):
         return self._applied_config.ui if self._applied_config is not None else None

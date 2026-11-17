@@ -1,6 +1,6 @@
 """Round summary and modal WAV details from independent daily snapshots."""
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from consts.ui_style_const import MOTOR_INFORMATION_SUMMARY_STYLE
@@ -11,6 +11,8 @@ from ui.sequence.motor_daily_details_dialog import MotorDailyDetailsDialog
 
 class MotorInformationSummaryPanel(QWidget):
     """Render independent round and saved-WAV snapshots supplied by the caller."""
+
+    record_analysis_requested = pyqtSignal(object, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -89,6 +91,9 @@ class MotorInformationSummaryPanel(QWidget):
         if self._details_dialog is None:
             dialog = MotorDailyDetailsDialog(self._daily_wav_records, self.window())
             self._details_dialog = dialog
+            # Signal-to-signal forwarding follows Qt ownership and disconnects
+            # automatically when either QObject is destroyed.
+            dialog.record_analysis_requested.connect(self.record_analysis_requested)
             # Split sections can put the dialog under a different Qt owner.
             self.destroyed.connect(dialog.deleteLater)
             dialog.destroyed.connect(self._details_destroyed)

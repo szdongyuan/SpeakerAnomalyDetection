@@ -6,6 +6,34 @@ import pytest
 from base.analysis import AnalysisInputError, build_analysis_batch
 
 
+def test_persistence_defaults_to_true(batch_payload):
+    batch = build_analysis_batch(batch_payload)
+    assert all(task.persist_artifacts is True for task in batch.tasks)
+    assert any(issue.error_type == "MissingOutputDirectory" for issue in batch.preparation_issues)
+
+
+@pytest.mark.parametrize("persist", [True, False])
+def test_persistence_switch_controls_only_output_preparation_issue(batch_payload, persist):
+    for task in batch_payload["tasks"]:
+        task["persist_artifacts"] = persist
+    batch = build_analysis_batch(batch_payload)
+    assert all(task.persist_artifacts is persist for task in batch.tasks)
+    kinds = {issue.error_type for issue in batch.preparation_issues}
+    assert ("MissingOutputDirectory" in kinds) is persist
+    assert "CalibrationNotProvided" in kinds
+    assert "UnsupportedSignalType" in kinds
+
+
+@pytest.mark.parametrize("value", [0, 1, None, "false", "true", [], {}])
+def test_non_boolean_persistence_reports_task_and_field(batch_payload, value):
+    batch_payload["tasks"][0]["persist_artifacts"] = value
+    with pytest.raises(AnalysisInputError) as caught:
+        build_analysis_batch(batch_payload)
+    assert caught.value.issue.task_id == "analysis-1-1"
+    assert caught.value.issue.field_path == "tasks[0].persist_artifacts"
+    assert caught.value.issue.error_type == "InvalidField"
+
+
 @pytest.fixture
 def referenced_payload(batch_payload):
     config = batch_payload["tasks"][0]["analysis_config"]
