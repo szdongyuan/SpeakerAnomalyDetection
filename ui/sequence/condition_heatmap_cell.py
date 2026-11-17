@@ -37,7 +37,7 @@ class ConditionHeatmapCell(ConditionPlotCell):
         else:
             self._condition_heatmaps.pop(condition_id, None)
         self._condition_states[condition_id] = (status, detail)
-        self._redraw()
+        self._redraw_preserving_view()
         self.results_changed.emit()
 
     def _has_condition_data(self, condition_id):

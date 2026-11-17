@@ -98,7 +98,8 @@ def _configured_plot_cell(cell, station_id, analysis_config, durations):
         # Explicit presentation-only data; no queue or physical channel binding.
         panels = tuple(ConditionSegmentDisplay(
             condition.condition_id, condition.condition_name, durations.get(condition.condition_id),
-            tuple((ch, f'模拟通道{ch}') for ch in settings['channel_display']['display_wav_channels']),
+            tuple((ch, {1: 'X', 2: 'Y', 3: 'Z'}.get(ch, f'模拟通道{ch}'))
+                  for ch in settings['channel_display']['display_wav_channels']),
             's', settings['value_unit'], '',
         ) for condition in analysis_config.context.conditions if station_id in condition.applicable_station_ids)
         return WorkbenchPlotCellDisplay(
