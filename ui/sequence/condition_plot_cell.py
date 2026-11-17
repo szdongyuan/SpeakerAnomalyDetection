@@ -7,7 +7,7 @@ from numbers import Real
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt, QTimer, QSize, pyqtSignal
-from PyQt5.QtWidgets import QLabel, QSizePolicy, QToolButton
+from PyQt5.QtWidgets import QLabel, QToolButton
 
 from consts.ui_style_const import MAIN_UI_SMALL_FONT_FAMILY
 from ui.sequence.station_plot_cell import StationPlotCell
@@ -24,7 +24,6 @@ class ConditionPlotCell(StationPlotCell):
     def __init__(self, display, parent=None, *, row=0, column=0, station_name='', detail_view=False):
         super().__init__(parent, row=row, column=column)
         self.station_name = station_name
-        self._detail_view = detail_view
         self._manual_view_axes = [False, False]
         self._detail_dialog = None
         self.display = display
@@ -62,7 +61,7 @@ class ConditionPlotCell(StationPlotCell):
         self._layout_width = 0
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
-        self._resize_timer.timeout.connect(self._redraw_after_resize)
+        self._resize_timer.timeout.connect(self._redraw_preserving_view)
         self._sampling_timer = QTimer(self)
         self._sampling_timer.setSingleShot(True)
         self._sampling_timer.timeout.connect(self._refresh_display_curves)
@@ -95,13 +94,8 @@ class ConditionPlotCell(StationPlotCell):
         self.legend_bar = StationPlotLegend(self)
         legend = settings['plot_style']['legend']
         if legend['position'].startswith('top'):
-            self.header.left.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-            self.header.left.setMaximumWidth(self.header.left.full_text_width() + 2)
-            self.header.left.setMinimumWidth(min(180, self.header.left.full_text_width() + 2))
-            self.header.layout().setStretch(0, 0)
-            self.header.layout().insertWidget(1, self.legend_bar, 1)
-            # Keep title/expand aligned when the legend is disabled (e.g. heatmaps).
-            self.header.layout().insertStretch(2)
+            # Reserve a full-width row even before results arrive, keeping the canvas stable.
+            self.layout().insertWidget(1, self.legend_bar)
         else:
             self.layout().addWidget(self.legend_bar)
         self.legend_bar.align_right = legend['position'].endswith('right')
@@ -111,11 +105,14 @@ class ConditionPlotCell(StationPlotCell):
         self.set_display_style({**settings['plot_style'], 'legend': {**legend, 'visible': False}},
                                {'scale': 'linear'}, settings['y_axis'])
         plot = self.plot_widget.getPlotItem()
-        # Overview ranges belong to the display configuration, not mouse gestures.
-        plot.getViewBox().setMouseEnabled(x=detail_view, y=detail_view)
+        plot.getViewBox().setMouseEnabled(x=True, y=True)
         plot.getViewBox().sigRangeChangedManually.connect(self._mark_manual_view_axes)
-        plot.setMenuEnabled(False)
-        plot.hideButtons()
+        plot.setMenuEnabled(True)
+        plot.showButtons()
+        # Native auto-fit omits empty conditions; restore the configured canvas instead.
+        plot.autoBtn.clicked.disconnect(plot.autoBtnClicked)
+        plot.autoBtn.clicked.connect(self.reset_view)
+        plot.autoBtn.setToolTip('还原视图')
         plot.getAxis('bottom').enableAutoSIPrefix(False)
         if settings['condition_display']['x_axis_mode'] == 'cumulative_time':
             plot.getAxis('bottom').label.setToolTip('各工况显示时间首尾拼接，不包含工况切换或等待时间')
@@ -150,7 +147,11 @@ class ConditionPlotCell(StationPlotCell):
         if abs(self.plot_widget.getViewBox().width() - self._layout_width) > 0.5:
             self._resize_timer.start(0)
 
-    def _redraw_after_resize(self):
+    def reset_view(self):
+        self._manual_view_axes = [False, False]
+        self._redraw()
+
+    def _redraw_preserving_view(self):
         previous = self._manual_view_ranges()
         self._redraw()
         self._restore_manual_view_ranges(previous)
@@ -159,7 +160,7 @@ class ConditionPlotCell(StationPlotCell):
         self._manual_view_axes = [old or changed for old, changed in zip(self._manual_view_axes, axes)]
 
     def _manual_view_ranges(self):
-        if not self._detail_view or not self.has_result_data():
+        if not self.has_result_data():
             return {}
         ranges = self.plot_widget.getViewBox().viewRange()
         return {name: ranges[index] for index, name in enumerate(('xRange', 'yRange'))
@@ -286,7 +287,7 @@ class ConditionPlotCell(StationPlotCell):
         self._condition_series[condition_id] = snapshot
         self._condition_states[condition_id] = (status, detail)
         self._condition_summaries[condition_id] = deepcopy(summaries)
-        self._redraw()
+        self._redraw_preserving_view()
         self.results_changed.emit()
 
     def set_condition_state(self, condition_id, status, detail='', *, clear=False):
@@ -295,7 +296,7 @@ class ConditionPlotCell(StationPlotCell):
         self._condition_states[condition_id] = (status, detail)
         if clear:
             self._clear_condition_data(condition_id)
-            self._redraw()
+            self._redraw_preserving_view()
         else:
             self._position_labels()
         self.results_changed.emit()
@@ -479,6 +480,7 @@ class ConditionPlotCell(StationPlotCell):
         self._no_conditions.setGeometry(rect)
 
     def clear_plot(self):
+        self._manual_view_axes = [False, False]
         self._condition_series.clear()
         self._condition_states.clear()
         self._condition_summaries.clear()

@@ -1,6 +1,7 @@
 import json
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pyqtgraph as pg
@@ -180,15 +181,18 @@ def test_detail_auto_range_follows_later_condition_after_resize(grid, configurat
 
 
 @pytest.mark.parametrize('manual_axes', [[True, False], [True, True]])
-def test_detail_preserves_only_manually_changed_axes_and_resets_next_round(
-        grid, configuration, qt_app, manual_axes):
+@pytest.mark.parametrize('detail_view', [False, True])
+def test_plot_preserves_only_manually_changed_axes_and_resets_next_round(
+        grid, configuration, qt_app, manual_axes, detail_view):
     show(grid, configuration, qt_app)
     source = grid._cells[0, 0]
     source.set_condition_curve_data('c1', [curve(low=30, high=40)])
-    source.open_detail()
+    if detail_view:
+        source.open_detail()
     for _ in range(5):
         qt_app.processEvents()
-    view = source._detail_dialog.cell.plot_widget.getViewBox()
+    cell = source._detail_dialog.cell if detail_view else source
+    view = cell.plot_widget.getViewBox()
     ranges = dict(xRange=(0.5, 2))
     if manual_axes[1]:
         ranges['yRange'] = (32, 38)
@@ -204,7 +208,8 @@ def test_detail_preserves_only_manually_changed_axes_and_resets_next_round(
     source.set_condition_curve_data('c1', [curve(low=100, high=110)])
     assert view.viewRange()[0] == pytest.approx([0, 6])
     assert view.viewRange()[1][1] >= 110
-    source.close_detail()
+    if detail_view:
+        source.close_detail()
 
 
 def test_existing_controller_builds_one_canvas_per_chart(grid, configuration, qt_app):
@@ -481,25 +486,55 @@ def test_main_window_styles_do_not_enlarge_condition_or_empty_labels(grid, confi
         host.deleteLater()
 
 
-def test_mouse_gestures_cannot_change_overview_ranges(grid, configuration, qt_app):
+@pytest.mark.parametrize('detail_view', [False, True])
+def test_plot_gestures_and_reset_restore_complete_conditions(
+        grid, configuration, qt_app, detail_view, monkeypatch):
     show(grid, configuration, qt_app)
     grid.set_condition_curve_data(0, 0, 'c1', [curve()])
-    plot = grid._cells[0, 0].plot_widget.getPlotItem()
+    source = grid._cells[0, 0]
+    if detail_view:
+        source.open_detail()
+    cell = source._detail_dialog.cell if detail_view else source
+    for _ in range(5):
+        qt_app.processEvents()
+    plot = cell.plot_widget.getPlotItem()
     view = plot.getViewBox()
     before = np.array(view.viewRange())
+    assert plot.menuEnabled()
+    assert view.menuEnabled()
+    assert view.menu.viewAll.text() == 'View All'
+    native_auto_range = Mock(wraps=view.autoRange)
+    monkeypatch.setattr(view, 'autoRange', native_auto_range)
+    view.menu.viewAll.trigger()
+    native_auto_range.assert_called_once_with()
+    cell.reset_view()
+    plot.hoverEvent(SimpleNamespace(enter=True, exit=False))
+    assert plot.autoBtn.isVisible()
     for button in (Qt.LeftButton, Qt.RightButton):
         event = SimpleNamespace(
             accept=lambda: None, scenePos=lambda: pg.Point(30, 30),
             lastScenePos=lambda: pg.Point(0, 0), button=lambda: button,
+            pos=lambda: pg.Point(30, 30), lastPos=lambda: pg.Point(0, 0),
             screenPos=lambda: pg.Point(30, 30), lastScreenPos=lambda: pg.Point(0, 0),
             buttonDownPos=lambda _: pg.Point(0, 0),
         )
         view.mouseDragEvent(event)
     view.wheelEvent(SimpleNamespace(accept=lambda: None, delta=lambda: 120, pos=lambda: pg.Point(50, 50)))
-    np.testing.assert_allclose(view.viewRange(), before)
-    assert not plot.menuEnabled()
-    assert not view.menuEnabled()
-    assert not plot.autoBtn.isVisible()
+    assert not np.allclose(view.viewRange(), before)
+    zoomed = np.array(view.viewRange())
+    source.set_condition_curve_data('c1', [curve(low=30, high=90)])
+    np.testing.assert_allclose(view.viewRange(), zoomed)
+    plot.autoBtn.clicked.emit(plot.autoBtn)
+    for _ in range(5):
+        qt_app.processEvents()
+    assert view.viewRange()[0] == pytest.approx([0, 6])
+    assert view.viewRange()[1][0] <= 30
+    assert view.viewRange()[1][1] >= 90
+    source.set_condition_curve_data('c2', [curve(low=100, high=110)])
+    assert view.viewRange()[1][1] >= 110
+    source.clear_plot()
+    if detail_view:
+        source.close_detail()
 
 
 def test_configured_empty_y_range_shows_ticks_then_auto_ranges_and_restores(grid, configuration, qt_app):
@@ -601,7 +636,7 @@ def test_empty_canvas_stays_clear_but_runtime_states_remain_visible(grid, config
 
 
 @pytest.mark.parametrize('channels', [[1], [1, 2]])
-@pytest.mark.parametrize('legend_position', ['top_right', 'bottom_left'])
+@pytest.mark.parametrize('legend_position', ['top_left', 'top_right', 'bottom_left'])
 def test_result_arrival_and_clear_keep_plot_geometry(grid, configuration, qt_app, channels, legend_position):
     layout = template_layout()
     template = layout['plot_templates']['spl']
@@ -634,8 +669,10 @@ def test_result_arrival_and_clear_keep_plot_geometry(grid, configuration, qt_app
             rect = target.plot_widget.mapFromScene(target.plot_widget.getViewBox().sceneBoundingRect()).boundingRect()
             assert target.overall_labels[key].geometry().bottom() < rect.top()
             if legend_position.startswith('top'):
-                assert target.legend_bar.parentWidget() is target.header
-                assert target.legend_bar.geometry().left() > target.header.left.geometry().right()
+                assert target.legend_bar.parentWidget() is target
+                assert target.legend_bar.geometry().top() > target.header.geometry().bottom()
+                assert target.legend_bar.width() == target.plot_widget.width()
+                assert target.legend_bar.geometry().bottom() < target.plot_widget.geometry().top()
 
     cell.clear_plot()
     settle()

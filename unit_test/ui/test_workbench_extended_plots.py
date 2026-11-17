@@ -140,6 +140,38 @@ def test_spectrogram_regions_common_scale_full_matrix_and_detail(grid, configura
     cell.close_detail()
 
 
+@pytest.mark.parametrize('detail_view', [False, True])
+@pytest.mark.parametrize('scale', ['linear', 'log'])
+def test_spectrogram_reset_restores_configured_axes(grid, configuration, qt_app, detail_view, scale):
+    show(grid, extended_configuration(configuration, scale=scale), qt_app)
+    source = grid._cells[0, 0]
+    data = dict(validate_spectrogram(matrix_payload()), wav_channel=1)
+    source.set_condition_heatmap_data('c1', data)
+    if detail_view:
+        source.open_detail()
+    cell = source._detail_dialog.cell if detail_view else source
+    for _ in range(5):
+        qt_app.processEvents()
+    plot = cell.plot_widget.getPlotItem()
+    view = plot.getViewBox()
+    original = np.array(view.viewRange())
+    assert plot.menuEnabled() and view.menuEnabled()
+    assert all(view.state['mouseEnabled'])
+    assert view.menu.viewAll.text() == 'View All'
+    view.setRange(xRange=(0.2, 0.8), yRange=(2, 3), padding=0)
+    view.sigRangeChangedManually.emit([True, True])
+    source.set_condition_heatmap_data('c1', data)
+    np.testing.assert_allclose(view.viewRange(), [[0.2, 0.8], [2, 3]])
+    plot.autoBtn.clicked.emit(plot.autoBtn)
+    for _ in range(5):
+        qt_app.processEvents()
+    np.testing.assert_allclose(view.viewRange(), original)
+    source.clear_plot()
+    np.testing.assert_allclose(view.viewRange(), original)
+    if detail_view:
+        source.close_detail()
+
+
 def test_spectrogram_auto_colors_recolor_all_conditions_and_log_dc(grid, configuration, qt_app):
     config = extended_configuration(configuration, scale='log', auto_colors=True)
     projection = show(grid, config, qt_app)

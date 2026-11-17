@@ -17,6 +17,31 @@ def demo_layout():
     return layout
 
 
+def test_three_simulated_channels_fit_in_separate_legend_row(
+        configuration, grid, qt_app, main_ui_font):
+    from ui.sequence.workbench_plot_demo import simulated_rms_series
+
+    config = replace(configuration, ui=replace(configuration.ui, layout=parse_plot_templates(demo_layout())))
+    grid.resize(1528, 650)
+    show(grid, config, qt_app)
+    cell = grid._cells[0, 0]
+    first = next(iter(cell.conditions))
+    cell.set_condition_curve_data(first, simulated_rms_series(
+        cell.conditions[first], cell._settings, 0, 0))
+    cell.open_detail()
+    for _ in range(6):
+        qt_app.processEvents()
+    for target in (cell, cell._detail_dialog.cell):
+        legend = target.legend_bar
+        assert [name for name, _ in legend.entries] == ['X', 'Y', 'Z']
+        assert legend._visible_count == 3
+        assert not legend.more.isVisible()
+        assert legend.geometry().top() > target.header.geometry().bottom()
+        assert legend.width() == target.plot_widget.width()
+    assert cell.expand_button.parentWidget() is cell.header
+    cell.close_detail()
+
+
 def test_demo_needs_no_analysis_item_or_hardware_and_cannot_receive_real_results(configuration, grid, qt_app):
     queues_before = dict(configuration.analysis.test_queues)
     config = replace(configuration, ui=replace(configuration.ui, layout=parse_plot_templates(demo_layout())))
