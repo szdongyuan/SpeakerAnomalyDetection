@@ -336,18 +336,39 @@ def test_failed_judgement_keeps_real_curves_and_never_displays_ok(real_results):
     assert good.status == '分析完成' and good.panels
 
 
-def test_overall_spl_limits_stay_scalar_and_never_become_curve_bounds(real_results):
+def test_overall_spl_limits_are_scalar_reference_lines_without_point_rejudgement(real_results):
     task, _, _ = real_results
     original = task.instances[0]
     config = dict(weighting='A', limit_checked=True, limit_metric='overall_spl',
                   scalar_upper_enabled=True, scalar_upper_value=0.001, scalar_lower_enabled=False)
     result = execute_task(replace(task, instances=(replace(original, parameters=config),)))
+    before = deepcopy(result)
+    source = result['instance_results'][0]
+    payload = source['display_payload']
     item = RecordAnalysisItem('SPL', 'SPL', (0,), config)
     channel, = build_record_analysis_results((item,), result)['SPL'].channels
-    assert channel.judgement == 'NG'
+    assert channel.status == '分析完成' and not channel.diagnostic
+    assert channel.judgement == source['judgement'] == 'NG'
+    assert channel.judgement_status == source['judgement_status'] == 'completed'
+    assert channel.metrics == source['metrics']
     assert channel.metrics['overall_upper_limit'] == 0.001
-    assert channel.metrics['overall_spl'] == result['instance_results'][0]['metrics']['overall_spl']
-    assert [series['role'] for series in channel.panels[0].series] == ['curve']
+    assert channel.violations == source['violations']
+    assert source['violations']
+    assert all(value['x_start'] is None and value['x_end'] is None
+               for value in source['violations'])
+    assert not any(np.isfinite(np.asarray(payload[side], dtype=float)).any()
+                   for side in ('upper', 'lower'))
+    # Scalar NG and points above the reference must not invent point highlights.
+    assert [series['role'] for series in channel.panels[0].series] == ['curve', 'upper']
+    curve, reference = channel.panels[0].series
+    np.testing.assert_array_equal(curve['x'], payload['x'])
+    np.testing.assert_array_equal(curve['y'], payload['y'])
+    assert np.any(curve['y'] > channel.metrics['overall_upper_limit'])
+    assert reference['limit_scope'] == 'scalar'
+    np.testing.assert_array_equal(reference['x'], payload['x'])
+    np.testing.assert_array_equal(reference['y'], np.full(
+        len(payload['x']), channel.metrics['overall_upper_limit']))
+    assert result == before
 
 
 def test_same_type_different_keys_keep_navigation_order_and_independent_data(real_results):
