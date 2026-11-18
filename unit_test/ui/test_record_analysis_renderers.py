@@ -9,7 +9,9 @@ import soundfile as sf
 from base.analysis.contracts import AnalysisInstance
 from base.analysis.executor import execute_task
 from base.analysis_algorithm_adapters import calculate_analysis_instance
+from base.analysis_curve_style import resolve_curve_colors
 from base.record_analysis_request import RecordAnalysisItem
+from ui.plotting.renderers import analysis_curve_pen
 from ui.sequence.record_analysis_renderers import RecordAnalysisRenderer
 from ui.sequence.record_analysis_results import build_record_analysis_results
 from unit_test.ui.test_record_analysis_results import real_results
@@ -24,7 +26,10 @@ def test_real_multichannel_curves_limits_and_disposal(qt_app, real_results, kind
     assert len(content.plots) == 1
     curves = [curve for curve in content.curves if curve.record_role == 'curve']
     assert [curve.name() for curve in curves] == ['CH1 · near', 'CH2 · far']
-    assert len(content.plots[0].plotItem.legend.items) == 2
+    assert content.plots[0].plotItem.legend is None
+    assert len(content.legends[0].entries) == len(content.curves)
+    assert [name for name, _ in content.legends[0].entries if ' · ' in name] == [
+        'CH1 · near', 'CH2 · far']
     assert any(curve.record_role == 'upper' for curve in content.curves)
     assert any(curve.record_role == 'exceedance' for curve in content.curves)
     for curve, channel in zip(curves, mapped.channels):
@@ -68,8 +73,8 @@ def test_loud_selected_composite_uses_independent_axes_and_metadata(qt_app, real
     assert [(plot.record_x_unit, plot.record_y_unit) for plot in content.plots] == [
         ('s', 'phon'), ('Bark', 'sone/Bark'), ('s', 'Bark')]
     assert len(content.images) == 1
-    assert len(content.summary_labels) == 2
-    assert all('本次判定' in label.text() for label in content.summary_labels)
+    assert not content.summary_labels
+    assert all('本次判定' not in label.text() for label in content.card_labels)
     assert all(card['unit'] in label.text() for card, label in zip(
         [card for ch in mapped.channels for card in ch.summary_cards], content.card_labels))
     assert content.plots[0].record_metadata['zero_based'] is True
@@ -212,7 +217,7 @@ def test_spec_invalid_color_settings_remain_diagnostic(qt_app, real_results, lim
     try:
         assert not content.plots
         assert 'Spec 内容不可用' in content.diagnostic_text()
-        assert content.summary_labels
+        assert not content.summary_labels
     finally:
         content.dispose()
 
@@ -309,7 +314,9 @@ def test_human_summary_keeps_measurements_without_backend_metadata(qt_app, real_
                          'analysis_end_time_sec', 'v2pa_factor', 'overall_upper_limit',
                          'overall_lower_limit', 'peak_value', 'peak_frequency_hz'):
             assert internal not in text
-        assert 'CH1' in text and 'CH2' in text and '本次判定' in text
+        if kind != 'Spec':
+            assert 'CH1' in text and 'CH2' in text
+        assert '本次判定' not in text
         if kind == 'SPL':
             assert '总体声压级' in text
         if kind == 'FFT':
@@ -321,16 +328,15 @@ def test_human_summary_keeps_measurements_without_backend_metadata(qt_app, real_
         content.dispose()
 
 
-def test_loud_titles_are_readable_while_internal_panel_identity_is_preserved(qt_app, real_results):
+def test_loud_has_no_title_rows_while_internal_panel_identity_is_preserved(qt_app, real_results):
     _, items, result = real_results
     content = RecordAnalysisRenderer().render(build_record_analysis_results(items, result)['LOUD'], {})
     try:
         assert [plot.record_panel_key for plot in content.plots] == [
             'loudness_time', 'specific_loudness_profile', 'specific_loudness']
-        titles = [plot.plotItem.titleLabel.text for plot in content.plots]
-        assert 'specific_loudness_profile' not in titles
-        assert 'loudness_time' not in titles
-        assert any('特征响度' in title for title in titles)
+        assert not content.title_labels
+        assert all(not plot.plotItem.titleLabel.text for plot in content.plots)
+        assert content.plots[1].getAxis('left').labelText
     finally:
         content.dispose()
 
@@ -380,7 +386,8 @@ def test_failed_channel_rows_remain_compact_at_top(qt_app, real_results):
         content.resize(700, 500)
         content.show()
         QTest.qWait(20)
-        assert content.summary_labels[0].y() <= 12
+        assert not content.summary_labels
+        assert content.diagnostics[0].y() <= 12
         bottom = content.diagnostics[-1].geometry().bottom()
         assert bottom < 200
         assert not content.plots
@@ -466,7 +473,10 @@ def test_real_fba_grouped_bars_preserve_values_limits_labels_and_ng(qt_app, real
 
     task, items, _ = real_results
     original_item = next(item for item in items if item.config_key == 'FBA')
-    parameters = dict(original_item.parameters, constant_lower_enabled=True, constant_lower_value=-80.)
+    parameters = dict(original_item.parameters, constant_lower_enabled=True, constant_lower_value=-80.,
+                      display={'main_curve_color': '#126798', 'upper_limit_color': '#A26914',
+                               'lower_limit_color': '#723DA1'})
+    colors = resolve_curve_colors(parameters)
     item = replace(original_item, channel_indices=tuple(range(channel_count)), parameters=parameters)
     source = execute_task(replace(task, instances=tuple(
         AnalysisInstance('FBA', 'FBA', i, parameters) for i in item.channel_indices)))
@@ -482,9 +492,11 @@ def test_real_fba_grouped_bars_preserve_values_limits_labels_and_ng(qt_app, real
             list(enumerate(plot.record_band_labels))]
         assert not plot.plotItem.ctrl.xGridCheck.isChecked()
         assert plot.plotItem.ctrl.yGridCheck.isChecked()
-        assert len(plot.plotItem.legend.items) == channel_count
-        assert [label.text for _, label in plot.plotItem.legend.items] == [
-            'CH1 · near', 'CH2 · far'][:channel_count]
+        assert plot.plotItem.legend is None
+        assert [name for name, _ in content.legends[0].entries] == [
+            name for channel in mapped.channels for name in
+            (f'CH{channel.wav_channel} · {channel.name}', f'CH{channel.wav_channel} 上限',
+             f'CH{channel.wav_channel} 下限', f'CH{channel.wav_channel} 超限')]
         for index, (bar, channel) in enumerate(zip(content.bars, mapped.channels)):
             assert isinstance(bar, pg.BarGraphItem)
             panel, = channel.panels
@@ -499,13 +511,14 @@ def test_real_fba_grouped_bars_preserve_values_limits_labels_and_ng(qt_app, real
             exceeded = np.isfinite(series['exceedance']['y'])
             assert exceeded.any()
             assert [brush.color().getRgb()[:3] for brush in bar.opts['brushes']] == [
-                (244, 67, 54) if flag else (76, 175, 80) for flag in exceeded]
-            for role, color, symbol in [('upper', (0, 188, 212), 'o'), ('lower', (63, 81, 181), 't')]:
+                analysis_curve_pen('exceedance' if flag else 'curve', colors).color().getRgb()[:3]
+                for flag in exceeded]
+            for role, symbol in [('upper', 'o'), ('lower', 't')]:
                 line, = [curve for curve in content.curves
                          if curve.record_role == role and curve.record_channel == channel.wav_channel]
                 np.testing.assert_allclose(line.full_x, x)
                 np.testing.assert_array_equal(line.full_y, series[role]['y'])
-                assert line.opts['pen'].color().getRgb()[:3] == color
+                assert line.opts['pen'] == analysis_curve_pen(role, colors)
                 assert line.opts['symbol'] == symbol
             annotations = [text for text in content.annotations if text.record_channel == channel.wav_channel]
             assert len(annotations) == int(exceeded.sum())
@@ -576,7 +589,9 @@ def test_fba_gaps_are_gray_zero_without_rejudging_or_mutating(qt_app, real_resul
         bar, = content.bars
         assert bar.opts['height'][0] == 0
         assert [brush.color().getRgb()[:3] for brush in bar.opts['brushes'][:3]] == [
-            (189, 189, 189), (244, 67, 54), (76, 175, 80)]
+            (189, 189, 189),
+            analysis_curve_pen('exceedance', resolve_curve_colors({})).color().getRgb()[:3],
+            analysis_curve_pen('curve', resolve_curve_colors({})).color().getRgb()[:3]]
         text, = content.annotations
         assert text.pos().x() == 1.
         upper, = content.curves

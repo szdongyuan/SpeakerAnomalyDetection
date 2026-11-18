@@ -10,6 +10,7 @@ from ui.sequence.record_analysis_dialog import RecordAnalysisDialog
 from ui.sequence.record_analysis_presenter import RecordAnalysisPresenter
 from ui.sequence.record_analysis_results import build_record_analysis_results
 from unit_test.ui.test_record_analysis_results import real_results
+from unit_test.ui.test_record_analysis_view_layout import text as label_text
 
 
 def test_default_selection_switching_and_independent_current_judgement(qt_app, real_results):
@@ -33,8 +34,8 @@ def test_default_selection_switching_and_independent_current_judgement(qt_app, r
     assert old.disposed
     assert dialog.channel_selector.count() == 2
     assert dialog.channel_selector.currentData() == 0
-    assert '本次判定：OK' in dialog.content.summary_labels[0].text()
-    assert dialog.original_result.text() == '原记录结果：NG'
+    assert label_text(dialog.current_result) == '本次判定：CH1 OK · CH2 OK'
+    assert label_text(dialog.original_result) == '原记录结果：NG'
     dialog.channel_selector.setCurrentIndex(1)
     assert presenter.selected_channel == 1
     assert len(dialog.content.images) == 1

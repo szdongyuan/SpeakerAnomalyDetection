@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QDialog, QLabel, QPushButton
 from base.motor_daily_wav_records import DailyWavRecord
 from base.record_analysis_request import RecordAnalysisItem
 from ui.sequence.record_analysis_dialog import RecordAnalysisDialog
+from unit_test.ui.test_record_analysis_view_layout import text as label_text
 
 
 def test_native_parent_navigation_record_and_scroll(qt_app):
@@ -36,7 +37,7 @@ def test_native_parent_navigation_record_and_scroll(qt_app):
     qt_app.processEvents()
     assert dialog.file_name.toolTip() == name
     assert dialog.file_name.text() != name
-    assert dialog.original_result.text() == '原记录结果：NG'
+    assert label_text(dialog.original_result) == '原记录结果：NG'
     assert '仅用于查看' in dialog.read_only_note.text()
     assert dialog.content_scroll.verticalScrollBar().maximum() > 0
     assert not hasattr(dialog, 'return_button')

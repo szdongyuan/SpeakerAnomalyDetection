@@ -19,6 +19,7 @@ from base.workbench_recording_protocol import StationWavChannel
 from ui.sequence.record_analysis_coordinator import RecordAnalysisCoordinator
 from ui.sequence.record_analysis_dialog import RecordAnalysisDialog
 from ui.sequence.record_analysis_presenter import RecordAnalysisPresenter
+from unit_test.ui.test_record_analysis_view_layout import text as label_text
 from unit_test.ui.test_motor_workbench_controller import (
     config, workbench, recording_workbench, paired_recording_workbench, configuration_with,
 )
@@ -178,7 +179,7 @@ def test_runtime_factory_summary_signal_and_parent_destroy(startup, monkeypatch,
     assert view is not None and view.isVisible()
     assert len(forwarded) == len(startup.analysis_service.submissions) == 1
     assert forwarded[0] == (details.table.item(0, 5).data(Qt.UserRole), details)
-    assert view.original_result.text().endswith("NG")
+    assert label_text(view.original_result).endswith("NG")
     assert [view.navigation.item(i).data(Qt.UserRole) for i in range(2)] == ["SPL", "FFT"]
     assert view.navigation.currentRow() == 0
     task = startup.analysis_service.submissions[-1]["tasks"][0]
