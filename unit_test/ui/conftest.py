@@ -19,6 +19,24 @@ def isolate_workbench_round_state(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolate_workbench_summary_state(tmp_path, monkeypatch):
+    from base.workbench_summary_store import WorkbenchSummaryStore
+
+    target = tmp_path / "workbench_summary_state.json"
+    monkeypatch.setattr(WorkbenchSummaryStore, "default_path", staticmethod(lambda: target))
+    return target
+
+
+@pytest.fixture(autouse=True)
+def isolate_workbench_wav_details_state(tmp_path, monkeypatch):
+    from base.workbench_wav_details_store import WorkbenchWavDetailsStore
+
+    target = tmp_path / "workbench_wav_details_state.json"
+    monkeypatch.setattr(WorkbenchWavDetailsStore, "default_path", staticmethod(lambda: target))
+    return target
+
+
+@pytest.fixture(autouse=True)
 def isolate_recording_defaults(tmp_path, monkeypatch):
     from base.recording_defaults import RecordingDefaultsStore
 

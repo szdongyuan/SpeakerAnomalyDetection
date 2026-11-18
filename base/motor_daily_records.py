@@ -22,6 +22,12 @@ class DailyRecordSummary:
     unmarked: int
     pass_rate: str
 
+    @classmethod
+    def from_counts(cls, ok: int, ng: int, unmarked: int):
+        total = ok + ng + unmarked
+        pass_rate = f"{ok / total * 100:.1f}%" if total else "--"
+        return cls(total, ok, ng, unmarked, pass_rate)
+
 
 @dataclass(frozen=True)
 class DailyRecordPage:
@@ -37,7 +43,7 @@ class DailyRecordStore:
     def __init__(self):
         self.record_date = date.today()
         self.records = ()
-        self.summary = DailyRecordSummary(0, 0, 0, 0, "--")
+        self.summary = DailyRecordSummary.from_counts(0, 0, 0)
         self.station_ids = ()
 
     def replace(self, records, record_date=None):
@@ -89,12 +95,10 @@ class DailyRecordStore:
         normalized = tuple(sorted(
             normalized, key=lambda row: row.completed_at, reverse=True,
         ))
-        total = len(normalized)
-        ok = sum(row.result == "OK" for row in normalized)
-        summary = DailyRecordSummary(
-            total, ok, sum(row.result == "NG" for row in normalized),
+        summary = DailyRecordSummary.from_counts(
+            sum(row.result == "OK" for row in normalized),
+            sum(row.result == "NG" for row in normalized),
             sum(row.result == "未标记" for row in normalized),
-            f"{ok / total * 100:.1f}%" if total else "--",
         )
         stations = tuple(sorted({row.station_id for row in normalized}))
         self.record_date, self.records = day, normalized

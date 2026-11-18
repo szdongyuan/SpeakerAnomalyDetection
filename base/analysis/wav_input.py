@@ -1,6 +1,8 @@
 """WAV data and calibration boundaries; no device or active-config lookup."""
 
 import math
+from pathlib import Path
+from stat import S_ISREG
 
 import numpy as np
 import soundfile as sf
@@ -12,8 +14,26 @@ from base.wav_calibration_metadata import (
 )
 
 
+def _unavailable_wav_reason(wav_path):
+    try:
+        mode = Path(wav_path).stat().st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return "WAV 文件不存在"
+    except OSError as error:
+        return f"无法访问 WAV 文件（{error.strerror or error}）"
+    return None if S_ISREG(mode) else "WAV 路径不是文件"
+
+
 def load_task_wav(task):
-    samples, sample_rate = sf.read(task.wav_path, dtype="float32", always_2d=True)
+    try:
+        samples, sample_rate = sf.read(task.wav_path, dtype="float32", always_2d=True)
+    except (OSError, sf.SoundFileRuntimeError) as error:
+        if not task.persist_artifacts:
+            # Diagnose an unavailable historical path in the worker after a read fails.
+            reason = _unavailable_wav_reason(task.wav_path)
+            if reason is not None:
+                raise OSError(f"{reason}\n{task.wav_path}") from error
+        raise
     if samples.shape[0] == 0:
         raise ValueError("WAV 没有音频帧")
     if samples.shape[1] != len(task.channels):

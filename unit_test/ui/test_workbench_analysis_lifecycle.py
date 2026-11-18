@@ -1,14 +1,24 @@
 """Application wiring for the resident service; acquisition stays independent."""
 
 from dataclasses import replace
+from datetime import date, datetime
 from time import monotonic
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from PyQt5.QtCore import QCoreApplication
+from PyQt5.QtGui import QCloseEvent
 from PyQt5.QtTest import QTest
 
 import main_window
 from base.workbench_configuration_loader import WorkbenchConfigurationError
+from base.workbench_summary_store import (
+    WorkbenchSummarySnapshot, WorkbenchSummaryStateError, WorkbenchSummaryStore,
+)
+from base.workbench_wav_details_store import (
+    WorkbenchWavDetailsSnapshot, WorkbenchWavDetailsStateError, WorkbenchWavDetailsStore,
+)
 from unit_test.ui.test_motor_workbench_controller import (
     config, workbench, configuration_with,
 )
@@ -116,6 +126,86 @@ def test_close_waits_for_service_and_keeps_polling(startup, monkeypatch, config)
     assert service.sync_calls == [("right", "left", "spare")]
     service.allow_close = True
     wait_until(lambda: getattr(window, "_exit_cleanup_complete", False))
+
+
+@pytest.mark.parametrize("failures", [
+    pytest.param((), id="both-saved"),
+    pytest.param(("summary",), id="summary-failed"),
+    pytest.param(("details",), id="details-failed"),
+    pytest.param(("summary", "details"), id="both-failed"),
+])
+def test_wav_details_restart_final_close_saves_independently_and_ignores_nested_events(
+        startup, monkeypatch, failures):
+    day = date(2026, 11, 18)
+    old_day = date(2026, 11, 17)
+    monkeypatch.setattr(main_window, "datetime",
+                        SimpleNamespace(now=lambda: datetime(2026, 11, 18, 9)), raising=False)
+    stores = {"summary": WorkbenchSummaryStore(), "details": WorkbenchWavDetailsStore()}
+    stores["summary"].save(WorkbenchSummarySnapshot(old_day, 2, 1, 1))
+    stores["details"].save(WorkbenchWavDetailsSnapshot(old_day, ()))
+    prior_bytes = {name: store.path.read_bytes() for name, store in stores.items()}
+    window = startup.launch(lambda _: ("Engineer", "test"))
+    logger = Mock()
+    window.default_logger = logger
+    nested_observations, attempts = [], []
+
+    def dispatch_nested_close(phase):
+        nested_event = QCloseEvent()
+        QCoreApplication.sendEvent(window, nested_event)
+        nested_observations.append((phase, nested_event.isAccepted(),
+                                    getattr(window, "_exit_cleanup_complete", False)))
+
+    def intercept_save(name, error_type):
+        save = type(stores[name]).save
+
+        def write(current_store, snapshot):
+            attempts.append((name, current_store.path, snapshot))
+            dispatch_nested_close(name)
+            if name in failures:
+                raise error_type(f"{current_store.path}: injected write failure")
+            save(current_store, snapshot)
+
+        return write
+
+    attempted_before_warning = []
+
+    def show_warning(_parent, title, _message):
+        attempted_before_warning.append(tuple(name for name, _, _ in attempts))
+        dispatch_nested_close(title)
+
+    warning = Mock(side_effect=show_warning)
+    monkeypatch.setattr(WorkbenchSummaryStore, "save", intercept_save("summary", WorkbenchSummaryStateError))
+    monkeypatch.setattr(WorkbenchWavDetailsStore, "save",
+                        intercept_save("details", WorkbenchWavDetailsStateError))
+    monkeypatch.setattr(main_window.QMessageBox, "warning", warning)
+    window.close()
+    wait_until(lambda: getattr(window, "_exit_cleanup_complete", False))
+
+    expected = {
+        "summary": WorkbenchSummarySnapshot(day, 0, 0, 0),
+        "details": WorkbenchWavDetailsSnapshot(day, ()),
+    }
+    assert attempts == [(name, store.path, expected[name]) for name, store in stores.items()]
+    warning_titles = {"summary": "首页信息汇总保存失败", "details": "WAV 明细保存失败"}
+    warning_messages = {"summary": "本次新增统计未保存", "details": "本次 WAV 明细未保存"}
+    assert nested_observations == [
+        (phase, False, False) for phase in (*stores, *(warning_titles[name] for name in failures))
+    ]
+    assert attempted_before_warning == [("summary", "details")] * len(failures)
+    assert warning.call_count == logger.warning.call_count == len(failures)
+    for name, notice, log in zip(failures, warning.call_args_list, logger.warning.call_args_list):
+        path = stores[name].path
+        parent, title, message = notice.args
+        assert parent is window and title == warning_titles[name]
+        assert warning_messages[name] in message and str(path) in message
+        fmt, *args = log.args
+        diagnostic = fmt % tuple(args)
+        assert str(path) in diagnostic and "injected write failure" in diagnostic
+    for name, store in stores.items():
+        if name in failures:
+            assert store.path.read_bytes() == prior_bytes[name]
+        else:
+            assert store.load() == expected[name]
 
 
 def test_close_before_first_tick_does_not_start_stations(startup, monkeypatch, config):
