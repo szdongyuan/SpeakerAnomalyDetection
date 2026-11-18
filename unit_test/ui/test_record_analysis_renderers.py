@@ -107,7 +107,7 @@ def test_fft_configured_log_axis_and_delta_unit_are_preserved(qt_app, real_resul
                              panels=(replace(ch.panels[0], y_unit='dB'),)) for ch in mapped.channels)
     content = RecordAnalysisRenderer().render(replace(mapped, channels=channels), {'x_axis_scale': 'log'})
     assert content.plots[0].plotItem.getAxis('bottom').logMode
-    assert '幅值单位：dB' in content.summary_labels[0].text()
+    assert content.plots[0].getAxis('left').labelText == 'dB'
     assert 'dB(A)' not in content.summary_labels[0].text()
     assert 'Hz' in content.summary_labels[0].text()
     content.dispose()
@@ -462,7 +462,7 @@ def test_real_spl_scalar_bounds_keep_canonical_weighted_unit_without_limit_unit(
         text = content.summary_labels[0].text()
         assert '上限：65.00 dB(A)' in text
         assert '下限：30.00 dB(A)' in text
-        assert '总体声压级' in text and '幅值单位：dB(A)' in text
+        assert f'总体声压级：{instance["metrics"]["overall_spl"]:.2f} dB(A)' in text
     finally:
         content.dispose()
 
