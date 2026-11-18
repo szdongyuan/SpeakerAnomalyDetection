@@ -48,7 +48,7 @@ def prepare_fixture(output_dir):
     values = {
         'SPL': {'type': 'SPL', 'analysis_channels': [0, 1], 'weighting': 'A',
                 'limit_checked': True, 'limit_metric': 'overall_spl',
-                'scalar_upper_enabled': True, 'scalar_upper_value': 65.,
+                'scalar_upper_enabled': True, 'scalar_upper_value': 60.,
                 'scalar_lower_enabled': False},
         'FFT': {'type': 'FFT', 'analysis_channels': [0, 1], 'n_fft': 2048, 'x_axis_scale': 'linear'},
         'FBA': {'type': 'FBA', 'analysis_channels': [0, 1],
@@ -65,6 +65,9 @@ def prepare_fixture(output_dir):
                              'summary_metrics': ['steady_state_average_loudness', 'max_transient_loudness']}},
         '未支持项': {'type': 'AI', 'analysis_channels': [0, 1]},
     }
+    for kind in ('SPL', 'FFT', 'FBA', 'LOUD'):
+        values[kind].setdefault('display', {}).update(
+            main_curve_color='#126798', upper_limit_color='#A26914', lower_limit_color='#723DA1')
     analysis = WorkbenchAnalysisConfig(WorkbenchContext('synthetic', '合成验收',
         str(output_dir / 'unused-results'), (WorkbenchStation('station', '合成工位', channels),),
         (WorkbenchCondition('condition', '正转', 'queue', ('station',), '', {'mode': 'none'}),)),
@@ -117,7 +120,7 @@ def render_evidence(output_dir, reference, items, result, worker_pid):
     if Path('C:/Windows/Fonts').is_dir():
         os.environ['QT_QPA_FONTDIR'] = 'C:/Windows/Fonts'
     from PyQt5.QtCore import QCoreApplication, QEvent
-    from PyQt5.QtGui import QFont, QFontDatabase
+    from PyQt5.QtGui import QFont, QFontDatabase, QTextDocument
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication
     from base.motor_daily_wav_records import DailyWavRecord
@@ -135,7 +138,9 @@ def render_evidence(output_dir, reference, items, result, worker_pid):
     app.setFont(QFont(family, 10))
     mapped = build_record_analysis_results(items, result, channel_names={0: '近端麦克风', 1: '远端麦克风'})
     evidence = dict(source='synthetic calibrated stereo WAV; existing executor in spawned worker',
-                    worker_pid=worker_pid, render_pid=os.getpid(), font=family, screenshots={})
+                    worker_pid=worker_pid, render_pid=os.getpid(), font=family,
+                    analysis_display={item.config_key: item.parameters.get('display', {}) for item in items},
+                    screenshots={})
     variants = (
         ('default-spl.png', 'SPL', (960, 680), 0),
         ('small-window.png', 'SPL', (720, 520), 0),
@@ -145,6 +150,8 @@ def render_evidence(output_dir, reference, items, result, worker_pid):
         ('spectrogram.png', 'Spec', (960, 680), 1),
         ('loudness-specific.png', 'LOUD', (960, 680), 0),
         ('failed-item.png', '未支持项', (960, 680), 0),
+        ('single-channel-spl.png', 'SPL', (960, 680), 0),
+        ('single-channel-ng.png', 'SPL', (960, 680), 1),
     )
     for filename, key, size, channel in variants:
         dialog = RecordAnalysisDialog()
@@ -156,6 +163,8 @@ def render_evidence(output_dir, reference, items, result, worker_pid):
             displayed = dict(mapped)
             if filename == 'fba-single-channel.png':
                 displayed[key] = replace(mapped[key], channels=mapped[key].channels[:1])
+            if filename.startswith('single-channel-'):
+                displayed[key] = replace(mapped[key], channels=(mapped[key].channels[channel],))
             presenter.show_result(displayed)
             dialog.navigation.setCurrentRow(list(mapped).index(key))
             if dialog.channel_selector.count():
@@ -169,27 +178,53 @@ def render_evidence(output_dir, reference, items, result, worker_pid):
                 # Bring the full returned specific-loudness profile into view.
                 profile = next(plot for plot in dialog.content.plots
                                if plot.record_panel_key == 'specific_loudness_profile')
-                dialog.content_scroll.verticalScrollBar().setValue(profile.y())
+                legend = dialog.content.content_layout.itemAt(
+                    dialog.content.content_layout.indexOf(profile) - 1).widget()
+                dialog.content_scroll.verticalScrollBar().setValue(legend.y())
                 QTest.qWait(30)
             if not dialog.grab().save(str(output_dir / filename)):
                 raise RuntimeError(f'Could not save {filename}')
             bounds = {}
-            for name in ('navigation', 'content_scroll', 'file_name', 'channel_selector'):
+            for name in ('navigation', 'content_scroll', 'file_name', 'channel_selector',
+                         'original_result', 'current_result'):
                 widget = getattr(dialog, name)
                 point = widget.mapTo(dialog, widget.rect().topLeft())
                 bounds[name] = [point.x(), point.y(), widget.width(), widget.height()]
+            original, current = QTextDocument(), QTextDocument()
+            original.setHtml(dialog.original_result.text())
+            current.setHtml(dialog.current_result.text())
             evidence['screenshots'][filename] = dict(size=[dialog.width(), dialog.height()],
                 bounds=bounds, selected_key=presenter.selected_key,
+                original_result=original.toPlainText(), current_result=current.toPlainText(),
                 selected_channel=presenter.selected_channel, status=dialog.status.text(),
                 channels=data_ranges(displayed[key]),
                 band_bars=[dict(x=bar.opts['x'].tolist(), height=bar.opts['height'].tolist(),
                                width=bar.opts['width'], channel=bar.toolTip())
                            for bar in dialog.content.bars],
+                curve_styles=[dict(role=curve.record_role, color=curve.opts['pen'].color().name(),
+                                   width=curve.opts['pen'].widthF(), style=int(curve.opts['pen'].style()))
+                              for curve in dialog.content.curves],
+                band_colors=[[brush.color().name() for brush in bar.opts['brushes']]
+                             for bar in dialog.content.bars],
                 ng_positions=[[text.pos().x(), text.pos().y()] for text in dialog.content.annotations],
                 displayed_panels=[plot.record_panel_key for plot in dialog.content.plots],
+                axes=[dict(key=plot.record_panel_key,
+                           bottom=plot.getAxis('bottom').labelText,
+                           left=plot.getAxis('left').labelText,
+                           font=plot.getAxis('left').label.font().family(),
+                           pixel_size=plot.getAxis('left').label.font().pixelSize())
+                      for plot in dialog.content.plots],
                 summary=[label.text() for label in dialog.content.summary_labels],
                 scroll_maximum=dialog.content_scroll.verticalScrollBar().maximum(),
-                plot_titles=[plot.plotItem.titleLabel.text for plot in dialog.content.plots],
+                plot_titles=[label.text() for label in dialog.content.title_labels],
+                legends=[dict(component=type(legend).__name__, height=legend.height(), align_right=legend.align_right,
+                              bounds=[legend.x(), legend.y(), legend.width(), legend.height()],
+                              font=legend.font().family(), pixel_size=legend.font().pixelSize(),
+                              overflow=legend.more.isVisible(), visible_count=legend._visible_count,
+                              menu=[action.text() for action in legend.menu.actions()],
+                              entries=[dict(name=name, color=pen.color().name(), width=pen.widthF(),
+                                            style=int(pen.style())) for name, pen in legend.entries])
+                         for legend in dialog.content.legends],
                 plot_bounds={plot.record_panel_key: [plot.x(), plot.y(), plot.width(), plot.height()]
                              for plot in dialog.content.plots},
                 scroll_value=dialog.content_scroll.verticalScrollBar().value())
@@ -218,7 +253,7 @@ def main():
         if item['artifacts']:
             raise RuntimeError('Synthetic view unexpectedly persisted analysis artifacts')
     render_evidence(directory, reference, items, result, worker_pid)
-    print(f'Rendered eight synthetic record-analysis views: {directory}')
+    print(f'Rendered ten synthetic record-analysis views: {directory}')
 
 
 if __name__ == '__main__':

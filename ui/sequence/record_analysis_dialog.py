@@ -1,10 +1,20 @@
 """Native, modeless-to-the-event-loop child view for one saved record."""
 
+from html import escape
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication, QComboBox, QDialog, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
+
+from consts.ui_style_const import MOTOR_STATION_STATUS_COLORS, MOTOR_WORKBENCH_SCROLLBAR_STYLE
+from ui.sequence.workbench_scrollbar import WorkbenchHorizontalScrollBar
+
+
+def _result_token(value):
+    color = MOTOR_STATION_STATUS_COLORS.get(value, MOTOR_STATION_STATUS_COLORS['--'])
+    return f'<span style="color:{color}">{escape(value)}</span>'
 
 
 class RecordAnalysisDialog(QDialog):
@@ -46,38 +56,39 @@ class RecordAnalysisDialog(QDialog):
         heading = QHBoxLayout()
         title = QLabel('记录分析')
         title.setStyleSheet('font-size:18px; font-weight:600; color:#2869af;')
-        heading.addWidget(title)
-        heading.addStretch()
-        layout.addLayout(heading)
         self.file_name = QLabel()
         self.file_name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.file_name.setMinimumWidth(0)
-        layout.addWidget(self.file_name)
-        record_line = QHBoxLayout()
-        self.record_info = QLabel()
-        self.record_info.setWordWrap(True)
-        self.original_result = QLabel('原记录结果：--')
-        record_line.addWidget(self.record_info, 1)
-        record_line.addWidget(self.original_result)
-        layout.addLayout(record_line)
+        identity = QVBoxLayout()
+        identity.addWidget(title)
+        identity.addWidget(self.file_name)
+        heading.addLayout(identity, 1)
+        results = QVBoxLayout()
+        self.original_result = QLabel()
+        self.current_result = QLabel()
+        for label in (self.original_result, self.current_result):
+            label.setTextFormat(Qt.RichText)
+            label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            label.setWordWrap(True)
+            results.addWidget(label)
+        self.original_result.setText('原记录结果：' + _result_token('--'))
+        self.show_judgements(())
+        heading.addLayout(results, 1)
+        layout.addLayout(heading)
         body = QHBoxLayout()
         self.navigation = QListWidget()
+        self.navigation.setHorizontalScrollBar(WorkbenchHorizontalScrollBar(
+            self.navigation, object_name='workbenchPlotHorizontalScrollBar'))
         self.navigation.setMinimumWidth(120)
         self.navigation.setMaximumWidth(200)
         self.navigation.currentItemChanged.connect(self._item_changed)
         body.addWidget(self.navigation, 1)
         right = QVBoxLayout()
-        toolbar = QHBoxLayout()
-        self.item_title = QLabel()
-        self.item_title.setWordWrap(True)
-        self.item_title.setStyleSheet('font-size:15px; font-weight:600;')
-        toolbar.addWidget(self.item_title, 1)
         self.channel_selector = QComboBox()
         self.channel_selector.setMinimumContentsLength(8)
         self.channel_selector.currentIndexChanged.connect(self._channel_changed)
         self.channel_selector.hide()
-        toolbar.addWidget(self.channel_selector)
-        right.addLayout(toolbar)
+        right.addWidget(self.channel_selector, 0, Qt.AlignRight)
         self.status = QLabel('待分析')
         self.status_detail = QLabel()
         self.status_detail.setWordWrap(True)
@@ -87,6 +98,9 @@ class RecordAnalysisDialog(QDialog):
         self.content_scroll = QScrollArea()
         self.content_scroll.setWidgetResizable(True)
         self.content_scroll.setMinimumWidth(0)
+        scrollbar = self.content_scroll.verticalScrollBar()
+        scrollbar.setObjectName('workbenchStationVerticalScrollBar')
+        scrollbar.setStyleSheet(MOTOR_WORKBENCH_SCROLLBAR_STYLE)
         right.addWidget(self.content_scroll, 1)
         body.addLayout(right, 4)
         layout.addLayout(body, 1)
@@ -101,10 +115,14 @@ class RecordAnalysisDialog(QDialog):
         self._full_file_name = record.file_name
         self.file_name.setToolTip(record.file_name)
         self._elide_filename()
-        self.record_info.setText(
-            f'工位 {record.station_id}  ·  {record.condition}  ·  '
-            f'{record.completed_at:%Y-%m-%d %H:%M:%S}')
-        self.original_result.setText(f'原记录结果：{record.result}')
+        self.original_result.setText('原记录结果：' + _result_token(record.result))
+
+    def show_judgements(self, judgements):
+        """Display each returned judgement without deriving an aggregate."""
+        multi = len(judgements) > 1
+        values = [(f'CH{channel} ' if multi else '') + _result_token(value)
+                  for channel, value in judgements]
+        self.current_result.setText('本次判定：' + ('  ·  '.join(values) if values else _result_token('--')))
 
     def _elide_filename(self):
         self.file_name.setText(self.file_name.fontMetrics().elidedText(
@@ -126,7 +144,6 @@ class RecordAnalysisDialog(QDialog):
 
     def _item_changed(self, current, previous):
         if current is not None:
-            self.item_title.setText(current.text())
             self.item_selected.emit(current.data(Qt.UserRole))
 
     def set_channels(self, channels, selected_index=None):
@@ -146,6 +163,7 @@ class RecordAnalysisDialog(QDialog):
             self.channel_selected.emit(self.channel_selector.itemData(index))
 
     def show_status(self, text, detail=''):
+        self.show_judgements(())
         self.set_content(None)
         self.set_channels(())
         self.status.setText(text)

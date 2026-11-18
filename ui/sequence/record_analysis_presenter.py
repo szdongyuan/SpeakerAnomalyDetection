@@ -67,6 +67,11 @@ class RecordAnalysisPresenter:
         if channels and self.selected_channel not in {ch.channel_index for ch in channels}:
             self.selected_channel = channels[0].channel_index
         self.dialog.set_channels(channels, self.selected_channel)
+        judgements = tuple((channel.wav_channel,
+            (channel.judgement or '未判定') if channel.judgement_status == 'completed'
+            else '判定失败' if channel.judgement_status == 'failed' else '未判定')
+            for channel in result.channels)
+        self.dialog.show_judgements(judgements or ((None, '未判定'),))
         self.dialog.status.setText(result.status)
         # Channel diagnostics belong with their graphics/summary in the scroll area.
         self.dialog.status_detail.clear()
