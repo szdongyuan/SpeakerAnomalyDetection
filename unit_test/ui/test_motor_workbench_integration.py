@@ -6,7 +6,7 @@ import os
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from threading import Event, Thread
 from time import monotonic
@@ -1706,7 +1706,7 @@ def test_main_window_paired_results_update_station_and_daily_summary(
     details.search_edit.setText(Path(first["wav_path"]).name)
     assert details.table.rowCount() == 1
     # Replaying either authenticated snapshot cannot overwrite the other source.
-    day = summary._daily_records.record_date
+    day = date.fromisoformat(summary.date_label.text())
     sequence.left_panel.set_daily_records(controller._result_state.records_for(day), day)
     assert details.table.rowCount() == 1 and details.search_edit.text() == Path(first["wav_path"]).name
     sequence.left_panel.set_daily_wav_records(controller._wav_state.records_for(day), day)

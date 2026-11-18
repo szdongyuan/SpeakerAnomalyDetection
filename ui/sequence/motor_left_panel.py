@@ -77,6 +77,9 @@ class MotorDetectionLeftPanel(QWidget):
     def set_daily_records(self, records, record_date=None):
         return self.dashboard_panel.summary_panel.set_daily_records(records, record_date)
 
+    def set_summary_counts(self, snapshot):
+        return self.dashboard_panel.summary_panel.set_summary_counts(snapshot)
+
     def set_daily_wav_records(self, records, record_date=None):
         return self.dashboard_panel.summary_panel.set_daily_wav_records(records, record_date)
 

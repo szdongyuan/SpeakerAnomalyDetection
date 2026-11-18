@@ -1,5 +1,6 @@
 """Window assembly and the analysis-to-label shutdown boundary."""
 
+import json
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
@@ -25,13 +26,17 @@ from base.workbench_recording_archive import WorkbenchRecordingArchive
 from base.workbench_recording_protocol import (
     StationWav, StationWavChannel, WorkbenchRecordingCompletion,
 )
+from base.workbench_summary_store import WorkbenchSummaryStateError, WorkbenchSummaryStore
+from base.workbench_wav_details_store import WorkbenchWavDetailsStore
 from ui.audio_label_sync_bridge import AudioLabelSyncBridge
 from consts import error_code, model_consts
 from unit_test.ui.test_motor_workbench_controller import (
     config, workbench, recording_workbench, paired_recording_workbench, configuration_with,
 )
 from unit_test.ui.test_workbench_analysis_lifecycle import wait_until
-from unit_test.ui.test_workbench_recording_startup import startup, AnalysisServiceStub
+from unit_test.ui.test_workbench_recording_startup import (
+    AnalysisServiceStub, RecordingBridge, displayed_wav_rows, home_summary_labels, open_wav_details, startup,
+)
 from unit_test.ui.test_workbench_result_state import instance
 from unit_test.ui.test_workbench_result_sync import result_event
 
@@ -479,6 +484,188 @@ def test_full_final_batch_is_consumed_before_label_shutdown_even_with_reentrant_
         RecordingManager.normalize_audio_path_for_db(task["wav_path"]): label
         for task, label in zip(tasks, expected_labels)}
     assert bridge.pending == 0 and bridge.is_closed
+
+
+def test_wav_details_restart_commits_drained_pair_and_accumulates_across_restarts(
+        startup, paired_recording_workbench, isolate_workbench_summary_state,
+        isolate_workbench_wav_details_state, monkeypatch, request):
+    from ui.sequence import motor_workbench_controller
+
+    instant = datetime(2026, 11, 18, 12)
+    clock = SimpleNamespace(now=lambda: instant)
+    monkeypatch.setattr(main_window, "datetime", clock, raising=False)
+    monkeypatch.setattr(motor_workbench_controller, "datetime", clock)
+    window, service, _, record = request.getfixturevalue("label_runtime")
+    path = isolate_workbench_summary_state
+    save = WorkbenchSummaryStore.save
+    details_store = WorkbenchWavDetailsStore()
+    writes, details_writes = [], []
+    save_details = WorkbenchWavDetailsStore.save
+
+    def track_save(store, snapshot):
+        writes.append((store.path, snapshot))
+        save(store, snapshot)
+
+    def track_details_save(store, snapshot):
+        details_writes.append((store.path, snapshot))
+        save_details(store, snapshot)
+
+    monkeypatch.setattr(WorkbenchSummaryStore, "save", track_save)
+    monkeypatch.setattr(WorkbenchWavDetailsStore, "save", track_details_save)
+
+    def all_displayed_rows(current):
+        details = open_wav_details(current)
+        rows = displayed_wav_rows(details)
+        while details.next_button.isEnabled():
+            details.next_button.click()
+            rows += displayed_wav_rows(details)
+        details.close()
+        return rows
+
+    def close_and_check(current, expected):
+        previous_writes = len(writes)
+        previous_details_writes = len(details_writes)
+        current.close()
+        wait_until(lambda: getattr(current, "_exit_cleanup_complete", False))
+        assert len(writes) == previous_writes + 1 and writes[-1][0] == path
+        saved = details_store.load()
+        assert len(details_writes) == previous_details_writes + 1
+        assert details_writes[-1] == (isolate_workbench_wav_details_state, saved)
+        assert saved.day == writes[-1][1].day == instant.date()
+        shown = home_summary_labels(current)
+        assert shown == (instant.date().isoformat(), *expected)
+        day, _, ok, ng, unmarked, _ = shown
+        assert json.loads(path.read_text(encoding="utf-8")) == {
+            "schema_version": 1, "date": day, "ok": int(ok), "ng": int(ng), "unmarked": int(unmarked),
+        }
+        return shown, saved
+
+    first, second = record()[0], record()[0]
+    service.events.append(result_event(first, [instance(judgement="OK")]))
+    window._poll_analysis_events()
+    assert home_summary_labels(window) == ("2026-11-18", "0", "0", "0", "0", "--")
+    service.allow_close = False
+    window.close()
+    wait_until(lambda: window._workbench_archive_close_state == "drained")
+    assert not writes and not path.exists()
+    assert not details_writes and not details_store.path.exists()
+
+    observations = []
+    bridge = window.audio_label_sync_bridge
+
+    def reenter_during_final_batch(event):
+        window.close()
+        observations.append((event["event_type"], len(writes), len(details_writes), bridge.is_closed,
+                             getattr(window, "_exit_cleanup_complete", False)))
+
+    window.workbench_analysis_event.connect(reenter_during_final_batch)
+    service.closed = True
+    service.events.extend([
+        {"event_type": "service_closed", "payload": {}},
+        result_event(second, [instance(judgement="NG")]),
+    ])
+    shown, saved = close_and_check(window, ("1", "0", "1", "0", "0.0%"))
+    assert observations == [("service_closed", 0, 0, False, False), ("task_result", 0, 0, False, False)]
+    first_results = {row.record.analysis_reference.wav_path: row.record.result for row in saved.rows}
+    assert len(first_results) == 6
+    assert first_results[first["wav_path"]] == "OK" and first_results[second["wav_path"]] == "NG"
+    assert sum(result == "未标记" for result in first_results.values()) == 4
+
+    recording = paired_recording_workbench
+    ports = recording.controller._recording
+
+    def reopen(expected, expected_wavs):
+        def login(reopened):
+            assert home_summary_labels(reopened) == expected
+            assert all_displayed_rows(reopened) == tuple(
+                row.record for row in sorted(expected_wavs, key=lambda row: row.record.completed_at, reverse=True)
+            )
+            return None, None
+
+        analysis = AnalysisServiceStub()
+        reopened = startup.launch(login, analysis_service=analysis, recording_bridge=RecordingBridge())
+        synthetic_bridge = SimpleNamespace(start=ports.bridge.start, service=SimpleNamespace(can_start_recording=True))
+        reopened.workbench_controller.bind_recording(replace(ports, bridge=synthetic_bridge))
+        reopened._activate_analysis_runtime()
+        return reopened, analysis
+
+    def deliver_pair(current, analysis, judgement):
+        task_paths = []
+        for _ in range(2):
+            current.workbench_controller.start_recording()
+            recording.complete()
+            task = analysis.submissions[-1]["tasks"][0]
+            task_paths.append(task["wav_path"])
+            analysis.events.extend([
+                result_event(task, [instance(judgement=judgement)]),
+                result_event(task, [instance(judgement="NG")]),
+            ])
+            current._poll_analysis_events()
+        current._poll_analysis_events()  # An empty same-day refresh leaves the count stable.
+        return task_paths
+
+    for judgement, expected in [("OK", ("2", "1", "1", "0", "50.0%")),
+                                ("--", ("3", "1", "1", "1", "33.3%"))]:
+        reopened, analysis = reopen(shown, saved.rows)
+        task_paths = deliver_pair(reopened, analysis, judgement)
+        displayed = all_displayed_rows(reopened)
+        assert home_summary_labels(reopened) == ("2026-11-18", *expected)
+        shown, next_saved = close_and_check(reopened, expected)
+        assert tuple(row.record for row in next_saved.rows) == displayed
+        assert next_saved.rows[:len(saved.rows)] == saved.rows
+        added = next_saved.rows[len(saved.rows):]
+        assert len(added) == 6 and len({row.key for row in next_saved.rows}) == len(next_saved.rows)
+        station_wavs = {
+            (completion.request_id, wav.station_id): wav
+            for completion in recording.completions[-2:]
+            for wav in completion.stations
+        }
+        for row in added:
+            reference = row.record.analysis_reference
+            wav = station_wavs[row.key]
+            assert reference.wav_path == wav.path and reference.channels == wav.channels
+            expected_result = "OK" if judgement == "OK" and reference.wav_path in task_paths else "未标记"
+            assert row.record.result == expected_result
+        saved = next_saved
+
+    prior_bytes = path.read_bytes()
+    reopened, analysis = reopen(shown, saved.rows)
+    deliver_pair(reopened, analysis, "OK")
+    assert home_summary_labels(reopened) == ("2026-11-18", "4", "2", "1", "1", "50.0%")
+
+    save_attempts, during_warning = [], []
+
+    def fail_save(store, snapshot):
+        save_attempts.append(store.path)
+        raise WorkbenchSummaryStateError(f"{store.path}: injected write failure")
+
+    def warn(parent, title, detail):
+        parent.close()
+        during_warning.append((parent, title, detail, getattr(parent, "_exit_cleanup_complete", False)))
+
+    logger = Mock()
+    reopened.default_logger = logger
+    with monkeypatch.context() as failure:
+        failure.setattr(WorkbenchSummaryStore, "save", fail_save)
+        failure.setattr(main_window.QMessageBox, "warning", warn)
+        reopened.close()
+        wait_until(lambda: getattr(reopened, "_exit_cleanup_complete", False))
+
+    assert save_attempts == [path]
+    assert len(during_warning) == 1
+    parent, title, detail, exited = during_warning[0]
+    assert parent is reopened and title == "首页信息汇总保存失败" and not exited
+    assert "本次新增统计未保存" in detail and str(path) in detail
+    fmt, *args = logger.warning.call_args.args
+    assert "injected write failure" in fmt % tuple(args)
+    assert path.read_bytes() == prior_bytes
+
+    # The next same-day launch sees the last successful commit.
+    recovered, _ = reopen(shown, details_store.load().rows)
+    close_and_check(recovered, shown[1:])
+    instant += timedelta(days=1)
+    tomorrow, _ = reopen(("2026-11-19", "0", "0", "0", "0", "--"), ())
+    close_and_check(tomorrow, ("0", "0", "0", "0", "--"))
 
 
 def test_close_before_first_tick_drains_empty_label_worker(startup):

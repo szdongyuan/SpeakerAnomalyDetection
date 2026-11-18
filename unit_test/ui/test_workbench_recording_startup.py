@@ -1,7 +1,10 @@
 """Exercise both application entry paths without a native recording device."""
 
 import json
-from datetime import date, datetime
+import logging
+import sys
+from dataclasses import replace
+from datetime import date, datetime, timedelta
 from threading import Event
 from time import monotonic
 from types import SimpleNamespace
@@ -9,19 +12,34 @@ from unittest.mock import Mock
 
 import pytest
 from PyQt5 import QtWidgets, sip
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtTest import QTest
 
 import main_window
 from base import hardware_selection, recording_service
 from base.db_manager import DataSave
+from base.motor_daily_wav_records import DailyWavRecord
+from base.record_analysis_reference import RecordAnalysisReference
 from base.recording_process_protocol import FrozenConfig, SoundcardPrepareResult
 from base.recording_service import RecordingWorkerStatus
+from base.workbench_analysis_config import AnalysisTestQueue
+from base.workbench_config_values import WorkbenchChannel, WorkbenchHardwareChannel
+from base.workbench_recording_protocol import StationWavChannel
+from base.workbench_summary_store import WorkbenchSummarySnapshot, WorkbenchSummaryStore
+from base.workbench_wav_details_store import (
+    WavDetailsRow, WorkbenchWavDetailsSnapshot, WorkbenchWavDetailsStore,
+)
 from consts import error_code
 from main_window_Launcher import MainWindowLauncher
 from ui import recording_service_bridge, vkinging_hardware_controls
+from ui.sequence import motor_workbench_controller
+from ui.sequence.motor_information_summary_panel import MotorInformationSummaryPanel
+from ui.sequence.record_analysis_dialog import RecordAnalysisDialog
 from ui.video_controller import VideoController
 from unit_test.base.vkinging_fakes import device_info, input_config
+from unit_test.ui.test_motor_workbench_controller import (
+    config, configuration_with, paired_recording_workbench, recording_workbench, workbench,
+)
 
 
 class RecordingBridge(QObject):
@@ -195,24 +213,24 @@ def startup(ui_qapp, monkeypatch, tmp_path):
     def login(execute):
         monkeypatch.setattr(main_window, "LoginWindow", lambda: SimpleNamespace(on_exec=lambda: execute(windows[-1])))
 
-    def launch(execute, *, launcher=False, **options):
+    def launch(execute, *, launcher=False, recording_bridge=bridge, **options):
         state.launch_options = options
         login(execute)
         if not launcher:
-            return Window(recording_bridge=bridge, **options)
+            return Window(recording_bridge=recording_bridge, **options)
         monkeypatch.setattr(QtWidgets, "QApplication", lambda _args: ui_qapp)
-        monkeypatch.setattr(recording_service, "RecordingService", lambda: bridge.service)
-        monkeypatch.setattr(recording_service_bridge, "RecordingServiceBridge", lambda *_: bridge)
+        monkeypatch.setattr(recording_service, "RecordingService", lambda: recording_bridge.service)
+        monkeypatch.setattr(recording_service_bridge, "RecordingServiceBridge", lambda *_: recording_bridge)
 
         def fail_launch(_parent, _title, detail):
             pytest.fail(detail)
 
         monkeypatch.setattr(QtWidgets.QMessageBox, "critical", fail_launch)
         application = MainWindowLauncher()
-        assert bridge.started
-        assert bridge.probes == []
+        assert recording_bridge.started
+        assert recording_bridge.probes == []
         application.on_loader_finished()
-        assert application.window.recording_bridge is bridge
+        assert application.window.recording_bridge is recording_bridge
         return application.window
 
     state.launch, state.login, state.path, state.bridge, state.mic = launch, login, path, bridge, mic
@@ -265,6 +283,326 @@ def test_soundcard_preparation_can_finish_inside_first_login(startup, launcher):
     assert device.login_ready
     assert device.snapshot.device["index"] == 7
     assert window.mic_channels == [0]
+
+
+def workbench_summary_panel(window):
+    return window.sequence_window.left_panel.dashboard_panel.summary_panel
+
+
+def summary_labels(panel):
+    return tuple(getattr(panel, f"{name}_label").text()
+                 for name in ("date", "total", "ok", "ng", "unmarked", "rate"))
+
+
+def home_summary_labels(window):
+    return summary_labels(workbench_summary_panel(window))
+
+
+def open_wav_details(window):
+    summary = workbench_summary_panel(window)
+    summary.findChild(QtWidgets.QPushButton, "summaryDetails").click()
+    assert summary._details_dialog.isVisible()
+    return summary._details_dialog
+
+
+def displayed_wav_rows(details):
+    return tuple(details.table.item(index, 5).data(Qt.UserRole)
+                 for index in range(details.table.rowCount()))
+
+
+@pytest.mark.parametrize("launcher", [False, True], ids=["direct", "launcher"])
+@pytest.mark.parametrize("state", ["current", "missing", "stale", "damaged"])
+def test_wav_details_restart_loads_once_before_first_publish(
+        startup, launcher, state, isolate_workbench_wav_details_state, monkeypatch):
+    instant = datetime(2026, 11, 18, 9)
+    monkeypatch.setattr(main_window, "datetime", SimpleNamespace(now=lambda: instant))
+    path = isolate_workbench_wav_details_state
+    if state in {"current", "stale"}:
+        saved_at = instant if state == "current" else instant - timedelta(days=1)
+        row = DailyWavRecord(saved_at, 2, "原始录制.wav", "正转", "NG")
+        WorkbenchWavDetailsStore().save(WorkbenchWavDetailsSnapshot(saved_at.date(), (
+            WavDetailsRow("saved-request", "left", row),
+        )))
+    elif state == "damaged":
+        path.write_text("{", encoding="utf-8")
+    expected = (row,) if state == "current" else ()
+    operations = []
+    load = WorkbenchWavDetailsStore.load
+    publish = MotorInformationSummaryPanel.set_daily_wav_records
+
+    def track_load(store):
+        operations.append(("read", store.path))
+        return load(store)
+
+    def track_publish(panel, records, record_date):
+        operations.append(("publish", record_date, len(records)))
+        return publish(panel, records, record_date)
+
+    monkeypatch.setattr(WorkbenchWavDetailsStore, "load", track_load)
+    monkeypatch.setattr(MotorInformationSummaryPanel, "set_daily_wav_records", track_publish)
+    logger = logging.getLogger("core")
+    warning = Mock(wraps=logger.warning)
+    monkeypatch.setattr(logger, "warning", warning)
+
+    def login(window):
+        assert operations == [("read", path), ("publish", instant.date(), len(expected))]
+        details = open_wav_details(window)
+        assert details.date_label.text() == instant.date().isoformat()
+        assert displayed_wav_rows(details) == expected
+        details.close()
+        return "Engineer", "test"
+
+    window = startup.launch(login, launcher=launcher)
+    window._poll_analysis_events()
+    window._poll_analysis_events()
+    assert operations == [("read", path), ("publish", instant.date(), len(expected))]
+    assert displayed_wav_rows(open_wav_details(window)) == expected
+    messages = [fmt % tuple(args) for fmt, *args in
+                (call.args for call in warning.call_args_list)
+                if "Workbench WAV details" in fmt]
+    if state == "damaged":
+        assert len(messages) == 1
+        assert str(path) in messages[0] and "Expecting property name" in messages[0]
+    else:
+        assert messages == []
+
+
+def test_wav_details_restart_displays_two_pages_filters_and_opens_record_analysis(
+        startup, monkeypatch, config, tmp_path):
+    from unit_test.ui.test_workbench_result_state import instance
+    from unit_test.ui.test_workbench_result_sync import result_event
+
+    instant = datetime(2026, 11, 18, 9)
+    monkeypatch.setattr(main_window, "datetime", SimpleNamespace(now=lambda: instant))
+    channels = tuple(
+        WorkbenchChannel(channel_id, f"当前 {channel_id}", "sound_pressure",
+                         WorkbenchHardwareChannel("current-device", physical_index))
+        for channel_id, physical_index in (("near", 2), ("far", 0))
+    )
+    stations = tuple(replace(station, channels=channels)
+                     for station in config.analysis.context.stations)
+    queue = AnalysisTestQueue("wav", {
+        "display_sequence": ["谱图"],
+        "谱图": {"type": "Spec", "analysis_channels": [0, 1]},
+    })
+    configured = configuration_with(
+        config, stations=stations, test_queues={**config.analysis.test_queues, "queue-a": queue},
+    )
+    repository = Mock(source_identity="history-product.json")
+    repository.load_product_catalog.return_value = ()
+    repository.load_active.return_value = configured
+    monkeypatch.setattr(main_window, "MotorWorkbenchConfigRepository", lambda: repository)
+
+    history_path = tmp_path / "上一轮" / "机组-20.wav"
+    historical_channels = (
+        StationWavChannel("near", "录制时近端", "sound_pressure", "recorded-device", 3, 0),
+        StationWavChannel("far", "录制时远端", "sound_pressure", "recorded-device", 1, 1),
+    )
+    reference = RecordAnalysisReference(
+        "record-20", "left", "warm", str(history_path), historical_channels,
+    )
+    rows = tuple(
+        WavDetailsRow(
+            f"record-{index}", "left" if index % 2 == 0 else "right",
+            DailyWavRecord(
+                instant + timedelta(seconds=index), 2 if index % 2 == 0 else 1,
+                f"机组-{index:02}.wav", ("正转", "反转")[index % 2],
+                ("NG", "未标记", "OK")[index % 3],
+                reference if index == 20 else None,
+            ),
+        )
+        for index in range(21)
+    )
+    WorkbenchWavDetailsStore().save(WorkbenchWavDetailsSnapshot(instant.date(), rows))
+    WorkbenchSummaryStore().save(WorkbenchSummarySnapshot(instant.date(), 1, 3, 0))
+    window = startup.launch(lambda _: ("Engineer", "test"))
+    details = open_wav_details(window)
+
+    def assert_page(expected_rows, label):
+        table = details.table
+        assert details.page_label.text() == label
+        assert displayed_wav_rows(details) == expected_rows
+        assert [
+            tuple(table.item(index, column).text() for column in range(6))
+            for index in range(table.rowCount())
+        ] == [
+            (row.completed_at.strftime("%H:%M:%S"), str(row.station_id),
+             row.file_name, row.condition, row.result, "查看")
+            for row in expected_rows
+        ]
+
+    newest_first = tuple(row.record for row in reversed(rows))
+    assert_page(newest_first[:20], "1 / 2")
+    details.next_button.click()
+    assert_page(newest_first[20:], "2 / 2")
+    details.station_combo.setCurrentIndex(details.station_combo.findData(2))
+    station_rows = tuple(row for row in newest_first if row.station_id == 2)
+    assert_page(station_rows, "1 / 1")
+    details.result_combo.setCurrentIndex(details.result_combo.findData("OK"))
+    assert_page(tuple(row for row in station_rows if row.result == "OK"), "1 / 1")
+    details.search_edit.setText("机组-2")
+    assert_page(newest_first[:1], "1 / 1")
+    assert details.record_count_label.text() == "共 1 条 · 每页 20 条"
+    assert summary_labels(details) == ("2026-11-18", "21", "7", "7", "7", "33.3%")
+    assert home_summary_labels(window) == ("2026-11-18", "4", "1", "3", "0", "25.0%")
+
+    operation = details.table.item(0, 5)
+    details.table.scrollToItem(operation)
+    QtWidgets.QApplication.processEvents()
+    QTest.mouseClick(details.table.viewport(), Qt.LeftButton,
+                     pos=details.table.visualItemRect(operation).center())
+    view = details.findChild(RecordAnalysisDialog)
+    assert view is not None and view.isVisible()
+    (payload,) = startup.analysis_service.submissions
+    (task,) = payload["tasks"]
+    assert (task["wav_path"], task["station_id"], task["condition_id"]) == (
+        str(history_path), "left", "warm",
+    )
+    assert task["persist_artifacts"] is False and task["analysis_result_directory"] is None
+    startup.analysis_service.events.append(result_event(task, [
+        {**instance("谱图", "Spec", "NG"), "channel_index": index, "judgement_status": "completed"}
+        for index in (1, 0)
+    ]))
+    window._poll_analysis_events()
+    assert tuple(view.channel_selector.itemText(index) for index in range(view.channel_selector.count())) == (
+        "CH1 · 录制时近端", "CH2 · 录制时远端",
+    )
+    assert "OK" in view.original_result.text()
+    assert view.current_result.text().count("NG") == 2
+    assert_page(newest_first[:1], "1 / 1")
+    assert summary_labels(details) == ("2026-11-18", "21", "7", "7", "7", "33.3%")
+    assert home_summary_labels(window) == ("2026-11-18", "4", "1", "3", "0", "25.0%")
+
+
+def test_wav_details_restart_poll_rolls_open_dialog_over_and_keeps_recording_day(
+        startup, paired_recording_workbench, monkeypatch):
+    from unit_test.ui.test_workbench_result_state import instance
+    from unit_test.ui.test_workbench_result_sync import result_event
+
+    clock = Mock(return_value=datetime(2026, 11, 18, 23, 59))
+    clock_source = SimpleNamespace(now=clock)
+    monkeypatch.setattr(main_window, "datetime", clock_source)
+    monkeypatch.setattr(motor_workbench_controller, "datetime", clock_source)
+    row = DailyWavRecord(clock.return_value, 1, "昨天.wav", "正转", "OK")
+    WorkbenchWavDetailsStore().save(WorkbenchWavDetailsSnapshot(row.completed_at.date(), (
+        WavDetailsRow("previous-request", "right", row),
+    )))
+    recording = paired_recording_workbench
+    repository = Mock(source_identity="rollover-product.json")
+    repository.load_product_catalog.return_value = ()
+    repository.load_active.return_value = recording.config
+    monkeypatch.setattr(main_window, "MotorWorkbenchConfigRepository", lambda: repository)
+    window = startup.launch(lambda _: (None, None))
+    controller = window.workbench_controller
+    controller.bind_recording(recording.controller._recording)
+    window._activate_analysis_runtime()
+    details = open_wav_details(window)
+    controller.start_recording()
+    recording.complete()
+    assert row in displayed_wav_rows(details) and details.table.rowCount() == 4
+    yesterday, = startup.analysis_service.submissions
+
+    clock.return_value = datetime(2026, 11, 19)
+    clock.reset_mock()
+    assert startup.analysis_service.events == []
+    window._poll_analysis_events()
+    clock.assert_called_once_with()
+    assert details.isVisible()
+    assert summary_labels(details) == ("2026-11-19", "0", "0", "0", "0", "--")
+    assert displayed_wav_rows(details) == ()
+    startup.analysis_service.events.append(result_event(yesterday["tasks"][0], [instance()]))
+    window._poll_analysis_events()
+    assert displayed_wav_rows(details) == ()
+
+    controller.start_recording()
+    recording.complete()
+    new_rows = displayed_wav_rows(details)
+    assert len(new_rows) == 3
+    assert all(row.completed_at == clock.return_value and row.result == "未标记" for row in new_rows)
+    assert len({row.analysis_reference.request_id for row in new_rows}) == 1
+    assert new_rows[0].analysis_reference.request_id != recording.requests[-2].request_id
+
+
+@pytest.mark.parametrize("launcher", [False, True], ids=["direct", "launcher"])
+@pytest.mark.parametrize("state", ["current", "missing", "stale", "damaged"])
+def test_summary_restart_loads_once_before_login(
+        startup, launcher, state, isolate_workbench_summary_state, monkeypatch):
+    day = date(2026, 11, 18)
+    clock = Mock(return_value=datetime(2026, 11, 18, 9))
+    monkeypatch.setattr(main_window, "datetime", SimpleNamespace(now=clock), raising=False)
+    path = isolate_workbench_summary_state
+    if state in {"current", "stale"}:
+        saved_day = day if state == "current" else date(2026, 11, 17)
+        WorkbenchSummaryStore().save(WorkbenchSummarySnapshot(saved_day, 2, 1, 1))
+    elif state == "damaged":
+        path.write_text("{", encoding="utf-8")
+
+    read_paths = []
+    load = WorkbenchSummaryStore.load
+
+    def track_load(store):
+        read_paths.append(store.path)
+        return load(store)
+
+    monkeypatch.setattr(WorkbenchSummaryStore, "load", track_load)
+    logger = logging.getLogger("core")
+    warning = Mock(wraps=logger.warning)
+    monkeypatch.setattr(logger, "warning", warning)
+    expected = ("4", "2", "1", "1", "50.0%") if state == "current" else ("0", "0", "0", "0", "--")
+
+    def login(window):
+        assert home_summary_labels(window) == (day.isoformat(), *expected)
+        assert read_paths == [path]
+        clock.assert_called_once_with()
+        return "Engineer", "test"
+
+    window = startup.launch(login, launcher=launcher)
+    window._poll_analysis_events()
+    window._poll_analysis_events()
+    assert read_paths == [path]
+    assert home_summary_labels(window) == (day.isoformat(), *expected)
+    summary_messages = [fmt % tuple(args) for fmt, *args in
+                        (call.args for call in warning.call_args_list)
+                        if "Workbench summary" in fmt]
+    if state == "damaged":
+        assert len(summary_messages) == 1
+        assert str(path) in summary_messages[0]
+        assert "Expecting property name" in summary_messages[0]
+    else:
+        assert summary_messages == []
+
+
+def test_summary_restart_displays_total_beyond_integer_string_limit(startup, monkeypatch):
+    instant = datetime(2026, 11, 18, 9)
+    monkeypatch.setattr(main_window, "datetime", SimpleNamespace(now=lambda: instant))
+    digit_limit = sys.get_int_max_str_digits() or sys.int_info.default_max_str_digits
+    count_text = "9" * digit_limit
+    count = int(count_text)
+    WorkbenchSummaryStore().save(WorkbenchSummarySnapshot(instant.date(), count, count, 0))
+    total_text = "1" + "9" * (digit_limit - 1) + "8"
+
+    def login(window):
+        assert home_summary_labels(window) == (
+            instant.date().isoformat(), total_text, count_text, count_text, "0", "50.0%",
+        )
+        return "Engineer", "test"
+
+    startup.launch(login)
+
+
+def test_summary_restart_poll_rolls_over_without_analysis_events(startup, monkeypatch):
+    clock = Mock(return_value=datetime(2026, 11, 18, 23, 59))
+    monkeypatch.setattr(main_window, "datetime", SimpleNamespace(now=clock), raising=False)
+    WorkbenchSummaryStore().save(WorkbenchSummarySnapshot(date(2026, 11, 18), 2, 1, 1))
+    window = startup.launch(lambda _: ("Engineer", "test"))
+    assert home_summary_labels(window) == ("2026-11-18", "4", "2", "1", "1", "50.0%")
+    clock.return_value = datetime(2026, 11, 19, 0, 0)
+    clock.reset_mock()
+    assert startup.analysis_service.events == []
+    window._poll_analysis_events()
+    clock.assert_called_once_with()
+    assert home_summary_labels(window) == ("2026-11-19", "0", "0", "0", "0", "--")
+    assert WorkbenchSummaryStore().load() == WorkbenchSummarySnapshot(date(2026, 11, 18), 2, 1, 1)
 
 
 @pytest.mark.parametrize("saved_day, expected", [(date(2026, 11, 12), "10000"), (date(2026, 11, 11), "1")])

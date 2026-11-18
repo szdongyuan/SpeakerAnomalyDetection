@@ -355,6 +355,40 @@ def test_empty_and_broken_wav_task_errors(task):
     assert empty["error"] is None
 
 
+@pytest.mark.parametrize("kind,reason", [
+    ("missing", "WAV 文件不存在"),
+    ("directory", "WAV 路径不是文件"),
+    ("inaccessible", "无法访问 WAV 文件"),
+])
+def test_wav_details_restart_compute_only_path_errors(task, tmp_path, monkeypatch, kind, reason):
+    path = tmp_path / "historical.wav"
+    if kind == "directory":
+        path.mkdir()
+    if kind == "inaccessible":
+        original_stat = Path.stat
+
+        def denied_stat(target, *args, **kwargs):
+            if target == path:
+                raise PermissionError(13, "directory access denied")
+            return original_stat(target, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", denied_stat)
+    production_task = replace(task, wav_path=str(path))
+    result = execute_task(replace(production_task, persist_artifacts=False))
+    assert result["execution_status"] == "分析失败"
+    assert result["error"]["stage"] == "wav_read"
+    assert reason in result["error"]["message"]
+    assert str(path) in result["error"]["message"]
+    assert reason not in execute_task(production_task)["error"]["message"]
+
+
+def test_wav_details_restart_compute_only_preserves_wav_decoder_error(task):
+    Path(task.wav_path).write_bytes(b"invalid WAV bytes")
+    production_error = execute_task(task)["error"]
+    assert production_error["type"] == "LibsndfileError"
+    assert execute_task(replace(task, persist_artifacts=False))["error"] == production_error
+
+
 def test_time_window_uses_wav_and_does_not_fallback_to_whole_recording(task):
     params = {"weighting": "Z", "analysis_time_range_enabled": True,
               "analysis_start_time_sec": 0.25, "analysis_end_time_sec": 0.5}
