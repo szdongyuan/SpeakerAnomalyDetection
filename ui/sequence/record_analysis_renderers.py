@@ -377,8 +377,6 @@ class RecordAnalysisRenderer:
                 if isinstance(value, Real) and not isinstance(value, bool) and np.isfinite(value):
                     values.append(f'{label}：{value:.2f}' +
                                   (f' {measurement_unit}' if measurement_unit else ''))
-            if values and unit and result.analysis_type in ('SPL', 'FFT', 'FBA'):
-                values.insert(0, f'幅值单位：{unit}')
             prefix = f'CH{channel.wav_channel}  ' if len(result.channels) > 1 else ''
             if values:
                 content.summary_labels.append(content.label(prefix + '  ·  '.join(values)))
