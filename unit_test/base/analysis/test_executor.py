@@ -44,12 +44,12 @@ def assert_curve_csv(item):
 
 
 def test_overall_save_failure_still_saves_complete_curve(task, monkeypatch):
-    from base.analysis import executor
+    from base.analysis import storage
 
     def fail(*args):
         raise PermissionError("overall CSV is locked")
 
-    monkeypatch.setattr(executor, "save_overall_spl", fail)
+    monkeypatch.setattr(storage, "save_overall_spl", fail)
     item = execute_task(task)["instance_results"][0]
     assert item["execution_status"] == "分析完成"
     assert item["artifacts"][0]["status"] == "failed"
@@ -107,8 +107,7 @@ def test_compute_only_keeps_real_results_without_export_or_file_changes(task, tm
     def forbidden_mkdir(*args, **kwargs):
         pytest.fail("compute-only task attempted to create a directory")
 
-    for name in ("save_curve", "save_loudness_summary", "save_overall_spl"):
-        monkeypatch.setattr(executor, name, forbidden_export)
+    monkeypatch.setattr(executor, "save_instance_artifacts", forbidden_export)
     monkeypatch.setattr(Path, "mkdir", forbidden_mkdir)
     directory = {"existing": task.analysis_result_directory,
                  "absent": str(tmp_path / "must-not-exist"), "none": None}[output]
@@ -126,6 +125,41 @@ def test_compute_only_keeps_real_results_without_export_or_file_changes(task, tm
         assert item["judgement"] == "NG" and item["violations"]
         assert item["display_payload"]["upper"]
     assert snapshot() == before
+
+
+def test_test_only_curve_registration_reuses_raw_data_but_not_judgement(task, monkeypatch):
+    from base import analysis_algorithm_adapters as adapters
+    from base.analysis import executor
+
+    calls = []
+
+    def ordinary_curve(signal, sample_rate, config, factor, **context):
+        def compute():
+            calls.append(1)
+            return {"x": np.array([100.0, 200.0]), "y": np.array([1.0, 2.0])}
+
+        cache = context["compute_context"]
+        key = ("test_curve", context["input_identity"], sample_rate, factor)
+        curve = compute() if cache is None else cache.get_or_compute(key, compute)
+        return {"metrics": {}, "curve": curve}
+
+    # Production registration remains explicit: handler plus executor admission.
+    # No fake type, new registry or test algorithm is installed into the product.
+    monkeypatch.setitem(adapters._HANDLERS, "TEST_CURVE", ordinary_curve)
+    monkeypatch.setattr(executor, "_SUPPORTED_TYPES", executor._SUPPORTED_TYPES | {"TEST_CURVE"})
+    config = {"limit_checked": True, "limit_mode": "manual", "manual_input_mode": "constant",
+              "constant_upper_enabled": True, "constant_lower_enabled": False}
+    current = replace(task, instances=tuple(
+        AnalysisInstance(f"curve-{limit}", "TEST_CURVE", 0, {**config, "constant_upper_value": limit})
+        for limit in (3.0, 1.5)))
+    shared = execute_task(current)
+    assert shared["execution_status"] == "分析完成"
+    assert len(calls) == 1
+    assert [i["judgement"] for i in shared["instance_results"]] == ["OK", "NG"]
+    assert execute_task(current, reuse_computations=False) == shared
+    assert len(calls) == 3
+    assert execute_task(current) == shared
+    assert len(calls) == 4  # A subsequent task cannot hit the prior task's data.
 
 
 def test_special_item_names_save_independently_and_keep_stable_paths(task):

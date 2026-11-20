@@ -6,13 +6,18 @@ configuration editors own writes and send commit notifications to the caller.
 """
 
 import logging
+from copy import deepcopy
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from base.audio_label_policy import audio_label_for_results
+from base.audio_label_policy import (
+    audio_label_for_results, judgement_summary, reconcile_terminal_judgement, required_judgements,
+)
+from base.analysis.input_adapter import build_analysis_batch
+from base.analysis.contracts import AnalysisInputError
 from base.audio_label_sync import AudioLabelJob
 from base.record_analysis_reference import RecordAnalysisReference
 from base.workbench_config_values import WorkbenchChannel, WorkbenchCondition
@@ -22,7 +27,7 @@ from base.workbench_round_store import RoundSnapshot, WorkbenchRoundStateError
 from base.workbench_configuration_loader import WorkbenchConfiguration, WorkbenchConfigurationError
 from base.workbench_analysis_input import (
     AnalysisRecordingContext, WorkbenchAnalysisInput, WorkbenchAnalysisInputError,
-    build_analysis_payload, make_analysis_recording_context,
+    build_analysis_payload, check_recorded_analysis_input, make_analysis_recording_context,
 )
 from ui.sequence.workbench_ui_projection import build_ui_projection, WorkbenchUiProjection, _PlotBindings
 from ui.sequence.workbench_plot_presenter import WorkbenchPlotPresenter
@@ -360,8 +365,10 @@ class MotorWorkbenchController:
                            and self._latest_analysis_tasks.get(key) == task_id
                            and context["round_id"] == self._current_round_id
                            and self._plot_presenter.matches_request(context))
-                if event["event_type"] == "task_result":
-                    self._consume_analysis_result(event, context, current)
+                if event["event_type"] in {"judgement_ready", "task_result"}:
+                    accepted = self._consume_analysis_event(event, context, current)
+                    if event["event_type"] == "judgement_ready" and not accepted:
+                        continue
                 event = {**event, **context, "is_current": current}
                 if event["event_type"] == "task_result":
                     del self._analysis_tasks[task_id]
@@ -372,7 +379,7 @@ class MotorWorkbenchController:
         if events:
             self.refresh_recording_state()
 
-    def _consume_analysis_result(self, event, context, is_current):
+    def _authenticated_analysis_payload(self, event, context):
         """Authenticate raw identities before forwarding merges the task context."""
         task_id = event["task_id"]
         payload = event.get("payload", {})
@@ -394,6 +401,62 @@ class MotorWorkbenchController:
                         source_name, field, source.get(field), identity,
                     )
                     return
+        return payload
+
+    def _consume_analysis_event(self, event, context, is_current):
+        payload = self._authenticated_analysis_payload(event, context)
+        if payload is None:
+            return False
+        if event["event_type"] == "judgement_ready":
+            return self._consume_early_judgement(event, context, is_current, payload)
+        self._consume_analysis_result(event, context, is_current, payload)
+        return True
+
+    def _consume_early_judgement(self, event, context, is_current, payload):
+        expected_items = context.get("expected_judgements", [])
+        if "early_judgements" in context or not expected_items:
+            return False
+        items = payload.get("instance_results", ())
+        if not isinstance(items, (list, tuple)) or not all(isinstance(item, dict) for item in items):
+            logging.getLogger("core").warning("Malformed early judgement for %s", event["task_id"])
+            return False
+        summary = judgement_summary(items, expected_items)
+        if summary["missing_required"] or len(items) != len(expected_items):
+            logging.getLogger("core").warning("Incomplete early judgement message for %s", event["task_id"])
+            return False
+        payload = {**payload, "judgement_summary": summary}
+        snapshot = self._result_state.receive_judgement(
+            context["round_id"], context["station_id"], context["condition_id"], payload,
+        )
+        if snapshot is None:
+            return False
+        context["early_judgements"] = deepcopy(items)
+        event["payload"] = payload
+        if is_current:
+            self._show_analysis_snapshot(context, snapshot)
+        return True
+
+    def _consume_analysis_result(self, event, context, is_current, payload):
+        task_id = event["task_id"]
+        if "expected_judgements" in context:
+            summary, conflict = reconcile_terminal_judgement(
+                payload, context["expected_judgements"], context.get("early_judgements"),
+            )
+            payload = {**payload, "judgement_summary": summary}
+            if conflict:
+                evidence_fields = ("config_key", "analysis_type", "channel_index",
+                                   "execution_status", "judgement_status", "judgement", "error")
+                early_evidence, terminal_evidence = (
+                    [{key: item.get(key) for key in evidence_fields} for item in items]
+                    for items in (context["early_judgements"], payload.get("instance_results", ()))
+                )
+                logging.getLogger("core").error(
+                    "Judgement conflict for task %s: early=%r terminal=%r original_error=%r",
+                    task_id, early_evidence, terminal_evidence, payload.get("error"),
+                )
+                payload["error"] = {"stage": "judgement", "type": "JudgementConflict",
+                                    "message": "提前判定与完整结果不一致，请检查分析诊断"}
+            event["payload"] = payload
         snapshot = self._result_state.receive(
             context["round_id"], context["station_id"], context["condition_id"], payload,
         )
@@ -402,28 +465,32 @@ class MotorWorkbenchController:
         if self._submit_audio_label is not None:
             self._submit_audio_label(AudioLabelJob(
                 task_id, context["wav_path"],
-                audio_label_for_results(payload.get("instance_results", ())),
+                audio_label_for_results(payload),
+                context.get("result_directory", ""), payload.get("judgement_summary"),
             ))
-        if self._round_counter is not None and payload.get("execution_status") == "分析完成":
+        if self._round_counter is not None:
             self._update_round_counter(
                 self._round_counter.analysis_completed, context["round_id"],
                 (context["condition_id"], context["station_id"]), datetime.now().date(),
             )
         if is_current:
-            self._station_panel.show_station_result(
-                context["station_ordinal"], snapshot.forward, snapshot.reverse,
-                snapshot.result, snapshot.rows,
-            )
-            column = self._plot_columns.get(context["station_id"])
-            if snapshot.complete and column is not None:
-                self._plot_grid.set_station_result(column, snapshot.result)
+            self._show_analysis_snapshot(context, snapshot)
         if snapshot.complete and self._set_daily_records is not None:
             today = datetime.now().date()
             self._set_daily_records(self._result_state.records_for(today), today)
         if self._wav_state.update_result(
-            context["request_id"], context["station_id"], payload.get("instance_results", ()),
+            context["request_id"], context["station_id"], payload,
         ):
             self._publish_wav_details()
+
+    def _show_analysis_snapshot(self, context, snapshot):
+        self._station_panel.show_condition_result(
+            context["station_ordinal"], snapshot.condition_statuses,
+            snapshot.result, snapshot.rows,
+        )
+        column = self._plot_columns.get(context["station_id"])
+        if snapshot.judgement_complete and column is not None:
+            self._plot_grid.set_station_result(column, snapshot.result)
 
     def _submit_saved_recording(self, item: WorkbenchAnalysisInput, round_context: _RecordingRound) -> None:
         """Submit published file paths, never sample buffers or the current configuration."""
@@ -445,13 +512,18 @@ class MotorWorkbenchController:
                 for station in item.completion.stations
             }
             payload = build_analysis_payload((item,), result_directories=directories)
-        except WorkbenchAnalysisInputError as error:
-            receipt = {"accepted": False, "accepted_task_ids": [], "issues": [{
+            batch = build_analysis_batch(payload)
+            issues = check_recorded_analysis_input(item, batch)
+            expected_by_task = {t.task_id: required_judgements(t.instances) for t in batch.tasks}
+        except (WorkbenchAnalysisInputError, AnalysisInputError) as error:
+            receipt = {"accepted": False, "precheck_failed": True, "accepted_task_ids": [], "issues": [{
                 "task_id": None, "field_path": "$input", "error_type": type(error).__name__,
                 "message": str(error),
             }]}
         else:
-            receipt = self._analysis_service.submit_batch(payload)
+            receipt = ({"accepted": False, "precheck_failed": True, "accepted_task_ids": [],
+                        "issues": [asdict(issue) for issue in issues]}
+                       if issues else self._analysis_service.submit_batch(payload))
             if receipt["accepted"]:
                 for task in payload["tasks"]:
                     task_id = task["task_id"]
@@ -460,6 +532,8 @@ class MotorWorkbenchController:
                     self._analysis_tasks[task_id] = {
                         "request_id": context.request_id, "analysis_version": context.analysis_version,
                         "wav_path": task["wav_path"],
+                        "expected_judgements": expected_by_task[task_id],
+                        "result_directory": task.get("analysis_result_directory", ""),
                         "station_id": task["station_id"], "condition_id": task["condition_id"],
                         "round_id": round_context.round_id,
                         "recorded_at": round_context.recorded_at,
@@ -471,9 +545,12 @@ class MotorWorkbenchController:
                     self._latest_analysis_tasks[task["station_id"], task["condition_id"]] = task_id
                 if context.analysis_version == self._analysis_version and payload['tasks']:
                     self._plot_presenter.begin_batch(context.request_id, payload['tasks'])
+        if not receipt['accepted']:
+            self._cancel_rejected_round(round_context)
         if context.analysis_version == self._analysis_version:
             self._plot_presenter.recording_state(
-                context, '待分析' if receipt['accepted'] else '分析未提交',
+                context, ('待分析' if receipt['accepted'] else
+                          '检查未通过' if receipt.get('precheck_failed') else '分析未提交'),
                 '\n'.join(issue['message'] for issue in receipt.get('issues', [])),
             )
         self._analysis_event_received({
@@ -488,6 +565,28 @@ class MotorWorkbenchController:
         if self._record_analysis is not None:
             self._record_analysis.begin_shutdown()
         self._analysis_service.shutdown()
+
+    def _cancel_rejected_round(self, context):
+        """A rejected attempt has no verdict and must not wait for a worker event."""
+        cancelled = self._result_state.cancel_round(context.round_id)
+        if self._round_counter is not None:
+            self._update_round_counter(self._round_counter.cancel_round,
+                                       context.round_id, datetime.now().date())
+        if context.round_id != self._current_round_id:
+            return
+        self._condition_index = 0
+        self._recording_round = None
+        self._current_round_id = None
+        self._plot_presenter.cancel_round(cancelled)
+        for station_id, ordinal, _ in context.stations:
+            if station_id in cancelled:
+                snapshot = cancelled[station_id]
+                self._station_panel.show_condition_result(
+                    ordinal, snapshot.condition_statuses, snapshot.result, snapshot.rows,
+                )
+                column = self._plot_columns.get(station_id)
+                if column is not None:
+                    self._plot_grid.set_station_result(column, "--")
 
     def bind_recording(self, ports: WorkbenchRecordingPorts) -> None:
         self._recording = ports
@@ -528,7 +627,10 @@ class MotorWorkbenchController:
             self._latest_analysis_tasks.clear()
 
         logging.getLogger("core").info("Applying workbench configuration from %s", source_identity)
-        self._station_panel.show_workbench_stations(stations)
+        self._station_panel.show_workbench_stations(
+            stations, condition_names=tuple(c.condition_name for c in analysis.context.conditions)
+            if analysis else (),
+        )
         self._plot_grid.show_workbench_layout(names, cells)
         self._plot_columns = {
             station.station_id: column
@@ -623,19 +725,18 @@ class MotorWorkbenchController:
         round_context = self._recording_round
         if self._condition_index == 0 or round_context is None:
             round_snapshot = None
-            expected_keys = frozenset()
+            expected_keys = frozenset(
+                (c.condition_id, station.station_id)
+                for c in config.analysis.context.conditions
+                if config.analysis.test_queues[c.test_queue].analysis_config["display_sequence"]
+                for station in config.analysis.stations_for(c.condition_id)
+            )
             if self._round_counter is not None:
                 if not self._update_round_counter(self._round_counter.prepare_new_round, recorded_at.date()):
                     ports.set_button_state(False, self._round_error, False)
                     return
                 round_snapshot = self._round_counter.current_snapshot
                 sample_number = str(round_snapshot.number)
-                expected_keys = frozenset(
-                    (c.condition_id, station.station_id)
-                    for c in config.analysis.context.conditions
-                    if config.analysis.test_queues[c.test_queue].analysis_config["display_sequence"]
-                    for station in config.analysis.stations_for(c.condition_id)
-                )
             round_context = _RecordingRound(
                 uuid4().hex, analysis_version, self._applied_source_identity, self._display_revision,
                 recorded_at, tuple(c.condition_id for c in config.recording.context.conditions),
@@ -710,6 +811,7 @@ class MotorWorkbenchController:
             source_identity=context.source_identity, recorded_at=context.recorded_at,
             condition_ids=context.condition_ids, stations=context.stations,
             product_code=context.product_code,
+            expected_analysis_keys=context.expected_analysis_keys,
         )
         if context.display_revision != self._display_revision:
             if self._round_counter is not None:
@@ -721,8 +823,9 @@ class MotorWorkbenchController:
         self._current_round_id = context.round_id
         self._plot_grid.clear_station_results()
         for _, ordinal, keys in context.stations:
-            self._station_panel.show_station_result(
-                ordinal, "--", "--", "--", [[key, "--", "--"] for key in keys],
+            self._station_panel.show_condition_result(
+                ordinal, ("--",) * len(context.condition_ids), "--",
+                [[key, *(["--"] * len(context.condition_ids))] for key in keys],
             )
 
     def _recording_started(self, session):

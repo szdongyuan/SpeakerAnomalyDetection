@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from base.audio_label_policy import aggregate_judgements
 from base.record_analysis_reference import RecordAnalysisReference
+from base.audio_label_policy import result_status
 
 
 @dataclass
@@ -45,7 +45,7 @@ class WorkbenchWavState:
         record = self._records.get((request_id, station_id))
         if record is None or record.terminal_received:
             return False
-        result = aggregate_judgements(item.get("judgement") for item in items)
+        result = result_status(items)
         record.result = "未标记" if result == "--" else result
         record.terminal_received = True
         return True

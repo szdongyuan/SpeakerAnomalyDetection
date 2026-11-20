@@ -5,6 +5,7 @@ from datetime import date, datetime
 
 from base.motor_daily_records import DailyRecordSummary
 from base.record_analysis_reference import RecordAnalysisReference
+from base.audio_label_policy import INCOMPLETE, NG_INCOMPLETE
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,7 @@ class DailyWavRecordStore:
             if not row["condition"].strip():
                 raise ValueError(f"records[{index}].condition must not be empty")
             result = row["result"].strip().upper()
-            if result not in ("OK", "NG", "未标记"):
+            if result not in ("OK", "NG", "未标记", INCOMPLETE, NG_INCOMPLETE):
                 raise ValueError(f"records[{index}].result must be OK, NG or 未标记")
             analysis_reference = row.get("analysis_reference")
             if analysis_reference is not None and not isinstance(analysis_reference, RecordAnalysisReference):
@@ -81,9 +82,10 @@ class DailyWavRecordStore:
         total = len(normalized)
         ok = sum(row.result == "OK" for row in normalized)
         summary = DailyRecordSummary(
-            total, ok, sum(row.result == "NG" for row in normalized),
+            total, ok, sum(row.result.startswith("NG") for row in normalized),
             sum(row.result == "未标记" for row in normalized),
             f"{ok / total * 100:.1f}%" if total else "--",
+            sum(INCOMPLETE in row.result for row in normalized),
         )
         stations = tuple(sorted({row.station_id for row in normalized}))
         self.record_date, self.records = day, normalized

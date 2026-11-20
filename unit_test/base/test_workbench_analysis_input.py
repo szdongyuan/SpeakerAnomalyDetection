@@ -4,6 +4,7 @@ from dataclasses import FrozenInstanceError, replace
 from datetime import datetime
 import json
 from uuid import NAMESPACE_URL, uuid5
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from base.recording_process_protocol import FrozenConfig
 from base.workbench_analysis_input import (
     AnalysisRecordingContext, WorkbenchAnalysisInput, WorkbenchAnalysisInputError,
     build_analysis_payload, make_analysis_recording_context,
+    check_recorded_analysis_input,
 )
 from base.workbench_configuration_loader import load_workbench_configuration
 from base.workbench_recording_protocol import StationWav, WorkbenchRecordingCompletion
@@ -19,6 +21,27 @@ from ui.workbench_recording_device import WorkbenchRecordingDeviceSnapshot
 from unit_test.base.test_workbench_recording_request import ChangingCalibrationStore
 from unit_test.base.vkinging_fakes import device_info, input_config
 from unit_test.base.workbench_config_fixtures import write_workbench_files
+
+
+@pytest.mark.parametrize("selected,expected", [(0, 0), (1, 1)])
+def test_precheck_ve_uses_selected_wav_channel_not_all_recorded_channels(selected, expected):
+    from base.analysis.contracts import AnalysisBatch, AnalysisChannel, AnalysisInstance, AnalysisTask
+    from unit_test.base.vkinging_fakes import wav_metadata_v2
+
+    channels = tuple(AnalysisChannel(index, f"CH{index + 1}", "sound_pressure",
+                                    physical_channel_index=physical)
+                     for index, physical in enumerate((7, 1)))
+    task = AnalysisTask("task", "s1", "工位1", "c1", "工况1", "unused.wav", None, channels,
+                        tuple(AnalysisInstance(kind, kind, selected, {}) for kind in ("SHRP", "ROUGH")), {})
+    plan = SimpleNamespace(station_id="s1", channels=channels,
+                           calibration_metadata=FrozenConfig.snapshot(wav_metadata_v2()))
+    item = SimpleNamespace(context=SimpleNamespace(station_plans=(plan,)),
+                           completion=SimpleNamespace(final_frames=132300, sample_rate=44100))
+    issues = check_recorded_analysis_input(item, AnalysisBatch((task,), ()))
+    assert len(issues) == expected
+    if expected:
+        assert issues[0].error_type == "InvalidCalibration"
+        assert "工位1" in issues[0].message and "硬件 CH2" in issues[0].message
 
 
 @pytest.fixture

@@ -56,6 +56,22 @@ def assert_wav_number(request, number):
         assert f"_M-02_{number}_SN-008.wav" in station.filename
 
 
+def test_precheck_rejection_finishes_round_without_waiting_for_worker(rounds, monkeypatch):
+    r = rounds
+    monkeypatch.setattr("base.recording_calibration_snapshot.load_mic_channel_calibrations", lambda *args: {})
+    for _ in range(2):
+        r.w.controller.start_recording()
+        r.w.complete()
+    r.assert_number(1)  # Rejected attempts do not consume a valid detection number.
+    assert not r.service.submissions and not r.w.controller._analysis_tasks
+    assert len(r.w.completions) == 2
+    assert all(event["payload"]["precheck_failed"] for event in r.events)
+    r.w.complete()  # Duplicate completion cannot advance the daily number twice.
+    r.assert_number(1)
+    assert r.w.controller._condition_index == 0
+    assert r.w.controller._recording_round is None
+
+
 def test_round_freezes_wav_number_and_waits_for_every_station_condition(rounds):
     r = rounds
     r.assert_number(1)
@@ -395,13 +411,13 @@ def test_first_condition_retry_after_midnight_uses_new_day(rounds, terminal):
     r.assert_number(1)
 
 
-def test_non_success_analysis_preserves_existing_diagnostic_and_does_not_advance(rounds):
+def test_non_success_analysis_preserves_existing_diagnostic_and_finishes_round(rounds):
     r = rounds
     first, second = r.record(), r.record()
     r.deliver(*second, *first[1:])
     r.service.events.append(result_event(first[0], failed=True))
     r.w.controller.poll_analysis_events()
-    r.assert_number(1)
+    r.assert_number(2)
     assert r.events[-1]["payload"]["execution_status"] == "分析失败"
 
 

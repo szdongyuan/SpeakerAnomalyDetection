@@ -1,10 +1,11 @@
-"""Qt-free single-channel display snapshots and paired recording-day results."""
+"""Qt-free condition display snapshots and station recording-day results."""
 
 import math
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
-from base.audio_label_policy import aggregate_judgements
+from consts.acoustic_analysis.common_consts import SOUND_QUALITY_ANALYSES
+from base.audio_label_policy import aggregate_judgements, result_status
 from ui.sequence.workbench_units import format_workbench_spl_unit
 
 
@@ -15,9 +16,14 @@ def _format_instance_value(item):
     key = {"SPL": "overall_spl", "FBA": "overall_weighted_db"}.get(
         item.get("analysis_type"),
     )
+    if item.get("analysis_type") in SOUND_QUALITY_ANALYSES:
+        spec = SOUND_QUALITY_ANALYSES[item["analysis_type"]]
+        key = metrics.get("limit_metric", spec["default_metric"])
+        if key == "curve_y":
+            key = spec["default_metric"]
     value = metrics.get(key) if key else None
     if type(value) not in (int, float) or not math.isfinite(value):
-        return "分析完成"
+        return "无有效数值" if item.get("analysis_type") in SOUND_QUALITY_ANALYSES else "分析完成"
     unit = (format_workbench_spl_unit(metrics["weighting"])
             if "weighting" in metrics else (metrics.get("unit") or ""))
     return f"{value:.2f} {unit}".strip()
@@ -25,30 +31,50 @@ def _format_instance_value(item):
 
 @dataclass(frozen=True)
 class WorkbenchStationResult:
-    """One complete station display; each snapshot owns its row containers."""
+    """All configured columns; legacy direction fields only serve daily-record consumers."""
 
-    forward: str
-    reverse: str
+    condition_statuses: tuple[str, ...]
     result: str
     rows: list[list[str]]
     complete: bool
+    judgement_complete: bool = False
+
+    @property
+    def forward(self):
+        return self.condition_statuses[0] if self.condition_statuses else "--"
+
+    @property
+    def reverse(self):
+        return self.condition_statuses[1] if len(self.condition_statuses) > 1 else "--"
 
 
 @dataclass
 class _Station:
     ordinal: int
     metric_keys: tuple[str, ...]
-    received: dict[str, tuple[str, dict[str, str]]] = field(default_factory=dict)
+    expected_conditions: tuple[str, ...]
+    received: dict[str, dict[str, str]] = field(default_factory=dict)
+    judgements: dict[str, str] = field(default_factory=dict)
+    cancelled: bool = False
 
     def snapshot(self, condition_ids):
-        forward, forward_values = self.received.get(condition_ids[0], ("--", {}))
-        reverse, reverse_values = self.received.get(condition_ids[1], ("--", {}))
-        complete = all(direction in self.received for direction in condition_ids)
+        if self.cancelled:
+            return WorkbenchStationResult(
+                ("--",) * len(condition_ids), "--",
+                [[key, *(["--"] * len(condition_ids))] for key in self.metric_keys], False,
+            )
+        statuses = tuple(self.judgements.get(key, "--") for key in condition_ids)
+        complete = bool(self.expected_conditions) and all(
+            key in self.received for key in self.expected_conditions)
+        judgement_complete = bool(self.expected_conditions) and all(
+            key in self.judgements for key in self.expected_conditions)
         return WorkbenchStationResult(
-            forward, reverse, aggregate_judgements((forward, reverse)) if complete else "--",
-            [[key, forward_values.get(key, "--"), reverse_values.get(key, "--")]
+            statuses,
+            aggregate_judgements(self.judgements[key] for key in self.expected_conditions)
+            if judgement_complete else "--",
+            [[key, *(self.received.get(condition, {}).get(key, "--") for condition in condition_ids)]
              for key in self.metric_keys],
-            complete,
+            complete, judgement_complete,
         )
 
 
@@ -57,7 +83,7 @@ class _Round:
     analysis_version: str
     source_identity: str
     recorded_at: datetime
-    condition_ids: tuple[str, str]
+    condition_ids: tuple[str, ...]
     stations: dict[str, _Station]
     product_code: str
 
@@ -70,24 +96,21 @@ class WorkbenchResultState:
         self._records: list[dict] = []
 
     def open_round(self, round_id, *, analysis_version, source_identity,
-                   recorded_at, condition_ids, stations, product_code):
+                   recorded_at, condition_ids, stations, product_code, expected_analysis_keys=None):
         """Freeze display metadata once; reopening an existing round is a no-op."""
         if round_id in self._rounds:
             return
         self._rounds[round_id] = _Round(
             analysis_version, source_identity, recorded_at, tuple(condition_ids),
-            {station_id: _Station(ordinal, tuple(keys))
+            {station_id: _Station(ordinal, tuple(keys), tuple(
+                condition for condition in condition_ids
+                if expected_analysis_keys is None or (condition, station_id) in expected_analysis_keys))
              for station_id, ordinal, keys in stations},
             product_code,
         )
 
-    def receive(self, round_id, station_id, condition_id, payload):
-        """Accept the first direction terminal and return its complete station view.
-
-        The controller authenticates task IDs against submitted task contexts.
-        This boundary checks the supplied station and condition against the round
-        and payload, before publishing any result or recording a completed pair.
-        """
+    def _locate(self, round_id, station_id, condition_id, payload):
+        """Validate shared round/condition identities for both event types."""
         if round_id not in self._rounds:
             raise ValueError(
                 f"Unknown round {round_id!r} for station {station_id!r}, "
@@ -109,14 +132,45 @@ class WorkbenchResultState:
                     f"{field_name} {actual!r} does not match {expected!r}",
                 )
         station = round_state.stations[station_id]
+        if condition_id not in station.expected_conditions:
+            raise ValueError(f"Unexpected condition {condition_id!r} for station {station_id!r}")
+        return round_state, station
+
+    def cancel_round(self, round_id):
+        """Retire unfinished station attempts; retain already completed records."""
+        state = self._rounds[round_id]
+        cancelled = {}
+        for station_id, station in state.stations.items():
+            if not station.cancelled and not station.snapshot(state.condition_ids).complete:
+                station.cancelled = True
+                cancelled[station_id] = station.snapshot(state.condition_ids)
+        return cancelled
+
+    def receive_judgement(self, round_id, station_id, condition_id, payload):
+        """Update verdicts only; terminal metrics and daily records stay pending."""
+        round_state, station = self._locate(round_id, station_id, condition_id, payload)
+        if station.cancelled or condition_id in station.judgements:
+            return None
+        station.judgements[condition_id] = result_status(payload)
+        return station.snapshot(round_state.condition_ids)
+
+    def receive(self, round_id, station_id, condition_id, payload):
+        """Accept each terminal once, independently of an earlier verdict."""
+        round_state, station = self._locate(round_id, station_id, condition_id, payload)
         if condition_id in station.received:
             return None
         items = payload.get("instance_results", ())
-        status = aggregate_judgements(item.get("judgement") for item in items)
-        values = {item["config_key"]: _format_instance_value(item) for item in items}
-        station.received[condition_id] = status, values
+        status = result_status(payload)
+        grouped = {}
+        for item in items:
+            grouped.setdefault(item["config_key"], []).append(item)
+        values = {key: (_format_instance_value(group[0]) if len(group) == 1 else
+                        " / ".join(f"CH{i['channel_index'] + 1}: {_format_instance_value(i)}"
+                                   for i in group)) for key, group in grouped.items()}
+        station.judgements[condition_id] = status
+        station.received[condition_id] = values
         snapshot = station.snapshot(round_state.condition_ids)
-        # Each direction is accepted once, so only the second can complete a pair.
+        # Only the last unreceived condition can complete this round once.
         if snapshot.complete:
             self._records.append({
                 "completed_at": round_state.recorded_at,

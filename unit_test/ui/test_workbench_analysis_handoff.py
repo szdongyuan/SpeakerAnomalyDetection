@@ -116,7 +116,12 @@ def test_main_window_two_conditions_publish_eight_analysis_tasks(startup, tmp_pa
     from unit_test.ui.test_motor_workbench_integration import _wait_for_qt
 
     files = write_workbench_files(tmp_path, all_stations=True)
+    monkeypatch.setattr("base.recording_calibration_snapshot.load_mic_channel_calibrations",
+                        lambda *_: {index: {"v2pa_factor": 1.0, "standard_spl_db": 94.0}
+                                    for index in range(3)})
     product = json.loads(files['product'].read_text(encoding='utf-8'))
+    for condition in product['conditions']:
+        condition['segmented_analysis'] = {'mode': 'none'}
     # Four logical stations share the fake soundcard's three physical channels.
     for index, station in enumerate(product['stations']):
         for column, channel in enumerate(station['channels']):
@@ -127,7 +132,11 @@ def test_main_window_two_conditions_publish_eight_analysis_tasks(startup, tmp_pa
         queue = json.loads(files[name].read_text(encoding='utf-8'))
         queue[0]['seq1']['acq']['detail'].update(
             total_time=12 / 48000, startup_trim_ms=0, audio_validation={'enabled': False})
-        expected_test_queues[name] = queue[0]['seq1']['analysis_list']
+        analyses = queue[0]['seq1']['analysis_list']
+        for key in analyses['display_sequence']:
+            analyses[key]['analysis_channels'] = [0]
+            analyses[key]['analysis_time_range_enabled'] = False
+        expected_test_queues[name] = analyses
         write_json(files[name], queue)
     original_files = {path: path.read_bytes() for path in files.values()}
     repository = MotorWorkbenchConfigRepository(files['programs'], files['queues'], files['layout'])

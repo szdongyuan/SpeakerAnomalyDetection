@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from base.audio_label_policy import INCOMPLETE, NG_INCOMPLETE
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class DailyRecordSummary:
     ng: int
     unmarked: int
     pass_rate: str
+    incomplete: int = 0  # Used by WAV details; round totals use three exclusive categories.
 
 
 @dataclass(frozen=True)
@@ -75,8 +77,8 @@ class DailyRecordStore:
                 if not isinstance(value, str):
                     raise TypeError(f"records[{index}].{field} must be a str")
                 allowed = (
-                    ("OK", "NG", "未标记") if field == "result"
-                    else ("--", "OK", "NG")
+                    ("OK", "NG", "未标记", INCOMPLETE, NG_INCOMPLETE) if field == "result"
+                    else ("--", "OK", "NG", INCOMPLETE, NG_INCOMPLETE)
                 )
                 value = value.strip().upper()
                 if value not in allowed:
@@ -92,8 +94,8 @@ class DailyRecordStore:
         total = len(normalized)
         ok = sum(row.result == "OK" for row in normalized)
         summary = DailyRecordSummary(
-            total, ok, sum(row.result == "NG" for row in normalized),
-            sum(row.result == "未标记" for row in normalized),
+            total, ok, sum(row.result.startswith("NG") for row in normalized),
+            sum(row.result in ("未标记", INCOMPLETE) for row in normalized),
             f"{ok / total * 100:.1f}%" if total else "--",
         )
         stations = tuple(sorted({row.station_id for row in normalized}))

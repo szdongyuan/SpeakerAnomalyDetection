@@ -54,6 +54,7 @@ class MotorDailyDetailsDialog(QDialog):
         for caption, name, text in (
             ("总数", "total", "0"), ("OK", "ok", "0"),
             ("NG", "ng", "0"), ("未标记", "unmarked", "0"),
+            ("不完整", "incomplete", "0"),
             ("合格率", "rate", "--"),
         ):
             column = QVBoxLayout()
@@ -80,7 +81,8 @@ class MotorDailyDetailsDialog(QDialog):
         self.station_combo = QComboBox(self)
         self.station_combo.addItem("全部工位", None)
         self.result_combo = QComboBox(self)
-        for text, value in (("全部结果", None), ("OK", "OK"), ("NG", "NG"), ("未标记", "未标记")):
+        for text, value in (("全部结果", None), ("OK", "OK"), ("NG", "NG"), ("未标记", "未标记"),
+                            ("结果不完整", "结果不完整"), ("NG（结果不完整）", "NG（结果不完整）")):
             self.result_combo.addItem(text, value)
         self.search_edit = QLineEdit(self)
         self.search_edit.setPlaceholderText("搜索文件名称")
@@ -195,6 +197,7 @@ class MotorDailyDetailsDialog(QDialog):
         summary = self._store.summary
         for label, value in ((self.total_label, summary.total), (self.ok_label, summary.ok),
                              (self.ng_label, summary.ng), (self.unmarked_label, summary.unmarked),
+                             (self.incomplete_label, summary.incomplete),
                              (self.rate_label, summary.pass_rate)):
             label.setText(str(value))
         self.rate_label.setProperty("secondary", summary.total == 0)
@@ -229,7 +232,7 @@ class MotorDailyDetailsDialog(QDialog):
                 elif column == 3:
                     item.setToolTip(record.condition)
                 if column == 4:
-                    item.setForeground(QColor({"OK": "#00824e", "NG": "#c32b42"}.get(value, "#617183")))
+                    item.setForeground(QColor({"OK": "#00824e", "NG": "#c32b42", "结果不完整": "#a65c00", "NG（结果不完整）": "#c32b42"}.get(value, "#617183")))
                 elif column == 5:
                     item.setData(Qt.UserRole, record)
                     if record.analysis_reference is None:
@@ -279,7 +282,7 @@ class MotorDailyDetailsDialog(QDialog):
         condition_width = max((metrics.horizontalAdvance(row.condition)
                                for row in self._store.records), default=0)
         widths[3] = max(widths[3], min(220, condition_width + 24))
-        widths[4] = max(widths[4], metrics.horizontalAdvance("未标记") + 24)
+        widths[4] = max(widths[4], metrics.horizontalAdvance("NG（结果不完整）") + 24)
         # Give filenames the remaining space while retaining readable fixed columns.
         reference_name = "2026-11-16_15-00-00-123_工位01_正转_型号ABC123_999_6901234567890.wav"
         filename_minimum = metrics.horizontalAdvance(reference_name) + 24

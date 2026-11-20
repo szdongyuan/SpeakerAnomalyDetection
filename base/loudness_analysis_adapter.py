@@ -50,6 +50,8 @@ def calculate_loudness(signal, sample_rate, config, v2pa_factor, **context):
     output = run_sound_quality(
         signal, sample_rate, v2pa_factor,
         {"enabled": True, "items": {"LOUD": settings}},
+        compute_context=context.get("compute_context"),
+        input_identity=context.get("input_identity"),
     ).loudness
     if output is None or not output.enabled or output.raw_result is None:
         raise ValueError(output.skipped_reason if output is not None else "响度未产生计算结果")

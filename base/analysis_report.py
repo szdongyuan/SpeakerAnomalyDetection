@@ -28,6 +28,7 @@ from base.analysis_report_source import (
 )
 from base.report_branding import load_company_logo
 from base.spl_csv_schema import resolve_overall_spl_csv_columns
+from consts.acoustic_analysis.common_consts import SOUND_QUALITY_ANALYSES
 
 
 _QT_APP = None
@@ -42,6 +43,7 @@ _TYPE_UNITS = {
     "FFT": "dB",
     "Spec": "dB",
     "未知": "",
+    **{kind: spec["unit"] for kind, spec in SOUND_QUALITY_ANALYSES.items()},
 }
 
 
@@ -60,6 +62,7 @@ class _ScalarCell:
     judgement: str = ""
     lower_limit: str = ""
     upper_limit: str = ""
+    criterion: str = ""
 
 
 @dataclass(frozen=True)
@@ -292,6 +295,8 @@ def _prepare_record(
 ) -> _PreparedRecord:
     item = candidate.analysis_item(identity)
     issues = list(candidate.issues)
+    if "结果不完整" in candidate.judgement_status:
+        issues.append("存在缺失或失败的必需判定实例")
     scalar_values = {}
     input_voltage = ""
     unit = _TYPE_UNITS.get(identity.analysis_type, "")
@@ -303,6 +308,8 @@ def _prepare_record(
     else:
         if identity.analysis_type == "SPL":
             scalar_values, segment_groups, input_voltage, unit, scalar_issues = _read_spl_csv(item)
+        elif identity.analysis_type in SOUND_QUALITY_ANALYSES:
+            scalar_values, scalar_issues = _read_sound_quality_csv(item)
         else:
             scalar_issues = []
         issues.extend(scalar_issues)
@@ -310,7 +317,7 @@ def _prepare_record(
             f"{channel} 测量值缺失"
             for channel, cell in scalar_values.items() if cell.value == "—"
         )
-        if identity.analysis_type == "SPL" and not (scalar_values or segment_groups):
+        if identity.analysis_type in {"SPL", "SHRP", "ROUGH"} and not (scalar_values or segment_groups):
             issues.append("未找到该分析项的标量结果")
         if identity.analysis_type in {"FBA", "FFT"} and not any(
             Path(path).is_file() for _role, path in item.csv_files
@@ -321,9 +328,12 @@ def _prepare_record(
             expected_channels = set(scalar_values) if identity.analysis_type == "SPL" else set()
             for _voltage, cells in segment_groups.values():
                 expected_channels.update(cells)
-            charts, chart_issues = _prepare_charts(
-                item, expected_channels, requires_chart, cancel_requested=cancel_requested,
-            )
+            if identity.analysis_type in SOUND_QUALITY_ANALYSES:
+                charts, chart_issues = _prepare_sound_quality_charts(item, set(scalar_values), cancel_requested)
+            else:
+                charts, chart_issues = _prepare_charts(
+                    item, expected_channels, requires_chart, cancel_requested=cancel_requested,
+                )
     return _PreparedRecord(
         candidate,
         item,
@@ -422,7 +432,10 @@ def _build_summary_html(
 ):
     result_counts = {"OK": 0, "NG": 0, "无判定结果": 0}
     for candidate in candidates:
-        result_counts[candidate.result_text] = result_counts.get(candidate.result_text, 0) + 1
+        key = "NG" if candidate.result_text.startswith("NG") else candidate.result_text
+        result_counts[key] = result_counts.get(key, 0) + 1
+    incomplete_count = sum("结果不完整" in candidate.result_text for candidate in candidates)
+    incomplete_text = f"　结果不完整 {incomplete_count}（含已判 NG）" if incomplete_count else ""
     item_text = "、".join(
         identity.key if identity.analysis_type.casefold() in identity.key.casefold()
         else f"{identity.key}（{identity.analysis_type}）"
@@ -445,10 +458,90 @@ def _build_summary_html(
   <tr><th>型号</th><td>{_html(models)}</td><th>端口</th><td>{_html(ports)}</td></tr>
   <tr><th>档位</th><td>{_html(conditions)}</td><th>轮次</th><td>{_html(rounds)}</td></tr>
   <tr><th>报告内容</th><td>{_html(mode_text)}</td><th>数据缺失</th><td>{completeness_text}</td></tr>
-  <tr><th>结果统计</th><td colspan="3">OK {result_counts['OK']}　NG {result_counts['NG']}　无判定结果 {result_counts['无判定结果']}</td></tr>
+  <tr><th>结果统计</th><td colspan="3">OK {result_counts['OK']}　NG {result_counts['NG']}　无判定结果 {result_counts['无判定结果']}{incomplete_text}</td></tr>
   <tr><th>分析项（{len(selected_items)}项）</th><td colspan="3">{_html(item_text)}</td></tr>
 </table>
 """
+
+
+def _read_sound_quality_csv(item):
+    spec = SOUND_QUALITY_ANALYSES[item.identity.analysis_type]
+    cells, issues = {}, []
+    labels = dict(spec["metrics"])
+    for role, path in item.csv_files:
+        if role != spec["label"] + "汇总":
+            continue
+        try:
+            with open(path, encoding="utf-8-sig", newline="") as stream:
+                rows = list(csv.DictReader(stream))
+            for row in rows:
+                channel = row["通道"]
+                if not re.fullmatch(r"CH[1-9][0-9]*(?:\([^)]*\))?", channel):
+                    raise ValueError("无效通道")
+                channel = channel.split("(")[0]
+                if channel in cells:
+                    raise ValueError(f"{channel} 重复汇总")
+                values = [(label, _format_number(row.get(label + spec["unit"])))
+                          for _, label in spec["metrics"]]
+                value_text = ("；".join(f"{label}：{value or '—'}" for label, value in values)
+                              if any(value for _, value in values) else "—")
+                judgement = row.get("判定结果", "")
+                if judgement == "判定失败":
+                    issues.append(f"{channel} 必需判定失败")
+                metric = row.get("判定指标", "")
+                criterion = "时间曲线" if metric == "curve_y" else labels.get(metric, metric)
+                cells[channel] = _ScalarCell(
+                    value_text, judgement, row.get("下限" + spec["unit"], ""),
+                    row.get("上限" + spec["unit"], ""), criterion,
+                )
+        except (OSError, UnicodeError, csv.Error, KeyError, ValueError) as error:
+            issues.append(f"汇总 CSV 读取失败：{Path(path).name}：{error}")
+    return cells, issues
+
+
+def _prepare_sound_quality_charts(item, expected_channels, cancel_requested):
+    # Reuse the existing non-Qt renderer at export time, outside acquisition.
+    from base.analysis_plot_renderer import render_analysis_png
+
+    spec = SOUND_QUALITY_ANALYSES[item.identity.analysis_type]
+    charts, issues, seen = [], [], set()
+    for role, path in item.csv_files:
+        if role != spec["label"] + "时间曲线":
+            continue
+        _raise_if_cancelled(cancel_requested)
+        try:
+            with open(path, encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                rows, header = list(reader), reader.fieldnames or []
+            if len(header) < 4 or not rows:
+                raise ValueError("曲线数据为空或列缺失")
+            columns = [(column.split("_")[0].split("(")[0], column)
+                       for column in header if re.match(r"CH[1-9][0-9]*(?:\([^)]*\))?_", column)]
+            if not columns:
+                match = re.search(r"_(CH[1-9][0-9]*)$", Path(path).stem)
+                if not match:
+                    raise ValueError("曲线通道标识缺失")
+                columns = [(match.group(1), header[1])]
+            numeric = lambda column: [float(row[column]) if row[column] else float("nan") for row in rows]
+            for channel, column in columns:
+                if channel in seen:
+                    raise ValueError(f"{channel} 重复曲线")
+                limits = {side: numeric(header[index]) for side, index in (("lower", -2), ("upper", -1))}
+                png = render_analysis_png({
+                    "kind": "curve", "x": numeric(header[0]), "y": numeric(column),
+                    **{side: values if any(math.isfinite(value) for value in values) else None
+                       for side, values in limits.items()},
+                    "x_label": "Time (s)", "y_label": f"{item.identity.analysis_type} ({spec['unit']})",
+                })
+                seen.add(channel)
+                charts.append(_PreparedChart(_channel_number(channel), path + "#" + channel,
+                                              base64.b64encode(png).decode("ascii"), _scaled_chart_size(png)))
+        except (OSError, UnicodeError, csv.Error, KeyError, ValueError) as error:
+            issues.append(f"曲线 CSV 读取失败：{Path(path).name}：{error}")
+    issues.extend(f"{channel} 时间曲线缺失" for channel in sorted(expected_channels - seen))
+    if not charts and not issues:
+        issues.append("未找到该分析项的时间曲线")
+    return tuple(charts), issues
 
 
 def _prepare_charts(item, expected_channels, requires_chart, *, cancel_requested=None):
@@ -626,10 +719,14 @@ def _build_criteria_cell(record, channels):
     standards = []
     for channel in channels:
         cell = values.get(channel)
-        if cell is None or not (cell.lower_limit or cell.upper_limit):
+        if cell is not None and cell.criterion == "时间曲线":
+            standard = "时间曲线（限值见曲线 CSV）"
+        elif cell is None or not (cell.lower_limit or cell.upper_limit):
             standard = "/"
         else:
             standard = _format_limit_range(cell.lower_limit, cell.upper_limit)
+            if cell.criterion:
+                standard = cell.criterion + "：" + standard
         standards.append((channel, standard))
     distinct = {standard for _, standard in standards}
     if len(distinct) <= 1:
@@ -867,8 +964,10 @@ def _result_class(value):
     normalized = str(value or "").upper()
     if normalized == "OK":
         return "result-ok"
-    if normalized == "NG":
+    if normalized.startswith("NG"):
         return "result-ng"
+    if "结果不完整" in normalized:
+        return "incomplete"
     return "result-na"
 
 

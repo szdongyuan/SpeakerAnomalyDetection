@@ -249,6 +249,21 @@ class MainWindow(QMainWindow):
             detail = "；".join(issue["message"] for issue in event["payload"]["issues"])
             self.default_logger.warning("Analysis submission %s rejected: %s", event["request_id"], detail)
             self.statusBar().showMessage(f"音频已保存，分析任务未提交：{detail}")
+            if event["payload"].get("precheck_failed") and not getattr(self, "_closing", False):
+                issues = event["payload"]["issues"]
+                message = "\n".join(issue["message"] for issue in issues)
+                if any(issue["error_type"] == "InvalidCalibration" for issue in issues):
+                    message += "\n\n请到「硬件 → 校准」完成校准后重新录音。"
+                message += "\n\n录音已保存，本次未分析。"
+                # show() returns immediately: finish recording callbacks without
+                # entering a nested event loop. Qt owns and deletes the dialog.
+                dialog = QMessageBox(QMessageBox.Warning, "分析前检查未通过", message, QMessageBox.Ok, self)
+                dialog.setTextFormat(Qt.PlainText)
+                dialog.setAttribute(Qt.WA_DeleteOnClose)
+                dialog.setWindowModality(Qt.WindowModal)
+                dialog.show()
+        elif kind == "judgement_ready" and event.get("is_current", False):
+            self.statusBar().showMessage("判定已返回，分析 CSV 保存状态待确认。")
         elif kind == "task_result":
             result = event["payload"]
             save_errors = [artifact["error"] for item in result.get("instance_results", [])
@@ -257,6 +272,11 @@ class MainWindow(QMainWindow):
                 self.default_logger.warning("Analysis task %s: %s; save errors: %s", event.get("task_id"),
                                             result.get("execution_status"), save_errors)
                 self.statusBar().showMessage("分析未全部完成，请检查返回的分析或文件保存错误。")
+            elif event.get("is_current", False):
+                has_files = any(item.get("artifacts") for item in result.get("instance_results", []))
+                self.statusBar().showMessage(
+                    "本任务分析 CSV 保存完成。" if has_files else "本任务分析完成，无需保存分析 CSV。", 3000,
+                )
         elif kind == "station_status" and not getattr(self, "_closing", False):
             states = self.analysis_service.station_states
             ready = sum(state["state"] in {"ready", "busy"} for state in states.values())

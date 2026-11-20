@@ -5,6 +5,25 @@ import pytest
 from base.audio_label_policy import aggregate_judgements, audio_label_for_results
 
 
+@pytest.mark.parametrize("early_verdict,final_verdict,expected", [
+    ("OK", " ok ", "OK"),
+    (None, "OK", "结果不完整"),
+    ("NG", "OK", "NG（结果不完整）"),
+])
+def test_terminal_reconciliation_never_converts_conflicting_evidence_to_ok(
+        early_verdict, final_verdict, expected):
+    from base.audio_label_policy import reconcile_terminal_judgement
+    identity = {"config_key": "SPL", "analysis_type": "SPL", "channel_index": 0}
+    early = {**identity, "execution_status": "分析完成", "judgement_status": "completed",
+             "judgement": early_verdict}
+    final = {**early, "judgement": final_verdict}
+    summary, conflict = reconcile_terminal_judgement(
+        {"instance_results": [final]}, [identity], [early],
+    )
+    assert summary["status"] == expected
+    assert conflict == (expected != "OK")
+
+
 @pytest.mark.parametrize("values,expected", [
     ([], "--"),
     (["OK", "OK"], "OK"),
@@ -28,7 +47,7 @@ def test_aggregate_judgements_uses_ng_then_any_ok(values, expected):
     ([{"judgement": None, "execution_status": "分析失败"}], "not_labeled"),
     ([{}, {"judgement": "unknown"}], "not_labeled"),
     ([{"judgement": " ok ", "judgement_status": "unavailable",
-       "execution_status": "分析失败", "error": {"stage": "csv_save"}}], "OK"),
+       "execution_status": "分析失败", "error": {"stage": "csv_save"}}], "not_labeled"),
     ([{"judgement": " nG\n"}, {"judgement": "ok"}], "NG"),
 ])
 def test_audio_labels_use_only_judgements_and_map_unknown_at_storage_boundary(items, expected):

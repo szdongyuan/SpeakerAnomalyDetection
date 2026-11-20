@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 import math
 from pathlib import Path
-from base.analysis_config_validation import ai_execution_issue
+from base.analysis_config_validation import ai_execution_issue, sharpness_execution_issue
 
 from .contracts import (
     AnalysisBatch,
@@ -17,7 +17,7 @@ from .contracts import (
 
 
 # These existing calculation paths are acoustic, not generic vibration analyzers.
-_ACOUSTIC_ANALYSIS_TYPES = frozenset({"SPL", "FFT", "FBA", "Spec", "LOUD"})
+ACOUSTIC_ANALYSIS_TYPES = frozenset({"SPL", "FFT", "FBA", "Spec", "LOUD", "SHRP", "ROUGH"})
 
 
 def _fail(path, message, task_id=None, error_type="InvalidField"):
@@ -173,7 +173,7 @@ def _build_instances(config, channels, path, task_id):
         analysis_type = _text(item.get("type"), f"{item_path}.type", task_id)
         selected = _selected_channels(item, len(channels), item_path, task_id)
         _validate_time_range(item, item_path, task_id)
-        if analysis_type == "LOUD":
+        if analysis_type in {"LOUD", "SHRP", "ROUGH"}:
             advanced_path = f"{item_path}.advanced"
             _validate_time_range(
                 _mapping(item.get("advanced", {}), advanced_path, task_id),
@@ -219,10 +219,15 @@ def _preparation_issues(task, task_path, station_path, analysis_path):
     for instance in task.instances:
         path = f"{analysis_path}[{json.dumps(instance.config_key, ensure_ascii=False)}]"
         channel = task.channels[instance.channel_index]
+        if instance.analysis_type == "SHRP":
+            issue = sharpness_execution_issue(instance.parameters)
+            if issue is not None:
+                add(path, *issue)
+                continue
         if instance.analysis_type == "AI":
             kind, message = ai_execution_issue(instance.parameters)
             add(path, kind, message)
-        elif instance.analysis_type not in _ACOUSTIC_ANALYSIS_TYPES:
+        elif instance.analysis_type not in ACOUSTIC_ANALYSIS_TYPES:
             add(f"{path}.type", "UnsupportedAnalysisType", f"分析类型尚未接入：{instance.analysis_type}")
         elif channel.signal_type != "sound_pressure":
             selection_field = (

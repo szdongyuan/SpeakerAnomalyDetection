@@ -14,6 +14,7 @@ from base.analysis_artifact_paths import (
 )
 from base.csv_writer import write_csv_atomic as _write_csv_atomic
 from base.spl_csv_schema import overall_spl_csv_columns
+from consts.acoustic_analysis.common_consts import SOUND_QUALITY_ANALYSES
 
 
 @dataclass(frozen=True)
@@ -77,11 +78,22 @@ def export_item_csvs(
 
 
 def _build_tables(analysis_type, config, outputs, channel_labels):
+    if analysis_type in SOUND_QUALITY_ANALYSES:
+        spec = SOUND_QUALITY_ANALYSES[analysis_type]
+        rows = []
+        for output in outputs:
+            header, row = sound_quality_summary_csv_row(analysis_type, config, output)
+            rows.append((format_channel_name(int(output["raw_channel"]), channel_labels), *row))
+        return (
+            iter_curve_csv_table(spec["label"] + "时间曲线", "时间(s)", spec["label"] + spec["unit"],
+                                  outputs, channel_labels, limit_unit=spec["unit"]),
+            (spec["label"] + "汇总", ("通道", *header), rows),
+        )
     if analysis_type == "SPL":
         return _spl_tables(config, outputs, channel_labels)
     if analysis_type == "LOUD":
         unit = outputs[0]["metrics"]["unit"]
-        curve = build_curve_csv_table(
+        curve = iter_curve_csv_table(
             "响度时间曲线", "时间(s)", f"响度_{unit}", outputs, channel_labels,
             limit_unit=unit,
         )
@@ -92,7 +104,7 @@ def _build_tables(analysis_type, config, outputs, channel_labels):
         return curve, ("响度汇总", ("通道", *header), rows)
     if analysis_type == "FBA":
         return (
-            build_curve_csv_table(
+            iter_curve_csv_table(
                 "频段能量",
                 "X轴中心频率Hz",
                 "频段声压级_Y轴dB",
@@ -102,7 +114,7 @@ def _build_tables(analysis_type, config, outputs, channel_labels):
         )
     if analysis_type == "FFT":
         return (
-            build_curve_csv_table(
+            iter_curve_csv_table(
                 "FFT频谱",
                 "X轴频率Hz",
                 "FFT_Y轴dB",
@@ -111,6 +123,21 @@ def _build_tables(analysis_type, config, outputs, channel_labels):
             ),
         )
     return ()
+
+
+def sound_quality_summary_csv_row(kind, config, result):
+    spec = SOUND_QUALITY_ANALYSES[kind]
+    metrics, unit = result["metrics"], spec["unit"]
+    enabled = bool(config.get("limit_checked"))
+    header = [label + unit for _, label in spec["metrics"]]
+    header += ["有效帧数", "总帧数", "判定指标", f"下限{unit}", f"上限{unit}", "判定结果"]
+    row = [_csv_number(metrics.get(key)) for key, _ in spec["metrics"]]
+    row += [metrics.get("valid_frame_count"), metrics.get("frame_count"),
+            config.get("limit_metric", "curve_y") if enabled else "",
+            _csv_number(metrics.get("overall_lower_limit")),
+            _csv_number(metrics.get("overall_upper_limit")),
+            (result.get("judgement") or "判定失败") if enabled else "未启用"]
+    return header, row
 
 
 def loudness_summary_csv_row(config, result):
@@ -161,7 +188,7 @@ def _spl_tables(config, outputs, channel_labels):
             )
         tables.append(("总体声压级", header, rows))
     tables.append(
-        build_curve_csv_table(
+        iter_curve_csv_table(
             "实时声压级",
             "X轴时间秒",
             "SPL_Y轴dB",
@@ -172,7 +199,12 @@ def _spl_tables(config, outputs, channel_labels):
     return tuple(tables)
 
 
-def build_curve_csv_table(
+def _curve_values(curve, key):
+    value = curve.get(key)
+    return () if value is None else value
+
+
+def iter_curve_csv_table(
     config_item_name,
     x_name,
     y_name,
@@ -181,11 +213,12 @@ def build_curve_csv_table(
     *,
     limit_unit="dB",
 ):
-    """Build a curve table without choosing output paths or writing files."""
+    """Validate columns once and format rows lazily without copying whole curves."""
     reference = dict(outputs[0].get("csv_curve") or {})
-    x_values = list(reference.get("x") or [])
-    lower = list(reference.get("lower") or [])
-    upper = list(reference.get("upper") or [])
+    x_values = _curve_values(reference, "x")
+    lower = _curve_values(reference, "lower")
+    upper = _curve_values(reference, "upper")
+    reference_x = np.asarray(x_values, dtype=np.float64)
     header = [x_name]
     for output in outputs:
         header.append(
@@ -197,32 +230,33 @@ def build_curve_csv_table(
     curves = []
     for output in outputs:
         curve = dict(output.get("csv_curve") or {})
-        channel_x = np.asarray(curve.get("x") or [], dtype=np.float64)
-        channel_y = np.asarray(curve.get("y") or [], dtype=np.float64)
+        channel_x = np.asarray(_curve_values(curve, "x"), dtype=np.float64)
+        channel_y = np.asarray(_curve_values(curve, "y"), dtype=np.float64)
         if channel_x.size != channel_y.size:
             raise ValueError("curve x/y lengths differ")
-        if channel_x.tolist() != x_values:
-            if not x_values or channel_x.size == 0:
+        if not np.array_equal(channel_x, reference_x):
+            if not len(x_values) or channel_x.size == 0:
                 raise ValueError("channel curves do not share an x axis")
             channel_y = np.interp(
-                np.asarray(x_values, dtype=np.float64),
+                reference_x,
                 channel_x,
                 channel_y,
             )
-        curves.append(channel_y.tolist())
+        curves.append(channel_y)
 
-    rows = []
-    for index, x_value in enumerate(x_values):
-        row = [_csv_number(x_value)]
-        row.extend(_csv_number(curve[index]) for curve in curves)
-        row.append(_csv_number(lower[index]) if lower else "")
-        row.append(_csv_number(upper[index]) if upper else "")
-        rows.append(tuple(row))
-    return config_item_name, tuple(header), rows
+    def rows():
+        for index, x_value in enumerate(x_values):
+            row = [_csv_number(x_value)]
+            row.extend(_csv_number(curve[index]) for curve in curves)
+            row.append(_csv_number(lower[index]) if len(lower) else "")
+            row.append(_csv_number(upper[index]) if len(upper) else "")
+            yield tuple(row)
+
+    return config_item_name, tuple(header), rows()
 
 
 def _csv_number(value):
-    if value is None or isinstance(value, bool):
+    if value is None or isinstance(value, (bool, np.bool_)):
         return ""
     try:
         number = float(value)

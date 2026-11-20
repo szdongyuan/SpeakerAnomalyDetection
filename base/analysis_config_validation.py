@@ -1,4 +1,17 @@
-"""AI drafts may be saved, but cannot enter an unimplemented inference path."""
+"""Execution requirements shared by analysis configuration and submission."""
+
+from consts.acoustic_analysis.common_consts import SHARPNESS_METHOD, SHARPNESS_OUTPUT_TIME_RESOLUTION_MS
+
+
+def sharpness_execution_issue(config):
+    """Do not silently reinterpret a saved segmented or differently sampled result."""
+    advanced = config.get("advanced") or {}
+    if (config.get("method", SHARPNESS_METHOD) != SHARPNESS_METHOD
+            or advanced.get("output_time_resolution_ms", SHARPNESS_OUTPUT_TIME_RESOLUTION_MS)
+            != SHARPNESS_OUTPUT_TIME_RESOLUTION_MS):
+        return ("SharpnessConfigurationMigrationRequired",
+                "尖锐度已固定为时变方式（2 ms）；请打开该分析项配置，复核阈值后重新保存。")
+    return None
 
 
 def ai_execution_issue(config):

@@ -92,8 +92,8 @@ class MotorDetectionLeftPanel(QWidget):
     def set_station_cell(self, station_id, row, column, value):
         return self.station_panel.set_station_cell(station_id, row, column, value)
 
-    def set_station_results(self, station_id, forward, reverse):
-        return self.station_panel.set_station_results(station_id, forward, reverse)
+    def set_station_results(self, station_id, *statuses, result="--"):
+        return self.station_panel.set_station_results(station_id, *statuses, result=result)
 
     def get_station_count(self):
         return self.station_panel.get_station_count()

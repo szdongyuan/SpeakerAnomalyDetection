@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 
+from consts.acoustic_analysis.common_consts import SOUND_QUALITY_ANALYSES
 from base.workbench_analysis_config import WorkbenchAnalysisConfig
 from base.workbench_config_values import WorkbenchCondition
 from base.workbench_ui_config import WorkbenchPlotCell, WorkbenchUiConfig
@@ -47,6 +48,8 @@ def _station_display(
 
 
 def _plot_unit(analysis: Mapping[str, object]) -> str:
+    if analysis.get("type") in SOUND_QUALITY_ANALYSES:
+        return SOUND_QUALITY_ANALYSES[analysis["type"]]["unit"]
     if analysis.get('type') == 'LOUD':
         from base.loudness_analysis_adapter import loudness_unit
 

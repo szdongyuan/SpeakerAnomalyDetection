@@ -52,6 +52,21 @@ def test_replace_sorts_newest_first_and_counts_final_results(local_day):
             store.summary.unmarked, store.summary.pass_rate) == (3, 1, 1, 1, "33.3%")
 
 
+def test_summary_groups_failed_judgements_without_double_counting():
+    day = date(2026, 11, 18)
+    records = make_daily_records(5, day)
+    statuses = ["OK", "NG", "未标记", "结果不完整", "NG（结果不完整）"]
+    for row, status in zip(records, statuses):
+        row["result"] = status
+    store = DailyRecordStore()
+    store.replace(records, day)
+    summary = store.summary
+    assert (summary.total, summary.ok, summary.ng, summary.unmarked,
+            summary.pass_rate) == (5, 1, 2, 2, "20.0%")
+    assert summary.total == summary.ok + summary.ng + summary.unmarked
+    assert {row.result for row in store.records} == set(statuses)
+
+
 @pytest.mark.parametrize("records", [None, "records", {}, iter(())])
 def test_rejects_non_list_or_tuple_batch(records):
     store = DailyRecordStore()

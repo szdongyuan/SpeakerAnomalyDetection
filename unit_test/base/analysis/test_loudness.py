@@ -6,6 +6,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import time
+import weakref
 
 import numpy as np
 import pytest
@@ -16,6 +17,7 @@ from base.analysis.contracts import AnalysisChannel, AnalysisInstance, AnalysisT
 from base.analysis.executor import execute_task
 from base.analysis.service import AnalysisService
 from base.core_algorithm.sound_quality.service import run_sound_quality
+from base.core_algorithm.sound_quality.loudness import LoudnessAnalyzer
 
 
 @pytest.fixture
@@ -54,6 +56,117 @@ def test_compute_only_loudness_preserves_failed_judgement_and_other_channel(loud
     assert good["execution_status"] == "分析完成" and good["error"] is None
     assert all(item["artifacts"] == [] for item in result["instance_results"])
     assert not Path(loud_task.analysis_result_directory).exists()
+
+
+def test_task_reuses_loudness_but_keeps_outputs_limits_and_tasks_separate(loud_task, monkeypatch):
+    original = LoudnessAnalyzer.compute
+    calls = []
+
+    def counted(self, *args, **kwargs):
+        calls.append(1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(LoudnessAnalyzer, "compute", counted)
+    first = loud_task.instances[0]
+    config = deepcopy(first.parameters)
+    config.update(limit_checked=True, limit_metric="max_transient",
+                  scalar_upper_enabled=True, scalar_upper_value=0.001)
+    config["advanced"]["curve_y_unit"] = "phon"
+    second = replace(first, config_key="second", parameters=config)
+    task = replace(loud_task, instances=(first, second))
+    result = execute_task(task)
+    assert len(calls) == 1
+    a, b = result["instance_results"]
+    assert a["judgement_status"] == "not_enabled"
+    assert b["judgement"] == "NG"
+    assert a["display_payload"]["y_unit"] == "sone"
+    assert b["display_payload"]["y_unit"] == "phon"
+    reverse = execute_task(replace(task, instances=(second, first)))
+    assert reverse["instance_results"] == [b, a]
+    assert len(calls) == 2  # A new task execution cannot inherit cached data.
+    direct = execute_task(task, reuse_computations=False)
+    assert direct == result
+    assert len(calls) == 4
+
+
+def test_shared_context_is_cleared_after_success_and_unexpected_exit(loud_task, monkeypatch):
+    from base.analysis import executor
+    from base.analysis_compute_context import TaskComputeContext
+
+    contexts, arrays = [], []
+    original = LoudnessAnalyzer.compute
+
+    def context_factory():
+        context = TaskComputeContext()
+        contexts.append(context)
+        return context
+
+    def compute(self, *args, **kwargs):
+        raw = original(self, *args, **kwargs)
+        arrays.append(weakref.ref(raw.specific_loudness))
+        return raw
+
+    monkeypatch.setattr(executor, "TaskComputeContext", context_factory)
+    monkeypatch.setattr(LoudnessAnalyzer, "compute", compute)
+    result = execute_task(loud_task)
+    assert result["execution_status"] == "分析完成"
+    assert len(contexts[0]) == 0
+    assert all(reference() is None for reference in arrays)
+
+    def fail_serialization(*args):
+        raise RuntimeError("serialization failed")
+
+    monkeypatch.setattr(executor, "plain_data", fail_serialization)
+    with pytest.raises(RuntimeError, match="serialization failed"):
+        execute_task(loud_task)
+    assert len(contexts[1]) == 0
+    assert all(reference() is None for reference in arrays)
+    result = execute_task(replace(loud_task, wav_path=loud_task.wav_path + ".missing"))
+    assert result["execution_status"] != "分析完成"
+    assert len(contexts) == 2  # WAV read failure never creates a context.
+
+
+def test_equal_length_windows_on_same_channel_are_distinct(loud_task, monkeypatch):
+    original = LoudnessAnalyzer.compute
+    calls = []
+
+    def counted(self, *args, **kwargs):
+        calls.append(1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(LoudnessAnalyzer, "compute", counted)
+    instances = []
+    for start in (0.1, 0.2):
+        first = loud_task.instances[0]
+        parameters = deepcopy(first.parameters)
+        parameters["advanced"].update(analysis_time_range_enabled=True,
+                                      analysis_start_time_sec=start,
+                                      analysis_end_time_sec=start + 0.3)
+        instances.append(replace(first, config_key=str(start), parameters=parameters))
+    result = execute_task(replace(loud_task, instances=tuple(instances)))
+    assert result["execution_status"] == "分析完成"
+    assert len(calls) == 2
+    assert result["instance_results"][0]["display_payload"]["x"] != result["instance_results"][1]["display_payload"]["x"]
+
+
+def test_shared_frontend_failure_does_not_stop_other_channel(loud_task, monkeypatch):
+    original = LoudnessAnalyzer.compute
+    calls = []
+
+    def compute(self, *args, **kwargs):
+        calls.append(kwargs["v2pa_factor"])
+        if kwargs["v2pa_factor"] == 2.0:
+            raise ValueError("bad frontend")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(LoudnessAnalyzer, "compute", compute)
+    a, b = loud_task.instances
+    result = execute_task(replace(loud_task, instances=(a, replace(a, config_key="duplicate"), b)))
+    first, second, good = result["instance_results"]
+    assert first["error"] == second["error"]
+    assert good["execution_status"] == "分析完成"
+    assert calls == [2.0, 3.0]
+    assert result["execution_status"] == "结果不完整"
 
 
 @pytest.mark.parametrize("method", ["per_segment", "time_varying_iso532_1"])

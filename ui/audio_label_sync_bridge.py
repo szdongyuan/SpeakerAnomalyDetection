@@ -49,9 +49,9 @@ class AudioLabelSyncBridge(QObject):
     @pyqtSlot(object, object, object)
     def _deliver(self, job, update, error):
         self._pending.remove(job.task_id)
-        if error is None:
+        if update is not None:
             self.changed.emit(update)
-        else:
+        if error is not None:
             self.failed.emit(job, error)
 
     @pyqtSlot()
