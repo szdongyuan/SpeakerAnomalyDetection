@@ -270,6 +270,7 @@ class CandidateTableModel(QAbstractTableModel):
             result_colors = {
                 "OK": ui_style_const.COLOR_OK,
                 "NG": ui_style_const.COLOR_NG,
+                "结果不完整": "#a65c00", "NG（结果不完整）": ui_style_const.COLOR_NG,
             }
             return QColor(
                 result_colors.get(
@@ -504,7 +505,7 @@ class ResultFilterOptions(QWidget):
         self.checkboxes.clear()
         selected = set(values if selected_values is None else selected_values)
         order = {value: index for index, value in enumerate(
-            ("OK", "NG", "无判定结果")
+            ("OK", "NG", "结果不完整", "NG（结果不完整）", "无判定结果")
         )}
         values = sorted(set(values), key=lambda value: (
             order.get(value, len(order)), _natural_key(value),

@@ -17,8 +17,11 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from base.analysis_compute_context import ComputationFailure, TaskComputeContext
 from consts.acoustic_analysis.specific_consts.loudness_consts import (
     LOUDNESS_DEFAULT_OUTPUT_TIME_RESOLUTION_S,
+    LOUDNESS_DEFAULT_STATIONARY_FRAME_DURATION_S,
+    LOUDNESS_DEFAULT_STATIONARY_HOP_DURATION_S,
     LOUDNESS_TV_SUMMARY_SKIP_S,
 )
 
@@ -75,6 +78,9 @@ def run_sound_quality(
     sample_rate: int,
     project_v2pa_factor: float,
     sq_config: Optional[dict],
+    *,
+    compute_context: Optional[TaskComputeContext] = None,
+    input_identity=None,
 ) -> SoundQualityRunResult:
     """Run the configured sound-quality algorithms on one recorded signal.
 
@@ -117,6 +123,8 @@ def run_sound_quality(
         project_v2pa_factor=project_v2pa_factor,
         field_type=field_type,
         loud_cfg=loud_cfg,
+        compute_context=compute_context,
+        input_identity=input_identity,
     )
 
     return SoundQualityRunResult(
@@ -133,6 +141,9 @@ def _run_loudness(
     project_v2pa_factor: float,
     field_type: str,
     loud_cfg: dict,
+    *,
+    compute_context: Optional[TaskComputeContext] = None,
+    input_identity=None,
 ) -> LoudnessRunResult:
     if not loud_cfg.get("enabled", False):
         return _empty_loudness("LOUD.enabled is false")
@@ -153,6 +164,23 @@ def _run_loudness(
     if sample_rate_int <= 0:
         return _empty_loudness("sample_rate must be > 0")
 
+    advanced_cfg, compute_options = loudness_compute_options(loud_cfg)
+    try:
+        raw, source_start_time_s, source_end_time_s = compute_loudness_raw(
+            signal_v, sample_rate_int, v2pa, field_type, advanced_cfg, compute_options,
+            compute_context=compute_context, input_identity=input_identity,
+        )
+    except (RuntimeError, ValueError, TypeError, FloatingPointError) as exc:
+        return _empty_loudness(f"loudness computation failed: {exc}")
+
+    # Output errors retain their original boundary; they are not compute failures.
+    return _build_loudness_output(
+        raw, source_start_time_s, source_end_time_s, loud_cfg, advanced_cfg,
+    )
+
+
+def loudness_compute_options(loud_cfg: dict) -> tuple[dict, dict]:
+    """Resolve core kwargs once, retaining the existing advanced configuration."""
     method_value = str(loud_cfg.get("method", LoudnessMethod.TIME_VARYING_ISO532_1.value))
     try:
         method = LoudnessMethod(method_value)
@@ -171,30 +199,75 @@ def _run_loudness(
         fallback_key="frame_duration_s",
     )
     stationary_hop_duration_s = _stationary_hop_duration_option(advanced_cfg, stationary_frame_duration_s)
-    try:
-        analysis_signal = signal_v.astype(np.float64, copy=False)
-        analysis_signal, source_start_time_s, source_end_time_s = _apply_loudness_time_range(
-            analysis_signal,
-            sample_rate_int,
-            advanced_cfg,
-        )
-        analysis_signal = _apply_loudness_noise_reduction(
-            analysis_signal,
-            sample_rate_int,
-            advanced_cfg,
-        )
-        raw = LoudnessAnalyzer(sample_rate_int).compute(
-            analysis_signal,
-            method=method,
-            field_type=field_type,
-            v2pa_factor=v2pa,
-            frame_duration_s=stationary_frame_duration_s,
-            hop_duration_s=stationary_hop_duration_s,
-            output_time_resolution_s=output_time_resolution_s,
-        )
-    except (RuntimeError, ValueError, TypeError, FloatingPointError) as exc:
-        return _empty_loudness(f"loudness computation failed: {exc}")
+    return advanced_cfg, {
+        "method": method,
+        "frame_duration_s": stationary_frame_duration_s or LOUDNESS_DEFAULT_STATIONARY_FRAME_DURATION_S,
+        "hop_duration_s": stationary_hop_duration_s or LOUDNESS_DEFAULT_STATIONARY_HOP_DURATION_S,
+        "output_time_resolution_s": output_time_resolution_s,
+    }
 
+
+def compute_loudness_raw(
+    signal_v: np.ndarray,
+    sample_rate: int,
+    v2pa_factor: float,
+    field_type: str,
+    advanced_cfg: dict,
+    compute_options: dict,
+    *,
+    compute_context: Optional[TaskComputeContext] = None,
+    input_identity=None,
+) -> tuple[LoudnessResult, float, Optional[float]]:
+    """Compute once from validated input; return relative-time data and source bounds."""
+    first, stop, source_start_time_s, source_end_time_s = sound_quality_time_window(
+        signal_v.size, sample_rate, advanced_cfg,
+    )
+
+    # External reference files have no frozen identity yet, including missing
+    # files that could appear between calls. Keep the whole enabled path direct.
+    share = compute_context is not None and not advanced_cfg.get(
+        "background_noise_processing_enabled", False,
+    )
+    if share and input_identity is None:
+        raise ValueError("input_identity is required for task-local loudness reuse")
+
+    def compute():
+        analysis_signal = signal_v.astype(np.float64, copy=False)[first:stop]
+        analysis_signal = _apply_loudness_noise_reduction(analysis_signal, sample_rate, advanced_cfg)
+        result = LoudnessAnalyzer(sample_rate).compute(
+            analysis_signal, field_type=field_type, v2pa_factor=v2pa_factor, **compute_options,
+        )
+        if share:
+            for array in (result.time_s, result.loudness_sone, result.loudness_level_phon,
+                          result.specific_loudness, result.bark_axis):
+                array.setflags(write=False)
+        return result
+
+    if share:
+        key = (
+            "engineering_loudness_v1", input_identity, sample_rate, signal_v.size,
+            first, stop, v2pa_factor, field_type, tuple(sorted(compute_options.items())),
+        )
+        raw = compute_context.get_or_compute(
+            key, compute, failure_types=(RuntimeError, ValueError, TypeError, FloatingPointError),
+        )
+        if isinstance(raw, ComputationFailure):
+            raise ValueError(raw.message)
+        # Arrays are shared; mutable metadata belongs to the individual caller.
+        raw = replace(raw, metadata=dict(raw.metadata))
+    else:
+        raw = compute()
+    return raw, source_start_time_s, source_end_time_s
+
+
+def _build_loudness_output(
+    raw: LoudnessResult,
+    source_start_time_s: float,
+    source_end_time_s: Optional[float],
+    loud_cfg: dict,
+    advanced_cfg: dict,
+) -> LoudnessRunResult:
+    """Build per-call summaries and payloads without changing the raw calculation."""
     display_cfg = loud_cfg.get("display", {}) or {}
     save_cfg = loud_cfg.get("save", {}) or {}
     requested_metrics = _requested_loudness_summary_metrics(
@@ -277,24 +350,24 @@ def _stationary_hop_duration_option(config: dict, frame_duration_s: Optional[flo
     return _positive_float_option(config, "stationary_hop_duration_s", fallback_key="hop_duration_s")
 
 
-def _apply_loudness_time_range(
-    signal: np.ndarray,
+def sound_quality_time_window(
+    sample_count: int,
     sample_rate: int,
     advanced_cfg: dict,
-) -> tuple[np.ndarray, float, Optional[float]]:
-    """Slice the signal to the user-configured analysis window."""
+) -> tuple[int, int, float, Optional[float]]:
+    """Resolve one sample window for both calculation and reuse identity."""
     if not advanced_cfg.get("analysis_time_range_enabled", False):
-        return signal, 0.0, None
+        return 0, sample_count, 0.0, None
     start_sec = max(0.0, float(advanced_cfg.get("analysis_start_time_sec", 0.0) or 0.0))
     end_sec = max(0.0, float(advanced_cfg.get("analysis_end_time_sec", 0.0) or 0.0))
     if end_sec > 0.0 and end_sec <= start_sec:
         raise ValueError("analysis end time must be greater than start time")
-    start_sample = min(int(np.floor(start_sec * sample_rate)), signal.size)
-    end_sample = min(int(np.ceil(end_sec * sample_rate)), signal.size) if end_sec > 0.0 else signal.size
+    start_sample = min(int(np.floor(start_sec * sample_rate)), sample_count)
+    end_sample = min(int(np.ceil(end_sec * sample_rate)), sample_count) if end_sec > 0.0 else sample_count
     if end_sample <= start_sample:
         raise ValueError("analysis time range does not contain any audio samples")
     return (
-        signal[start_sample:end_sample],
+        start_sample, end_sample,
         start_sample / float(sample_rate),
         end_sample / float(sample_rate),
     )

@@ -10,6 +10,7 @@ from base.analysis_limit_evaluation import (
     resolve_spl_overall_limits,
 )
 from base.loudness_analysis_adapter import loudness_limit_data
+from base.sound_quality_analysis_adapter import sound_quality_limit_data
 
 
 def evaluate_instance(instance, calculation):
@@ -22,6 +23,8 @@ def evaluate_instance(instance, calculation):
     unit = "dB"
     if instance.analysis_type == "LOUD":
         x, y, upper, lower, scalar, unit = loudness_limit_data(config, calculation)
+    elif instance.analysis_type in {"SHRP", "ROUGH"}:
+        x, y, upper, lower, scalar, unit = sound_quality_limit_data(config, calculation)
     elif scalar:
         x = np.asarray([0.0])
         y = np.asarray([calculation["metrics"]["overall_spl"]])
@@ -53,7 +56,7 @@ def evaluate_instance(instance, calculation):
     violations = _violations(
         x, y, upper, lower, valid, scalar=scalar,
         discrete=instance.analysis_type == "FBA",
-        x_unit="s" if instance.analysis_type in {"SPL", "LOUD"} else "Hz",
+        x_unit="s" if instance.analysis_type in {"SPL", "LOUD", "SHRP", "ROUGH"} else "Hz",
         y_unit=unit,
     )
     return {

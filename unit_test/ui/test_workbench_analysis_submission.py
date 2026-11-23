@@ -3,6 +3,7 @@
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 from time import monotonic
 from unittest.mock import Mock
@@ -44,10 +45,11 @@ def test_round_timestamp_and_identity_follow_first_condition_wav(paired_submissi
     w, service = paired_submission.w, paired_submission.service
     times = (datetime(2026, 11, 11, 23, 59, 59), datetime(2026, 11, 12, 0, 0, 1),
              datetime(2026, 11, 12, 0, 1, 2))
-    clock = iter(times)
-    monkeypatch.setattr(module, "datetime", SimpleNamespace(now=lambda: next(clock)))
+    clock = SimpleNamespace(now=lambda: times[0])
+    monkeypatch.setattr(module, "datetime", clock)
     contexts = []
     for index, stamp in enumerate(times):
+        clock.now = lambda: stamp
         w.identity.sample = str(7 + index)
         w.controller.start_recording()
         w.complete()
@@ -156,6 +158,90 @@ def test_submit_only_after_success_and_use_published_paths(submission):
     w.complete()  # Duplicate recording completion must not submit again.
     assert len(service.submissions) == 1
     assert submission.events[-1]["payload"]["accepted"]
+
+
+def test_missing_calibration_is_checked_after_capture_once_per_channel(submission, monkeypatch):
+    w = submission.w
+    queues = {name: AnalysisTestQueue("wav", {
+        "display_sequence": ["SPL", "SHRP", "ROUGH"],
+        **{kind: {"type": kind, "analysis_channel": 0} for kind in ("SPL", "SHRP", "ROUGH")},
+    }) for name in w.config.analysis.test_queues}
+    w.repository.result = configuration_with(w.config, test_queues=queues)
+    w.controller.refresh_configuration()
+    monkeypatch.setattr("base.recording_calibration_snapshot.load_mic_channel_calibrations", lambda *args: {})
+    w.controller.start_recording()
+    assert len(w.requests) == 1  # Missing calibration never blocks recording startup.
+    assert not submission.events and not submission.service.submissions
+    # A later registry change cannot repair calibration of the captured recording.
+    monkeypatch.setattr("base.recording_calibration_snapshot.load_mic_channel_calibrations",
+                        lambda *args: {0: {"v2pa_factor": 1.0, "standard_spl_db": 94.0}})
+    w.complete()
+    assert len(w.completions) == len(w.archive_submissions) == 1
+    assert not submission.service.submissions and not w.controller._analysis_tasks
+    event, = submission.events
+    receipt = event["payload"]
+    assert receipt["precheck_failed"] and not receipt["accepted"]
+    assert len(receipt["issues"]) == len(w.completions[0].stations)
+    assert all(issue["error_type"] == "InvalidCalibration" for issue in receipt["issues"])
+    assert all("硬件 CH1" in issue["message"] and "缺少声压标定" in issue["message"]
+               for issue in receipt["issues"])
+    w.complete()
+    assert len(submission.events) == 1
+
+
+def test_valid_snapshot_survives_registry_changes(submission, monkeypatch):
+    w = submission.w
+    w.controller.start_recording()
+    monkeypatch.setattr("base.recording_calibration_snapshot.load_mic_channel_calibrations", lambda *args: {})
+    w.complete()
+    assert submission.events[-1]["payload"]["accepted"]
+
+
+@pytest.mark.parametrize("parameters,kind", [
+    ({"analysis_time_range_enabled": True, "analysis_start_time_sec": 0,
+      "analysis_end_time_sec": 999}, "InvalidAnalysisTimeRange"),
+    ({"analysis_channel": 99}, "AnalysisInputError"),
+])
+def test_invalid_analysis_parameters_reject_before_submission(submission, parameters, kind):
+    w = submission.w
+    queues = {name: AnalysisTestQueue("wav", {"display_sequence": ["SPL"],
+              "SPL": {"type": "SPL", "analysis_channel": 0, **parameters}})
+              for name in w.config.analysis.test_queues}
+    w.repository.result = configuration_with(w.config, test_queues=queues)
+    w.controller.refresh_configuration()
+    w.controller.start_recording()
+    w.complete()
+    assert not submission.service.submissions
+    assert submission.events[-1]["payload"]["precheck_failed"]
+    assert submission.events[-1]["payload"]["issues"][0]["error_type"] == kind
+
+
+def test_precheck_popup_is_combined_and_does_not_block_callbacks(startup, monkeypatch, tmp_path):
+    import main_window
+    from PyQt5.QtWidgets import QMessageBox
+
+    if sys.platform == "win32" and main_window.QApplication.platformName() == "offscreen":
+        pytest.skip("Windows Qt offscreen crashes on QMessageBox.show; run with QT_QPA_PLATFORM=windows")
+    repository = Mock(source_identity="isolated-product.json")
+    repository.load_product_catalog.return_value = ()
+    repository.load_active.return_value = None
+    monkeypatch.setattr(main_window, "MotorWorkbenchConfigRepository", lambda: repository)
+    window = startup.launch(lambda _: (None, None))
+    received = []
+    window.workbench_analysis_event.connect(received.append)
+    event = {"event_type": "submission_result", "request_id": "req-1", "payload": {
+        "accepted": False, "precheck_failed": True, "issues": [
+            {"error_type": "InvalidCalibration", "message": "工位1：硬件 CH1 缺少声压标定。"},
+            {"error_type": "InvalidCalibration", "message": "工位2：硬件 CH2 缺少声压标定。"},
+        ]}}
+    window._on_analysis_event(event)
+    assert received == [event]  # The popup must not enter a nested event loop.
+    dialog, = [child for child in window.findChildren(QMessageBox) if child.isVisible()]
+    assert dialog.windowTitle() == "分析前检查未通过"
+    assert "录音已保存" in dialog.text() and "硬件 CH1" in dialog.text() and "硬件 CH2" in dialog.text()
+    assert dialog.text().count("硬件 → 校准") == 1 and "WAV" not in dialog.text()
+    dialog.grab().save(str(tmp_path / "precheck_popup.png"))
+    dialog.accept()
 
 
 def test_empty_queue_records_without_submitting(submission):

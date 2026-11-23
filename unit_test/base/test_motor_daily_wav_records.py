@@ -18,6 +18,26 @@ def snapshot(store):
     return store.record_date, store.records, store.summary, store.station_ids
 
 
+@pytest.mark.parametrize("statuses,counts,rate", [
+    (["结果不完整"], (0, 0, 1), "0.0%"),
+    (["NG（结果不完整）"], (0, 1, 0), "0.0%"),
+    (["OK", "NG", "未标记", "结果不完整", "NG（结果不完整）"], (1, 2, 2), "20.0%"),
+    ([], (0, 0, 0), "--"),
+])
+def test_summary_classifies_every_record_once_and_preserves_status(day, statuses, counts, rate):
+    rows = make_daily_wav_records(len(statuses), day)
+    for row, status in zip(rows, statuses):
+        row["result"] = status
+    store = DailyWavRecordStore()
+    store.replace(rows, day)
+    assert (store.summary.ok, store.summary.ng, store.summary.unmarked) == counts
+    assert store.summary.total == sum(counts) == len(statuses)
+    assert store.summary.pass_rate == rate
+    assert {row.file_name: row.result for row in store.records} == {
+        row["file_name"]: row["result"] for row in rows
+    }
+
+
 def test_initial_state_and_default_local_date(monkeypatch):
     class LocalDate(date):
         @classmethod

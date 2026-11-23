@@ -142,6 +142,19 @@ def test_snapshot_exports_independent_display_rows(sample_snapshot):
         first.request_id = "changed"
 
 
+@pytest.mark.parametrize("status", ["结果不完整", "NG（结果不完整）"])
+def test_round_trip_preserves_incomplete_judgements(tmp_path, sample_snapshot, status):
+    first = sample_snapshot.rows[0]
+    snapshot = WorkbenchWavDetailsSnapshot(DAY, (
+        replace(first, record=replace(first.record, result=status)),
+    ))
+    store = WorkbenchWavDetailsStore(tmp_path / "details.json")
+    store.save(snapshot)
+    restored = WorkbenchWavDetailsStore(store.path).load()
+    assert restored == snapshot
+    assert restored.rows[0].to_display_dict()["result"] == status
+
+
 def test_snapshot_requires_valid_day_rows_and_reference_identity(sample_snapshot):
     with pytest.raises(ValueError, match="date"):
         WorkbenchWavDetailsSnapshot(COMPLETED_AT, ())

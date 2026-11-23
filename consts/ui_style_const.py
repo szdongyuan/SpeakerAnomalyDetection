@@ -1417,7 +1417,8 @@ qtreeview_style = _style("""
 
 # Station presentation is independent from the legacy task/result palette.
 MOTOR_OK_COLOR = "#009900"
-MOTOR_STATION_STATUS_COLORS = MappingProxyType({"--": "#617183", "OK": MOTOR_OK_COLOR, "NG": "#ca3245"})
+MOTOR_STATION_STATUS_COLORS = MappingProxyType({"--": "#617183", "OK": MOTOR_OK_COLOR, "NG": "#ca3245",
+                                             "结果不完整": "#a65c00", "NG（结果不完整）": "#ca3245"})
 MOTOR_STATION_PANEL_STYLE = _style("""
 QWidget#motorStationTestPanel {
     border: 1px solid #cddaea;

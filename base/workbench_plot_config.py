@@ -178,7 +178,7 @@ def _cell(data, style, conditions, field):
             CELL_FIELDS - {"plot_style", "condition_display", "display_downsampling", "spectrogram", "value_unit", "data_source"})
     for key in ("title", "analysis_item_name"):
         _text(data[key], f"{field}.{key}")
-    _choice(data["analysis_type"], ("SPL", "FFT", "LOUD", "Spec", "VIBRATION_RMS"), f"{field}.analysis_type")
+    _choice(data["analysis_type"], ("SPL", "FFT", "LOUD", "SHRP", "ROUGH", "Spec", "VIBRATION_RMS"), f"{field}.analysis_type")
     _choice(data["chart_type"], ("heatmap",) if data['analysis_type'] == 'Spec' else ("line",), f"{field}.chart_type")
     if data['analysis_type'] == 'VIBRATION_RMS':
         _choice(data.get('value_unit'), ('m/s²', 'g'), f'{field}.value_unit')

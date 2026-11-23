@@ -214,15 +214,20 @@ def test_plot_preserves_only_manually_changed_axes_and_resets_next_round(
 
 def test_existing_controller_builds_one_canvas_per_chart(grid, configuration, qt_app):
     stations = []
+
+    def show_stations(values, *, condition_names):
+        stations.append((values, condition_names))
+
     controller = MotorWorkbenchController(
         repository=SimpleNamespace(load_active=lambda: configuration, source_identity='isolated.json'),
-        station_panel=SimpleNamespace(show_workbench_stations=stations.append),
+        station_panel=SimpleNamespace(show_workbench_stations=show_stations),
         plot_grid=grid, set_active_product=lambda _: None, show_video_settings=lambda: None,
     )
     controller.refresh_configuration()
     qt_app.processEvents()
     cell = grid._cells[0, 0]
-    assert len(stations[-1]) == 4
+    assert len(stations[-1][0]) == 4
+    assert stations[-1][1] == ('工况1', '工况2')
     assert isinstance(cell, ConditionPlotCell)
     assert len(cell.findChildren(pg.PlotWidget)) == 1
     assert list(cell.conditions) == ['c1', 'c2']

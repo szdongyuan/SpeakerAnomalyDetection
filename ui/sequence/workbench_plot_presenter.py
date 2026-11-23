@@ -75,6 +75,14 @@ class WorkbenchPlotPresenter:
         """Wait for terminal results of submitted stations, not a fixed four slots."""
         self._batches[request_id] = (tuple(task['task_id'] for task in tasks), {})
 
+    def cancel_round(self, station_ids):
+        """Stop showing pending states for an attempt that will not finish."""
+        for row, column, station_id, condition_id in self._state_targets():
+            if station_id in station_ids:
+                self._grid.set_condition_state(row, column, condition_id, '本轮已终止',
+                                               '请修正配置后重新开始检测')
+        self._batches.clear()
+
     def analysis_event(self, event):
         if not event.get('is_current', False):
             return

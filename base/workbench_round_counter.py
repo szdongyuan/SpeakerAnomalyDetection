@@ -131,3 +131,10 @@ class WorkbenchRoundCounter:
         if state is not None and not state.recordings_finished:
             state.abandoned = True
         self.refresh(day)
+
+    def cancel_round(self, round_id: Hashable, day: date):
+        """End a rejected attempt, including one whose recordings have finished."""
+        state = self._rounds.get(round_id)
+        if state is not None and not state.advanced:
+            state.abandoned = True
+        self.refresh(day)

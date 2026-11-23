@@ -14,17 +14,17 @@ from consts.ui_style_const import (
 )
 
 
-class _FourColumns:
+class _ResultColumns:
     """Shared geometry for the general header and each station toggle."""
 
     def _place_columns(self):
         width = self.contentsRect().width()
         first = int(width * .46)
-        status_width = (width - first) // 3
-        for label, left, label_width in zip(
-            self._labels, (0, first, first + status_width, first + 2 * status_width),
-            (first, status_width, status_width, width - first - 2 * status_width),
-        ):
+        count = len(self._labels) - 1
+        first = first if count <= 3 else 160
+        boundaries = [0, *(first + (width - first) * i // count for i in range(count + 1))]
+        for label, left, right in zip(self._labels, boundaries, boundaries[1:]):
+            label_width = right - left
             label.setGeometry(self.contentsRect().x() + left, 0, label_width, self.height())
 
     def resizeEvent(self, event):
@@ -32,28 +32,33 @@ class _FourColumns:
         self._place_columns()
 
 
-class _GeneralHeader(_FourColumns, QWidget):
-    def __init__(self, parent=None):
+class _GeneralHeader(_ResultColumns, QWidget):
+    def __init__(self, condition_names, parent=None):
         super().__init__(parent)
         self.setObjectName("stationGeneralHeader")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self._labels = [QLabel(text, self) for text in ("工位", "正转", "反转", "结果")]
-        for label, name in zip(self._labels, ("Station", "Forward", "Reverse", "Result")):
+        self._labels = [QLabel(text, self) for text in ("工位", *condition_names, "结果")]
+        names = ("Station", *(("Forward", "Reverse")[i] if i < 2 else f"Condition{i}"
+                              for i in range(len(condition_names))), "Result")
+        for label, name in zip(self._labels, names):
             label.setObjectName(f"stationGeneral{name}")
             label.setAlignment(Qt.AlignCenter)
+            label.setTextFormat(Qt.PlainText)
+            label.setToolTip(label.text())
+            label.setWordWrap(True)
         self._labels[0].setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         self._labels[0].setContentsMargins(12, 0, 0, 0)
         self.setFixedHeight(max(30, self.fontMetrics().height() + 12))
 
 
-class _StationHeader(_FourColumns, QPushButton):
-    def __init__(self, station_id, parent=None):
+class _StationHeader(_ResultColumns, QPushButton):
+    def __init__(self, station_id, condition_names, parent=None):
         super().__init__(parent)
         self.setObjectName(f"stationHeader{station_id}")
         self.setProperty("stationHeader", True)
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
-        self._labels = [QLabel(self) for _ in range(4)]
+        self._labels = [QLabel(self) for _ in range(len(condition_names) + 2)]
         for label in self._labels:
             label.setAttribute(Qt.WA_TransparentForMouseEvents)
             label.setAlignment(Qt.AlignCenter)
@@ -63,14 +68,15 @@ class _StationHeader(_FourColumns, QPushButton):
         self._labels[0].setContentsMargins(self._branch_left + self._branch_width, 0, 0, 0)
         self._labels[0].setTextFormat(Qt.PlainText)
         self._labels[0].setStyleSheet("color: #293b4d;")
-        self._labels[1].setObjectName(f"stationForward{station_id}")
-        self._labels[2].setObjectName(f"stationReverse{station_id}")
-        self._labels[3].setObjectName(f"stationResult{station_id}")
+        for index, label in enumerate(self._labels[1:-1]):
+            name = ("Forward", "Reverse")[index] if index < 2 else f"Condition{index}"
+            label.setObjectName(f"station{name}{station_id}")
+        self._labels[-1].setObjectName(f"stationResult{station_id}")
         self.setFixedHeight(max(34, self.fontMetrics().height() + 14))
         self.toggled.connect(self._set_expanded)
         self._set_expanded(self.isChecked())
         self.set_station_name(f"工位 {station_id}")
-        self.set_results("--", "--", "--")
+        self.set_results(("--",) * len(condition_names), "--")
 
     def set_station_name(self, name):
         self._labels[0].setText(name)
@@ -94,18 +100,22 @@ class _StationHeader(_FourColumns, QPushButton):
         with QPainter(self) as painter:
             QApplication.style().drawPrimitive(QStyle.PE_IndicatorBranch, option, painter, self)
 
-    def set_results(self, forward, reverse, result):
-        for label, status in zip(self._labels[1:], (forward, reverse, result)):
+    def set_results(self, statuses, result):
+        incomplete = any("结果不完整" in status for status in (*statuses, result))
+        self.setFixedHeight(max(34, self.fontMetrics().height() * (3 if incomplete else 1) + 14))
+        for label, status in zip(self._labels[1:], (*statuses, result)):
             label.setText(status)
+            label.setWordWrap(True)
+            label.setToolTip(status)
             # Local styles override ancestor rules and reset weight on every update.
             label.setStyleSheet(f"color: {MOTOR_STATION_STATUS_COLORS[status]}; font-weight: 400;")
 
 
 class _DetailTable(QTableWidget):
-    def __init__(self, station_id, parent=None):
-        super().__init__(0, 3, parent)
+    def __init__(self, station_id, condition_names, parent=None):
+        super().__init__(0, len(condition_names) + 1, parent)
         self.setObjectName(f"stationTable{station_id}")
-        self.setHorizontalHeaderLabels(["指标", "正转", "反转"])
+        self.setHorizontalHeaderLabels(["指标", *condition_names])
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setSelectionMode(QAbstractItemView.NoSelection)
         self.setFocusPolicy(Qt.NoFocus)
@@ -115,7 +125,8 @@ class _DetailTable(QTableWidget):
         self.horizontalHeader().setMinimumSectionSize(0)
         self.horizontalHeader().setStretchLastSection(False)
         self.horizontalHeader().setFixedHeight(max(30, self.fontMetrics().height() + 12))
-        for column in range(3):
+        for column in range(self.columnCount()):
+            self.horizontalHeaderItem(column).setToolTip(self.horizontalHeaderItem(column).text())
             self.horizontalHeaderItem(column).setTextAlignment(
                 Qt.AlignVCenter | (Qt.AlignLeft if column == 0 else Qt.AlignHCenter)
             )
@@ -130,9 +141,15 @@ class _DetailTable(QTableWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         width = self.viewport().width()
-        first, second = int(width * .40), int(width * .30)
-        for column, size in enumerate((first, second, width - first - second)):
-            self.setColumnWidth(column, size)
+        count = self.columnCount() - 1
+        first = int(width * .40) if count else width
+        if count > 2:
+            first = 160
+        boundaries = [0, first]
+        if count:
+            boundaries += [first + (width - first) * i // count for i in range(1, count + 1)]
+        for column, (left, right) in enumerate(zip(boundaries, boundaries[1:])):
+            self.setColumnWidth(column, right - left)
         self._update_height()
 
     def _update_height(self):
@@ -165,17 +182,18 @@ class _DetailTable(QTableWidget):
 
 
 class _Station(QWidget):
-    def __init__(self, station_id, parent=None):
+    def __init__(self, station_id, condition_names, parent=None):
         super().__init__(parent)
         self.rows = []
         self.forward = "--"
         self.reverse = "--"
+        self.statuses = ("--",) * len(condition_names)
         self.result = "--"
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        self.header = _StationHeader(station_id, self)
-        self.table = _DetailTable(station_id, self)
+        self.header = _StationHeader(station_id, condition_names, self)
+        self.table = _DetailTable(station_id, condition_names, self)
         self.table.hide()
         layout.addWidget(self.header)
         detail_layout = QVBoxLayout()
@@ -203,18 +221,22 @@ class MotorStationTestPanel(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(MOTOR_STATION_PANEL_STYLE)
         self._stations = []
+        self._condition_names = ("正转", "反转")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(1, 1, 1, 1)
         layout.setSpacing(0)
         title = QLabel("工位测试", self)
         title.setObjectName("stationTitle")
         layout.addWidget(title)
-        self._general_header = _GeneralHeader(self)
-        layout.addWidget(self._general_header)
+        self._header_viewport = QWidget(self)
+        self._general_header = _GeneralHeader(self._condition_names, self._header_viewport)
+        self._header_viewport.setFixedHeight(self._general_header.height())
+        layout.addWidget(self._header_viewport)
         self._scroll = QScrollArea(self)
         self._scroll.setObjectName("stationScroll")
         self._scroll.setWidgetResizable(True)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.horizontalScrollBar().valueChanged.connect(self._align_header)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scrollbar = self._scroll.verticalScrollBar()
         scrollbar.setObjectName("workbenchStationVerticalScrollBar")
@@ -228,16 +250,24 @@ class MotorStationTestPanel(QWidget):
         self._scroll.setWidget(self._content)
         layout.addWidget(self._scroll, 1)
         self._scroll.viewport().installEventFilter(self)
+        self._header_viewport.installEventFilter(self)
 
     def eventFilter(self, watched, event):
-        if watched is self._scroll.viewport() and event.type() == QEvent.Resize:
+        if watched in (self._scroll.viewport(), self._header_viewport) and event.type() == QEvent.Resize:
             # Paint the full header; align only its labels with the viewport.
-            viewport = self._scroll.viewport().geometry()
-            self._general_header.setContentsMargins(
-                viewport.x(), 0, self._scroll.width() - viewport.right() - 1, 0,
-            )
-            self._general_header._place_columns()
+            self._align_header()
         return super().eventFilter(watched, event)
+
+    def _align_header(self):
+        viewport = self._scroll.viewport()
+        width = max(self._header_viewport.width(), self._content.minimumWidth() + 2)
+        self._general_header.setGeometry(
+            -self._scroll.horizontalScrollBar().value(), 0, width, self._header_viewport.height(),
+        )
+        self._general_header.setContentsMargins(
+            viewport.x(), 0, max(1, width - max(viewport.width(), self._content.minimumWidth()) - viewport.x()), 0,
+        )
+        self._general_header._place_columns()
 
     @staticmethod
     def _integer(value, name):
@@ -302,14 +332,17 @@ class MotorStationTestPanel(QWidget):
             station.setParent(None)
             station.deleteLater()
         while len(self._stations) < count:
-            station = _Station(len(self._stations) + 1, self._content)
+            station = _Station(len(self._stations) + 1, self._condition_names, self._content)
             self._stations.append(station)
             self._station_layout.insertWidget(len(self._stations) - 1, station)
 
-    def show_workbench_stations(self, stations):
+    def show_workbench_stations(self, stations, *, condition_names=("正转", "反转")):
         """Apply (station name, metric names) pairs with fresh result placeholders."""
         if not isinstance(stations, (list, tuple)):
             raise TypeError("stations must be a list or tuple")
+        if not isinstance(condition_names, (list, tuple)) or not all(
+                isinstance(name, str) and name.strip() for name in condition_names):
+            raise ValueError("condition_names must contain nonblank strings")
         display = []
         for index, entry in enumerate(stations):
             field = f"stations[{index}]"
@@ -328,15 +361,26 @@ class MotorStationTestPanel(QWidget):
             for metric_index, metric in enumerate(metrics):
                 if not isinstance(metric, str):
                     raise TypeError(f"{field}.metrics[{metric_index}] must be a string")
-                rows.append([metric, "--", "--"])
+                rows.append([metric, *(["--"] * len(condition_names))])
             display.append((name, rows))
 
+        if tuple(condition_names) != self._condition_names:
+            self.set_station_count(0)
+            self._condition_names = tuple(condition_names)
+            self._general_header.hide()
+            self._general_header.setParent(None)
+            self._general_header.deleteLater()
+            self._general_header = _GeneralHeader(self._condition_names, self._header_viewport)
+            self._general_header.show()
+            count = len(self._condition_names)
+            self._content.setMinimumWidth(160 + 90 * (count + 1) if count > 2 else 0)
+            self._align_header()
         self.set_station_count(len(display))
         for station_id, (name, rows) in enumerate(display, start=1):
             station = self._station(station_id)
             station.header.set_station_name(name)
             station.apply_rows(rows)
-            self.set_station_results(station_id, "--", "--")
+            self.show_condition_result(station_id, ("--",) * len(self._condition_names), "--", rows)
 
     def set_station_row_count(self, station_id, count):
         """Resize just this station's rows, initializing new cells to --."""
@@ -344,14 +388,14 @@ class MotorStationTestPanel(QWidget):
         self._count(count, "count")
         if count != len(station.rows):
             rows = [row[:] for row in station.rows[:count]]
-            rows.extend([["--", "--", "--"] for _ in range(count - len(rows))])
+            rows.extend([["--"] * (len(self._condition_names) + 1) for _ in range(count - len(rows))])
             station.apply_rows(rows)
 
     def set_station_row(self, station_id, row, values):
-        """Replace exactly three cells after validating the complete row."""
+        """Replace one row in the configured condition-column shape."""
         station = self._station(station_id)
         self._index(row, len(station.rows), "row")
-        normalized = self._values(values, 3)
+        normalized = self._values(values, len(self._condition_names) + 1)
         rows = [value[:] for value in station.rows]
         rows[row] = normalized
         station.apply_rows(rows)
@@ -359,7 +403,7 @@ class MotorStationTestPanel(QWidget):
     def set_station_column(self, station_id, column, values):
         """Replace a full column; a zero-row station accepts an empty sequence."""
         station = self._station(station_id)
-        self._index(column, 3, "column")
+        self._index(column, len(self._condition_names) + 1, "column")
         normalized = self._values(values, len(station.rows))
         rows = [row[:] for row in station.rows]
         for row, value in zip(rows, normalized):
@@ -370,42 +414,43 @@ class MotorStationTestPanel(QWidget):
         """Replace one scalar cell without changing table shape or results."""
         station = self._station(station_id)
         self._index(row, len(station.rows), "row")
-        self._index(column, 3, "column")
+        self._index(column, len(self._condition_names) + 1, "column")
         normalized = self._cell(value)
         rows = [values[:] for values in station.rows]
         rows[row][column] = normalized
         station.apply_rows(rows)
 
-    def set_station_results(self, station_id, forward, reverse, *, result="--"):
+    def set_station_results(self, station_id, *statuses, result="--"):
         """Normalize all statuses before updating the station header."""
         station = self._station(station_id)
-        forward = self._status(forward, "forward")
-        reverse = self._status(reverse, "reverse")
-        result = self._status(result, "result")
-        station.forward, station.reverse, station.result = forward, reverse, result
-        station.header.set_results(forward, reverse, result)
+        self.show_condition_result(station_id, statuses, result, station.rows)
 
     def show_station_result(self, station_id, forward, reverse, result, rows):
-        """Validate a complete snapshot before replacing this station's display.
+        """Two-condition entry point retained for existing panel callers."""
+        self.show_condition_result(station_id, (forward, reverse), result, rows)
 
-        Rows retain the configured count and three-cell shape. Caller-owned
-        containers are copied; the station's expansion state is preserved.
-        """
+    def show_condition_result(self, station_id, statuses, result, rows):
+        """Apply an atomic snapshot in the configured condition-column order."""
         station = self._station(station_id)
         field = f"station_id {station_id}"
-        forward = self._status(forward, f"{field} forward")
-        reverse = self._status(reverse, f"{field} reverse")
+        if not isinstance(statuses, (list, tuple)):
+            raise TypeError(f"{field} statuses must be a list or tuple")
+        if len(statuses) != len(self._condition_names):
+            raise ValueError(f"{field} statuses must contain exactly {len(self._condition_names)} values")
+        statuses = tuple(self._status(value, f"{field} condition") for value in statuses)
         result = self._status(result, f"{field} result")
         if not isinstance(rows, (list, tuple)):
             raise TypeError(f"{field} rows must be a list or tuple")
         if len(rows) != len(station.rows):
             raise ValueError(f"{field} rows must contain exactly {len(station.rows)} rows")
-        normalized = [self._values(row, 3, f"{field} rows[{index}]")
+        normalized = [self._values(row, len(self._condition_names) + 1, f"{field} rows[{index}]")
                       for index, row in enumerate(rows)]
 
         station.apply_rows(normalized)
-        station.forward, station.reverse, station.result = forward, reverse, result
-        station.header.set_results(forward, reverse, result)
+        station.statuses, station.result = statuses, result
+        station.forward = statuses[0] if statuses else "--"
+        station.reverse = statuses[1] if len(statuses) > 1 else "--"
+        station.header.set_results(statuses, result)
 
     def get_station_count(self):
         """Return the number of stations explicitly created by this caller."""

@@ -1,11 +1,14 @@
 """Assemble analysis parameters from request-bound, successful recordings."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
+from base.analysis.contracts import AnalysisInputIssue
+from base.analysis.input_adapter import ACOUSTIC_ANALYSIS_TYPES
 from base.recording_process_protocol import RecordingRequest
+from base.wav_calibration_metadata import resolve_wav_channel_v2pa_factor
 from base.workbench_analysis_config import WorkbenchAnalysisConfig
 from base.workbench_config_values import _same_snapshot_value
 from base.workbench_recording_protocol import StationRecordingPlan, WorkbenchRecordingCompletion
@@ -32,6 +35,65 @@ class AnalysisRecordingContext:
 class WorkbenchAnalysisInput:
     context: AnalysisRecordingContext
     completion: WorkbenchRecordingCompletion
+
+
+def check_recorded_analysis_input(item, batch):
+    """Check captured prerequisites after recording, without rereading devices.
+
+    This does not replace the worker's checks against the actual WAV. In
+    particular, waveform validity and algorithm-specific parameters remain
+    owned by the existing execution path.
+    """
+    from base.analysis.wav_input import sample_window
+
+    plans = {plan.station_id: plan for plan in item.context.station_plans}
+    tasks = {task.task_id: task for task in batch.tasks}
+    issues = []
+
+    def label(task):
+        return f"{task.station_name or task.station_id} / {task.condition_name or task.condition_id}"
+
+    for issue in batch.preparation_issues:
+        if issue.error_type != "CalibrationNotProvided":
+            issues.append(replace(issue, message=f"{label(tasks[issue.task_id])}：{issue.message}"))
+    for task in batch.tasks:
+        if task.segmented_analysis.get("mode", "none") != "none":
+            issues.append(AnalysisInputIssue(
+                task.task_id, "segmented_analysis", "UnsupportedSegmentation",
+                f"{label(task)}：当前执行器尚不支持分段分析",
+            ))
+        plan = plans[task.station_id]
+        metadata = plan.calibration_metadata.to_dict() if plan.calibration_metadata is not None else None
+        checked_channels = set()
+        for instance in task.instances:
+            channel = task.channels[instance.channel_index]
+            if instance.analysis_type not in ACOUSTIC_ANALYSIS_TYPES or channel.signal_type != "sound_pressure":
+                continue
+            prefix = f"{label(task)} / WAV 第{channel.channel_index + 1}通道（{channel.channel_name}）"
+            if channel.channel_index not in checked_channels:
+                checked_channels.add(channel.channel_index)
+                if channel.v2pa_factor is None:
+                    try:
+                        resolution = resolve_wav_channel_v2pa_factor(metadata, channel.channel_index)
+                        if not resolution.used_file_metadata:
+                            raise ValueError("缺少声压标定")
+                    except ValueError as error:
+                        physical = plan.channels[channel.channel_index].physical_channel_index + 1
+                        issues.append(AnalysisInputIssue(
+                            task.task_id, f"channels[{channel.channel_index}].v2pa_factor",
+                            "InvalidCalibration",
+                            f"{task.station_name or task.station_id}：硬件 CH{physical} {error}。",
+                        ))
+            parameters = (instance.parameters.get("advanced", {})
+                          if instance.analysis_type in {"LOUD", "SHRP", "ROUGH"} else instance.parameters)
+            try:
+                sample_window(parameters, item.completion.final_frames, item.completion.sample_rate)
+            except (ValueError, TypeError, OverflowError) as error:
+                issues.append(AnalysisInputIssue(
+                    task.task_id, f"analysis_config[{instance.config_key}].analysis_time_range",
+                    "InvalidAnalysisTimeRange", f"{prefix} / {instance.config_key}：{error}",
+                ))
+    return tuple(issues)
 
 
 def make_analysis_recording_context(

@@ -2,6 +2,7 @@
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 from .runtime_protocol import (
     RunTask, StopWorker, WorkerEvent, failed_task, runtime_error,
@@ -10,6 +11,7 @@ from .runtime_protocol import (
 
 def analysis_worker_main(connection, station_id, generation):
     logger = logging.getLogger(__name__)
+    save_executor = None
 
     def emit(kind, task_id=None, payload=None):
         connection.send(WorkerEvent(
@@ -20,6 +22,7 @@ def analysis_worker_main(connection, station_id, generation):
         # Loading the management module in the parent must not load algorithms.
         from .executor import execute_task
 
+        save_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="analysis-csv")
         emit("ready", payload={"pid": os.getpid()})
         while True:
             command = connection.recv()
@@ -33,7 +36,10 @@ def analysis_worker_main(connection, station_id, generation):
                 raise ValueError("Task station does not match worker station")
             emit("task_started", task.task_id)
             try:
-                result = execute_task(task)
+                result = execute_task(
+                    task, save_executor=save_executor,
+                    on_judgement_ready=lambda payload: emit("judgement_ready", task.task_id, payload),
+                )
             except Exception as error:
                 # Last boundary around the executor, not a silent retry.
                 logger.exception("Unhandled analysis task failure: %s", task.task_id)
@@ -55,4 +61,6 @@ def analysis_worker_main(connection, station_id, generation):
         except (OSError, EOFError):
             logger.exception("Cannot send worker failure to parent")
     finally:
+        if save_executor is not None:
+            save_executor.shutdown(wait=True)
         connection.close()

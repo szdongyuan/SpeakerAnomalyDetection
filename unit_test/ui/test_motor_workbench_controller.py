@@ -148,9 +148,9 @@ def workbench(qt_app, monkeypatch):
     def record_call(view, method, name):
         render = getattr(view, method)
 
-        def record_and_render(*data):
+        def record_and_render(*data, **kwargs):
             calls.append(name)
-            render(*data)
+            render(*data, **kwargs)
             if name == "grid":
                 plot_batches.append(data)
 
@@ -234,13 +234,13 @@ def test_first_refresh_starts_empty_and_applies_valid_configuration(workbench, c
     for station, metrics in enumerate(expected_names, start=1):
         data = workbench.panel.get_station_data(station)
         assert (data["forward"], data["reverse"]) == ("--", "--")
-        assert data["rows"] == [[metric, "--", "--"] for metric in metrics]
+        assert data["rows"] == [[metric, "--", "--", "--"] for metric in metrics]
 
 
 def test_refresh_failure_and_equal_recovery_keep_existing_results(workbench, config, caplog):
     workbench.repository.result = config
     workbench.controller.refresh_configuration()
-    workbench.panel.set_station_results(1, "OK", "NG")
+    workbench.panel.set_station_results(1, "OK", "NG", "--")
     workbench.panel.set_station_cell(1, 0, 1, 12)
     workbench.grid.set_curve_data(0, 0, [{"x": [1, 2], "y": [3, 4]}])
     workbench.grid.set_column_options(0, [("结果", 42)])
@@ -382,7 +382,7 @@ def test_shared_plot_formats_weighting_and_preserves_raw_config(workbench, confi
 def test_switch_resets_same_size_views_and_clearing_is_idempotent(workbench, config):
     workbench.repository.result = config
     workbench.controller.refresh_configuration()
-    workbench.panel.set_station_results(1, "OK", "NG")
+    workbench.panel.set_station_results(1, "OK", "NG", "--")
     workbench.panel.set_station_cell(1, 0, 1, 12)
     workbench.grid.set_curve_data(0, 0, [{"x": [1, 2], "y": [3, 4]}])
     workbench.grid.set_column_options(0, [("结果", 42)])
@@ -400,7 +400,7 @@ def test_switch_resets_same_size_views_and_clearing_is_idempotent(workbench, con
     assert workbench.grid.findChild(QLabel, "stationName0").toolTip() == "前工位"
     data = workbench.panel.get_station_data(1)
     assert (data["forward"], data["reverse"]) == ("--", "--")
-    assert data["rows"][0] == ["响度", "--", "--"]
+    assert data["rows"][0] == ["响度", "--", "--", "--"]
     assert not plot_cells(workbench.grid)[0, 0].plot_widget.getPlotItem().listDataItems()
     assert column_options(workbench.grid, 0).count() == 0
 
@@ -471,12 +471,20 @@ def test_settings_intent_calls_only_the_video_port_once(workbench):
 
 
 @pytest.fixture
-def recording_workbench(workbench, config):
+def recording_workbench(workbench, config, monkeypatch):
     from ui.sequence.motor_workbench_controller import WorkbenchRecordingPorts
 
-    channel = WorkbenchChannel("input", "声音", "audio", WorkbenchHardwareChannel("default", 0))
+    # Successful capture fixtures explicitly provide calibrated input channels.
+    monkeypatch.setattr("base.recording_calibration_snapshot.load_mic_channel_calibrations",
+                        lambda *args: {index: {"v2pa_factor": 1.0, "standard_spl_db": 94.0}
+                                       for index in range(8)})
+    channel = WorkbenchChannel("input", "声音", "sound_pressure", WorkbenchHardwareChannel("default", 0))
     stations = tuple(replace(station, channels=(channel,)) for station in config.recording.context.stations)
-    config = configuration_with(config, stations=stations, conditions=config.recording.context.conditions[:2])
+    # Recording/submission fixtures must meet the real input adapter contract.
+    queues = {name: AnalysisTestQueue("wav", {"display_sequence": ["SPL"],
+              "SPL": {"type": "SPL", "analysis_channel": 0}}) for name in ("queue-a", "queue-b")}
+    config = configuration_with(config, stations=stations, conditions=config.recording.context.conditions[:2],
+                                test_queues=queues)
     workbench.repository.result = config
     device = SimpleNamespace(
         login_ready=True, detail="准备中",
@@ -560,7 +568,7 @@ def paired_recording_workbench(recording_workbench):
     conditions = tuple(replace(c, test_queue="queue-a", applicable_station_ids=ids)
                        for c in w.config.analysis.context.conditions)
     queue = AnalysisTestQueue("wav", {"display_sequence": ["SPL"],
-                                     "SPL": {"type": "SPL", "analysis_channels": [0]}})
+                                     "SPL": {"type": "SPL", "analysis_channels": [0], "limit_checked": True}})
     w.config = configuration_with(w.config, conditions=conditions, test_queues={"queue-a": queue})
     w.repository.result = w.config
     w.controller.refresh_configuration()
@@ -610,13 +618,13 @@ def test_round_synchronous_terminal_activates_once_before_reentrant_start(
 ):
     w, panel = paired_recording_workbench, workbench.panel
     reset_calls = []
-    render = panel.show_station_result
+    render = panel.show_condition_result
 
     def record_reset(*args):
         reset_calls.append(args)
         render(*args)
 
-    panel.show_station_result = record_reset
+    panel.show_condition_result = record_reset
     if terminal == "success":
         # Finish the first direction so synchronous completion wraps the cursor.
         w.controller.start_recording()
@@ -649,7 +657,7 @@ def test_round_synchronous_terminal_rendering_error_propagates(
     def fail_render(*args):
         raise consumer_error
 
-    monkeypatch.setattr(workbench.panel, "show_station_result", fail_render)
+    monkeypatch.setattr(workbench.panel, "show_condition_result", fail_render)
     w.outcome.on_start = lambda: w.complete(outcome=terminal)
     with pytest.raises(error_type, match="snapshot consumer bug") as raised:
         w.controller.start_recording()
@@ -1389,7 +1397,7 @@ def test_product_selection_unexpected_view_error_propagates_with_source(selectio
     w = selection_workbench
     caplog.set_level("INFO", logger="core")
 
-    def fail(*_):
+    def fail(*_, **kwargs):
         raise RuntimeError("view publication failed")
 
     monkeypatch.setattr(w.panel, "show_workbench_stations", fail)

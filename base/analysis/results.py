@@ -3,6 +3,7 @@
 import math
 
 import numpy as np
+from base.audio_label_policy import judgement_summary, required_judgements
 
 from base.pre_processing.spl_runtime_config import resolve_spl_unit
 
@@ -16,6 +17,7 @@ def instance_result(instance):
         "config_key": instance.config_key, "analysis_type": instance.analysis_type,
         "channel_index": instance.channel_index, "execution_status": "分析失败",
         "judgement_status": "not_executed", "judgement": None,
+        "judgement_required": bool(instance.parameters.get("limit_checked", False)),
         "metrics": {}, "display_payload": None, "violations": None,
         "artifacts": [], "error": None,
     }
@@ -35,6 +37,7 @@ def task_result(task, instances, error=None):
         "task_id": task.task_id, "station_id": task.station_id,
         "condition_id": task.condition_id, "execution_status": status,
         "instance_results": instances, "error": error,
+        "judgement_summary": judgement_summary(instances, required_judgements(task.instances)),
     }
 
 
@@ -42,6 +45,13 @@ def calculation_payload(instance, calculation, start_time):
     metrics = dict(calculation["metrics"])
     config = instance.parameters
     kind = instance.analysis_type
+    if kind in {"SHRP", "ROUGH"}:
+        curve = calculation["curve"]
+        return metrics, {
+            "kind": "curve", **curve, "x_unit": "s", "y_unit": metrics["unit"],
+            "reduction": "none", "time_reference": "wav_start",
+            "algorithm_metadata": calculation["metadata"],
+        }
     if kind == "LOUD":
         curve = calculation["curve"]
         return metrics, {

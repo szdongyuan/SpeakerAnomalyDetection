@@ -388,15 +388,67 @@ def exception_once_worker(connection, station_id, generation):
     original = executor.execute_task
     first = True
 
-    def execute(task):
+    def execute(task, **kwargs):
         nonlocal first
         if first:
             first = False
             raise RuntimeError("synthetic uncaught executor failure")
-        return original(task)
+        return original(task, **kwargs)
 
     executor.execute_task = execute
     analysis_worker_main(connection, station_id, generation)
+
+
+def blocked_csv_worker(connection, station_id, generation):
+    from base.analysis import storage
+    from base.analysis.worker import analysis_worker_main
+    original = storage.write_csv_atomic
+
+    def save(path, header, rows):
+        gate = Path(path).parents[2] / "release_save"
+        gate.parent.mkdir(parents=True, exist_ok=True)
+        (gate.parent / "save_started").touch()
+        deadline = time.monotonic() + 20
+        while not gate.exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("test did not release save")
+            time.sleep(0.01)
+        return original(path, header, rows)
+
+    storage.write_csv_atomic = save
+    analysis_worker_main(connection, station_id, generation)
+
+
+@pytest.mark.parametrize("abort", [False, True])
+def test_real_worker_early_message_precedes_save_and_does_not_release_station(task, abort):
+    task = replace(task, instances=tuple(replace(item, parameters={
+        **item.parameters, "limit_checked": True, "limit_mode": "manual",
+        "manual_input_mode": "constant", "constant_upper_enabled": True,
+        "constant_upper_value": 200,
+    }) for item in task.instances))
+    manager = AnalysisProcessManager(task.station_id, worker_target=blocked_csv_worker)
+    try:
+        manager.start()
+        wait_ready(manager)
+        manager.submit(task)
+        events = wait_for(manager, lambda es: any(e["event_type"] == "judgement_ready" for e in es))
+        assert manager.state == "busy"
+        assert not any(e["event_type"] == "task_result" for e in events)
+        with pytest.raises(RuntimeError):
+            manager.submit(replace(task, task_id="next"))
+        if abort:
+            manager.abort(runtime_error("execution", "TaskTimeout", "test timeout"))
+        else:
+            Path(task.analysis_result_directory, "release_save").touch()
+        result, remaining = wait_result(manager, task.task_id)
+        assert sum(e["event_type"] == "task_result" for e in remaining) == 1
+        if abort:
+            assert result["error"]["type"] == "TaskTimeout"
+        else:
+            assert all(a["status"] == "saved" for i in result["instance_results"] for a in i["artifacts"])
+    finally:
+        manager.close()
+    assert manager.closed
 
 
 def test_uncaught_executor_error_still_allows_next_real_wav(task):

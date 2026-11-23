@@ -6,6 +6,35 @@ from base.analysis_artifact_paths import AnalysisStorageContext
 from base.analysis_csv_exporter import export_item_csvs
 
 
+def test_streamed_arrays_preserve_interpolation_and_empty_values():
+    import numpy as np
+    from base.analysis_csv_exporter import iter_curve_csv_table
+    outputs = [
+        {"raw_channel": 0, "csv_curve": {"x": np.array([0., 1., 2.]),
+         "y": np.array([1., np.nan, np.inf]), "lower": np.array([0., 0., 0.])}},
+        {"raw_channel": 1, "csv_curve": {"x": np.array([0., 2.]), "y": np.array([2., 4.])}},
+    ]
+    name, header, rows = iter_curve_csv_table("test", "t", "y", outputs, {})
+    assert iter(rows) is rows
+    assert list(rows) == [("0", "1", "2", "0", ""), ("1", "", "3", "0", ""), ("2", "", "4", "0", "")]
+    assert name == "test" and len(header) == 5
+
+
+def test_row_iteration_failure_keeps_original_file_and_cleans_temporary(tmp_path):
+    from base.csv_writer import write_csv_atomic
+    path = tmp_path / "curve.csv"
+    path.write_bytes(b"original")
+
+    def rows():
+        yield (1, 2)
+        raise ValueError("bad curve row")
+
+    with pytest.raises(ValueError, match="bad curve row"):
+        write_csv_atomic(path, ["x", "y"], rows())
+    assert path.read_bytes() == b"original"
+    assert list(tmp_path.iterdir()) == [path]
+
+
 def _context(tmp_path):
     return AnalysisStorageContext(
         str(tmp_path.resolve()),

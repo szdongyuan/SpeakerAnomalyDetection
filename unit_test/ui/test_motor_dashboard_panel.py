@@ -5,6 +5,8 @@ import builtins
 import sqlite3
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("main_ui_font")
 from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, Qt
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtTest import QTest
@@ -14,6 +16,19 @@ from base.workbench_summary_store import WorkbenchSummarySnapshot
 from consts.ui_style_const import MAIN_UI_SMALL_FONT_FAMILY_NAME
 from ui.sequence.motor_information_summary_panel import MotorInformationSummaryPanel
 from unit_test.daily_record_cases import make_daily_records, make_daily_wav_records
+
+
+def test_summary_has_three_exclusive_categories(summary):
+    day = date(2026, 11, 18)
+    records = make_daily_records(5, day)
+    for row, status in zip(records, ["OK", "NG", "未标记", "结果不完整", "NG（结果不完整）"]):
+        row["result"] = status
+    summary.set_daily_records(records, day)
+    assert summary_values(summary) == (day.isoformat(), "5", "1", "2", "2", "20.0%")
+    captions = [label.text() for label in summary.findChildren(QLabel)
+                if label.objectName().endswith("Caption")
+                and label.objectName() not in {"summaryTotalCaption", "summaryRateCaption"}]
+    assert captions == ["OK", "NG", "未标记"]
 
 
 @pytest.fixture

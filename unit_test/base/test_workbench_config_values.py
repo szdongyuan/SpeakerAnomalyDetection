@@ -74,7 +74,7 @@ def test_describe_preserves_complete_contract_and_independent_exports():
     assert after["stations"][1] == {
         "station_id": "s2", "station_name": "工位2", "device_ref": "device-1",
         "channels": [{"channel_id": f"ch{i + 1}", "channel_name": f"声音{i + 1}",
-                      "signal_type": "audio", "physical_channel_index": 2 + i} for i in range(2)],
+                      "signal_type": "sound_pressure", "physical_channel_index": 2 + i} for i in range(2)],
     }
     assert after["conditions"][0] == {
         "condition_id": "c1", "condition_name": "工况1", "test_queue": "测试队列A",
