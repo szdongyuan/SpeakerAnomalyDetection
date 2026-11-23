@@ -1166,6 +1166,9 @@ class SequenceWidgetStreamingOpsMixin:
             self.data_struct.add_stft_or_fft_count(self.analysis_config[item_name]["type"])
 
     def closeEvent(self, event):
+        if not getattr(self, "_test_pause_allows_close", lambda: True)():
+            event.ignore()
+            return
         # MainWindow initializes its embedded sequence with a hidden close.
         # That UI reset must not cancel reservations or stop hardware listeners.
         application_exit = getattr(self, "_application_close_in_progress", False)

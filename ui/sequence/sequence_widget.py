@@ -16,6 +16,7 @@ from ui.sequence.sequence_tools_bar import SequenceToolsBar
 from ui.sequence.sequencement_count_board import SequenceCountBoard
 
 from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
+from ui.sequence.sequence_widget_pause_ops import SequenceWidgetPauseOpsMixin
 from ui.sequence.sequence_widget_test_metadata_ops import SequenceWidgetTestMetadataOpsMixin
 from ui.sequence.sequence_widget_progress_ops import SequenceWidgetProgressOpsMixin
 from ui.sequence.sequence_widget_round_reset_ops import SequenceWidgetRoundResetOpsMixin
@@ -31,6 +32,7 @@ from ui.sequence.sequence_widget_raw_csv_ops import SequenceWidgetRawCsvOpsMixin
 
 
 class SequenceWindow(
+    SequenceWidgetPauseOpsMixin,
     SequenceWidgetUiOpsMixin,
     SequenceWidgetTestMetadataOpsMixin,
     SequenceWidgetProgressOpsMixin,
@@ -112,6 +114,7 @@ class SequenceWindow(
         self._manual_product_condition_counted_group_labels = {}
         self._active_product_condition_key = ""
         self._active_product_condition_config = None
+        self._init_test_pause()
 
         self._missing_config_prompted = False
         # Only show missing-config prompt after the window is shown (i.e. after login success).

@@ -105,6 +105,8 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         self._analysis_process_timer.start()
 
     def _start_selected_condition_manual_analysis(self):
+        if getattr(self, "_test_pause_blocks_start", lambda: False)():
+            return False
         if self._analysis_has_pending_tasks():
             QMessageBox.information(
                 self,
@@ -329,6 +331,11 @@ class SequenceWidgetAnalysisProcessOpsMixin:
         if not queue:
             self._finish_deferred_analysis_round_if_ready()
             self._refresh_analysis_action_state()
+            # Analysis may have kept the main button in its pause presentation.
+            # Recompute only when the queue drains, using the existing mode gates.
+            refresh_player = getattr(self, "update_player_btn_is_paused", None)
+            if callable(refresh_player):
+                refresh_player()
             return False
         request = queue.popleft()
         self._analysis_active_request = request
@@ -427,6 +434,9 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             ):
                 self._restore_waiting_stage_after_automatic_analysis()
         self._refresh_analysis_action_state()
+
+        if getattr(self, "_test_pause_blocks_start", lambda: False)():
+            self._apply_test_pause_presentation()
 
     def _handle_analysis_terminal(self, result):
         track_result = getattr(self, "_track_round_analysis_result", None)
@@ -1010,6 +1020,9 @@ class SequenceWidgetAnalysisProcessOpsMixin:
     def _refresh_analysis_action_state(self):
         button = getattr(self, "data_btn", None)
         if button is None:
+            return
+        if getattr(self, "_test_pause_blocks_start", lambda: False)():
+            button.setEnabled(False)
             return
         if getattr(self, "_round_reset_delete_failed", False):
             button.setEnabled(False)

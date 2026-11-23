@@ -551,6 +551,8 @@ class SequenceWidgetBarcodeOpsMixin:
         return False
 
     def _commit_barcode(self, barcode: str, source: str = "wedge"):
+        if getattr(self, "_test_pause_blocks_start", lambda: False)():
+            return
         raw_in = barcode
         barcode = self._normalize_barcode(barcode)
         try:
@@ -723,6 +725,8 @@ class SequenceWidgetBarcodeOpsMixin:
 
     def on_directional_triggered(self, direction: str):
         """处理串口离散输入触发信号（区分正反转）"""
+        if getattr(self, "_test_pause_blocks_start", lambda: False)():
+            return
         direction = self._normalize_trigger_direction(direction)
         if not direction:
             return
@@ -757,13 +761,19 @@ class SequenceWidgetBarcodeOpsMixin:
 
     def _drain_queued_directional_trigger(self):
         """busy 释放后，自动执行之前暂存的方向触发（如有）。"""
+        if getattr(self, "_test_pause_blocks_start", lambda: False)():
+            self._queued_directional_trigger = ""
+            return
         direction = getattr(self, "_queued_directional_trigger", "")
         self._queued_directional_trigger = ""
         if direction:
             print(f"[serial-trigger][ui] busy 释放，执行暂存触发: direction={direction}")
             self.default_logger.info(f"busy 释放，执行暂存的离散输入触发 (方向={direction})")
             from PyQt5.QtCore import QTimer
-            QTimer.singleShot(100, lambda d=direction: self.on_directional_triggered(d))
+            epoch = getattr(self, "_test_trigger_epoch", 0)
+            QTimer.singleShot(100, lambda d=direction, e=epoch:
+                self.on_directional_triggered(d)
+                if e == getattr(self, "_test_trigger_epoch", 0) else None)
 
     def _is_recording_in_progress_for_labeling(self) -> bool:
         streaming_processor = getattr(self, "streaming_processor", None)

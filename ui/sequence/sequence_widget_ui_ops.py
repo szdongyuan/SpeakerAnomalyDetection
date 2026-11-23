@@ -452,6 +452,8 @@ class SequenceWidgetUiOpsMixin:
                 lineedit.setText(str(result_scanner_barcode))
 
     def update_player_btn_is_playing(self):
+        if getattr(self, "_apply_test_pause_presentation", lambda: False)():
+            return
         self.player_btn.setIcon(QIcon(DEFAULT_DIR + "ui/ui_pic/sequence_pic/pause.png"))
         self.player_btn.setIconSize(QSize(35, 35))
         self.player_btn.setDisabled(True)
@@ -486,6 +488,8 @@ class SequenceWidgetUiOpsMixin:
         ).strip()
 
     def update_player_btn_is_paused(self):
+        if getattr(self, "_apply_test_pause_presentation", lambda: False)():
+            return
         refresh_state = getattr(self, "_product_config_refresh_state", "ready")
         if refresh_state != "ready":
             self.player_btn.setEnabled(False)

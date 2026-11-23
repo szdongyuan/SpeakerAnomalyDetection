@@ -103,6 +103,8 @@ class SequenceWidgetRoundResetOpsMixin:
                     self._register_round_file(info, artifact.path)
 
     def _round_reset_busy(self):
+        if getattr(self, "_test_pause_is_busy", lambda: False)():
+            return True
         if any(bool(getattr(self, name, False)) for name in (
             "player_status_flag", "_record_workflow_busy",
             "_product_test_program_config_dialog_open",
@@ -233,6 +235,9 @@ class SequenceWidgetRoundResetOpsMixin:
                 QMessageBox.information(self, "暂不能重置", "录音或 CSV 文件尚未释放，请稍后重试。")
                 return
             self._reset_round_presentation()
+            clear_pause = getattr(self, "_clear_test_pause", None)
+            if clear_pause:
+                clear_pause()
             self._round_data_records.pop(group_id, None)
             self._round_reset_group_id = ""
             self._round_analysis_records.clear()

@@ -948,6 +948,9 @@ class MainWindow(QMainWindow):
             "_analysis_has_pending_tasks",
             None,
         )
+        if not getattr(sequence, "_test_pause_allows_close", lambda: True)():
+            event.ignore()
+            return
         if callable(has_pending_analysis) and has_pending_analysis():
             event.ignore()
             if getattr(self, "_closing", False):

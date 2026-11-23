@@ -315,6 +315,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
         return result
 
     def on_serial_full_frame_received(self, payload):
+        if not getattr(self, "_test_pause_accepts_serial_frame", lambda payload: True)(payload):
+            return
         if getattr(self, "_product_config_refresh_state", "ready") != "ready":
             return
         if getattr(self, "_test_queue_config_dialog_open", False):
@@ -745,6 +747,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
             self._serial_product_session_started = True
 
     def _on_serial_product_runtime_error(self, reason):
+        if getattr(self, "_handle_test_pause_business_error", lambda reason: False)(reason):
+            return True
         if not getattr(self, "_serial_product_condition_executing", False):
             abort_metadata = getattr(self, "_abort_test_round_metadata", None)
             if callable(abort_metadata):
@@ -754,6 +758,10 @@ class SequenceWidgetSerialTriggerOpsMixin:
         return True
 
     def _abort_serial_product_round(self, reason, *, show_warning=True):
+        if getattr(self, "_test_pause_blocks_start", lambda: False)():
+            # A disconnect during an operator pause must not delete the round.
+            self.default_logger.warning(f"paused_round_preserved reason={reason}")
+            return
         if getattr(self, "_serial_product_error_dialog_open", False):
             retry = getattr(self, "_current_product_recording_retry", lambda: None)()
             if retry is None or not retry.modal_pending:
