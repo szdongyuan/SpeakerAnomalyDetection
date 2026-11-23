@@ -184,15 +184,15 @@ def test_status_save_failure_does_not_cancel_label_commit(tmp_path, monkeypatch)
     assert calls == ["OK"] and results[0][1] == "committed" and isinstance(results[0][2], OSError)
 
 
-def test_daily_incomplete_count_preserves_ng_and_pass_rate():
+def test_daily_incomplete_results_use_three_categories_and_preserve_pass_rate():
     from datetime import datetime
     from base.motor_daily_wav_records import DailyWavRecordStore
     now = datetime(2026, 11, 17, 10)
     store = DailyWavRecordStore()
     store.replace([dict(completed_at=now, station_id=1, file_name=f"{i}.wav", condition="正转", result=status)
                    for i, status in enumerate(["OK", "NG", "结果不完整", "NG（结果不完整）", "未标记"])], now.date())
-    assert (store.summary.total, store.summary.ok, store.summary.ng, store.summary.incomplete,
-            store.summary.unmarked, store.summary.pass_rate) == (5, 1, 2, 2, 1, "20.0%")
+    assert (store.summary.total, store.summary.ok, store.summary.ng,
+            store.summary.unmarked, store.summary.pass_rate) == (5, 1, 2, 2, "20.0%")
 
 
 def test_report_counts_and_status_preserve_incomplete_ng():

@@ -18,6 +18,26 @@ def snapshot(store):
     return store.record_date, store.records, store.summary, store.station_ids
 
 
+@pytest.mark.parametrize("statuses,counts,rate", [
+    (["结果不完整"], (0, 0, 1), "0.0%"),
+    (["NG（结果不完整）"], (0, 1, 0), "0.0%"),
+    (["OK", "NG", "未标记", "结果不完整", "NG（结果不完整）"], (1, 2, 2), "20.0%"),
+    ([], (0, 0, 0), "--"),
+])
+def test_summary_classifies_every_record_once_and_preserves_status(day, statuses, counts, rate):
+    rows = make_daily_wav_records(len(statuses), day)
+    for row, status in zip(rows, statuses):
+        row["result"] = status
+    store = DailyWavRecordStore()
+    store.replace(rows, day)
+    assert (store.summary.ok, store.summary.ng, store.summary.unmarked) == counts
+    assert store.summary.total == sum(counts) == len(statuses)
+    assert store.summary.pass_rate == rate
+    assert {row.file_name: row.result for row in store.records} == {
+        row["file_name"]: row["result"] for row in rows
+    }
+
+
 def test_initial_state_and_default_local_date(monkeypatch):
     class LocalDate(date):
         @classmethod
@@ -27,7 +47,7 @@ def test_initial_state_and_default_local_date(monkeypatch):
     monkeypatch.setattr("base.motor_daily_wav_records.date", LocalDate)
     store = DailyWavRecordStore()
     assert snapshot(store) == (LocalDate.today(), (), store.summary, ())
-    assert vars(store.summary) == dict(incomplete=0, total=0, ok=0, ng=0, unmarked=0, pass_rate="--")
+    assert vars(store.summary) == dict(total=0, ok=0, ng=0, unmarked=0, pass_rate="--")
     store.replace(make_daily_wav_records(1, LocalDate.today()))
     assert store.record_date == LocalDate.today()
 
@@ -39,7 +59,7 @@ def test_replace_counts_single_file_result_and_sorts_full_precision(day):
     assert store.replace(tuple(rows), day) is None
     assert [r.file_name for r in store.records] == ["CASE-003.wav", "CASE-002.wav", "CASE-001.wav"]
     assert store.station_ids == (2, 3, 9)
-    assert vars(store.summary) == dict(incomplete=0, total=3, ok=1, ng=1, unmarked=1, pass_rate="33.3%")
+    assert vars(store.summary) == dict(total=3, ok=1, ng=1, unmarked=1, pass_rate="33.3%")
     assert vars(store.records[-1]) == {key: value for key, value in rows[0].items() if key != "extra"} | {"result": "OK", "analysis_reference": None}
     assert set(make_daily_records(1, day)[0]) == {
         "completed_at", "station_id", "product_code", "forward", "reverse", "result",
@@ -157,7 +177,7 @@ def test_snapshot_is_detached_immutable_and_stable_for_ties(day):
     store.replace([], date(2026, 11, 15))
     assert store.record_date == date(2026, 11, 15)
     assert store.records == store.station_ids == ()
-    assert vars(store.summary) == dict(incomplete=0, total=0, ok=0, ng=0, unmarked=0, pass_rate="--")
+    assert vars(store.summary) == dict(total=0, ok=0, ng=0, unmarked=0, pass_rate="--")
     assert len(selected.rows) == 3
 
 
@@ -235,7 +255,7 @@ def test_reference_survives_snapshot_sorting_paging_and_caller_mutation(day, tmp
     assert store.records[-1].analysis_reference is reference
     assert store.select_page().rows[-1].analysis_reference is reference
     assert other.records == ()
-    assert vars(store.summary) == dict(incomplete=0, total=3, ok=1, ng=1, unmarked=1, pass_rate="33.3%")
+    assert vars(store.summary) == dict(total=3, ok=1, ng=1, unmarked=1, pass_rate="33.3%")
     assert snapshot(store) == before
 
 

@@ -85,14 +85,7 @@ class DailyWavRecordStore:
             for index, row in enumerate(records)
         ]
         normalized = tuple(sorted(normalized, key=lambda row: row.completed_at, reverse=True))
-        total = len(normalized)
-        ok = sum(row.result == "OK" for row in normalized)
-        summary = DailyRecordSummary(
-            total, ok, sum(row.result.startswith("NG") for row in normalized),
-            sum(row.result == "未标记" for row in normalized),
-            f"{ok / total * 100:.1f}%" if total else "--",
-            sum(INCOMPLETE in row.result for row in normalized),
-        )
+        summary = DailyRecordSummary.from_results(row.result for row in normalized)
         stations = tuple(sorted({row.station_id for row in normalized}))
         self.record_date, self.records = day, normalized
         self.summary, self.station_ids = summary, stations

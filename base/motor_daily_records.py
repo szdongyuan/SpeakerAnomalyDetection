@@ -23,7 +23,6 @@ class DailyRecordSummary:
     ng: int
     unmarked: int
     pass_rate: str
-    incomplete: int = 0  # Used by WAV details; round totals use three exclusive categories.
 
     @classmethod
     def from_counts(cls, ok: int, ng: int, unmarked: int):

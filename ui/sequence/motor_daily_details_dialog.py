@@ -54,7 +54,6 @@ class MotorDailyDetailsDialog(QDialog):
         for caption, name, text in (
             ("总数", "total", "0"), ("OK", "ok", "0"),
             ("NG", "ng", "0"), ("未标记", "unmarked", "0"),
-            ("不完整", "incomplete", "0"),
             ("合格率", "rate", "--"),
         ):
             column = QVBoxLayout()
@@ -197,7 +196,6 @@ class MotorDailyDetailsDialog(QDialog):
         summary = self._store.summary
         for label, value in ((self.total_label, summary.total), (self.ok_label, summary.ok),
                              (self.ng_label, summary.ng), (self.unmarked_label, summary.unmarked),
-                             (self.incomplete_label, summary.incomplete),
                              (self.rate_label, summary.pass_rate)):
             label.setText(str(value))
         self.rate_label.setProperty("secondary", summary.total == 0)
