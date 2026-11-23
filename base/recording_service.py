@@ -109,6 +109,7 @@ class RecordingCallbacks:
     released: object = None
     release_failed: object = None
     finalizing: object = None
+    progress: object = None
 
 
 @dataclass(frozen=True)
@@ -172,6 +173,7 @@ class RecordingSession:
         self._startup_retry_proof = None
         self._cold_start = False
         self._capture_deadline = None
+        self._soundcard_progress_deadline = None
         self._slot_release_deadline = None
         self._slot_release_warning_sent = False
         self._critical_observations = {}
@@ -182,6 +184,7 @@ class RecordingSession:
         self._slot_lifecycle_counts = None
         self._admission_reason = None
         self._last_sequence = self._last_sample_stop = 0
+        self._progress_frames = 0
         self._preview_pending = None
         self._preview_ack_requested = None
         self._preview_disabled = False
@@ -311,7 +314,8 @@ class RecordingService:
                  ready_timeout=10.0, start_timeout=10.0, cancel_timeout=5.0,
                  shutdown_timeout=5.0, terminate_timeout=2.0, preview_interval=.05,
                  reader_factory=ResultReader, release_timeout=None,
-                 pipeline_capacity=2, monotonic=None, retry_delay=.75):
+                 pipeline_capacity=2, monotonic=None, retry_delay=.75,
+                 capture_stall_timeout=5.0):
         if backend_factory is not None and (not isinstance(backend_factory, str) or not re.fullmatch(
                 r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*", backend_factory)):
             raise ValueError("backend_factory must be an importable module:function identifier")
@@ -319,12 +323,14 @@ class RecordingService:
         self._backend_options = FrozenConfig.snapshot(backend_options or {}).to_dict()
         for name, value in (("ready", ready_timeout), ("start", start_timeout),
                             ("cancel", cancel_timeout), ("shutdown", shutdown_timeout),
-                            ("terminate", terminate_timeout), ("preview", preview_interval)):
+                            ("terminate", terminate_timeout), ("preview", preview_interval),
+                            ("capture stall", capture_stall_timeout)):
             if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} timeout/interval must be positive and finite")
         self._ready_timeout, self._start_timeout = ready_timeout, start_timeout
         self._cancel_timeout, self._shutdown_timeout = cancel_timeout, shutdown_timeout
         self._terminate_timeout, self._preview_interval = terminate_timeout, preview_interval
+        self._capture_stall_timeout = capture_stall_timeout
         self._release_timeout = shutdown_timeout if release_timeout is None else release_timeout
         if (not isinstance(self._release_timeout, (int, float))
                 or not math.isfinite(self._release_timeout) or self._release_timeout <= 0):
@@ -1631,9 +1637,22 @@ class RecordingService:
         is_ve = session.request.device.get("backend") == VE_BACKEND
         if event.kind == "progress":
             deadline = session._capture_deadline
-            if not is_ve or deadline is None or session._terminal:
+            if session._terminal:
                 return
             progress = event.payload
+            if not session._progress_frames < progress.frames <= session.request.target_samples:
+                return
+            if not is_ve:
+                session._progress_frames = progress.frames
+                if session.state == "recording":
+                    session._soundcard_progress_deadline = (
+                        self._clock() + self._capture_stall_timeout
+                        if progress.frames < session.request.target_samples else None)
+                if not session.cancel_requested:
+                    self._notify(session, "progress", progress)
+                return
+            if deadline is None:
+                return
             previous = deadline.snapshot()
             if (not previous.frames <= progress.frames <= session.request.target_samples
                     or not previous.last_frame_at <= progress.last_frame_at <= self._clock()):
@@ -1647,6 +1666,10 @@ class RecordingService:
                 session._slot_release_deadline = progress.last_frame_at + VE_CAPTURE_RELEASE_TIMEOUT_SECONDS
                 self._diagnostic("parent_release_deadline", session,
                                  t0=progress.last_frame_at, deadline=session._slot_release_deadline)
+            session._progress_frames = progress.frames
+            # Native progress still owns release/deadline proof during cancel.
+            if not session.cancel_requested:
+                self._notify(session, "progress", progress)
         elif event.kind == "capture_slot_released":
             slot = event.payload
             counts = slot.lifecycle_counts
@@ -1723,6 +1746,7 @@ class RecordingService:
                 return
             if session.state == "recording":
                 session.state = "finalizing"
+            session._soundcard_progress_deadline = None
             self._notify_finalizing(session)
         elif event.kind == "started" and not session._terminal:
             if session.state == "starting":
@@ -1754,6 +1778,8 @@ class RecordingService:
                 session.state = "recording"
                 if not session.cancel_requested:
                     session._deadline = None
+                    if not is_ve:
+                        session._soundcard_progress_deadline = self._clock() + self._capture_stall_timeout
                 self._notify(session, "started")
         elif event.kind in ("completed", "failed", "cancelled"):
             if session.descriptor is not None:
@@ -2304,6 +2330,20 @@ class RecordingService:
                 pending_prewarm.attempt = 2
                 self._dispatch_ve_prewarm_attempt(pending_prewarm)
         session = self._capture_session
+        if (session is not None and session._soundcard_progress_deadline is not None
+                and not session._terminal and not session.cancel_requested
+                and now >= session._soundcard_progress_deadline):
+            session._soundcard_progress_deadline = None
+            message = (
+                f"音频输入连续 {self._capture_stall_timeout:g} 秒未收到新采样数据"
+                f"（已采集 {session._progress_frames}/{session.request.target_samples} 帧）。"
+                "请检查采集设备的 USB 连接及输入设置，必要时重新插拔设备后重试。")
+            self._fail(session, "capture_timeout", message, RecordingFailure(
+                session.request.request_id, "capture_timeout", session.request.path, message,
+                raw_frames=session._progress_frames, handles_released=session._child_released))
+            # Native stop may also block. Existing cancel/release deadlines own retirement.
+            if session._sent and not session._child_released:
+                self._command("cancel", session)
         if (session is not None and session._capture_deadline is not None
                 and not session._terminal and not session.cancel_requested):
             try:

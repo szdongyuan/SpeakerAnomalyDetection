@@ -12,6 +12,7 @@ class RecordingProcessContext:
     processor: object = None
     processing_notified: bool = False
     processing_condition: str = ""
+    condition_key: str = ""
     final: bool = False
     failed: bool = False
     cancelled: bool = False

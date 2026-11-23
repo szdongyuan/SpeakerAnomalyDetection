@@ -257,6 +257,9 @@ class SequenceWidgetUiOpsMixin:
             self.left_panel.condition_selected.connect(
                 lambda _condition_key: self._refresh_analysis_action_state()
             )
+            result_panel = getattr(self.left_panel, "result_panel", None)
+            if result_panel is not None:
+                result_panel.capture_status_changed.connect(self._on_condition_capture_status_changed)
         self.lineedit_type.editingFinished.connect(lambda: self.lineedit_type_lose_focus(self.lineedit_type))
 
         # 扫码键盘楔入模式：信号交给 BarcodeRouter 处理
