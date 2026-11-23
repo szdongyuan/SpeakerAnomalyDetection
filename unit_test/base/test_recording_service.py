@@ -45,6 +45,95 @@ def request(tmp_path, **changes):
     return RecordingRequest(**values)
 
 
+def test_actual_frame_progress_without_waveform_preview(tmp_path, services):
+    service = services({"manual": True, "pace_writer": True})
+    progress = []
+    previews = []
+    session = service.start(request(tmp_path, streaming=False, target_samples=90),
+                            RecordingCallbacks(
+                                progress=lambda s, p: progress.append(p.frames),
+                                preview=lambda s, p: previews.append(p),
+                                result_ready=lambda s, value: s.accept_result()))
+    for index, frames in enumerate((3, 7, 90)):
+        (tmp_path / f"feed-{index}").touch()
+        eventually(lambda: progress and progress[-1] == frames)
+    assert session.released.wait(15), service.diagnostics
+    assert session.failure is None, service.diagnostics
+    assert progress and progress[-1] == 90
+    assert progress == sorted(set(progress))
+    assert not previews
+
+
+@pytest.mark.parametrize("feed_first_block", [False, True])
+def test_soundcard_stall_fails_releases_and_allows_retry(tmp_path, services, feed_first_block):
+    service = services({"manual": True}, capture_stall_timeout=.5)
+    events = Events()
+    session = service.start(request(tmp_path, target_samples=90, streaming=False), events.callbacks)
+    events.started.get(timeout=10)
+    if feed_first_block:
+        (tmp_path / "feed-0").touch()
+        eventually(lambda: session._progress_frames == 3)
+    failure = events.failed.get(timeout=3)
+    assert failure.stage == "capture_timeout"
+    assert failure.raw_frames == (3 if feed_first_block else 0)
+    assert "未收到" in failure.message
+    assert session.released.wait(8)
+    assert not service.is_path_leased(session.request.path)
+    assert events.results.empty()
+    for index in range(3):
+        (tmp_path / f"feed-{index}").touch()
+    retry_events = Events()
+    retry = service.start(request(tmp_path, request_id="retry", target_samples=90), retry_events.callbacks)
+    retry_events.results.get(timeout=10)
+    retry.accept_result()
+    assert retry.released.wait(8)
+    assert retry.failure is None
+
+
+def test_soundcard_stall_reclaims_worker_when_native_stop_hangs(tmp_path, services):
+    service = services({"manual": True, "hang_close": True},
+                       capture_stall_timeout=.3, cancel_timeout=.3, terminate_timeout=.3)
+    events = Events()
+    session = service.start(request(tmp_path, target_samples=90), events.callbacks)
+    events.started.get(timeout=10)
+    failure = events.failed.get(timeout=3)
+    assert failure.stage == "capture_timeout"
+    assert session.released.wait(8)
+    assert session.failure is failure
+    assert service.worker_pid is None
+    assert not service.is_path_leased(session.request.path)
+
+
+@pytest.mark.parametrize("cancel_at_halfway", [False, True])
+def test_native_progress_callback_rejects_regression_and_cancelled_updates(
+        monkeypatch, tmp_path, cancel_at_halfway):
+    from base.recording_process_protocol import RecordingProgress
+    from unit_test.base.test_recording_service_pipeline import ve_probe
+
+    probe = ve_probe(monkeypatch, tmp_path)
+    observed = []
+    probe.session.callbacks = RecordingCallbacks(progress=lambda s, p: observed.append(p.frames))
+    target = probe.session.request.target_samples
+    for frames in (target // 2, target // 2 - 1, target // 2, target):
+        if frames == target:
+            probe.session.cancel_requested = cancel_at_halfway
+        probe.clock.advance(.1)
+        probe.service._event(probe.worker, RecordingEvent(
+            1, probe.session.request.request_id, "progress",
+            RecordingProgress(probe.session.request.request_id, 1, frames, probe.clock())))
+    expected = [target // 2] if cancel_at_halfway else [target // 2, target]
+    assert observed == expected
+    deadline = probe.session._slot_release_deadline
+    assert deadline is not None
+    probe.session.cancel_requested = True
+    probe.clock.advance(.1)
+    probe.service._event(probe.worker, RecordingEvent(
+        1, probe.session.request.request_id, "progress",
+        RecordingProgress(probe.session.request.request_id, 1, target, probe.clock())))
+    assert observed == expected
+    assert probe.session._slot_release_deadline == deadline
+
+
 def test_blocked_worker_factory_drains_tail_before_service_terminate(tmp_path, monkeypatch):
     service = RecordingService(
         backend_factory="unit_test.base.recording_process_fakes:logged_blocked_recording_dependencies",
@@ -507,7 +596,7 @@ def test_spawn_pid_complete_envelopes_and_healthy_reuse(tmp_path, services, stre
 @pytest.mark.parametrize("pause_seconds", [1.0, 30.0])
 def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_progress_cumulative(
         tmp_path, services, pause_seconds):
-    service = services(dict(manual=True))
+    service = services(dict(manual=True), capture_stall_timeout=pause_seconds + 5)
     events = Events()
     session = service.start(request(tmp_path, target_samples=100, trim_samples=0), events.callbacks)
     events.started.get(timeout=10)
@@ -1672,7 +1761,7 @@ def test_setup_failure_with_actual_child_waits_for_retirement_before_release(
 
 @pytest.mark.parametrize("pause_seconds", [1.0, 30.0])
 def test_paused_preview_credit_keeps_disk_progress_and_next_snapshot_cumulative(tmp_path, services, pause_seconds):
-    service = services(dict(manual=True))
+    service = services(dict(manual=True), capture_stall_timeout=pause_seconds + 5)
     events = Events()
     session = service.start(request(tmp_path, target_samples=100, trim_samples=0, preview_time_mode=PREVIEW_TIME_MODE_CUMULATIVE), events.callbacks)
     events.started.get(timeout=10)

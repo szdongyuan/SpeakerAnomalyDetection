@@ -338,12 +338,15 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
             self._pending_raw_audio_csv_recording = None
             csv_admission.csv_reservation = None
         self._recording_contexts()[request.request_id] = context
+        condition_key = getattr(self, "_get_active_product_condition_key", None)
+        context.condition_key = condition_key() if callable(condition_key) else ""
         self._recording_failure_recovery = None
         self._active_recording_process_id = request.request_id
         callbacks = RecordingCallbacks(
             started=self._on_process_recording_started,
             finalizing=self._on_process_recording_finalizing,
             preview=self._on_process_recording_preview,
+            progress=self._on_process_recording_progress,
             result_ready=self._on_process_recording_result,
             accepted=self._on_process_recording_accepted,
             failed=self._on_process_recording_failed,
@@ -416,6 +419,11 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         # Compatibility for isolated legacy tests that seed only the old ID.
         return getattr(self, "_recording_process_id", None) == request_id
 
+    def _on_condition_capture_status_changed(self, condition_key, status):
+        workspace = getattr(self, "channel_workspace", None)
+        if workspace is not None:
+            workspace.set_condition_context(condition_key, status=status)
+
     def _on_process_recording_started(self, session):
         if self._is_active_recording_process(session):
             self._set_active_product_condition_stage(
@@ -435,7 +443,40 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
                 clear_stage = getattr(left_panel, "clear_current_stage", None)
                 if callable(clear_stage):
                     clear_stage()
+            context = self._recording_context_for_session(session)
+            panel = getattr(getattr(self, "left_panel", None), "result_panel", None)
+            if context is not None and panel is not None and context.condition_key:
+                request = context.request
+                panel.start_condition_capture(
+                    context.condition_key,
+                    (request.target_samples - request.trim_samples) / request.sample_rate)
             self.default_logger.info(f"Recording started request={session.request.request_id} pid={session.worker_pid}")
+
+    def _update_condition_capture_progress(self, session, frames):
+        context = self._recording_context_for_session(session)
+        if context is None or context.cancelled or context.failed or context.final:
+            return
+        panel = getattr(getattr(self, "left_panel", None), "result_panel", None)
+        if panel is None or not context.condition_key:
+            return
+        request = context.request
+        target = request.target_samples - request.trim_samples
+        captured = min(target, max(0, frames - request.trim_samples))
+        panel.set_condition_capture_progress(
+            context.condition_key, captured / request.sample_rate, target / request.sample_rate)
+
+    def _on_process_recording_progress(self, session, progress):
+        context = self._recording_context_for_session(session)
+        if (context is not None and not context.processing_notified
+                and self._is_active_recording_process(session)
+                and progress.request_id == session.request.request_id
+                and progress.generation == session.generation):
+            self._update_condition_capture_progress(session, progress.frames)
+
+    def _set_capture_terminal_phase(self, context, phase):
+        panel = getattr(getattr(self, "left_panel", None), "result_panel", None)
+        if panel is not None and context.condition_key and self._is_active_recording_process(context.session):
+            panel.set_condition_capture_phase(context.condition_key, phase)
 
     def _on_process_recording_finalizing(self, session):
         context = self._recording_context_for_session(session)
@@ -443,6 +484,7 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
                 or context.processing_notified or not self._is_active_recording_process(session)):
             return
         context.processing_notified = True
+        self._update_condition_capture_progress(session, context.request.target_samples)
         context.processing_condition = self._get_active_product_condition_key()
         self._set_active_product_condition_stage("数据保存中", update_task_stage=False)
         left_panel = getattr(self, "left_panel", None)
@@ -753,6 +795,7 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
             f"stage={failure.stage} path={session.request.path} "
             f"machine_id={session.request.device.get('machine_id')}: {failure.message}")
         self._finish_process_recording_status(context, "测试异常", "测试异常", "ng")
+        self._set_capture_terminal_phase(context, "采集失败")
         context.failed = True
         context.validated_audio = None
         active = self._is_active_recording_process(session)
@@ -796,6 +839,7 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         if context is None or context.cleanup_owned:
             return
         self._finish_process_recording_status(context, "待检测", "等待开始", "pending")
+        self._set_capture_terminal_phase(context, "已停止")
         context.final = True
         context.cancelled = True
         context.validated_audio = None
@@ -826,6 +870,7 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         if context is None:
             return
         self._finish_process_recording_status(context, "待检测", "等待开始", "pending")
+        self._set_capture_terminal_phase(context, "已停止")
         context.preview_enabled = False
         context.final = True
         context.accepted_audio = None

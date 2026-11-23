@@ -1,4 +1,7 @@
-from PyQt5.QtCore import Qt, pyqtSignal
+from math import isfinite
+from time import monotonic
+
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox,
     QFrame,
@@ -6,6 +9,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QProgressBar,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -19,10 +23,12 @@ from consts import ui_style_const
 from ui.sequence.motor_panel_common import MotorSectionCard
 from ui.sequence.analysis_channel_preflight import MULTI_CHANNEL_ANALYSIS_TYPES
 from ui.ui_analysis_config.config_normalization import normalize_analysis_channels
+from ui.sequence.toolbar_eliding_widgets import ElidingLabel
 
 
 class MotorResultPanel(QWidget):
     condition_selected = pyqtSignal(str)
+    capture_status_changed = pyqtSignal(str, str)
 
     DETAIL_LABEL_ORDER = ("SPL", "响度", "FBA", "FFT", "Spec")
     ANALYSIS_COLUMN_HEADERS = {
@@ -88,6 +94,9 @@ class MotorResultPanel(QWidget):
         self._channel_table_channels = []
         self._channel_table_signature = None
         self._detail_owner_key = ""
+        self._capture_timer = QTimer(self)
+        self._capture_timer.setInterval(100)
+        self._capture_timer.timeout.connect(self._refresh_capture_elapsed)
         self._init_ui()
         self.set_condition_configs(condition_configs, queue_catalog=queue_catalog)
 
@@ -263,6 +272,7 @@ class MotorResultPanel(QWidget):
         root.addWidget(card, stretch=1)
 
     def set_condition_configs(self, condition_configs, *, queue_catalog=None):
+        self._capture_timer.stop()
         self.conditions = self._normalize_conditions(condition_configs, queue_catalog)
 
         # IMPORTANT: detail_frame may have been inserted into rows_layout.
@@ -298,8 +308,26 @@ class MotorResultPanel(QWidget):
             button.clicked.connect(lambda checked=False, key=item["key"]: self.select_condition(key, show_detail=True))
             button_layout = QHBoxLayout(button)
             button_layout.setContentsMargins(8, 0, 8, 0)
-            button_layout.setSpacing(8)
-            name_label = QLabel(item.get("short_name", item["name"]))
+            button_layout.setSpacing(5)
+            name_label = ElidingLabel(item.get("short_name", item["name"]))
+            name_label.setMinimumWidth(32)
+            capture_bar = QProgressBar()
+            capture_bar.setObjectName("conditionCaptureProgress")
+            capture_bar.setRange(0, 1000)
+            capture_bar.setValue(0)
+            capture_bar.setTextVisible(False)
+            capture_bar.setMinimumWidth(32)
+            capture_bar.setMaximumWidth(150)
+            capture_bar.setFixedHeight(8)
+            capture_bar.setAttribute(Qt.WA_TransparentForMouseEvents)
+            capture_bar.setStyleSheet(
+                "QProgressBar { border:none; border-radius:4px; background:#DCE6F2; }"
+                "QProgressBar::chunk { background:#3989DC; border-radius:4px; }")
+            capture_time = QLabel("-- / -- 秒")
+            capture_time.setStyleSheet(self._row_label_style())
+            capture_time.setAttribute(Qt.WA_TransparentForMouseEvents)
+            capture_time.setAlignment(Qt.AlignCenter)
+            capture_time.setMinimumWidth(capture_time.fontMetrics().horizontalAdvance("-- / -- 秒") + 4)
             progress_label = QLabel(f"通道判定：0/{len(condition_channels)}")
             progress_label.setFixedWidth(100)
             progress_label.setToolTip("本档位分析通道中已获得 OK/NG 判定的数量，不表示依次录音。")
@@ -315,16 +343,30 @@ class MotorResultPanel(QWidget):
             result_label.setAlignment(Qt.AlignCenter)
             result_label.setStyleSheet(ui_style_const.motor_condition_result_style)
             button_layout.addWidget(name_label, stretch=1)
+            button_layout.addWidget(capture_bar, stretch=2)
+            button_layout.addWidget(capture_time)
             button_layout.addWidget(progress_label)
             button_layout.addWidget(result_label)
             self.rows_layout.addWidget(button)
             self.rows[item["key"]] = {
+                "key": item["key"],
+                "capture_display_status": "",
                 "button": button,
                 "labels": {
                     "name": name_label,
                     "progress": progress_label,
                     "result": result_label,
+                    "capture_time": capture_time,
                 },
+                "capture_bar": capture_bar,
+                "capture_seconds": 0.0,
+                "capture_duration": item["recording_duration"],
+                "configured_duration": item["recording_duration"],
+                "capture_has_started": False,
+                "capture_phase": "等待开始",
+                "capture_started_at": None,
+                "capture_last_data_at": None,
+                "capture_elapsed_seconds": 0.0,
                 "result": "待检测",
                 "tone": "pending",
                 "group": item.get("group", ""),
@@ -370,6 +412,9 @@ class MotorResultPanel(QWidget):
         for item in updated_conditions:
             row = self.rows.get(item["key"])
             if row is not None:
+                row["configured_duration"] = item["recording_duration"]
+                if not row["capture_has_started"]:
+                    row["capture_duration"] = item["recording_duration"]
                 if preserve_results and (row["result"] != "待检测" or row["channel_results"]):
                     continue
                 self._set_row_analysis_layout(row, item)
@@ -508,6 +553,21 @@ class MotorResultPanel(QWidget):
             result, tone = "待判定", "pending"
         row["result"] = result
         row["tone"] = tone
+        if result == "准备采集":
+            self._stop_capture_clock(row)
+            row.update(capture_seconds=0.0, capture_duration=row["configured_duration"],
+                       capture_has_started=False, capture_phase=result,
+                       capture_last_data_at=None, capture_elapsed_seconds=0.0)
+        elif result in ("采集中", "数据保存中", "分析中", "分析排队", "分段分析"):
+            row["capture_phase"] = result
+        elif result in ("分析失败", "采集失败", "测试异常", "已停止"):
+            row["capture_phase"] = result
+        elif result in ("待判定", "未标记"):
+            row["capture_phase"] = "采集完成"
+        elif result.strip().upper() in ("OK", "NG") or result in ("未判定", "结果不完整"):
+            row["capture_phase"] = "已完成"
+        if row["capture_phase"] != "采集中":
+            self._stop_capture_clock(row)
         if self._is_pending_result(result, tone) or result in ("准备采集", "采集中"):
             config = next(item for item in self.conditions if item["key"] == key)
             self._set_row_analysis_layout(row, config)
@@ -810,6 +870,104 @@ class MotorResultPanel(QWidget):
             labels["result"].setFixedWidth(
                 max(60, labels["result"].fontMetrics().horizontalAdvance("数据保存中") + 12)
                 if row.get("result") == "数据保存中" else 60)
+        self._render_capture_progress(row)
+
+    def start_condition_capture(self, condition, duration):
+        key = self._resolve_key(condition)
+        if not key:
+            return
+        row = self.rows[key]
+        row.update(capture_seconds=0.0, capture_duration=duration, capture_phase="采集中",
+                   capture_has_started=True,
+                   capture_started_at=monotonic(), capture_last_data_at=None,
+                   capture_elapsed_seconds=0.0)
+        self._capture_timer.start()
+        self._render_capture_progress(row)
+
+    def _stop_capture_clock(self, row):
+        if row["capture_started_at"] is not None:
+            row["capture_elapsed_seconds"] = monotonic() - row["capture_started_at"]
+            row["capture_started_at"] = None
+        if not any(item["capture_started_at"] is not None for item in self.rows.values()):
+            self._capture_timer.stop()
+
+    def _refresh_capture_elapsed(self):
+        now = monotonic()
+        for row in self.rows.values():
+            if row["capture_started_at"] is not None:
+                row["capture_elapsed_seconds"] = now - row["capture_started_at"]
+                self._render_capture_progress(row)
+
+    def set_condition_capture_progress(self, condition, elapsed, duration):
+        key = self._resolve_key(condition)
+        if not key:
+            return False
+        row = self.rows[key]
+        row["capture_has_started"] = True
+        row["capture_duration"] = duration
+        # Queued progress may arrive after finalizing. Never move acquired time back.
+        row["capture_seconds"] = min(duration, max(row["capture_seconds"], elapsed))
+        row["capture_last_data_at"] = monotonic()
+        self._render_capture_progress(row)
+        return True
+
+    def set_condition_capture_phase(self, condition, phase):
+        key = self._resolve_key(condition)
+        if key:
+            row = self.rows[key]
+            row["capture_phase"] = phase
+            if phase != "采集中":
+                self._stop_capture_clock(row)
+            if phase in ("已停止", "采集失败"):
+                self.set_condition_result(key, phase, "pending" if phase == "已停止" else "ng")
+            else:
+                self._render_capture_progress(self.rows[key])
+
+    def _render_capture_progress(self, row):
+        bar = row["capture_bar"]
+        elapsed, duration = row["capture_seconds"], row["capture_duration"]
+        phase = row["capture_phase"]
+        # This bar only measures acquired audio. Saving/analysis must not replace
+        # a completed capture with an indeterminate, apparently half-full bar.
+        bar.setRange(0, 1000)
+        value = round(elapsed / duration * 1000) if duration > 0 else 0
+        if value != bar.value():
+            bar.setValue(value)
+            # Qt 5 skips small changes when text is hidden (about nine pixels).
+            # Schedule a paint so real frame progress does not appear to stall.
+            bar.update()
+        # Keep the single-row time slot stable; waiting details belong in the tooltip.
+        elapsed_text = f"{elapsed:.1f}" if row["capture_has_started"] else "--"
+        duration_text = f"{duration:.1f}" if duration > 0 else "--"
+        text = f"{elapsed_text} / {duration_text} 秒"
+        running = row["capture_started_at"] is not None
+        last_data_at = row["capture_last_data_at"]
+        waiting = running and last_data_at is None
+        stalled = running and last_data_at is not None and monotonic() - last_data_at >= 3
+        # Keep presentation-only waiting separate from verdict/analysis state.
+        result_label = row["labels"]["result"]
+        result_text = "等待数据" if waiting or stalled else row["result"]
+        result_label.setText(result_text)
+        result_label.setFixedWidth(max(60, result_label.fontMetrics().horizontalAdvance(result_text) + 12))
+        if result_text != row["capture_display_status"]:
+            row["capture_display_status"] = result_text
+            if result_text in ("等待数据", "采集中", "数据保存中", "采集失败", "已停止"):
+                self.capture_status_changed.emit(row["key"], result_text)
+        label = row["labels"]["capture_time"]
+        label.setText(text)
+        widest_time = f"{duration:.1f} / {duration:.1f} 秒" if duration > 0 else "-- / -- 秒"
+        label.setFixedWidth(label.fontMetrics().horizontalAdvance(widest_time) + 4)
+        tooltip = f"{phase}；已采集 {elapsed:.1f} 秒" + (
+            f" / 目标 {duration:.1f} 秒" if duration > 0 else "")
+        tooltip += f"；采集阶段已用 {row['capture_elapsed_seconds']:.1f} 秒"
+        if waiting or stalled:
+            tooltip += "；尚未收到音频数据" if waiting else "；音频数据暂未继续到达"
+        if stalled:
+            tooltip += f"，已停滞 {monotonic() - last_data_at:.1f} 秒"
+        label.setToolTip(tooltip)
+        bar.setToolTip(tooltip)
+        bar.setAccessibleName("档位采集进度")
+        bar.setAccessibleDescription(tooltip)
 
     def _update_port_summary(self):
         visible_rows = [
@@ -895,6 +1053,7 @@ class MotorResultPanel(QWidget):
             self.channel_detail_labels.append(row_labels)
 
     def _set_default_condition_results(self):
+        self._capture_timer.stop()
         # Reset row data first; repaint and aggregate only after every row is ready.
         for item in self.conditions:
             self._set_row_analysis_layout(self.rows[item["key"]], item)
@@ -902,6 +1061,9 @@ class MotorResultPanel(QWidget):
             row.update(
                 result="待检测", tone="pending", runtime_details={},
                 completed_channels=0, analysis_completed=False, channel_results=[],
+                capture_seconds=0.0, capture_duration=row["configured_duration"],
+                capture_has_started=False, capture_phase="等待开始",
+                capture_started_at=None, capture_last_data_at=None, capture_elapsed_seconds=0.0,
             )
             self._update_row_button(key)
         self._refresh_row_styles()
@@ -974,6 +1136,10 @@ class MotorResultPanel(QWidget):
                 key = f"{base_key}#{index + 1}"
             used_keys.add(key)
             queue_name = str(item.get("test_queue") or "").strip()
+            queue_info = queue_catalog.get(queue_name) or {}
+            duration = queue_info.get("duration")
+            if type(duration) not in (int, float) or not isfinite(duration) or duration <= 0:
+                duration = 0.0
             if isinstance(item.get("analysis_list"), dict):
                 analysis_layout = cls._build_condition_analysis_layout(item, queue_catalog)
             else:
@@ -988,6 +1154,7 @@ class MotorResultPanel(QWidget):
                     "name": name,
                     "group": group_name,
                     "short_name": short_name or name,
+                    "recording_duration": duration,
                     **analysis_layout,
                 }
             )

@@ -36,6 +36,9 @@ from base.vkinging_sdk import VkDaqClient
 from consts.ve3668n_consts import VE_BACKEND
 
 
+_PROGRESS_INTERVAL_SECONDS = .05
+
+
 def _send_loop(connection, outgoing, broken, latest=None, wake=None, urgent=None,
                ordered=None, diagnostics=None):
     logger = LogManager.set_log_handler("core")
@@ -800,6 +803,21 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                         and capture.raw_frames >= capture.request.target_samples):
                     state.finalizing = True
                     emit("finalizing", state.request_id)
+                if state.started and capture.request.device.get("backend") != VE_BACKEND:
+                    frames = capture.raw_frames
+                    if (frames > state.progress_frames
+                            and (now >= state.next_progress_at
+                                 or frames == capture.request.target_samples)):
+                        payload = RecordingProgress(state.request_id, generation, frames, now)
+                        clear_progress()
+                        if frames == capture.request.target_samples:
+                            emit("progress", state.request_id, payload)
+                        else:
+                            progress_out.put_nowait(RecordingEvent(
+                                generation, state.request_id, "progress", payload))
+                            control_wake.set()
+                        state.progress_frames = frames
+                        state.next_progress_at = now + _PROGRESS_INTERVAL_SECONDS
                 if state.started and capture.request.device.get("backend") == VE_BACKEND:
                     progress = capture.progress_snapshot()
                     if (progress is not None and progress.frames > state.progress_frames
@@ -815,7 +833,7 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                                 generation, state.request_id, "progress", payload))
                             control_wake.set()
                         state.progress_frames = progress.frames
-                        state.next_progress_at = now + .2
+                        state.next_progress_at = now + _PROGRESS_INTERVAL_SECONDS
 
                     slot_event = getattr(capture, "capture_slot_released", None)
                     if slot_event is not None and slot_event.is_set():

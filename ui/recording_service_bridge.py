@@ -15,6 +15,7 @@ class RecordingServiceBridge(QObject):
     shutting_down = pyqtSignal()
     _event = pyqtSignal(object)
     _preview_wakeup = pyqtSignal(str)
+    _progress_wakeup = pyqtSignal(str)
     _invoke = pyqtSignal(object)
 
     def __init__(self, service, parent=None):
@@ -23,6 +24,7 @@ class RecordingServiceBridge(QObject):
         self.service = service
         self._callbacks = {}
         self._previews = {}
+        self._progress = {}
         self._preview_wakeups = set()
         self._finished = set()
         self._delivered = set()
@@ -34,6 +36,7 @@ class RecordingServiceBridge(QObject):
         self._ve_prewarm_calls = set()
         self._event.connect(self._deliver, Qt.QueuedConnection)
         self._preview_wakeup.connect(self._deliver_preview, Qt.QueuedConnection)
+        self._progress_wakeup.connect(self._deliver_progress, Qt.QueuedConnection)
         self._invoke.connect(self._call, Qt.QueuedConnection)
 
     @property
@@ -169,6 +172,15 @@ class RecordingServiceBridge(QObject):
                 session.reject_result("recording consumer was destroyed")
             return
         key = session.request.request_id
+        if kind == "progress":
+            with self._lock:
+                if key in self._finished:
+                    return
+                wake = key not in self._progress
+                self._progress[key] = (session, value)
+            if wake:
+                self._progress_wakeup.emit(key)
+            return
         if kind == "preview":
             with self._lock:
                 if key in self._finished:
@@ -187,6 +199,18 @@ class RecordingServiceBridge(QObject):
             with self._lock:
                 self._finished.add(key)
         self._event.emit((kind, session, value))
+
+    @pyqtSlot(str)
+    def _deliver_progress(self, key):
+        with self._lock:
+            pending = self._progress.pop(key, None)
+            finished = key in self._finished
+        callbacks = self._callbacks.get(key)
+        if pending is not None and not finished and callbacks is not None and callbacks.progress is not None:
+            try:
+                callbacks.progress(*pending)
+            except Exception as error:
+                self._logger.exception("Recording UI progress failed: %s", error)
 
 
     @pyqtSlot(str)
