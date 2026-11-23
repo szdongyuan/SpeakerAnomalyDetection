@@ -45,10 +45,11 @@ def test_round_timestamp_and_identity_follow_first_condition_wav(paired_submissi
     w, service = paired_submission.w, paired_submission.service
     times = (datetime(2026, 11, 11, 23, 59, 59), datetime(2026, 11, 12, 0, 0, 1),
              datetime(2026, 11, 12, 0, 1, 2))
-    clock = iter(times)
-    monkeypatch.setattr(module, "datetime", SimpleNamespace(now=lambda: next(clock)))
+    clock = SimpleNamespace(now=lambda: times[0])
+    monkeypatch.setattr(module, "datetime", clock)
     contexts = []
     for index, stamp in enumerate(times):
+        clock.now = lambda: stamp
         w.identity.sample = str(7 + index)
         w.controller.start_recording()
         w.complete()

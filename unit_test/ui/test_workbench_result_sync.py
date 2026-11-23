@@ -1,6 +1,6 @@
 """Exercise paired result consumption through recording, submission and polling."""
 
-from datetime import datetime
+from datetime import date, datetime
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QLabel, QTableWidget
 
 from base.audio_label_sync import AudioLabelJob
 from base.workbench_analysis_config import AnalysisTestQueue
+from base.workbench_summary_store import WorkbenchSummarySnapshot, WorkbenchSummaryStore
 from ui.sequence.motor_information_summary_panel import MotorInformationSummaryPanel
 from unit_test.ui.test_motor_workbench_controller import (
     config, workbench, recording_workbench, paired_recording_workbench, configuration_with,
@@ -153,6 +154,110 @@ def test_early_evidence_is_reconciled_before_all_consumers(sync, terminal_kind, 
 
 def station_title(sync, column=0):
     return sync.grid._headers[column].name.toolTip()
+
+
+@pytest.mark.parametrize("forward,reverse,result,counts,rate", [
+    ("OK", "NG", "NG", (2, 2, 1), "40.0%"),
+    ("OK", "--", "结果不完整", (2, 1, 2), "40.0%"),
+    ("NG", "--", "NG（结果不完整）", (2, 2, 1), "40.0%"),
+    ("--", "--", "结果不完整", (2, 1, 2), "40.0%"),
+])
+def test_count_snapshot_adds_completed_pairs_to_same_day_baseline(
+        sync, summary_count_panel, monkeypatch, forward, reverse, result, counts, rate):
+    controller = sync.w.controller
+    day = sync.clock.now().date()
+    baseline = WorkbenchSummarySnapshot(day, 2, 1, 1)
+    rendered = []
+
+    def render(snapshot):
+        rendered.append(snapshot)
+        summary_count_panel.set_summary_counts(snapshot)
+
+    controller.bind_summary_counts(render, baseline, day)
+    assert rendered == [baseline]
+    assert summary_count_panel.date_label.text() == day.isoformat()
+    assert labels(summary_count_panel) == ("4", "2", "1", "1", "50.0%")
+    assert sync.published == []
+
+    first, second = sync.record(), sync.record()
+    first_terminal = result_event(first["right"], [instance(judgement=forward)])
+    second_terminal = result_event(second["right"], [instance(judgement=reverse)])
+    sync.deliver(first_terminal, first_terminal)
+    assert rendered == [baseline]
+    sync.deliver(second_terminal, first_terminal, second_terminal)
+    expected = WorkbenchSummarySnapshot(day, *counts)
+    assert rendered == [baseline, expected]
+    assert labels(summary_count_panel) == ("5", *map(str, counts), rate)
+    records, row_day = sync.published[0]
+    assert len(sync.published) == len(records) == 1
+    assert row_day == day and records[0]["result"] == result
+    assert records[0]["completed_at"] == sync.clock.now()
+
+    def unexpected_scan(_day):
+        pytest.fail("Same-day refresh rescanned the result rows")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(controller._result_state, "records_for", unexpected_scan)
+        assert controller.refresh_summary_counts(day) is None
+    assert len(rendered) == 2
+    assert controller.refresh_summary_counts(day, force=True) is rendered[-1]
+    assert rendered[-1] == expected and len(rendered) == 3
+    assert baseline == WorkbenchSummarySnapshot(day, 2, 1, 1)
+
+
+@pytest.fixture
+def summary_count_panel(qt_app):
+    panel = MotorInformationSummaryPanel()
+    yield panel
+    panel.close()
+    panel.deleteLater()
+
+
+@pytest.mark.parametrize("judgement,status,counts", [
+    ("OK", "结果不完整", (2, 1, 2)),
+    ("NG", "NG（结果不完整）", (2, 2, 1)),
+])
+def test_incomplete_round_counts_survive_same_day_restart(sync, tmp_path, judgement, status, counts):
+    controller = sync.w.controller
+    day = sync.clock.now().date()
+    rendered = []
+    controller.bind_summary_counts(rendered.append, WorkbenchSummarySnapshot(day, 2, 1, 1), day)
+    first, second = sync.record(), sync.record()
+    sync.deliver(result_event(first["right"], [instance(judgement=judgement)]))
+    failure = result_event(second["right"], failed=True)
+    sync.deliver(failure, failure)
+    assert sync.panel.get_station_data(1)["result"] == status
+    expected = WorkbenchSummarySnapshot(day, *counts)
+    assert rendered[-1] == expected
+    assert expected.summary.total == 5
+
+    store = WorkbenchSummaryStore(tmp_path / "summary.json")
+    store.save(rendered[-1])
+    from ui.sequence.workbench_result_state import WorkbenchResultState
+    controller._result_state = WorkbenchResultState()
+    controller.bind_summary_counts(rendered.append, store.load(), day)
+    assert rendered[-1] == expected
+
+
+def test_count_snapshot_refreshes_at_midnight_and_keeps_old_pair_on_recording_day(sync):
+    controller = sync.w.controller
+    old_day, new_day = date(2026, 11, 11), date(2026, 11, 12)
+    baseline = WorkbenchSummarySnapshot(old_day, 2, 1, 1)
+    rendered = []
+    controller.bind_summary_counts(rendered.append, baseline, old_day)
+    sync.clock.now = lambda: datetime(2026, 11, 11, 23, 59, 59)
+    first = sync.record()["right"]
+    sync.deliver(result_event(first, [instance()]))
+
+    sync.clock.now = lambda: datetime(2026, 11, 12, 0, 0, 3)
+    empty_today = WorkbenchSummarySnapshot(new_day, 0, 0, 0)
+    assert controller.refresh_summary_counts(new_day) == empty_today
+    assert rendered == [baseline, empty_today]
+    second = sync.record()["right"]
+    sync.deliver(result_event(second, [instance()]))
+    assert rendered == [baseline, empty_today, empty_today]
+    assert sync.published == [([], new_day)]
+    assert controller.refresh_summary_counts(old_day, force=True) == WorkbenchSummarySnapshot(old_day, 3, 1, 1)
 
 
 @pytest.mark.parametrize("reverse_first", [False, True])

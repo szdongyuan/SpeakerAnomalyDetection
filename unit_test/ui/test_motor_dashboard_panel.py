@@ -12,6 +12,7 @@ from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QDialog, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
+from base.workbench_summary_store import WorkbenchSummarySnapshot
 from consts.ui_style_const import MAIN_UI_SMALL_FONT_FAMILY_NAME
 from ui.sequence.motor_information_summary_panel import MotorInformationSummaryPanel
 from unit_test.daily_record_cases import make_daily_records, make_daily_wav_records
@@ -288,6 +289,40 @@ def summary_values(summary):
 def dialog_values(dialog):
     return tuple(getattr(dialog, f"{name}_label").text()
                  for name in ("date", "total", "ok", "ng", "unmarked", "rate"))
+
+
+def test_count_snapshot_updates_home_and_preserves_open_wav_details(qt_app):
+    from ui.sequence.motor_left_panel import MotorDetectionLeftPanel
+
+    left = MotorDetectionLeftPanel()
+    try:
+        wav_day = date(2026, 11, 4)
+        left.set_daily_wav_records(make_daily_wav_records(123, wav_day), wav_day)
+        summary = left.dashboard_panel.summary_panel
+        summary.findChild(QPushButton, "summaryDetails").click()
+        dialog = summary._details_dialog
+        dialog.station_combo.setCurrentIndex(dialog.station_combo.findData(2))
+        dialog.result_combo.setCurrentIndex(dialog.result_combo.findData("NG"))
+        dialog.search_edit.setText(" case ")
+        dialog.next_button.click()
+        details = dialog_values(dialog)
+        rows = [dialog.table.item(row, 2).text() for row in range(dialog.table.rowCount())]
+        assert dialog.page_label.text() == "2 / 3"
+
+        home_day = date(2026, 11, 5)
+        assert left.set_summary_counts(WorkbenchSummarySnapshot(home_day, 2, 1, 1)) is None
+        assert summary_values(summary) == (home_day.isoformat(), "4", "2", "1", "1", "50.0%")
+        assert summary._details_dialog is dialog and dialog.isVisible()
+        assert dialog_values(dialog) == details
+        assert [dialog.table.item(row, 2).text() for row in range(dialog.table.rowCount())] == rows
+        assert dialog.page_label.text() == "2 / 3"
+        assert dialog.station_combo.currentData() == 2
+        assert dialog.result_combo.currentData() == "NG"
+        assert dialog.search_edit.text() == " case "
+    finally:
+        left.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        qt_app.processEvents()
 
 
 def test_round_and_wav_snapshots_have_independent_statistics_and_dates(summary, qt_app):

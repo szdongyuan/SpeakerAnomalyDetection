@@ -1,17 +1,18 @@
 """Saved-WAV details follow authenticated recording and analysis events."""
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from base.audio_label_sync import AudioLabelJob
-from base.motor_daily_wav_records import DailyWavRecordStore
+from base.motor_daily_wav_records import DailyWavRecord, DailyWavRecordStore
 from base.record_analysis_reference import RecordAnalysisReference
 from base.workbench_analysis_config import AnalysisTestQueue
 from base.workbench_recording_protocol import StationWav, WorkbenchRecordingCompletion
+from base.workbench_wav_details_store import WavDetailsRow, WorkbenchWavDetailsSnapshot
 from ui.sequence.motor_workbench_controller import MotorWorkbenchController, WorkbenchProductSelectionPorts
 from unit_test.ui.test_motor_workbench_controller import (
     config, workbench, recording_workbench, paired_recording_workbench, configuration_with,
@@ -30,6 +31,7 @@ def wav_sync(sync):
 
     sync.w.controller.bind_wav_details(publish)
     sync.wav_published = published
+    sync.publish_wav = publish
     return sync
 
 
@@ -43,6 +45,143 @@ def reference_for(s, task):
     actual = next(w for w in completion.stations if w.station_id == task["station_id"])
     return RecordAnalysisReference(completion.request_id, actual.station_id, completion.condition_id,
                                    actual.path, actual.channels)
+
+
+def test_wav_details_restart_publishes_complete_merge_and_keeps_restored_judgement(wav_sync):
+    s = wav_sync
+    controller = s.w.controller
+    when = s.clock.now()
+    controller.start_recording()
+    request = s.w.requests[-1]
+    station = next(station for station in request.station_group.stations if station.station_id == "right")
+    saved = DailyWavRecord(when - timedelta(seconds=1), 1, station.filename, "原工况", "NG")
+    collision = WavDetailsRow(request.request_id, station.station_id, saved)
+    separate = WavDetailsRow("previous-request", station.station_id, replace(saved, result="OK"))
+    baseline = WorkbenchWavDetailsSnapshot(when.date(), (collision, separate))
+
+    controller.bind_wav_details(s.publish_wav, baseline=baseline, day=when.date())
+    restored = [row.to_display_dict() for row in baseline.rows]
+    assert s.wav_published[-1] == (restored, when.date())
+
+    s.w.complete()
+    tasks = {task["station_id"]: task for task in s.service.submissions[-1]["tasks"]}
+    assert len(tasks) == 3
+    assert len(rows(s)) == 4
+    assert rows(s, 1) == restored
+    assert all(row["result"] == "未标记" for row in rows(s) if row["station_id"] != 1)
+
+    collision_result = result_event(tasks["right"], [instance()])
+    target_task = next(task for station_id, task in tasks.items() if station_id != "right")
+    live_result = result_event(target_task, [instance()])
+    for terminal in (collision_result, live_result):
+        publications = len(s.wav_published)
+        s.deliver(terminal)
+        assert len(s.wav_published) == publications + 1
+        assert len(rows(s)) == 4 and rows(s, 1) == restored
+
+    publications = len(s.wav_published)
+    s.deliver(collision_result, result_event(target_task, [instance(judgement="NG")]))
+    assert len(s.wav_published) == publications
+
+    final = controller.refresh_wav_details(when.date(), force=True)
+    assert final.rows[:2] == baseline.rows
+    results = {row.key: row.record.result for row in final.rows}
+    assert len(results) == 4
+    assert results[request.request_id, target_task["station_id"]] == "OK"
+    assert s.wav_published[-1] == ([row.to_display_dict() for row in final.rows], final.day)
+
+
+def test_wav_details_restart_rollover_excludes_baseline_and_late_yesterday_results(wav_sync):
+    s = wav_sync
+    controller = s.w.controller
+    when = s.clock.now()
+    day = when.date()
+    tomorrow = day + timedelta(days=1)
+    restored = WavDetailsRow("prior-request", "right", DailyWavRecord(when, 1, "history.wav", "正转", "NG"))
+    controller.bind_wav_details(s.publish_wav, baseline=WorkbenchWavDetailsSnapshot(day, (restored,)), day=day)
+    first_task = s.record()["right"]
+
+    publications = len(s.wav_published)
+    assert controller.refresh_wav_details(day) is None
+    assert len(s.wav_published) == publications
+
+    next_time = when + timedelta(days=1)
+    s.clock.now = lambda: next_time
+    assert controller.refresh_wav_details(tomorrow) == WorkbenchWavDetailsSnapshot(tomorrow, ())
+    assert s.wav_published[-1] == ([], tomorrow)
+
+    s.deliver(result_event(first_task, [instance()]))
+    assert s.wav_published[-1] == ([], tomorrow)
+    assert controller._wav_state.records_for(day)[0]["result"] == "OK"
+
+    s.record()
+    assert len(rows(s)) == 3
+    assert all(row["completed_at"] == next_time for row in rows(s))
+
+
+def test_wav_details_restart_forced_snapshot_is_available_without_consumer(recording_workbench):
+    w = recording_workbench
+    w.controller.start_recording()
+    w.complete()
+    completion = w.completions[-1]
+    recorded_on = w.archive_submissions[-1][2]
+
+    snapshot = w.controller.refresh_wav_details(recorded_on, force=True)
+    assert [row.key for row in snapshot.rows] == [
+        (completion.request_id, station.station_id) for station in completion.stations
+    ]
+
+
+def test_wav_details_restart_consumer_rebind_preserves_restored_rows(wav_sync):
+    s = wav_sync
+    controller = s.w.controller
+    when = s.clock.now()
+    day = when.date()
+    restored = WavDetailsRow("prior-request", "right", DailyWavRecord(when, 1, "history.wav", "正转", "NG"))
+    controller.bind_wav_details(s.publish_wav, baseline=WorkbenchWavDetailsSnapshot(day, (restored,)), day=day)
+    publications = len(s.wav_published)
+
+    controller.bind_wav_details(None)
+    s.record()
+    snapshot = controller.refresh_wav_details(day, force=True)
+    assert len(s.wav_published) == publications
+    assert len(snapshot.rows) == 4 and snapshot.rows[0] == restored
+
+    controller.bind_wav_details(s.publish_wav)
+    assert s.wav_published[-1] == ([row.to_display_dict() for row in snapshot.rows], day)
+
+
+def test_wav_details_restart_live_publications_skip_typed_snapshot_validation(wav_sync, monkeypatch):
+    s = wav_sync
+    controller = s.w.controller
+    when = s.clock.now()
+    day = when.date()
+    saved = DailyWavRecord(when, 1, "same.wav", "正转", "NG")
+    restored = tuple(WavDetailsRow(f"prior-{index}", "right", saved) for index in range(12))
+    controller.bind_wav_details(s.publish_wav, baseline=WorkbenchWavDetailsSnapshot(day, restored), day=day)
+    snapshot_sizes = []
+    validate = WorkbenchWavDetailsSnapshot.__post_init__
+
+    def observe_validation(snapshot):
+        snapshot_sizes.append(len(snapshot.rows))
+        validate(snapshot)
+
+    monkeypatch.setattr(WorkbenchWavDetailsSnapshot, "__post_init__", observe_validation)
+    publication_count = len(s.wav_published)
+
+    tasks = s.record().values()
+    s.deliver(*(result_event(task, [instance()]) for task in tasks))
+
+    publications = s.wav_published[publication_count:]
+    assert len(publications) == 4
+    assert all(len(records) == 15 for records, _ in publications)
+    assert [row["result"] for row in rows(s)[-3:]] == ["OK"] * 3
+    assert snapshot_sizes == []
+
+    final = controller.refresh_wav_details(day, force=True)
+    assert snapshot_sizes == [15]
+    assert final.rows[:12] == restored
+    assert s.wav_published[-1] == ([row.to_display_dict() for row in final.rows], day)
 
 
 def test_saved_files_publish_before_results_with_independent_round_summary(wav_sync):

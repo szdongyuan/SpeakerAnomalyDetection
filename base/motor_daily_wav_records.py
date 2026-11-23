@@ -26,6 +26,44 @@ class DailyWavRecordPage:
     page_count: int
 
 
+def normalize_daily_wav_record(row, day, index) -> DailyWavRecord:
+    """Validate and detach one row from a daily WAV snapshot."""
+    if not isinstance(row, dict):
+        raise TypeError(f"records[{index}] must be a dict")
+    for field in ("completed_at", "station_id", "file_name", "condition", "result"):
+        if field not in row:
+            raise ValueError(f"records[{index}].{field} is required")
+    completed_at = row["completed_at"]
+    if not isinstance(completed_at, datetime):
+        raise TypeError(f"records[{index}].completed_at must be a datetime")
+    if completed_at.tzinfo is not None:
+        raise ValueError(f"records[{index}].completed_at must be timezone-naive")
+    if completed_at.date() != day:
+        raise ValueError(f"records[{index}].completed_at must match record_date")
+    station_id = row["station_id"]
+    if not isinstance(station_id, int) or isinstance(station_id, bool):
+        raise TypeError(f"records[{index}].station_id must be an int, not bool")
+    if station_id <= 0:
+        raise ValueError(f"records[{index}].station_id must be positive")
+    for field in ("file_name", "condition", "result"):
+        if not isinstance(row[field], str):
+            raise TypeError(f"records[{index}].{field} must be a str")
+    if not row["file_name"].strip():
+        raise ValueError(f"records[{index}].file_name must not be empty")
+    if not row["condition"].strip():
+        raise ValueError(f"records[{index}].condition must not be empty")
+    result = row["result"].strip().upper()
+    if result not in ("OK", "NG", "未标记", INCOMPLETE, NG_INCOMPLETE):
+        raise ValueError(f"records[{index}].result must be OK, NG or 未标记")
+    analysis_reference = row.get("analysis_reference")
+    if analysis_reference is not None and not isinstance(analysis_reference, RecordAnalysisReference):
+        raise TypeError(f"records[{index}].analysis_reference must be a RecordAnalysisReference or None")
+    return DailyWavRecord(
+        completed_at, station_id, row["file_name"], row["condition"], result,
+        analysis_reference,
+    )
+
+
 class DailyWavRecordStore:
     """Own a complete WAV day; validate and copy before replacing state."""
 
@@ -42,42 +80,10 @@ class DailyWavRecordStore:
         day = date.today() if record_date is None else record_date
         if not isinstance(day, date) or isinstance(day, datetime):
             raise TypeError("record_date must be a date, not datetime")
-        normalized = []
-        for index, row in enumerate(records):
-            if not isinstance(row, dict):
-                raise TypeError(f"records[{index}] must be a dict")
-            for field in ("completed_at", "station_id", "file_name", "condition", "result"):
-                if field not in row:
-                    raise ValueError(f"records[{index}].{field} is required")
-            completed_at = row["completed_at"]
-            if not isinstance(completed_at, datetime):
-                raise TypeError(f"records[{index}].completed_at must be a datetime")
-            if completed_at.tzinfo is not None:
-                raise ValueError(f"records[{index}].completed_at must be timezone-naive")
-            if completed_at.date() != day:
-                raise ValueError(f"records[{index}].completed_at must match record_date")
-            station_id = row["station_id"]
-            if not isinstance(station_id, int) or isinstance(station_id, bool):
-                raise TypeError(f"records[{index}].station_id must be an int, not bool")
-            if station_id <= 0:
-                raise ValueError(f"records[{index}].station_id must be positive")
-            for field in ("file_name", "condition", "result"):
-                if not isinstance(row[field], str):
-                    raise TypeError(f"records[{index}].{field} must be a str")
-            if not row["file_name"].strip():
-                raise ValueError(f"records[{index}].file_name must not be empty")
-            if not row["condition"].strip():
-                raise ValueError(f"records[{index}].condition must not be empty")
-            result = row["result"].strip().upper()
-            if result not in ("OK", "NG", "未标记", INCOMPLETE, NG_INCOMPLETE):
-                raise ValueError(f"records[{index}].result must be OK, NG or 未标记")
-            analysis_reference = row.get("analysis_reference")
-            if analysis_reference is not None and not isinstance(analysis_reference, RecordAnalysisReference):
-                raise TypeError(f"records[{index}].analysis_reference must be a RecordAnalysisReference or None")
-            normalized.append(DailyWavRecord(
-                completed_at, station_id, row["file_name"], row["condition"], result,
-                analysis_reference,
-            ))
+        normalized = [
+            normalize_daily_wav_record(row, day, index)
+            for index, row in enumerate(records)
+        ]
         normalized = tuple(sorted(normalized, key=lambda row: row.completed_at, reverse=True))
         total = len(normalized)
         ok = sum(row.result == "OK" for row in normalized)

@@ -1,5 +1,6 @@
 """Immutable, process-local daily motor record snapshots, independent of Qt."""
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime
 from base.audio_label_policy import INCOMPLETE, NG_INCOMPLETE
@@ -24,6 +25,21 @@ class DailyRecordSummary:
     pass_rate: str
     incomplete: int = 0  # Used by WAV details; round totals use three exclusive categories.
 
+    @classmethod
+    def from_counts(cls, ok: int, ng: int, unmarked: int):
+        total = ok + ng + unmarked
+        pass_rate = f"{ok / total * 100:.1f}%" if total else "--"
+        return cls(total, ok, ng, unmarked, pass_rate)
+
+    @classmethod
+    def from_results(cls, results):
+        """Use the same three categories for live and persisted round totals."""
+        counts = Counter(results)
+        return cls.from_counts(
+            counts["OK"], counts["NG"] + counts[NG_INCOMPLETE],
+            counts["未标记"] + counts[INCOMPLETE],
+        )
+
 
 @dataclass(frozen=True)
 class DailyRecordPage:
@@ -39,7 +55,7 @@ class DailyRecordStore:
     def __init__(self):
         self.record_date = date.today()
         self.records = ()
-        self.summary = DailyRecordSummary(0, 0, 0, 0, "--")
+        self.summary = DailyRecordSummary.from_counts(0, 0, 0)
         self.station_ids = ()
 
     def replace(self, records, record_date=None):
@@ -91,13 +107,7 @@ class DailyRecordStore:
         normalized = tuple(sorted(
             normalized, key=lambda row: row.completed_at, reverse=True,
         ))
-        total = len(normalized)
-        ok = sum(row.result == "OK" for row in normalized)
-        summary = DailyRecordSummary(
-            total, ok, sum(row.result.startswith("NG") for row in normalized),
-            sum(row.result in ("未标记", INCOMPLETE) for row in normalized),
-            f"{ok / total * 100:.1f}%" if total else "--",
-        )
+        summary = DailyRecordSummary.from_results(row.result for row in normalized)
         stations = tuple(sorted({row.station_id for row in normalized}))
         self.record_date, self.records = day, normalized
         self.summary, self.station_ids = summary, stations

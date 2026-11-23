@@ -26,6 +26,9 @@ from base.workbench_analysis_config import AnalysisTestQueue
 from base.workbench_config_values import WorkbenchChannel, WorkbenchHardwareChannel
 from base.workbench_recording_archive import WorkbenchRecordingArchive
 from base.workbench_recording_protocol import StationWav, StationWavChannel, WorkbenchRecordingCompletion
+from base.workbench_wav_details_store import (
+    WavDetailsRow, WorkbenchWavDetailsSnapshot, WorkbenchWavDetailsStore,
+)
 from ui.sequence.record_analysis_dialog import RecordAnalysisDialog
 from ui.sequence.station_plot_cell import StationPlotCell
 from unit_test.ui.test_motor_workbench_controller import (
@@ -208,6 +211,44 @@ def start_production(runtime):
     wait_until(lambda: len(runtime.submissions) > previous)
     assert runtime.submissions[-1][0]['tasks'][0].get('persist_artifacts', True)
     return runtime.submissions[-1][0]['tasks'][0]
+
+
+def test_wav_details_restart_real_worker_reports_missing_file(real_runtime, tmp_path, monkeypatch):
+    r = real_runtime
+    saved = r.details.table.item(0, 5).data(Qt.UserRole)
+    reference = saved.analysis_reference
+    path = Path(reference.wav_path)
+    path.unlink()
+
+    host_path_checks = []
+    original_stat = Path.stat
+
+    def observe_host_stat(target, *args, **kwargs):
+        if target == path:
+            host_path_checks.append(target)
+        return original_stat(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'stat', observe_host_stat)
+    store = WorkbenchWavDetailsStore(tmp_path / 'restored-details.json')
+    store.save(WorkbenchWavDetailsSnapshot(saved.completed_at.date(), (
+        WavDetailsRow(*reference.record_key, saved),
+    )))
+    restored = store.load()
+    r.summary.set_daily_wav_records([row.to_display_dict() for row in restored.rows], restored.day)
+    assert host_path_checks == []
+    view = click_view(r.details)
+    assert host_path_checks == []
+    assert view.isVisible()
+    (payload, receipt), = r.submissions
+    assert receipt['accepted'] and payload['tasks'][0]['persist_artifacts'] is False
+    session = current_session(r)
+    wait_until(lambda: bool(session.presenter.results), timeout=15000)
+    assert host_path_checks == []
+    assert view.status.text() == '结果不可用'
+    diagnostic = view.content.diagnostic_text()
+    assert 'WAV 文件不存在' in diagnostic and reference.wav_path in diagnostic
+    assert r.details.table.item(0, 5).data(Qt.UserRole) == saved
+    assert r.changed == [] and not any(event['event_type'] == 'task_result' for event in r.received)
 
 
 def test_real_worker_details_all_types_are_read_only_and_production_still_persists(real_runtime):

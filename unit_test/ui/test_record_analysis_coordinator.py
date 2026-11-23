@@ -17,6 +17,9 @@ from base.workbench_config_values import (
     WorkbenchHardwareChannel, WorkbenchStation,
 )
 from base.workbench_recording_protocol import StationWavChannel
+from base.workbench_wav_details_store import (
+    WavDetailsRow, WorkbenchWavDetailsSnapshot, WorkbenchWavDetailsStore,
+)
 from ui.sequence.record_analysis_coordinator import RecordAnalysisCoordinator
 
 
@@ -138,6 +141,39 @@ def ports(tmp_path):
     coordinator = RecordAnalysisCoordinator(service, lambda: tuple(current), create_view)
     return SimpleNamespace(coordinator=coordinator, service=service, views=views,
                            current=current, record=record, parent=SimpleNamespace(destroyed=Signal()))
+
+
+@pytest.fixture
+def restored_wav_record(ports, tmp_path):
+    record = ports.record
+    row = WavDetailsRow(*record.analysis_reference.record_key, record)
+    path = tmp_path / 'persisted-details.json'
+    WorkbenchWavDetailsStore(path).save(WorkbenchWavDetailsSnapshot(record.completed_at.date(), (row,)))
+    return WorkbenchWavDetailsStore(path).load().rows[0].record
+
+
+def test_wav_details_restart_opens_saved_wav_readonly(ports, restored_wav_record):
+    dialog = ports.coordinator.open_record(restored_wav_record, ports.parent)
+    assert dialog.shown == 1 and dialog.record == restored_wav_record
+    task, = ports.service.payloads[0]['tasks']
+    assert task['wav_path'] == ports.record.analysis_reference.wav_path
+    assert (task['station_id'], task['condition_id']) == ('source', 'condition')
+    assert task['persist_artifacts'] is False and task['analysis_result_directory'] is None
+
+
+def test_wav_details_restart_reports_incompatible_config_on_open(ports, restored_wav_record):
+    config = ports.current[0]
+    station, = config.context.stations
+    station = replace(station, channels=tuple(reversed(station.channels)))
+    ports.current[0] = replace(config, context=replace(config.context, stations=(station,)))
+
+    dialog = ports.coordinator.open_record(restored_wav_record, ports.parent)
+
+    assert dialog.shown == 1 and dialog.record == restored_wav_record
+    status, detail = ports.views[0][1].statuses[-1]
+    assert status == '无法分析该记录'
+    assert '通道身份' in detail
+    assert not ports.service.payloads
 
 
 def terminal(ports, task_id=None, **changes):

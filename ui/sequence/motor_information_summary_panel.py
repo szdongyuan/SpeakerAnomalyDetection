@@ -1,11 +1,14 @@
 """Round summary and modal WAV details from independent daily snapshots."""
 
+from decimal import Decimal
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from consts.ui_style_const import MOTOR_INFORMATION_SUMMARY_STYLE
 from base.motor_daily_records import DailyRecordStore
 from base.motor_daily_wav_records import DailyWavRecordStore
+from base.workbench_summary_store import WorkbenchSummarySnapshot
 from ui.sequence.motor_daily_details_dialog import MotorDailyDetailsDialog
 
 
@@ -74,12 +77,19 @@ class MotorInformationSummaryPanel(QWidget):
     def set_daily_records(self, records, record_date=None):
         """Replace one day's complete snapshot; validation errors leave UI intact."""
         self._daily_records.replace(records, record_date)
-        summary = self._daily_records.summary
-        self.date_label.setText(self._daily_records.record_date.isoformat())
-        for label, value in ((self.total_label, summary.total), (self.ok_label, summary.ok),
-                             (self.ng_label, summary.ng), (self.unmarked_label, summary.unmarked),
-                             (self.rate_label, summary.pass_rate)):
-            label.setText(str(value))
+        self._render_summary(self._daily_records.record_date, self._daily_records.summary)
+
+    def set_summary_counts(self, snapshot: WorkbenchSummarySnapshot) -> None:
+        """Render the home summary from a snapshot of daily counts."""
+        self._render_summary(snapshot.day, snapshot.summary)
+
+    def _render_summary(self, day, summary):
+        self.date_label.setText(day.isoformat())
+        # Valid stored counts can sum to more digits than int-to-string permits.
+        for label, count in ((self.total_label, summary.total), (self.ok_label, summary.ok),
+                             (self.ng_label, summary.ng), (self.unmarked_label, summary.unmarked)):
+            label.setText(format(Decimal(count), "f"))
+        self.rate_label.setText(summary.pass_rate)
 
     def set_daily_wav_records(self, records, record_date=None):
         """Replace saved-WAV details independently of the round summary."""

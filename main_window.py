@@ -1,4 +1,5 @@
 import sys
+from datetime import datetime
 from pathlib import Path
 
 if __name__ == "__main__":
@@ -18,6 +19,8 @@ from base.hardware_selection import restore_or_default
 from base.motor_workbench_config import MotorWorkbenchConfigRepository
 from base.workbench_round_counter import WorkbenchRoundCounter
 from base.workbench_round_store import WorkbenchRoundStore
+from base.workbench_summary_store import WorkbenchSummaryStateError, WorkbenchSummaryStore
+from base.workbench_wav_details_store import WorkbenchWavDetailsStateError, WorkbenchWavDetailsStore
 from base.product_test_project_config import ProductTestProjectConfigManager
 from base.sound_device_manager import SoundDeviceManager
 from base.workbench_recording_archive import WorkbenchRecordingArchive
@@ -69,6 +72,7 @@ class MainWindow(QMainWindow):
         self._analysis_poll_in_progress = False
         self._analysis_service_closed_seen = False
         self._analysis_events_drained = True  # No producer until runtime assembly.
+        self._workbench_snapshot_save_state = "pending"
         self.default_logger = LogManager.set_log_handler("core")
         self._configuration_editor_open = False
         self._configuration_deletion_error = ""
@@ -214,6 +218,9 @@ class MainWindow(QMainWindow):
         self._analysis_poll_in_progress = True
         try:
             self.workbench_controller.poll_analysis_events()
+            day = datetime.now().date()
+            self.workbench_controller.refresh_summary_counts(day)
+            self.workbench_controller.refresh_wav_details(day)
         finally:
             self._analysis_poll_in_progress = False
         if self.analysis_service.closed and self._analysis_service_closed_seen:
@@ -750,8 +757,29 @@ class MainWindow(QMainWindow):
             sequence.show_workbench_round,
             lambda detail: QMessageBox.warning(self, "工作台轮次", detail),
         )
-        controller.bind_result_summary(sequence.left_panel.set_daily_records)
-        controller.bind_wav_details(sequence.left_panel.set_daily_wav_records)
+        summary_store = WorkbenchSummaryStore()
+        try:
+            summary_baseline = summary_store.load()
+        except WorkbenchSummaryStateError as exc:
+            self.default_logger.warning("Workbench summary load failed: %s", exc)
+            summary_baseline = None
+        details_store = WorkbenchWavDetailsStore()
+        try:
+            details_baseline = details_store.load()
+        except WorkbenchWavDetailsStateError as exc:
+            self.default_logger.warning("Workbench WAV details load failed: %s", exc)
+            details_baseline = None
+        day = datetime.now().date()
+        if summary_baseline is not None and summary_baseline.day != day:
+            summary_baseline = None
+        if details_baseline is not None and details_baseline.day != day:
+            details_baseline = None
+        controller.bind_summary_counts(sequence.left_panel.set_summary_counts, summary_baseline, day)
+        self._workbench_summary_store = summary_store
+        controller.bind_wav_details(
+            sequence.left_panel.set_daily_wav_records, baseline=details_baseline, day=day,
+        )
+        self._workbench_wav_details_store = details_store
         sequence.left_panel.dashboard_panel.summary_panel.record_analysis_requested.connect(
             controller.open_record_analysis)
         controller.bind_product_selection(WorkbenchProductSelectionPorts(
@@ -1204,6 +1232,9 @@ class MainWindow(QMainWindow):
                 pass
 
     def closeEvent(self, event):
+        if getattr(self, "_workbench_snapshot_save_state", None) == "saving":
+            event.ignore()
+            return
         if getattr(self, "_exit_cleanup_complete", False):
             event.accept()
             return
@@ -1277,6 +1308,16 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
+        summary_store = getattr(self, "_workbench_summary_store", None)
+        details_store = getattr(self, "_workbench_wav_details_store", None)
+        if ((summary_store is not None or details_store is not None)
+                and self._workbench_snapshot_save_state == "pending"):
+            self._workbench_snapshot_save_state = "saving"
+            try:
+                self._save_workbench_snapshots(summary_store, details_store)
+            finally:
+                self._workbench_snapshot_save_state = "attempted"
+
         if sequence is not None:
             sequence.close_workbench_input()
             sequence.close()
@@ -1284,6 +1325,29 @@ class MainWindow(QMainWindow):
 
         self._exit_cleanup_complete = True
         event.accept()
+
+    def _save_workbench_snapshots(self, summary_store, details_store):
+        day = datetime.now().date()
+        controller = self.workbench_controller
+        summary = controller.refresh_summary_counts(day, force=True) if summary_store is not None else None
+        details = controller.refresh_wav_details(day, force=True) if details_store is not None else None
+        summary_error = details_error = None
+        if summary_store is not None:
+            try:
+                summary_store.save(summary)
+            except WorkbenchSummaryStateError as exc:
+                summary_error = exc
+        if details_store is not None:
+            try:
+                details_store.save(details)
+            except WorkbenchWavDetailsStateError as exc:
+                details_error = exc
+        if summary_error is not None:
+            self.default_logger.warning("Workbench summary save failed: %s", summary_error)
+            QMessageBox.warning(self, "首页信息汇总保存失败", f"本次新增统计未保存。\n{summary_error}")
+        if details_error is not None:
+            self.default_logger.warning("Workbench WAV details save failed: %s", details_error)
+            QMessageBox.warning(self, "WAV 明细保存失败", f"本次 WAV 明细未保存。\n{details_error}")
 
     def _finish_workbench_archive_close_check(self):
         self._workbench_archive_close_state = "drained"

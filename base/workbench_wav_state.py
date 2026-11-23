@@ -1,7 +1,7 @@
 """Process-local ledger for saved WAV identities and first terminal results."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from base.record_analysis_reference import RecordAnalysisReference
@@ -50,18 +50,22 @@ class WorkbenchWavState:
         record.terminal_received = True
         return True
 
+    def identified_records_for(self, day: date):
+        """Yield each saved WAV's identity and an independent display dictionary."""
+        for key, record in self._records.items():
+            if record.recorded_at.date() != day:
+                continue
+            fields = {
+                "completed_at": record.recorded_at,
+                "station_id": record.station_number,
+                "file_name": record.file_name,
+                "condition": record.condition,
+                "result": record.result,
+            }
+            if record.analysis_reference is not None:
+                fields["analysis_reference"] = record.analysis_reference
+            yield key, fields
+
     def records_for(self, day):
         """Export independent display dictionaries for the WAV's frozen date."""
-        return [
-            dict(
-                completed_at=record.recorded_at,
-                station_id=record.station_number,
-                file_name=record.file_name,
-                condition=record.condition,
-                result=record.result,
-                **({"analysis_reference": record.analysis_reference}
-                   if record.analysis_reference is not None else {}),
-            )
-            for record in self._records.values()
-            if record.recorded_at.date() == day
-        ]
+        return [fields for _, fields in self.identified_records_for(day)]

@@ -6,8 +6,8 @@ configuration editors own writes and send commit notifications to the caller.
 """
 
 import logging
-from copy import deepcopy
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
@@ -19,11 +19,15 @@ from base.audio_label_policy import (
 from base.analysis.input_adapter import build_analysis_batch
 from base.analysis.contracts import AnalysisInputError
 from base.audio_label_sync import AudioLabelJob
+from base.motor_daily_records import DailyRecordSummary
+from base.motor_daily_wav_records import DailyWavRecord
 from base.record_analysis_reference import RecordAnalysisReference
 from base.workbench_config_values import WorkbenchChannel, WorkbenchCondition
 from base.workbench_round_counter import WorkbenchRoundCounter
+from base.workbench_wav_details_store import WavDetailsRow, WorkbenchWavDetailsSnapshot
 from base.workbench_wav_state import WorkbenchWavState
 from base.workbench_round_store import RoundSnapshot, WorkbenchRoundStateError
+from base.workbench_summary_store import WorkbenchSummarySnapshot
 from base.workbench_configuration_loader import WorkbenchConfiguration, WorkbenchConfigurationError
 from base.workbench_analysis_input import (
     AnalysisRecordingContext, WorkbenchAnalysisInput, WorkbenchAnalysisInputError,
@@ -149,8 +153,13 @@ class MotorWorkbenchController:
         self._result_state = WorkbenchResultState()
         self._plot_columns = {}
         self._set_daily_records = None
+        self._set_summary_counts: Callable[[WorkbenchSummarySnapshot], None] | None = None
+        self._summary_baseline: WorkbenchSummarySnapshot | None = None
+        self._last_summary_day: date | None = None
         self._wav_state = WorkbenchWavState()
         self._set_daily_wav_records = None
+        self._wav_details_baseline: WorkbenchWavDetailsSnapshot | None = None
+        self._last_wav_details_day: date | None = None
         self._round_counter: WorkbenchRoundCounter | None = None
         self._show_round = None
         self._notify_round_error = None
@@ -319,15 +328,65 @@ class MotorWorkbenchController:
         """Attach the optional complete daily snapshot consumer on the GUI thread."""
         self._set_daily_records = set_daily_records
 
-    def bind_wav_details(self, set_daily_wav_records: Callable | None) -> None:
-        """Attach the independent saved-WAV consumer and publish today's snapshot."""
-        self._set_daily_wav_records = set_daily_wav_records
-        self._publish_wav_details()
+    def bind_summary_counts(self, render: Callable[[WorkbenchSummarySnapshot], None],
+                            baseline: WorkbenchSummarySnapshot | None, day: date) -> None:
+        """Attach the home summary renderer and publish the current day's counts."""
+        self._set_summary_counts = render
+        self._summary_baseline = baseline
+        self.refresh_summary_counts(day, force=True)
 
-    def _publish_wav_details(self) -> None:
+    def refresh_summary_counts(self, day: date, *, force: bool = False) -> WorkbenchSummarySnapshot | None:
+        """Publish on a day change or explicit refresh and return the rendered snapshot."""
+        if self._set_summary_counts is None or (day == self._last_summary_day and not force):
+            return None
+        summary = DailyRecordSummary.from_results(row["result"] for row in self._result_state.records_for(day))
+        ok, ng, unmarked = summary.ok, summary.ng, summary.unmarked
+        baseline = self._summary_baseline
+        if baseline is not None and baseline.day == day:
+            ok, ng, unmarked = ok + baseline.ok, ng + baseline.ng, unmarked + baseline.unmarked
+        snapshot = WorkbenchSummarySnapshot(day, ok, ng, unmarked)
+        self._set_summary_counts(snapshot)
+        self._last_summary_day = day
+        return snapshot
+
+    def bind_wav_details(
+        self, set_daily_wav_records: Callable | None, *,
+        baseline: WorkbenchWavDetailsSnapshot | None = None, day: date | None = None,
+    ) -> None:
+        """Bind the consumer and optionally supply the restored baseline."""
+        self._set_daily_wav_records = set_daily_wav_records
+        if baseline is not None:
+            self._wav_details_baseline = baseline
+        self._refresh_live_wav_details(datetime.now().date() if day is None else day)
+
+    def refresh_wav_details(self, day: date, *, force: bool = False) -> WorkbenchWavDetailsSnapshot | None:
+        """Merge and publish the day's saved WAVs on rollover or explicit refresh."""
+        if day == self._last_wav_details_day and not force:
+            return None
+        snapshot = WorkbenchWavDetailsSnapshot(day, tuple(
+            WavDetailsRow(*key, DailyWavRecord(**fields))
+            for key, fields in self._merged_wav_details(day).items()
+        ))
+        self._publish_wav_details(day, (row.to_display_dict() for row in snapshot.rows))
+        return snapshot
+
+    def _merged_wav_details(self, day: date):
+        baseline = self._wav_details_baseline
+        restored = baseline.rows if baseline is not None and baseline.day == day else ()
+        merged = {row.key: row.to_display_dict() for row in restored}
+        for key, fields in self._wav_state.identified_records_for(day):
+            merged.setdefault(key, fields)
+        return merged
+
+    def _refresh_live_wav_details(self, day: date) -> None:
+        # The display consumer already validates rows. Only explicit refresh needs a typed snapshot.
+        rows = self._merged_wav_details(day).values() if self._set_daily_wav_records is not None else ()
+        self._publish_wav_details(day, rows)
+
+    def _publish_wav_details(self, day: date, rows) -> None:
         if self._set_daily_wav_records is not None:
-            today = datetime.now().date()
-            self._set_daily_wav_records(self._wav_state.records_for(today), today)
+            self._set_daily_wav_records(list(rows), day)
+        self._last_wav_details_day = day
 
     def bind_audio_label_sync(self, submit: Callable[[AudioLabelJob], None] | None) -> None:
         """Attach the optional label job sink; persistence belongs to its owner."""
@@ -475,13 +534,15 @@ class MotorWorkbenchController:
             )
         if is_current:
             self._show_analysis_snapshot(context, snapshot)
-        if snapshot.complete and self._set_daily_records is not None:
+        if snapshot.complete and (self._set_daily_records is not None or self._set_summary_counts is not None):
             today = datetime.now().date()
-            self._set_daily_records(self._result_state.records_for(today), today)
+            if self._set_daily_records is not None:
+                self._set_daily_records(self._result_state.records_for(today), today)
+            self.refresh_summary_counts(today, force=True)
         if self._wav_state.update_result(
             context["request_id"], context["station_id"], payload,
         ):
-            self._publish_wav_details()
+            self._refresh_live_wav_details(datetime.now().date())
 
     def _show_analysis_snapshot(self, context, snapshot):
         self._station_panel.show_condition_result(
@@ -892,7 +953,7 @@ class MotorWorkbenchController:
                 result.request_id, station.station_id, result.condition_id, station.path, station.channels,
             ) for station in result.stations},
         ):
-            self._publish_wav_details()
+            self._refresh_live_wav_details(datetime.now().date())
         try:
             self._recording.submit_archive(
                 result, attempt.product_name, attempt.recorded_on,

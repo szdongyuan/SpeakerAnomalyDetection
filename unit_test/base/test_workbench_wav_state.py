@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from base.record_analysis_reference import RecordAnalysisReference
+from base.workbench_recording_protocol import StationWavChannel
 from base.workbench_wav_state import WorkbenchWavState
 
 
@@ -99,9 +101,6 @@ def test_frozen_time_order_days_detached_exports_and_instance_isolation(tmp_path
 
 
 def test_reference_is_keyed_by_source_station_and_only_first_registration_keeps_it(tmp_path):
-    from base.record_analysis_reference import RecordAnalysisReference
-    from base.workbench_recording_protocol import StationWavChannel
-
     state, other = WorkbenchWavState(), WorkbenchWavState()
     when = datetime(2026, 11, 16, 23, 59, 59)
     channel = StationWavChannel("mic", "Microphone", "sound", "device", 3, 0)
@@ -129,9 +128,6 @@ def test_reference_is_keyed_by_source_station_and_only_first_registration_keeps_
 
 
 def test_missing_reference_keeps_legacy_export_shape_even_on_duplicate(tmp_path):
-    from base.record_analysis_reference import RecordAnalysisReference
-    from base.workbench_recording_protocol import StationWavChannel
-
     state = WorkbenchWavState()
     when = datetime(2026, 11, 16, 12)
     path = str(tmp_path / "same.wav")
@@ -143,3 +139,37 @@ def test_missing_reference_keeps_legacy_export_shape_even_on_duplicate(tmp_path)
     assert state.records_for(when.date()) == [dict(
         completed_at=when, station_id=9, file_name="same.wav", condition="正转", result="未标记",
     )]
+
+
+def test_wav_details_restart_identified_records_keep_ledger_keys_and_detached_results(tmp_path):
+    state = WorkbenchWavState()
+    when = datetime(2026, 11, 16, 23, 59, 59, 123456)
+    next_day = when.date() + timedelta(days=1)
+    path = str(tmp_path / "same.wav")
+    reference = RecordAnalysisReference("request", "source-z", "condition", path,
+                                        [StationWavChannel("mic", "Mic", "sound", "device", 0, 0)])
+    state.register_recording("request", when, "正转", [("source-z", 9, path), ("source-a", 2, path)],
+                             analysis_references={"source-z": reference})
+    state.register_recording("other", when, "反转", [("source-z", 9, path)])
+    state.register_recording("tomorrow", when + timedelta(days=1), "正转", [("source-z", 9, path)])
+
+    day = when.date()
+    identified = list(state.identified_records_for(day))
+    expected = dict(completed_at=when, station_id=9, file_name="same.wav", condition="正转", result="未标记")
+    assert identified == [
+        (("request", "source-z"), dict(expected, analysis_reference=reference)),
+        (("request", "source-a"), dict(expected, station_id=2)),
+        (("other", "source-z"), dict(expected, condition="反转")),
+    ]
+    assert [key for key, _ in state.identified_records_for(next_day)] == [("tomorrow", "source-z")]
+    exported = state.records_for(day)
+    assert exported == [fields for _, fields in identified]
+    exported[0].clear()
+    identified[1][1]["file_name"] = "changed.wav"
+    assert state.records_for(day)[0] == dict(expected, analysis_reference=reference)
+    assert state.records_for(day)[1] == dict(expected, station_id=2)
+
+    assert state.update_result("request", "source-z", [{"judgement": "OK"}])
+    assert not state.update_result("request", "source-z", [{"judgement": "NG"}])
+    assert identified[0][1]["result"] == "未标记"
+    assert dict(state.identified_records_for(day))["request", "source-z"]["result"] == "OK"
