@@ -127,7 +127,11 @@ def _configure_limit_graph_style(plot_widget: PlotWidget) -> None:
 
 def _set_graph_label_until(plot_widget: PlotWidget, model_type: str) -> None:
     model_type = model_type or ""
-    if "LOUD" in model_type:
+    if model_type in {"SHRP", "ROUGH"}:
+        unit = "acum" if model_type == "SHRP" else "asper"
+        plot_widget.setLabel("left", f"{model_type} ({unit})")
+        plot_widget.setLabel("bottom", "Time (s)")
+    elif "LOUD" in model_type:
         loudness_unit = "phon" if "PHON" in model_type.upper() else "sone"
         plot_widget.setLabel("left", f"Loudness ({loudness_unit})")
         plot_widget.setLabel("bottom", "Time (s)")

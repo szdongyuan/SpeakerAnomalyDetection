@@ -624,7 +624,9 @@ def test_wav_details_restart_commits_drained_pair_and_accumulates_across_restart
             reference = row.record.analysis_reference
             wav = station_wavs[row.key]
             assert reference.wav_path == wav.path and reference.channels == wav.channels
-            expected_result = "OK" if judgement == "OK" and reference.wav_path in task_paths else "未标记"
+            expected_result = "未标记"
+            if reference.wav_path in task_paths:
+                expected_result = "结果不完整" if judgement == "--" else judgement
             assert row.record.result == expected_result
         saved = next_saved
 

@@ -14,6 +14,7 @@ import os
 import numpy as np
 
 from base.loudness_analysis_adapter import calculate_loudness
+from base.sound_quality_analysis_adapter import calculate_roughness, calculate_sharpness
 from base.analysis_curve_style import resolve_curve_colors
 from base.analysis_limit_evaluation import (
     compare_with_limits as _compare_with_limits,
@@ -464,6 +465,8 @@ _HANDLERS = {
     "FFT": _calculate_fft,
     "Spec": _calculate_spec,
     "LOUD": calculate_loudness,
+    "SHRP": calculate_sharpness,
+    "ROUGH": calculate_roughness,
 }
 
 
@@ -478,6 +481,8 @@ def calculate_analysis_instance(
     sequence_snapshot,
     evaluate_limits=True,
     full_spectrogram=False,
+    compute_context=None,
+    input_identity=None,
 ):
     """Run one configured channel and return numerical data, without rendering.
 
@@ -508,6 +513,8 @@ def calculate_analysis_instance(
         source=source,
         sequence_snapshot=sequence_snapshot or {},
         full_spectrogram=full_spectrogram,
+        compute_context=compute_context,
+        input_identity=input_identity,
     )
 
 

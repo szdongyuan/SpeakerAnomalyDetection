@@ -1,7 +1,9 @@
 """Immutable, process-local daily motor record snapshots, independent of Qt."""
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime
+from base.audio_label_policy import INCOMPLETE, NG_INCOMPLETE
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,15 @@ class DailyRecordSummary:
         total = ok + ng + unmarked
         pass_rate = f"{ok / total * 100:.1f}%" if total else "--"
         return cls(total, ok, ng, unmarked, pass_rate)
+
+    @classmethod
+    def from_results(cls, results):
+        """Use the same three categories for live and persisted round totals."""
+        counts = Counter(results)
+        return cls.from_counts(
+            counts["OK"], counts["NG"] + counts[NG_INCOMPLETE],
+            counts["未标记"] + counts[INCOMPLETE],
+        )
 
 
 @dataclass(frozen=True)
@@ -81,8 +92,8 @@ class DailyRecordStore:
                 if not isinstance(value, str):
                     raise TypeError(f"records[{index}].{field} must be a str")
                 allowed = (
-                    ("OK", "NG", "未标记") if field == "result"
-                    else ("--", "OK", "NG")
+                    ("OK", "NG", "未标记", INCOMPLETE, NG_INCOMPLETE) if field == "result"
+                    else ("--", "OK", "NG", INCOMPLETE, NG_INCOMPLETE)
                 )
                 value = value.strip().upper()
                 if value not in allowed:
@@ -95,11 +106,7 @@ class DailyRecordStore:
         normalized = tuple(sorted(
             normalized, key=lambda row: row.completed_at, reverse=True,
         ))
-        summary = DailyRecordSummary.from_counts(
-            sum(row.result == "OK" for row in normalized),
-            sum(row.result == "NG" for row in normalized),
-            sum(row.result == "未标记" for row in normalized),
-        )
+        summary = DailyRecordSummary.from_results(row.result for row in normalized)
         stations = tuple(sorted({row.station_id for row in normalized}))
         self.record_date, self.records = day, normalized
         self.summary, self.station_ids = summary, stations

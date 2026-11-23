@@ -91,6 +91,7 @@ class AnalysisProcessManager:
         self._pending = deque()
         self._task = None
         self._result_pending = False
+        self._judgement_seen = False
         self._failure = None
         self._stop_requested = False
         self._stopped_seen = False
@@ -178,6 +179,7 @@ class AnalysisProcessManager:
         serialized = pickle.dumps(RunTask(task), protocol=pickle.HIGHEST_PROTOCOL)
         self._outbound.put_nowait(serialized)
         self._task = task
+        self._judgement_seen = False
         self._status("busy")
 
     def request_stop(self):
@@ -279,18 +281,22 @@ class AnalysisProcessManager:
         elif event.kind == "ready":
             if self.state == "starting":
                 self._status("ready")
-        elif event.kind in {"task_started", "task_result"}:
+        elif event.kind in {"task_started", "judgement_ready", "task_result"}:
             if self._task is None:
                 return  # Already failed/closed; never emit a second terminal result.
             if event.task_id != self._task.task_id:
                 self.abort(runtime_error("communication", "TaskMismatch", "Worker event task does not match"))
                 return
-            if event.kind == "task_result":
+            if event.kind in {"judgement_ready", "task_result"}:
                 expected = (self._task.task_id, self.station_id, self._task.condition_id)
                 actual = tuple(event.payload.get(k) for k in ("task_id", "station_id", "condition_id"))
                 if actual != expected:
                     self.abort(runtime_error("communication", "ResultMismatch", "Worker result identity does not match"))
                     return
+            if event.kind == "judgement_ready":
+                if self._judgement_seen:
+                    return
+                self._judgement_seen = True
             self._emit(event.kind, event.task_id, event.payload)
             if event.kind == "task_result":
                 self._task = None

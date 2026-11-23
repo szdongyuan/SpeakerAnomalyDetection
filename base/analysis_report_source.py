@@ -18,13 +18,14 @@ from base.analysis_artifact_names import (
     parse_csv_artifact as _parse_csv_artifact,
     infer_analysis_type as _infer_analysis_type,
     split_segment_channel,
+    JUDGEMENT_STATUS_FILE,
 )
 from base.audio_record_filter import parse_recording_stem as _parse_recording_stem
 from consts import model_consts
 from consts.running_consts import DEFAULT_DIR
 
 
-_SUPPORTED_TYPES = frozenset({"SPL", "Spec", "FBA", "FFT", "LOUD"})
+_SUPPORTED_TYPES = frozenset({"SPL", "Spec", "FBA", "FFT", "LOUD", "SHRP", "ROUGH"})
 
 
 @dataclass(frozen=True, order=True)
@@ -60,11 +61,11 @@ class CandidateAnalysisItem:
     @property
     def has_scalar_values(self) -> bool:
         return any(
-            role == "总体声压级" for role, _ in self.csv_files)
+            role in {"总体声压级", "尖锐度汇总", "粗糙度汇总"} for role, _ in self.csv_files)
 
     @property
     def has_charts(self) -> bool:
-        return bool(self.image_files)
+        return bool(self.image_files) or any(role in {"尖锐度时间曲线", "粗糙度时间曲线"} for role, _ in self.csv_files)
 
     def csv_path(self, role: str) -> str:
         for stored_role, path in self.csv_files:
@@ -89,6 +90,7 @@ class ReportCandidate:
     channel_labels: tuple[tuple[str, str], ...] = ()
     channel_mapping_source: str = "分析结果文件"
     issues: tuple[str, ...] = ()
+    judgement_status: str = ""
 
     @property
     def round_text(self) -> str:
@@ -102,6 +104,8 @@ class ReportCandidate:
 
     @property
     def result_text(self) -> str:
+        if self.judgement_status:
+            return self.judgement_status if self.judgement_status != "--" else "无判定结果"
         normalized = str(self.label or "").strip().upper()
         if normalized in {"OK", "NG"}:
             return normalized
@@ -109,7 +113,7 @@ class ReportCandidate:
 
     @property
     def data_status(self) -> str:
-        return "结果不完整" if self.issues else "完整"
+        return "结果不完整" if self.issues or "结果不完整" in self.judgement_status else "完整"
 
     def analysis_item(self, identity: AnalysisItemIdentity) -> CandidateAnalysisItem | None:
         for item in self.analysis_items:
@@ -367,6 +371,20 @@ def _build_candidate(
     if not analysis_items:
         issues.append("未找到可导出的分析项产物")
     issues.extend(channel_issues)
+    judgement_status = ""
+    status_path = csv_directory / JUDGEMENT_STATUS_FILE
+    if status_path.is_file():
+        try:
+            with status_path.open(encoding="utf-8-sig", newline="") as stream:
+                statuses = list(csv.DictReader(stream))
+            if len(statuses) != 1 or statuses[0]["状态"] not in {"OK", "NG", "--", "结果不完整", "NG（结果不完整）"}:
+                raise ValueError("无效完整性状态")
+            judgement_status = statuses[0]["状态"]
+            if "结果不完整" in judgement_status:
+                issues.append("存在缺失或失败的必需判定实例")
+        except (OSError, UnicodeError, csv.Error, KeyError, ValueError) as error:
+            judgement_status = "结果不完整"
+            issues.append(f"完整性记录读取失败：{error}")
     return ReportCandidate(
         wav_path=str(wav_path),
         project=root.name,
@@ -377,6 +395,7 @@ def _build_candidate(
         test_round=parsed.get("test_round"),
         recorded_at=parsed.get("recorded_at"),
         analysis_items=analysis_items,
+        judgement_status=judgement_status,
         channel_labels=channel_labels,
         channel_mapping_source=mapping_source,
         issues=tuple(issues),

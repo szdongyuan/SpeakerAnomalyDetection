@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import QLabel, QTableWidget
 
 from base.audio_label_sync import AudioLabelJob
 from base.workbench_analysis_config import AnalysisTestQueue
-from base.workbench_summary_store import WorkbenchSummarySnapshot
+from base.workbench_summary_store import WorkbenchSummarySnapshot, WorkbenchSummaryStore
 from ui.sequence.motor_information_summary_panel import MotorInformationSummaryPanel
 from unit_test.ui.test_motor_workbench_controller import (
     config, workbench, recording_workbench, paired_recording_workbench, configuration_with,
@@ -73,14 +73,94 @@ def labels(summary):
                  for name in ("total", "ok", "ng", "unmarked", "rate"))
 
 
+def early_event(task, judgement="OK"):
+    event = result_event(task, [instance(judgement=judgement)])
+    event["event_type"] = "judgement_ready"
+    return event
+
+
+def test_early_pair_updates_verdict_without_counting_or_labeling(sync):
+    jobs = []
+    sync.w.controller.bind_audio_label_sync(jobs.append)
+    first, second = sync.record(), sync.record()
+    for task in (first["right"], second["right"]):
+        sync.deliver(early_event(task))
+    assert sync.panel.get_station_data(1)["result"] == "OK"
+    assert labels(sync.summary) == ("0", "0", "0", "0", "--")
+    assert jobs == []
+    assert first["right"]["task_id"] in sync.w.controller._analysis_tasks
+    sync.deliver(early_event(second["right"]))
+    sync.deliver(result_event(first["right"], [instance()]),
+                 result_event(second["right"], [instance()]))
+    assert labels(sync.summary) == ("1", "1", "0", "0", "100.0%")
+    assert len(jobs) == 2
+    sync.deliver(result_event(second["right"], [instance()]), early_event(second["right"]))
+    assert len(jobs) == 2 and labels(sync.summary)[0] == "1"
+
+
+@pytest.mark.parametrize("invalid", [None, [], [None]])
+def test_malformed_early_evidence_does_not_prevent_real_terminal(sync, invalid):
+    first, second = sync.record(), sync.record()
+    event = early_event(first["right"])
+    event["payload"]["instance_results"] = invalid
+    sync.deliver(event)
+    assert sync.panel.get_station_data(1)["forward"] == "--"
+    sync.deliver(result_event(first["right"], [instance()]),
+                 result_event(second["right"], [instance()]))
+    assert labels(sync.summary) == ("1", "1", "0", "0", "100.0%")
+
+
+def test_old_early_result_cannot_overwrite_current_round(sync):
+    first, second = sync.record(), sync.record()
+    sync.record()
+    sync.deliver(early_event(first["right"]), early_event(second["right"]))
+    assert sync.panel.get_station_data(1)["result"] == "--"
+    sync.deliver(result_event(first["right"], [instance()]),
+                 result_event(second["right"], [instance()]))
+    assert labels(sync.summary)[1] == "1"
+    assert sync.panel.get_station_data(1)["result"] == "--"
+
+
+def test_early_verdict_can_be_painted_before_terminal(sync, qt_app, tmp_path, main_ui_font):
+    first, second = sync.record(), sync.record()
+    sync.panel.show()
+    sync.deliver(early_event(first["right"]), early_event(second["right"]))
+    qt_app.processEvents()
+    label = sync.panel.findChild(QLabel, "stationResult1")
+    assert label.text() == "OK" and label.isVisible()
+    assert sync.panel.grab().save(str(tmp_path / "early_verdict.png"))
+    assert labels(sync.summary)[0] == "0"
+
+
+@pytest.mark.parametrize("terminal_kind,expected", [("runtime_failure", "OK"), ("conflict", "NG（结果不完整）")])
+def test_early_evidence_is_reconciled_before_all_consumers(sync, terminal_kind, expected, caplog):
+    jobs = []
+    sync.w.controller.bind_audio_label_sync(jobs.append)
+    first, second = sync.record(), sync.record()
+    sync.deliver(early_event(first["right"]), early_event(second["right"]))
+    sync.deliver(result_event(first["right"], [instance()]))
+    terminal = (result_event(second["right"], failed=True) if terminal_kind == "runtime_failure"
+                else result_event(second["right"], [instance(judgement="NG")]))
+    sync.deliver(terminal)
+    assert sync.panel.get_station_data(1)["result"] == expected
+    assert jobs[-1].judgement_summary["status"] == expected
+    assert labels(sync.summary)[0] == "1"
+    assert jobs[-1].label == ("OK" if expected == "OK" else "NG")
+    if terminal_kind == "conflict":
+        assert "early=" in caplog.text and "terminal=" in caplog.text
+        assert "'judgement': 'NG'" in caplog.text
+        assert "display_payload" not in caplog.text
+
+
 def station_title(sync, column=0):
     return sync.grid._headers[column].name.toolTip()
 
 
 @pytest.mark.parametrize("forward,reverse,result,counts,rate", [
     ("OK", "NG", "NG", (2, 2, 1), "40.0%"),
-    ("OK", "--", "OK", (3, 1, 1), "60.0%"),
-    ("--", "--", "未标记", (2, 1, 2), "40.0%"),
+    ("OK", "--", "结果不完整", (2, 1, 2), "40.0%"),
+    ("NG", "--", "NG（结果不完整）", (2, 2, 1), "40.0%"),
+    ("--", "--", "结果不完整", (2, 1, 2), "40.0%"),
 ])
 def test_count_snapshot_adds_completed_pairs_to_same_day_baseline(
         sync, summary_count_panel, monkeypatch, forward, reverse, result, counts, rate):
@@ -133,6 +213,32 @@ def summary_count_panel(qt_app):
     panel.deleteLater()
 
 
+@pytest.mark.parametrize("judgement,status,counts", [
+    ("OK", "结果不完整", (2, 1, 2)),
+    ("NG", "NG（结果不完整）", (2, 2, 1)),
+])
+def test_incomplete_round_counts_survive_same_day_restart(sync, tmp_path, judgement, status, counts):
+    controller = sync.w.controller
+    day = sync.clock.now().date()
+    rendered = []
+    controller.bind_summary_counts(rendered.append, WorkbenchSummarySnapshot(day, 2, 1, 1), day)
+    first, second = sync.record(), sync.record()
+    sync.deliver(result_event(first["right"], [instance(judgement=judgement)]))
+    failure = result_event(second["right"], failed=True)
+    sync.deliver(failure, failure)
+    assert sync.panel.get_station_data(1)["result"] == status
+    expected = WorkbenchSummarySnapshot(day, *counts)
+    assert rendered[-1] == expected
+    assert expected.summary.total == 5
+
+    store = WorkbenchSummaryStore(tmp_path / "summary.json")
+    store.save(rendered[-1])
+    from ui.sequence.workbench_result_state import WorkbenchResultState
+    controller._result_state = WorkbenchResultState()
+    controller.bind_summary_counts(rendered.append, store.load(), day)
+    assert rendered[-1] == expected
+
+
 def test_count_snapshot_refreshes_at_midnight_and_keeps_old_pair_on_recording_day(sync):
     controller = sync.w.controller
     old_day, new_day = date(2026, 11, 11), date(2026, 11, 12)
@@ -157,14 +263,15 @@ def test_count_snapshot_refreshes_at_midnight_and_keeps_old_pair_on_recording_da
 @pytest.mark.parametrize("reverse_first", [False, True])
 @pytest.mark.parametrize("forward,reverse,final_result,expected", [
     ("OK", "NG", "NG", ("1", "0", "1", "0", "0.0%")),
-    ("OK", "--", "OK", ("1", "1", "0", "0", "100.0%")),
-    ("NG", "--", "NG", ("1", "0", "1", "0", "0.0%")),
-    ("--", "--", "--", ("1", "0", "0", "1", "0.0%")),
+    ("OK", "--", "结果不完整", ("1", "0", "0", "1", "0.0%")),
+    ("NG", "--", "NG（结果不完整）", ("1", "0", "1", "0", "0.0%")),
+    ("--", "--", "结果不完整", ("1", "0", "0", "1", "0.0%")),
 ])
 def test_station_updates_immediately_final_result_and_summary_wait_for_both(
         sync, reverse_first, forward, reverse, final_result, expected):
     first, second = sync.record(), sync.record()
     default_title = station_title(sync)
+    first_status = lambda value: "结果不完整" if value == "--" else value
     events = [result_event(first["right"], [instance(judgement=forward, metrics={"overall_spl": 0, "unit": "dB(A)"})]),
               result_event(second["right"], [instance(judgement=reverse, metrics={"overall_spl": 64.125})])]
     if reverse_first:
@@ -173,10 +280,10 @@ def test_station_updates_immediately_final_result_and_summary_wait_for_both(
     assert labels(sync.summary) == ("0", "0", "0", "0", "--")
     assert sync.published == []
     right = sync.panel.get_station_data(1)
-    assert right["reverse" if reverse_first else "forward"] == (reverse if reverse_first else forward)
+    assert right["reverse" if reverse_first else "forward"] == first_status(reverse if reverse_first else forward)
     assert right["rows"][0][2 if reverse_first else 1] == ("64.12" if reverse_first else "0.00 dB(A)")
     direction_label = "stationReverse1" if reverse_first else "stationForward1"
-    assert sync.panel.findChild(QLabel, direction_label).text() == (reverse if reverse_first else forward)
+    assert sync.panel.findChild(QLabel, direction_label).text() == first_status(reverse if reverse_first else forward)
     table = sync.panel.findChild(QTableWidget, "stationTable1")
     assert table.item(0, 2 if reverse_first else 1).text() == ("64.12" if reverse_first else "0.00 dB(A)")
     assert right["result"] == "--"
@@ -187,7 +294,7 @@ def test_station_updates_immediately_final_result_and_summary_wait_for_both(
     assert len(sync.published) == 1
     assert sync.panel.get_station_data(1)["rows"] == [["SPL", "0.00 dB(A)", "64.12"]]
     assert sync.panel.get_station_data(1)["result"] == final_result
-    assert station_title(sync) == default_title + (f' · {final_result}' if final_result in {'OK', 'NG'} else '')
+    assert station_title(sync) == default_title + (f' · {final_result}' if final_result != '--' else '')
     assert sync.panel.findChild(QLabel, "stationResult1").text() == final_result
     assert sync.panel.get_station_data(2)["forward"] == "--"
     sync.deliver(*events, result_event({**first["right"], "task_id": "unknown"}))
@@ -216,7 +323,8 @@ def test_multiple_stations_and_rounds_accumulate_without_waiting_for_other_stati
                  result_event(newer_second["right"], failed=True))
     assert labels(sync.summary) == ("3", "1", "1", "1", "33.3%")
     assert sync.panel.get_station_data(1)["rows"] == [["SPL", "--", "--"]]
-    assert [station_title(sync, column) for column in range(2)] == default_titles
+    assert station_title(sync, 0) == default_titles[0] + " · 结果不完整"
+    assert sync.summary.unmarked_label.text() == "1"
 
 
 def test_old_reverse_latest_task_cannot_overwrite_new_round_but_completes_history(sync):
@@ -339,8 +447,8 @@ def test_export_failure_preserves_completed_values_and_outward_error(sync):
     item = instance(metrics={"overall_spl": 42})
     item["artifacts"] = [{"status": "failed", "error": {"stage": "saving", "message": "access denied"}}]
     incoming = result_event(first["right"], [item])
-    sync.deliver(incoming, result_event(second["right"], failed=True))
-    assert sync.panel.get_station_data(1)["rows"] == [["SPL", "42.00", "--"]]
+    sync.deliver(incoming, result_event(second["right"], [instance()]))
+    assert sync.panel.get_station_data(1)["rows"] == [["SPL", "42.00", "分析完成"]]
     assert sync.events[-2]["payload"] is incoming["payload"]
     assert labels(sync.summary) == ("1", "1", "0", "0", "100.0%")
 
@@ -357,17 +465,17 @@ def test_optional_summary_port_and_unexpected_consumer_errors(sync, monkeypatch)
     def fail_render(*_):
         raise RuntimeError("unexpected rendering error")
 
-    monkeypatch.setattr(sync.panel, "show_station_result", fail_render)
+    monkeypatch.setattr(sync.panel, "show_condition_result", fail_render)
     with pytest.raises(RuntimeError, match="unexpected rendering error"):
         sync.deliver(result_event(newer["right"], [instance()]))
-    assert jobs == [AudioLabelJob(newer["right"]["task_id"], newer["right"]["wav_path"], "OK")]
+    assert jobs == [AudioLabelJob(newer["right"]["task_id"], newer["right"]["wav_path"], "OK", jobs[-1].result_directory, jobs[-1].judgement_summary)]
     # The first receive accepted this terminal even though rendering then failed.
     sync.deliver(result_event(newer["right"], [instance()]))
     assert len(jobs) == 1
 
 
 @pytest.mark.parametrize("items,failed,label", [
-    ([instance(judgement="OK"), instance("FFT", "FFT", "NG")], False, "NG"),
+    ([instance(judgement="OK"), instance("FFT", "FFT", "NG")], False, "OK"),
     ([instance(), instance("FFT", "FFT", None, execution_status="分析失败")], False, "OK"),
     ([instance(judgement="unknown")], False, "not_labeled"),
     ([], True, "not_labeled"),
@@ -381,7 +489,7 @@ def test_one_direction_queues_its_own_wav_without_waiting(sync, items, failed, l
     task = sync.record()["right"]
     incoming = result_event(task, items, failed=failed)
     sync.deliver(incoming)
-    assert jobs == [AudioLabelJob(task["task_id"], task["wav_path"], label)]
+    assert jobs == [AudioLabelJob(task["task_id"], task["wav_path"], label, jobs[-1].result_directory, jobs[-1].judgement_summary)]
     assert labels(sync.summary)[0] == "0"
     assert sync.events[-1]["payload"] is incoming["payload"]
     sync.deliver(incoming, result_event({**task, "task_id": "unknown"}, items))
@@ -425,8 +533,8 @@ def test_late_result_uses_frozen_wav_after_current_identity_changes(sync, change
     sync.deliver(result_event(old_task, [instance(judgement="NG")]))
     assert sync.events[-1]["is_current"] is False
     assert sync.panel.get_station_data(1) == before
-    assert jobs == [AudioLabelJob(new_task["task_id"], new_task["wav_path"], "OK"),
-                    AudioLabelJob(old_task["task_id"], old_path, "NG")]
+    assert jobs == [AudioLabelJob(new_task["task_id"], new_task["wav_path"], "OK", jobs[0].result_directory, jobs[0].judgement_summary),
+                    AudioLabelJob(old_task["task_id"], old_path, "NG", jobs[-1].result_directory, jobs[-1].judgement_summary)]
 
 
 def test_shutdown_still_queues_accepted_analysis_terminal(sync):
@@ -435,7 +543,7 @@ def test_shutdown_still_queues_accepted_analysis_terminal(sync):
     task = sync.record()["right"]
     sync.w.controller.begin_analysis_shutdown()
     sync.deliver(result_event(task, [instance()]))
-    assert jobs == [AudioLabelJob(task["task_id"], task["wav_path"], "OK")]
+    assert jobs == [AudioLabelJob(task["task_id"], task["wav_path"], "OK", jobs[-1].result_directory, jobs[-1].judgement_summary)]
 
 
 @pytest.mark.parametrize("outcome", ["rejected", "skipped"])

@@ -10,7 +10,7 @@ def workbench_source(*, all_stations=False):
         "channels": [{
             "channel_id": f"ch{channel + 1}",
             "channel_name": f"声音{channel + 1}",
-            "signal_type": "audio",
+            "signal_type": "sound_pressure",
             "hardware_channel": {
                 "device_ref": "device-1",
                 "physical_channel_index": index * 2 + channel,

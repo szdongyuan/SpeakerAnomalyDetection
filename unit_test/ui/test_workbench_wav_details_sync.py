@@ -372,18 +372,19 @@ def test_identical_basenames_from_separate_requests_are_distinct(wav_sync):
             request.request_id, group.project_id, group.condition_id, request.sample_rate, 8, (actual,),
         ))
     assert [row["file_name"] for row in rows(s)] == ["same.wav", "same.wav"]
-    assert [row["condition"] for row in rows(s)] == ["正转", "反转"]
+    # Missing WAV calibration rejects analysis, so each retry starts at the first condition.
+    assert [row["condition"] for row in rows(s)] == ["正转", "正转"]
     references = [row["analysis_reference"] for row in rows(s)]
     assert references[0].record_key != references[1].record_key
     assert references[0].wav_path != references[1].wav_path
 
 
 @pytest.mark.parametrize("items,failed,expected", [
-    ([instance(), instance("FFT", "FFT", "NG")], False, "NG"),
+    ([instance(), instance("FFT", "FFT", "NG")], False, "OK"),
     ([instance(), instance("FFT", "FFT", None, execution_status="分析失败")], True, "OK"),
-    ([instance(judgement=None)], False, "未标记"),
-    ([instance(judgement="unknown")], False, "未标记"),
-    ([], True, "未标记"),
+    ([instance(judgement=None)], False, "结果不完整"),
+    ([instance(judgement="unknown")], False, "结果不完整"),
+    ([], True, "结果不完整"),
     ([{**instance(), "artifacts": [{"status": "failed", "error": {
         "stage": "saving", "message": "CSV access denied"}}]}], True, "OK"),
 ])
@@ -517,7 +518,7 @@ def test_wav_result_consumer_error_preserves_original_updates_and_first_acceptan
     incoming = result_event(task, [instance(judgement=judgement)])
     with pytest.raises(RuntimeError, match="WAV result render failed"):
         s.deliver(incoming)
-    assert jobs == [AudioLabelJob(task["task_id"], task["wav_path"], judgement)]
+    assert jobs == [AudioLabelJob(task["task_id"], task["wav_path"], judgement, jobs[0].result_directory, jobs[0].judgement_summary)]
     target = next(row for row in failed_publications[0] if row["file_name"] == Path(task["wav_path"]).name)
     assert target["result"] == judgement
     assert labels(s.summary) == (("1", "0", "1", "0", "0.0%") if complete_pair
@@ -574,3 +575,49 @@ def test_inflight_third_condition_keeps_its_frozen_configured_name(wav_sync):
     third_tasks = s.service.submissions[-1]["tasks"]
     s.deliver(*(result_event(task, [instance(judgement="NG")]) for task in third_tasks))
     assert all(row["result"] == "NG" for row in rows(s) if row["condition"] == "负载升速")
+
+@pytest.mark.parametrize("mode", ["missing", "failed", "process_exit"])
+def test_frozen_required_items_block_ok_across_wav_station_and_statistics(wav_sync, mode):
+    s = wav_sync
+    queue = AnalysisTestQueue("wav", {"display_sequence": ["SPL", "SHRP"],
+        "SPL": {"type": "SPL", "analysis_channels": [0], "limit_checked": True},
+        "SHRP": {"type": "SHRP", "analysis_channels": [0], "limit_checked": True}})
+    from unit_test.ui.test_motor_workbench_controller import configuration_with
+    s.w.config = configuration_with(s.w.config, test_queues={"queue-a": queue})
+    s.w.repository.result = s.w.config
+    s.w.controller.refresh_configuration()
+    jobs = []
+    s.w.controller.bind_audio_label_sync(jobs.append)
+    first, second = s.record(), s.record()
+    items = [instance()]
+    if mode == "failed":
+        items.append(instance("SHRP", "SHRP", None, execution_status="分析失败"))
+    elif mode == "process_exit":
+        items = []
+    s.deliver(result_event(first["right"], items, failed=mode == "process_exit"))
+    assert jobs[0].label == "not_labeled"
+    assert jobs[0].judgement_summary["required_count"] == 2
+    assert jobs[0].judgement_summary["status"] == "结果不完整"
+    assert rows(s, 1)[0]["result"] == "结果不完整"
+    s.deliver(result_event(second["right"], [instance(), instance("SHRP", "SHRP")]))
+    assert s.panel.get_station_data(1)["result"] == "结果不完整"
+    assert s.summary.ok_label.text() == "0" and s.summary.unmarked_label.text() == "1"
+    assert s.summary.rate_label.text() == "0.0%"
+    s.deliver(result_event(first["right"], [instance(), instance("SHRP", "SHRP")]))
+    assert len(jobs) == 2 and s.summary.unmarked_label.text() == "1"
+
+
+def test_invalid_analysis_input_rejects_submission_and_finishes_recording(wav_sync):
+    s = wav_sync
+    queue = AnalysisTestQueue("invalid", {"display_sequence": ["SPL"],
+        "SPL": {"type": "SPL", "analysis_channels": [999], "limit_checked": True}})
+    s.w.repository.result = configuration_with(s.w.config, test_queues={"queue-a": queue})
+    s.w.controller.refresh_configuration()
+    s.w.controller.start_recording()
+    s.w.complete()
+    assert not s.w.controller.recording_busy
+    assert not s.service.submissions and not s.w.controller._analysis_tasks
+    assert len(rows(s)) == 3 and all(row["result"] == "未标记" for row in rows(s))
+    receipt = next(e["payload"] for e in s.events if e["event_type"] == "submission_result")
+    assert receipt["accepted"] is False
+    assert receipt["issues"][0]["error_type"] == "AnalysisInputError"

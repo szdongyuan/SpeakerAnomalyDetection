@@ -78,6 +78,27 @@ def test_initial_date_statistics_and_options_follow_store(make_dialog):
     assert dialog.rate_label.palette().color(QPalette.WindowText) == QColor("#617183")
 
 
+def test_incomplete_rows_use_three_summary_categories_and_keep_detail_status(make_dialog, qt_app):
+    dialog, store, _ = make_dialog()
+    rows = make_daily_wav_records(2, store.record_date)
+    rows[0]["result"] = "结果不完整"
+    rows[1]["result"] = "NG（结果不完整）"
+    store.replace(rows, store.record_date)
+    dialog.refresh_records()
+    qt_app.processEvents()
+    assert [dialog.total_label.text(), dialog.ok_label.text(), dialog.ng_label.text(),
+            dialog.unmarked_label.text(), dialog.rate_label.text()] == ["2", "0", "1", "1", "0.0%"]
+    statistics = dialog.findChild(QWidget, "detailsStatistics")
+    assert statistics.layout().count() == 5
+    assert dialog.findChild(QLabel, "detailsIncomplete") is None
+    assert {dialog.table.item(row, 4).text() for row in range(2)} == {
+        "结果不完整", "NG（结果不完整）",
+    }
+    dialog.result_combo.setCurrentIndex(dialog.result_combo.findData("结果不完整"))
+    assert dialog.table.rowCount() == 1
+    assert dialog.table.item(0, 4).text() == "结果不完整"
+
+
 def test_search_has_reference_width_and_sits_at_right_of_filter_row(make_dialog):
     dialog, _, _ = make_dialog()
     for label, combo, text in ((dialog.station_label, dialog.station_combo, "工位"),

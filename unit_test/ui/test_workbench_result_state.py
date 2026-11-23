@@ -16,7 +16,7 @@ def instance(key="SPL", kind="SPL", judgement="OK", *, metrics=None,
              execution_status="分析完成"):
     return {
         "config_key": key, "analysis_type": kind, "channel_index": 0,
-        "execution_status": execution_status, "judgement_status": "judged",
+        "execution_status": execution_status, "judgement_status": "completed" if str(judgement).strip().upper() in {"OK", "NG"} else "not_enabled",
         "judgement": judgement, "metrics": {} if metrics is None else metrics,
         "display_payload": None, "violations": None, "artifacts": [], "error": None,
     }

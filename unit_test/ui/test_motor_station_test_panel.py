@@ -570,9 +570,9 @@ def test_header_background_fills_inner_width_through_resize(panel, qt_app, style
         scroll = panel.findChild(QScrollArea)
         image = panel.grab().toImage()
         assert title.geometry().right() == panel.width() - 2
-        assert general.geometry().right() == panel.width() - 2
+        assert general.mapTo(panel, general.rect().topRight()).x() == panel.width() - 2
         assert image.pixelColor(panel.width() - 2, title.geometry().center().y()) == QColor("#3e75ac")
-        assert image.pixelColor(panel.width() - 2, general.y() + 4) == QColor("#f1f5f9")
+        assert image.pixelColor(panel.width() - 2, general.mapTo(panel, QPoint(0, 4)).y()) == QColor("#f1f5f9")
         assert image.pixelColor(panel.width() - 1, panel.height() // 2) == QColor("#cddaea")
         assert scroll.horizontalScrollBar().maximum() == 0
         if count:

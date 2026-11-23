@@ -56,6 +56,7 @@ from ui.ui_analysis_config.spl_config_dialog import SplConfigWindow
 from ui.ui_analysis_config.fba_config_dialog import FbaConfigWindow
 from ui.ui_analysis_config.fft_config_dialog import FftConfigWindow
 from ui.ui_analysis_config.loudness_config_dialog import LoudnessConfigWindow
+from ui.ui_analysis_config.sound_quality_config_dialog import SoundQualityConfigWindow
 
 
 SUPPORTED_ACQ_ITEMS = ["录制音频"]
@@ -67,11 +68,10 @@ SUPPORTED_ANALYSIS_ITEMS = [
     "快速傅里叶变换 (FFT) ",
     "响度 (LOUD) ",
     "AI 分析 ",
-]
-PENDING_ANALYSIS_ITEMS = [
     "尖锐度 (SHRP) ",
     "粗糙度 (ROUGH) ",
 ]
+PENDING_ANALYSIS_ITEMS = []
 SUPPORTED_ANALYSIS_TYPES = {
     "AI",
     "SPL",
@@ -81,6 +81,8 @@ SUPPORTED_ANALYSIS_TYPES = {
     "FBA",
     "FFT",
     "LOUD",
+    "SHRP",
+    "ROUGH",
 }
 MULTI_CHANNEL_ANALYSIS_TYPES = {
     "SPL",
@@ -89,6 +91,8 @@ MULTI_CHANNEL_ANALYSIS_TYPES = {
     "FFT",
     "LP",
     "LOUD",
+    "SHRP",
+    "ROUGH",
 }
 
 
@@ -1097,6 +1101,10 @@ class OptionList(QListView):
                 available_channels=available_channels,
                 allow_multiple_channels=allow_multiple_channels,
             )
+        if type in {"SHRP", "ROUGH"}:
+            return SoundQualityConfigWindow(config_manager, name, type,
+                                            available_channels=available_channels,
+                                            allow_multiple_channels=allow_multiple_channels)
         if type == "LOUD":
             return LoudnessConfigWindow(
                 config_manager,
@@ -1571,7 +1579,7 @@ class OptionList(QListView):
         code, data = LoadUiConfig.load_data_from_json(default_config_file)
         if code != 0:
             self.default_logger.error(f"Failed to load the default config file. {data}")
-            if analysis_type not in {"SPL", "Spec", "FBA", "FFT", "LOUD", "AI"}:
+            if analysis_type not in {"SPL", "Spec", "FBA", "FFT", "LOUD", "SHRP", "ROUGH", "AI"}:
                 return
             data = {}
 
@@ -1598,6 +1606,8 @@ class OptionList(QListView):
                 **FftConfigWindow.DEFAULT_CONFIG,
                 **default_of_type,
             }
+        elif analysis_type in {"SHRP", "ROUGH"}:
+            default_of_type = SoundQualityConfigWindow.merge_with_defaults(analysis_type, default_of_type)
         elif analysis_type == "LOUD":
             default_of_type = LoudnessConfigWindow.merge_with_defaults(
                 default_of_type

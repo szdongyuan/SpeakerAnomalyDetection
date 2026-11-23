@@ -52,7 +52,7 @@ class _ElidedLabel(QLabel):
             suffix_width = (self.fontMetrics().horizontalAdvance(' · ')
                             + QFontMetrics(bold_font).horizontalAdvance(self._result))
             name = self.fontMetrics().elidedText(name, Qt.ElideRight, max(0, self.width() - suffix_width))
-            color = '#237a3b' if self._result == 'OK' else '#b42318'
+            color = '#237a3b' if self._result == 'OK' else '#a65c00' if self._result == '结果不完整' else '#b42318'
             self.setText(f'{escape(name)} · <span style="color: {color}; font-weight: bold;">'
                          f'{self._result}</span>')
             return
@@ -193,7 +193,7 @@ class _ColumnControls(QWidget):
 
     def set_result(self, result):
         self.setProperty('stationResult', result)
-        suffix = f' · {result}' if result in {'OK', 'NG'} else ''
+        suffix = f' · {result}' if result != '--' else ''
         self.name.set_full_text(self._station_name + suffix, plain_text=True,
                                 result=result if suffix else '')
         for widget in (self, self.name):
@@ -539,7 +539,7 @@ class StationPlotGrid(QWidget):
     def set_station_result(self, column, result):
         """Display the caller's final result; '--' restores the default title."""
         column = self._column(column, 'set_station_result')
-        if result not in ('OK', 'NG', '--'):
+        if result not in ('OK', 'NG', '--', '结果不完整', 'NG（结果不完整）'):
             raise ValueError('set_station_result: result must be OK, NG or --')
         self._headers[column].set_result(result)
 

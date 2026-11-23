@@ -99,6 +99,47 @@ def deliver_completed_batch(w, event):
     deliver(w, *(result_event(task) for task in tasks if task['task_id'] != event['task_id']), event)
 
 
+@pytest.mark.parametrize('early', [False, True])
+def test_single_condition_result_leaves_analyzing_and_completes_once(
+        plotted, early, qt_app, main_ui_font, tmp_path):
+    w = plotted
+    station = w.config.analysis.context.stations[0]
+    condition = replace(w.config.analysis.context.conditions[0],
+                        applicable_station_ids=(station.station_id,))
+    w.config = configuration_with(w.config, stations=(station,), conditions=(condition,))
+    w.repository.result = w.config
+    w.controller.refresh_configuration()
+    start(w)
+    w.complete()
+    task, = w.analysis.submissions[-1]['tasks']
+    terminal = result_event(task)
+    for item in terminal['payload']['instance_results']:
+        item['display_payload'].update(y=[60, 62, 61], upper=[80, 80, 80])
+    deliver(w, {**terminal, 'event_type': 'task_started', 'payload': {}})
+    cell = w.grid._cells[0, 0]
+    assert cell._condition_states[condition.condition_id][0] == '分析中'
+    if early:
+        judgement = {**terminal, 'event_type': 'judgement_ready', 'payload': {
+            **terminal['payload'], 'instance_results': [
+                item for item in terminal['payload']['instance_results'] if item['analysis_type'] == 'SPL'],
+        }}
+        deliver(w, judgement)
+        assert task['task_id'] in w.controller._analysis_tasks
+    deliver(w, terminal)
+    assert cell._condition_states[condition.condition_id][0] != '分析中'
+    assert cell._condition_series[condition.condition_id]
+    assert task['task_id'] not in w.controller._analysis_tasks
+    round_state, = w.controller._result_state._rounds.values()
+    snapshot = round_state.stations[station.station_id].snapshot((condition.condition_id,))
+    assert (snapshot.forward, snapshot.reverse, snapshot.result) == ('OK', '--', 'OK')
+    assert snapshot.complete and snapshot.judgement_complete
+    assert len(w.controller._result_state._records) == 1
+    deliver(w, terminal)
+    assert len(w.controller._result_state._records) == 1
+    qt_app.processEvents()
+    assert w.grid.grab().save(str(tmp_path / 'single_condition_result.png'))
+
+
 def test_staggered_results_wait_for_all_stations_including_failure(plotted):
     w = plotted
     start(w); w.complete()
@@ -430,3 +471,38 @@ def test_real_resident_workers_feed_four_station_plots_from_closed_wavs(plot_set
         w.controller.begin_analysis_shutdown()
         wait(lambda: service.closed)
         timer.stop()
+
+@pytest.mark.parametrize("kind,unit", [("SHRP", "acum"), ("ROUGH", "asper")])
+def test_quality_main_plot_and_detail_reuse_curves(plot_setup, kind, unit):
+    w = plot_setup
+    queues = {c.test_queue: AnalysisTestQueue('wav', {
+        'display_sequence': ['声品质'],
+        '声品质': {'type': kind, 'analysis_channels': [0, 1], 'limit_checked': True},
+    }) for c in w.config.analysis.context.conditions}
+    layout = template_layout()
+    layout['plot_templates']['spl'].update(analysis_item_name='声品质', analysis_type=kind, title='声品质')
+    w.config = configuration_with(w.config, test_queues=queues, plot_layout=parse_plot_templates(layout))
+    w.repository.result = w.config
+    w.controller.refresh_configuration()
+    w.analysis = AnalysisServiceStub()
+    w.controller.bind_analysis_service(w.analysis, lambda *_: None)
+    w.controller.activate_analysis()
+    start(w); w.complete()
+    for task in w.analysis.submissions[0]['tasks']:
+        event = result_event(task)
+        event['payload']['instance_results'] = event['payload']['instance_results'][:2]
+        for item in event['payload']['instance_results']:
+            item.update(config_key='声品质', analysis_type=kind)
+            item['display_payload']['y_unit'] = unit
+        deliver(w, event)
+    cell = w.grid._cells[0, 0]
+    assert cell.display.condition_plot.conditions[0].y_unit == unit
+    series = cell._condition_series['warm']
+    assert len([s for s in series if s['role'] == 'curve']) == 2
+    cell.open_detail()
+    try:
+        detail = cell._detail_dialog
+        assert detail is not None and detail.isVisible()
+        assert cell._condition_states['warm'][0] == ''
+    finally:
+        cell.close_detail()

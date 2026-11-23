@@ -109,7 +109,7 @@ class _WorkbenchWindow(MainWindow):
 def _write_plot_program(files, *, custom_layout):
     def channel(channel_id, name, device, index):
         return {
-            "channel_id": channel_id, "channel_name": name, "signal_type": "audio",
+            "channel_id": channel_id, "channel_name": name, "signal_type": "sound_pressure",
             "hardware_channel": {"device_ref": device, "physical_channel_index": index},
         }
 
@@ -347,7 +347,9 @@ def test_startup_without_layout_loads_business_state_and_refresh_recovers_plots(
     controller = window.workbench_controller
     assert sequence.using_file_combobox.currentData() == workbench.files["product"].name
     assert sequence.left_panel.get_station_count() == 3
-    assert sequence.left_panel.get_station_data(1)["rows"] == [["B", "--", "--"], ["A", "--", "--"]]
+    assert sequence.left_panel.get_station_data(1)["rows"] == [
+        ["B", "--", "--", "--"], ["A", "--", "--", "--"],
+    ]
     assert (sequence.plot_grid._rows, sequence.plot_grid._columns) == (0, 0)
     assert sequence.plot_grid._cells == sequence.plot_grid._headers == {}
     recording = controller.get_recording_config()
@@ -383,7 +385,7 @@ def test_workbench_ignores_mode_preferences_and_keeps_results_on_hidden_combo_ch
     assert not hasattr(sequence, "count_board")
     _assert_station_headers_name_only(grid)
     grid.set_curve_data(0, 0, [{"x": [1, 2], "y": [3, 4]}])
-    sequence.left_panel.set_station_results(1, "OK", "NG")
+    _seed_station_results(window)
     for _ in range(2):
         workbench.window.on_workbench_configuration_committed()
         _assert_station_headers_name_only(grid)
@@ -439,6 +441,13 @@ def _assert_display(window, product, names, *, selection_enabled=True):
     assert sequence.left_panel.get_station_count() == len(names)
     station_rows = sequence.left_panel.station_panel._stations
     assert tuple(station.header.accessibleName() for station in station_rows) == names
+    if names:
+        conditions = window.workbench_controller.get_analysis_config().context.conditions
+        for station in station_rows:
+            table = station.table
+            assert [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())] == [
+                "指标", *(condition.condition_name for condition in conditions),
+            ]
     expected_columns = names + ("",) * (4 - len(names)) if names else ()
     assert tuple(header.name.toolTip() for header in sequence.plot_grid._headers.values()) == expected_columns
     assert len(sequence.plot_grid._cells) == len(expected_columns)
@@ -469,8 +478,16 @@ def _register_toolbar_product(workbench, *, equal=False):
     return second, product
 
 
-def _seed_toolbar_results(sequence):
-    sequence.left_panel.set_station_results(1, "OK", "NG")
+def _seed_station_results(window, station_id=1):
+    conditions = window.workbench_controller.get_analysis_config().context.conditions
+    statuses = tuple(("OK", "NG")[index] if index < 2 else "--"
+                     for index in range(len(conditions)))
+    window.sequence_window.left_panel.set_station_results(station_id, *statuses)
+
+
+def _seed_toolbar_results(window):
+    sequence = window.sequence_window
+    _seed_station_results(window)
     for row, column in sequence.plot_grid._cells:
         sequence.plot_grid.set_curve_data(row, column, [{"x": [1, 2], "y": [3, 4]}])
 
@@ -486,7 +503,7 @@ def test_toolbar_product_selection_switch_and_restart(workbench, equal):
     if equal:
         assert combo.itemText(0) != combo.itemText(1)
         assert all(combo.itemData(i) in combo.itemText(i) for i in range(2))
-    _seed_toolbar_results(sequence)
+    _seed_toolbar_results(window)
     old_version = controller._analysis_version
     expected_registry = json.loads(workbench.files["programs"].read_text(encoding="utf-8"))
     expected_registry["active_file"] = second.name
@@ -499,7 +516,7 @@ def test_toolbar_product_selection_switch_and_restart(workbench, equal):
     assert not any(cell.plot_widget.getPlotItem().listDataItems() for cell in sequence.plot_grid._cells.values())
     assert sequence.left_panel.station_panel._stations[0].header.accessibleName() == product["stations"][0]["station_name"]
     assert next(iter(sequence.plot_grid._headers.values())).name.toolTip() == product["stations"][0]["station_name"]
-    _seed_toolbar_results(sequence)
+    _seed_toolbar_results(window)
     before = workbench.files["programs"].read_bytes()
     combo.currentIndexChanged.emit(combo.currentIndex())
     assert sequence.left_panel.get_station_data(1)["forward"] == "OK"
@@ -542,7 +559,7 @@ def test_toolbar_product_selection_failures_restore_current_product(workbench, m
     sequence = window.sequence_window
     controller = workbench.window.workbench_controller
     combo = sequence.using_file_combobox
-    _seed_toolbar_results(sequence)
+    _seed_toolbar_results(workbench.window)
     config = controller.get_recording_config()
     if failure == "missing":
         second.unlink()
@@ -681,9 +698,9 @@ def test_default_plots_and_station_channels_from_real_startup(workbench):
          ch.hardware_channel.physical_channel_index)
         for ch in channels + controller.get_station_channels(s2)
     ] == [
-        ("ch1", "CH1", "audio", "device-a", 0),
-        ("ch2", "CH2", "audio", "device-a", 1),
-        ("input1", "CH1", "audio", "device-b", 0),
+        ("ch1", "CH1", "sound_pressure", "device-a", 0),
+        ("ch2", "CH2", "sound_pressure", "device-a", 1),
+        ("input1", "CH1", "sound_pressure", "device-b", 0),
     ]
     for condition in (first, second):
         assert controller.get_analysis_config().test_queues[condition.test_queue].analysis_config["声压级"]["analysis_channels"] == (1, 0)
@@ -741,7 +758,7 @@ def test_each_snapshot_change_resets_all_results_and_invalid_refresh_preserves_t
 
     def seed_results():
         for station in (1, 2):
-            panel.set_station_results(station, "OK", "NG")
+            _seed_station_results(window, station)
         for row, column in grid._cells:
             grid.set_curve_data(row, column, [{"x": [1, 2], "y": [3, 4]}])
 
@@ -813,7 +830,9 @@ def test_startup_reads_both_views_and_uses_independent_fallback_in_memory(workbe
     _assert_display(window, "电机", ("工位三", "工位一", "工位二"))
     sequence = window.sequence_window
     assert window.editor_context.selected_path == str(workbench.independent_path)
-    assert sequence.left_panel.get_station_data(1)["rows"] == [["B", "--", "--"], ["A", "--", "--"]]
+    assert sequence.left_panel.get_station_data(1)["rows"] == [
+        ["B", "--", "--", "--"], ["A", "--", "--", "--"],
+    ]
     assert sequence.left_panel.get_station_data(1)["forward"] == "--"
     assert sequence.left_panel.get_station_data(1)["reverse"] == "--"
     controller = window.workbench_controller
@@ -871,7 +890,7 @@ def test_deletion_failure_blocks_only_own_configuration_entries(workbench, monke
     failed = workbench.window
     second, _ = _register_toolbar_product(workbench)
     healthy = workbench.open_window()
-    _seed_toolbar_results(failed.sequence_window)
+    _seed_toolbar_results(failed)
     snapshot = failed.workbench_controller.get_recording_config()
     registry = workbench.files["programs"].read_bytes()
     queue_editor = Mock(side_effect=lambda *args, **kwargs: _CommitDialog(lambda: None))
@@ -960,7 +979,7 @@ def test_nested_queue_editor_obeys_current_window_failure_and_close_state(workbe
 def test_committed_notification_preserves_snapshot_when_refresh_is_blocked(workbench, blocked):
     window, files = workbench.window, workbench.files
     controller, sequence = window.workbench_controller, window.sequence_window
-    _seed_toolbar_results(sequence)
+    _seed_toolbar_results(window)
     recording = controller.get_recording_config()
     analysis = controller.get_analysis_config()
     condition = controller.get_condition_config("c1")
@@ -1040,9 +1059,9 @@ def test_refresh_reads_committed_files_and_keeps_last_display_on_error(workbench
         "seq1": {"acq": acquisition(), "analysis_list": {"display_sequence": ["C"], "C": {}}},
     }])
     editor.committed.emit()
-    assert window.sequence_window.left_panel.get_station_data(3)["rows"] == [["C", "--", "--"]]
+    assert window.sequence_window.left_panel.get_station_data(3)["rows"] == [["C", "--", "--", "--"]]
 
-    window.sequence_window.left_panel.set_station_results(1, "OK", "NG")
+    _seed_station_results(window)
     editor.committed.emit()
     assert window.sequence_window.left_panel.get_station_data(1)["forward"] == "OK"
 
@@ -1276,6 +1295,9 @@ def test_real_toolbar_waits_for_login_and_resource_admission_then_delivers_group
     write_json(config_files["product"], product)
     queue = json.loads(config_files["shared"].read_text(encoding="utf-8"))
     queue[0]["seq1"]["acq"]["detail"].update({"recording_root": str(tmp_path / "audio"), "startup_trim_ms": 0})
+    analyses = queue[0]["seq1"]["analysis_list"]
+    for key in analyses["display_sequence"]:
+        analyses[key]["analysis_channels"] = [0]
     write_json(config_files["shared"], queue)
     repository = MotorWorkbenchConfigRepository(
         config_files["programs"], config_files["queues"], plot_layout_path=config_files["layout"],
@@ -1315,9 +1337,17 @@ def test_real_toolbar_waits_for_login_and_resource_admission_then_delivers_group
         assert submissions == []
         return "Engineer", "test"
 
+    from base.vkinging_stores import VECalibrationStore
+    calibration_store = VECalibrationStore(tmp_path / "ve-calibrations.json")
+    for physical_channel in (7, 1):
+        calibration_store.save(
+            discovered, physical_channel, v2pa_factor=1.0, standard_spl=94.0,
+            calibration_sample_rate=51200, calibration_duration_seconds=10.0,
+            calibrated_at="2026-11-10T10:00:00+08:00",
+        )
     window = startup.launch(
         login, ve_profile_store=SimpleNamespace(load=lambda *_: discovered["input_config"]),
-        ve_calibration_store=SimpleNamespace(observe=lambda _: {}),
+        ve_calibration_store=calibration_store,
     )
     sequence = _set_recording_identity(window)
     sequence.barcode_scanner_box.setChecked(False)
@@ -1434,6 +1464,9 @@ def test_workbench_completion_signal_rejects_untyped_payload(workbench):
 
 
 def _recording_program(files, audio_root, monkeypatch):
+    monkeypatch.setattr(recording_calibration_snapshot, "load_mic_channel_calibrations",
+                        lambda *_: {index: {"v2pa_factor": 1.0, "standard_spl_db": 94.0}
+                                    for index in range(3)})
     _write_plot_program(files, custom_layout=True)
     product = json.loads(files["product"].read_text(encoding="utf-8"))
     product["result_root_directory"] = str(audio_root)
@@ -1446,6 +1479,9 @@ def _recording_program(files, audio_root, monkeypatch):
     write_json(files["product"], product)
     for key, frames in (("shared", 8), ("empty", 10)):
         queue = json.loads(files[key].read_text(encoding="utf-8"))
+        analyses = queue[0]["seq1"]["analysis_list"]
+        for analysis_key in analyses["display_sequence"]:
+            analyses[analysis_key]["analysis_channels"] = [0]
         acq = queue[0]["seq1"]["acq"]
         acq.update(name="录制音频", mode="RECORD_ONLY")
         acq["detail"].update(
@@ -1637,6 +1673,7 @@ def test_main_window_paired_results_update_station_and_daily_summary(
     analysis = queue[0]["seq1"]["analysis_list"]
     for key in analysis["display_sequence"]:
         analysis[key]["analysis_channels"] = [0]
+    analysis[analysis["display_sequence"][0]]["limit_checked"] = True
     write_json(config_files["shared"], queue)
     submissions = []
 
@@ -1924,7 +1961,7 @@ def test_active_switch_refreshes_recording_with_in_flight_snapshot(
     finish()
 
     before = files["shared"].read_bytes()
-    window.sequence_window.left_panel.set_station_results(1, "OK", "NG")
+    _seed_station_results(window)
     files["shared"].write_text("{", encoding="utf-8")
     editor.committed.emit()
     assert window.sequence_window.left_panel.get_station_data(1)["forward"] == "OK"
@@ -2147,7 +2184,8 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
     monkeypatch.setattr(controller_module, "datetime", SimpleNamespace(
         now=lambda: datetime(2026, 11, 9, 13, 14, 15, 123999)))
     monkeypatch.setattr(recording_calibration_snapshot, "load_mic_channel_calibrations",
-                        lambda *_: {2: {"v2pa_factor": 2.5, "standard_spl_db": 94.0}})
+                        lambda *_: {physical: {"v2pa_factor": factor, "standard_spl_db": 94.0}
+                                    for physical, factor in ((0, 1.0), (2, 2.5))})
     service = RecordingService(
         backend_factory="unit_test.base.recording_process_fakes:workbench_soundcard_dependencies",
         backend_options={"trace_dir": str(tmp_path), "frames": 12, "chunk_frames": 4, "manual": True},
@@ -2296,7 +2334,7 @@ def test_real_toolbar_publishes_spawned_station_wavs_retries_and_wraps(
                 metadata = read_wav_calibration_metadata(station.path)
                 assert [(channel["wav_channel_index"], channel["physical_input_channel"], channel["v2pa_factor"])
                         for channel in metadata["recorded_channels"]] == [
-                    (wav, physical, 2.5 if physical == 2 else None) for wav, physical in enumerate(columns)
+                    (wav, physical, 2.5 if physical == 2 else 1.0) for wav, physical in enumerate(columns)
                 ]
         assert set(wav_dir.iterdir()) == expected_paths
         assert _archive_rows(startup.database_path) == expected_rows

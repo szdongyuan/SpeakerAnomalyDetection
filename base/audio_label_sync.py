@@ -1,11 +1,16 @@
 """Instance-owned serial audio label writes, independent of Qt."""
 
+import csv
+import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from queue import Queue
 from threading import Lock, Thread
 
+from base.analysis_artifact_names import JUDGEMENT_STATUS_FILE
 from base.audio_label_repository import AudioLabelPersistenceError
+from base.csv_writer import write_csv_atomic
 
 
 @dataclass(frozen=True)
@@ -13,6 +18,8 @@ class AudioLabelJob:
     task_id: str
     wav_path: str
     label: str
+    result_directory: str = ""
+    judgement_summary: dict | None = None
 
 
 class AudioLabelSubmissionError(RuntimeError):
@@ -62,6 +69,19 @@ class AudioLabelSyncService:
             job = self._jobs.get()
             if job is None:
                 return
+            status_error = None
+            if job.result_directory and job.judgement_summary is not None:
+                try:
+                    path = Path(job.result_directory) / "csv" / Path(job.wav_path).stem / JUDGEMENT_STATUS_FILE
+                    summary = job.judgement_summary
+                    write_csv_atomic(path, ["状态", "完整", "必需判定数", "缺失实例", "失败实例"], [[
+                        summary["status"], summary["complete"], summary["required_count"],
+                        json.dumps(summary["missing_required"], ensure_ascii=False),
+                        json.dumps(summary["failed_required"], ensure_ascii=False),
+                    ]])
+                except (OSError, ValueError, TypeError, csv.Error) as error:
+                    status_error = error
+                    logging.getLogger("core").exception("Cannot save judgement completeness for %s", job.task_id)
             try:
                 update = self._repository.update(job.wav_path, job.label)
             except AudioLabelPersistenceError as error:
@@ -74,4 +94,4 @@ class AudioLabelSyncService:
                 )
                 self._completed(job, None, error)
             else:
-                self._completed(job, update, None)
+                self._completed(job, update, status_error)

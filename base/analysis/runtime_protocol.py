@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 
 from .contracts import AnalysisTask
+from base.audio_label_policy import judgement_summary, required_judgements
 
 
 @dataclass(frozen=True)
@@ -34,4 +35,5 @@ def failed_task(task, error):
         "task_id": task.task_id, "station_id": task.station_id,
         "condition_id": task.condition_id, "execution_status": "分析失败",
         "instance_results": [], "error": error,
+        "judgement_summary": judgement_summary([], required_judgements(task.instances)),
     }

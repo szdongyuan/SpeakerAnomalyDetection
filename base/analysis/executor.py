@@ -1,12 +1,14 @@
-"""Execute one prepared task; process ownership belongs to the later service."""
+"""Execute a task; the worker owns its process and save-thread lifecycle."""
 
 from copy import deepcopy
+from concurrent.futures import wait
 import logging
 
 import numpy as np
 
 from base.analysis_algorithm_adapters import calculate_analysis_instance
 from base.analysis_config_validation import ai_execution_issue
+from base.analysis_compute_context import TaskComputeContext
 from base.loudness_analysis_adapter import loudness_limit_data
 
 from .contracts import AnalysisTask
@@ -14,15 +16,16 @@ from .evaluation import evaluate_instance
 from .results import (
     calculation_payload, error_record, instance_result, plain_data, task_result,
 )
-from .storage import save_curve, save_loudness_summary, save_overall_spl
+from .storage import save_instance_artifacts
 from .wav_input import load_task_wav, resolve_calibration, sample_window
 
 
 _LOGGER = logging.getLogger(__name__)
-_SUPPORTED_TYPES = frozenset({"SPL", "FFT", "FBA", "Spec", "LOUD"})
+_SUPPORTED_TYPES = frozenset({"SPL", "FFT", "FBA", "Spec", "LOUD", "SHRP", "ROUGH"})
 
 
-def execute_task(task: AnalysisTask) -> dict:
+def execute_task(task: AnalysisTask, *, reuse_computations: bool = True,
+                 on_judgement_ready=None, save_executor=None) -> dict:
     """Return a fixed result, without UI, current-config queries or processes.
 
     The caller must publish/close the WAV before calling. Preparation issues do
@@ -40,14 +43,51 @@ def execute_task(task: AnalysisTask) -> dict:
         # File/library boundary; preserve diagnostics and return one task failure.
         _LOGGER.exception("Cannot read WAV for analysis task %s", task.task_id)
         return task_result(task, [], error_record("wav_read", error))
-    results = [
-        _execute_instance(task, instance, samples, sample_rate, metadata)
-        for instance in task.instances
-    ]
-    return plain_data(task_result(task, results))
+    context = TaskComputeContext() if reuse_computations else None
+    pending = []
+    last_required = max((i for i, item in enumerate(task.instances)
+                         if item.parameters.get("limit_checked", False)), default=-1)
+    try:
+        results = []
+        for index, instance in enumerate(task.instances):
+            result = _execute_instance(task, instance, samples, sample_rate, metadata, context)
+            results.append(result)
+            if index == last_required and on_judgement_ready is not None:
+                fields = ("config_key", "analysis_type", "channel_index", "execution_status",
+                          "judgement_required", "judgement_status", "judgement", "error")
+                on_judgement_ready({
+                    "task_id": task.task_id, "station_id": task.station_id,
+                    "condition_id": task.condition_id,
+                    "instance_results": [{key: deepcopy(item[key]) for key in fields}
+                                         for item in results if item["judgement_required"]],
+                })
+            if result["execution_status"] != "分析完成" or not task.persist_artifacts:
+                continue
+            if save_executor is None:
+                result["artifacts"] = save_instance_artifacts(task, instance, result)
+            else:
+                pending.append((result, save_executor.submit(
+                    save_instance_artifacts, task, instance, result,
+                )))
+        for result, future in pending:
+            result["artifacts"] = future.result()
+        return plain_data(task_result(task, results))
+    finally:
+        # Also drain on calculation/callback/submission failure: no writes may
+        # escape into the next task of this resident worker.
+        if pending:
+            wait([future for _, future in pending])
+            pending.clear()
+        if context is not None:
+            context.clear()
+            _LOGGER.debug(
+                "Task computation reuse %s: hits=%s misses=%s computes=%s lookup_s=%.6f compute_s=%.6f",
+                task.task_id, context.hits, context.misses, context.compute_count,
+                context.lookup_seconds, context.compute_seconds,
+            )
 
 
-def _execute_instance(task, instance, samples, sample_rate, metadata):
+def _execute_instance(task, instance, samples, sample_rate, metadata, compute_context=None):
     result = instance_result(instance)
     if instance.analysis_type == "AI":
         kind, message = ai_execution_issue(instance.parameters)
@@ -74,7 +114,7 @@ def _execute_instance(task, instance, samples, sample_rate, metadata):
             )
             return result
         time_config = (instance.parameters.get("advanced", {})
-                       if instance.analysis_type == "LOUD" else instance.parameters)
+                       if instance.analysis_type in {"LOUD", "SHRP", "ROUGH"} else instance.parameters)
         first, stop = sample_window(time_config, len(samples), sample_rate)
         # SPL weighting runs before cropping, so invalid earlier samples matter.
         used = (
@@ -91,6 +131,8 @@ def _execute_instance(task, instance, samples, sample_rate, metadata):
             deepcopy(instance.parameters), factor, source="station_analysis",
             sequence_snapshot={"segment_window_samples": (first, stop)},
             evaluate_limits=False, full_spectrogram=True,
+            compute_context=compute_context,
+            input_identity=(task.task_id, index, first, stop, "wav_voltage_float32"),
         )
         metrics, payload = calculation_payload(instance, calculation, first / sample_rate)
         for key in ("overall_spl", "overall_db", "overall_weighted_db", "peak_value"):
@@ -112,24 +154,6 @@ def _execute_instance(task, instance, samples, sample_rate, metadata):
         result["error"] = error_record(stage, error)
         return result
     _judge(instance, calculation, result)
-    if not task.persist_artifacts:
-        return result
-    exports = []
-    if instance.analysis_type == "SPL":
-        exports.append(("overall_spl_csv", save_overall_spl))
-    elif instance.analysis_type == "LOUD":
-        exports.append(("loudness_summary_csv", save_loudness_summary))
-    if instance.analysis_type in {"SPL", "FFT", "FBA", "LOUD"}:
-        exports.append(("curve_csv", save_curve))
-    for kind, save in exports:
-        artifact = {"kind": kind, "status": "failed", "path": None, "error": None}
-        try:
-            artifact["path"] = save(task, instance, result)
-            artifact["status"] = "saved"
-        except Exception as error:
-            _LOGGER.exception("Cannot save %s for %s/%s", kind, task.task_id, instance.config_key)
-            artifact["error"] = error_record("saving", error)
-        result["artifacts"].append(artifact)
     return result
 
 
@@ -139,7 +163,7 @@ def _judge(instance, calculation, result):
         return
     try:
         evaluation = evaluate_instance(instance, calculation)
-        if instance.analysis_type == "LOUD":
+        if instance.analysis_type in {"LOUD", "SHRP", "ROUGH"}:
             result["metrics"].update(
                 limit_metric=instance.parameters.get("limit_metric", "curve_y"),
                 limit_unit=evaluation["unit"],
