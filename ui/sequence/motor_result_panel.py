@@ -45,8 +45,12 @@ class MotorResultPanel(QWidget):
         "等待下一档位",
         "本轮完成",
         "测试异常",
+        "正在暂停",
+        "已暂停",
+        "暂停未完成",
     }
     PUBLIC_STAGE_ALIASES = {
+        "等待新的工况状态码": "等待下一档位",
         "分析排队": "分析中",
         "分段分析": "分析中",
         "本轮录音完成，等待分析": "分析中",
@@ -517,7 +521,7 @@ class MotorResultPanel(QWidget):
             display_tone = "pending"
         elif display_text in ("分析中", "数据保存中"):
             display_tone = "running"
-        elif display_text == "测试异常":
+        elif display_text in ("测试异常", "暂停未完成"):
             display_tone = "ng"
         else:
             display_tone = tone
@@ -922,6 +926,18 @@ class MotorResultPanel(QWidget):
                 self.set_condition_result(key, phase, "pending" if phase == "已停止" else "ng")
             else:
                 self._render_capture_progress(self.rows[key])
+
+    def pause_condition_capture(self, condition):
+        """Discard only the current attempt's presentation, keeping its target."""
+        key = self._resolve_key(condition)
+        if key:
+            self.set_condition_result(key, "待检测", "pending")
+            row = self.rows[key]
+            self._stop_capture_clock(row)
+            row.update(capture_seconds=0.0, capture_has_started=False,
+                       capture_last_data_at=None, capture_elapsed_seconds=0.0)
+            row["result"] = row["capture_phase"] = "已暂停"
+            self._render_capture_progress(row)
 
     def _render_capture_progress(self, row):
         bar = row["capture_bar"]

@@ -172,6 +172,8 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
 
     def _recording_resources_available(self):
         """Shared product-test and calibration ownership checks."""
+        if getattr(self, "_test_pause_blocks_start", lambda: False)():
+            return False
         if getattr(self, "_product_config_refresh_state", "ready") in ("initializing", "applying"):
             return False
         if getattr(self, "_product_progress_choice_pending", False):
@@ -420,6 +422,9 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
         return getattr(self, "_recording_process_id", None) == request_id
 
     def _on_condition_capture_status_changed(self, condition_key, status):
+        if getattr(self, "_test_pause_blocks_start", lambda: False)():
+            self._apply_test_pause_presentation()
+            return
         workspace = getattr(self, "channel_workspace", None)
         if workspace is not None:
             workspace.set_condition_context(condition_key, status=status)
@@ -787,6 +792,9 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
             refresh()
 
     def _on_process_recording_failed(self, session, failure):
+        pause_terminal = getattr(self, "_handle_test_pause_terminal", None)
+        if pause_terminal and pause_terminal(session, "failed", failure.message):
+            return
         context = self._recording_context_for_session(session)
         if context is None:
             return
@@ -835,6 +843,9 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
                 self._refresh_recording_failure_recovery(session)
 
     def _on_process_recording_cancelled(self, session, descriptor):
+        pause_terminal = getattr(self, "_handle_test_pause_terminal", None)
+        if pause_terminal and pause_terminal(session, "cancelled"):
+            return
         context = self._recording_context_for_session(session)
         if context is None or context.cleanup_owned:
             return

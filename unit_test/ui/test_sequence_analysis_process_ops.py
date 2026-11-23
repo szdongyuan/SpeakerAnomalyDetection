@@ -52,6 +52,84 @@ class _Workspace:
         self.context_updates.append((condition_key, context))
 
 
+@pytest.mark.parametrize("state", ["waiting", "recording", "serial", "paused", "pausing"])
+def test_analysis_queue_drain_refreshes_real_main_button(ui_qapp, state, tmp_path):
+    from PyQt5.QtWidgets import QPushButton
+    from ui.sequence.sequence_widget_pause_ops import (
+        SequenceWidgetPauseOpsMixin, TestPauseContext,
+    )
+    from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
+
+    class Host(SequenceWidgetPauseOpsMixin, SequenceWidgetUiOpsMixin,
+               SequenceWidgetAnalysisProcessOpsMixin):
+        def __init__(self):
+            self.toolsbar = SimpleNamespace(
+                player_btn=QPushButton(), data_btn=QPushButton(), replayer_btn=QPushButton(),
+            )
+            self.left_panel = _LeftPanel()
+            self._test_pause = None
+            self._manual_product_condition_group_id = "round-1"
+            self._manual_product_condition_index = 1
+            self.product_test_condition_configs = [
+                {"condition_name": "10V3A", "trigger_state": ""},
+                {"condition_name": "档位1", "trigger_state": ""},
+            ]
+            self.player_status_flag = self._record_workflow_busy = state == "recording"
+            self._analysis_process_service = SimpleNamespace(active=True, poll=lambda: ([], []))
+            self._analysis_active_request = SimpleNamespace(task_id="auto-1", source="自动分析")
+            self._analysis_handled_terminal_task_ids = {"auto-1"}
+            self._analysis_task_queue = deque()
+            self._analysis_round_completion_pending = False
+            self.refresh_count = 0
+            if state == "serial":
+                for index, condition in enumerate(self.product_test_condition_configs):
+                    condition["trigger_state"] = str(index + 1)
+            if state in ("paused", "pausing"):
+                self._test_pause = TestPauseContext("round-1", "first", None, None, phase=state)
+
+        def update_player_btn_is_paused(self):
+            self.refresh_count += 1
+            super().update_player_btn_is_paused()
+
+        def _refresh_analysis_action_state(self):
+            pass
+
+        def _load_sequence_config_for_product_condition(self, condition):
+            raise AssertionError("分析结束不能自动启动下一档位")
+
+        def _can_prepare_recording_workflow(self):
+            return not self.player_status_flag and not self._test_pause_blocks_start()
+
+    host = Host()
+    host.update_player_btn_is_paused()
+    before = host.refresh_count
+    if state == "waiting":
+        assert host.player_btn.toolTip() == "开始录制：档位1"
+        assert host.player_btn.isEnabled()
+    else:
+        assert host.player_btn.toolTip() != "开始录制：档位1"
+    host._analysis_process_service.active = False
+    host._poll_analysis_process_runtime()
+    assert host.refresh_count == before + 1
+    if state == "waiting":
+        assert host.player_btn.toolTip() == "开始录制：档位1"
+        assert host.player_btn.isEnabled()
+        assert host.left_panel.stage_updates[-1] == ("等待下一档位", "pending")
+        host.player_btn.resize(120, 40)
+        assert host.player_btn.grab().save(str(tmp_path / "next_condition_button.png"))
+    elif state in ("recording", "serial"):
+        assert host.player_btn.toolTip() == "暂停测试"
+        assert host.player_btn.isEnabled()
+    elif state == "paused":
+        assert "继续测试" in host.player_btn.toolTip()
+        assert host.player_btn.isEnabled()
+    else:
+        assert not host.player_btn.isEnabled()
+    host._poll_analysis_process_runtime()
+    assert host.refresh_count == before + 1  # No repeated idle-poll button updates.
+    assert host._manual_product_condition_index == 1
+
+
 def test_automatic_request_snapshots_current_channel_labels(monkeypatch):
     captured = {}
 

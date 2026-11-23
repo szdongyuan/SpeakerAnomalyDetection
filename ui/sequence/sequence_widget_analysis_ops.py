@@ -1211,6 +1211,8 @@ class SequenceWidgetAnalysisOpsMixin(
 
 
     def on_clicked_player_btn(self, label="not_labeled"):
+        if getattr(self, "_handle_test_pause_button", lambda: False)():
+            return
         if getattr(self, "_product_progress_choice_pending", False):
             if (getattr(self, "_product_progress_prompt_ready", False)
                     and self._offer_product_test_resume()):
@@ -1968,6 +1970,9 @@ class SequenceWidgetAnalysisOpsMixin(
                 self.data_btn.setDisabled(True)
 
             QApplication.processEvents()
+            if getattr(self, "_test_pause_blocks_start", lambda: False)():
+                self._pause_prepared_recording()
+                return
             if (getattr(self, "_close_in_progress", False)
                     or (csv_scope.admission is not None and csv_scope.admission.cancelled)):
                 self._rollback_closed_recording_start()
