@@ -193,6 +193,7 @@ def test_save_dialog_default_directory_is_canonical(editor, monkeypatch, tmp_pat
     (tmp_path / "consts").mkdir()
     monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", tmp_path.as_posix() + "/consts/../")
     expected_dir = tmp_path / "ui" / "ui_config" / "analysis_sequence_config"
+    expected_dir.mkdir(parents=True)
     window.using_config_path = None
     change(window)
     draft = window.format_config_data(window.select_list.config)
@@ -222,18 +223,19 @@ def test_save_dialog_default_directory_is_canonical(editor, monkeypatch, tmp_pat
     assert {path: path.read_bytes() for path in tmp_path.rglob("*.json")} == before
 
 
-def test_first_save_directory_failure_retains_draft(editor, monkeypatch, tmp_path, save_selection):
+def test_first_save_unavailable_default_allows_cancel_and_retains_draft(editor, monkeypatch, tmp_path, save_selection):
     window, original, registry, _, warnings = editor
     before = original.read_bytes(), registry.read_bytes()
     window.using_config_path = None
     change(window)
-    calls = save_selection(tmp_path / "Chosen.json")
-    # A file in place of the default directory produces a real filesystem error.
+    calls = save_selection(None)
+    # An unavailable default must not prevent choosing another directory or cancelling.
     write_json(tmp_path / "ui", {})
     monkeypatch.setattr("ui.operation_sequence.DEFAULT_DIR", tmp_path.as_posix() + "/")
     window.show()
     window.ok_btn_clicked()
-    assert warnings and not calls
+    assert not warnings
+    assert calls == ["保存测试队列"]
     assert window.using_config_path is None
     assert window.dirty and window.isVisible()
     assert (original.read_bytes(), registry.read_bytes()) == before

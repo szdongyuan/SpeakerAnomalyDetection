@@ -45,6 +45,7 @@ from base.analysis_report_source import (
     scan_project,
 )
 from consts import model_consts, ui_style_const
+from ui import file_dialog_history as path_history
 from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.analysis_report_wav_dialog import (
     AnalysisReportWavDialog,
@@ -550,10 +551,14 @@ class AnalysisReportExportDialog(QDialog):
         return controls
 
     def _choose_project(self):
-        initial = self.project_path_edit.text().strip() or os.getcwd()
+        initial = path_history.get_initial_directory(
+            path_history.REPORT_PROJECT_SELECT,
+            self.project_path_edit.text().strip() or os.getcwd(),
+        )
         selected = QFileDialog.getExistingDirectory(self, "选择测试项目目录", initial)
         if not selected:
             return
+        path_history.remember_directory(path_history.REPORT_PROJECT_SELECT, selected)
         self.project_path_edit.setText(os.path.normpath(selected))
         self._start_scan()
 
@@ -837,6 +842,10 @@ class AnalysisReportExportDialog(QDialog):
             return
 
         suggested = default_report_path(self._index.project_directory)
+        initial = path_history.get_initial_directory(
+            path_history.REPORT_PDF_SAVE, os.path.dirname(suggested),
+        )
+        suggested = os.path.join(initial, os.path.basename(suggested))
         file_path, _selected_filter = QFileDialog.getSaveFileName(
             self,
             "保存分析报告",
@@ -845,6 +854,7 @@ class AnalysisReportExportDialog(QDialog):
         )
         if not file_path:
             return
+        path_history.remember_directory(path_history.REPORT_PDF_SAVE, os.path.dirname(file_path))
         try:
             prepare_analysis_report_runtime()
         except Exception as error:

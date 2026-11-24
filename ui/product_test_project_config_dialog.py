@@ -53,6 +53,7 @@ from consts.product_test_project_consts import (
     TRIGGER_STATE_KEY,
 )
 from consts.running_consts import DEFAULT_DIR
+from ui import file_dialog_history as path_history
 from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.config_dialog_base import ConfigDialogBase
 from ui.product_queue_conflict_dialog import ProductQueueConflictDialog
@@ -1485,10 +1486,15 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         if not self._confirm_leave_changes():
             return
         source_path, _ = QFileDialog.getOpenFileName(
-            self, "导入产品测试配置", self.manager.program_dir, "JSON 配置 (*.json)"
+            self, "导入产品测试配置",
+            path_history.get_initial_directory(
+                path_history.PRODUCT_PROJECT_IMPORT, self.manager.program_dir,
+            ),
+            "JSON 配置 (*.json)",
         )
         if not source_path:
             return
+        path_history.remember_directory(path_history.PRODUCT_PROJECT_IMPORT, os.path.dirname(source_path))
         success, project_data = self.manager.import_project(source_path)
         if not success:
             QMessageBox.warning(self, "导入失败", project_data)
