@@ -92,6 +92,16 @@ def test_capture_analysis_failure_retry_and_reset(panel):
     assert row["labels"]["capture_time"].text() == "-- / -- 秒"
 
 
+def test_restore_without_configured_duration_does_not_invent_capture_time(panel):
+    panel.set_condition_result("first", "OK", "ok")
+    assert not panel.restore_condition_capture_completed("first")
+    row = panel.rows["first"]
+    assert row["capture_bar"].value() == 0
+    assert row["labels"]["capture_time"].text() == "-- / -- 秒"
+    assert row["result"] == "OK"
+    assert not panel._capture_timer.isActive()
+
+
 def test_configured_durations_are_visible_before_start_and_survive_reset(panel):
     conditions = [
         {"key": "first", "condition_name": "10V3A", "test_queue": "short"},
@@ -116,6 +126,30 @@ def test_configured_durations_are_visible_before_start_and_survive_reset(panel):
     panel.reset()
     assert first["labels"]["capture_time"].text() == "-- / 60.0 秒"
     assert second["labels"]["capture_time"].text() == "-- / 90.0 秒"
+
+
+@pytest.mark.parametrize("width", [400, 480, 570])
+def test_capture_columns_align_across_durations_and_states(panel, ui_qapp, width):
+    panel.set_condition_configs([
+        {"key": "first", "condition_name": "5V放点", "test_queue": "long"},
+        {"key": "second", "condition_name": "档位1", "test_queue": "short"},
+    ], queue_catalog={"long": {"duration": 430}, "short": {"duration": 60}})
+    panel.resize(width, 460)
+    for state in ("待检测", "数据保存中", "NG"):
+        panel.set_condition_result("first", state)
+        ui_qapp.processEvents()
+        rects_by_row = []
+        for row in panel.rows.values():
+            widgets = [row["labels"]["name"], row["capture_bar"],
+                       row["labels"]["capture_time"], row["labels"]["progress"],
+                       row["labels"]["result"]]
+            rects = [widget.geometry() for widget in widgets]
+            assert all(row["button"].rect().contains(rect) for rect in rects)
+            assert all(a.right() < b.left() for a, b in zip(rects, rects[1:]))
+            for label in (row["labels"]["capture_time"], row["labels"]["result"]):
+                assert label.width() >= label.fontMetrics().horizontalAdvance(label.text())
+            rects_by_row.append([(rect.x(), rect.width()) for rect in rects])
+        assert rects_by_row[0] == rects_by_row[1]
 
 
 @pytest.mark.parametrize("width", [400, 480, 570])

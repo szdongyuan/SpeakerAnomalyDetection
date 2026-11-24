@@ -24,7 +24,7 @@ _MIN_SAMPLE_RATE = 4000
 _MAX_SAMPLE_RATE = 192000
 
 _SELECT_FIELDS = (
-    ("select_product_model", "产品型号", "全部型号"),
+    ("select_product_model", "测试设备型号", "全部测试设备型号"),
     ("select_sample_number", "样本编号", "全部样本"),
     ("select_test_round", "测试轮次", "全部轮次"),
     ("select_port", "端口", "全部端口"),
@@ -171,9 +171,18 @@ class ArchiveAudioFilterDialog(ConfigDialogBase):
             if info.project_key is not None
         }
         names = Counter(projects.values())
+        reserved_labels = {"全部项目", "未识别"}
+        # Reserve real names before numbering, including names sorted later.
+        occupied_labels = set(projects.values()) | reserved_labels
+        name_indices = Counter()
         options = []
         for key, name in sorted(projects.items(), key=lambda item: (natural_sort_key(item[1]), item[0])):
-            text = f"{name} — {key}" if names[name] > 1 else name
+            text = name
+            if names[name] > 1 or name in reserved_labels:
+                while text in occupied_labels:
+                    name_indices[name] += 1
+                    text = f"{name}（{name_indices[name]}）"
+            occupied_labels.add(text)
             options.append((text, key, key))
         if any(info.project_key is None for info in self.metadata_by_id.values()):
             options.append(("未识别", UNKNOWN, "无法从保存路径和文件名识别项目"))

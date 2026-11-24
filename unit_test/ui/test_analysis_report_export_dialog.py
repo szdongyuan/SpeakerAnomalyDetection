@@ -299,7 +299,7 @@ def test_loaded_index_without_models_shows_disabled_empty_state(
     )
 
     assert dialog.model_combo.count() == 1
-    assert dialog.model_combo.currentText() == "未发现型号"
+    assert dialog.model_combo.currentText() == "未发现测试设备型号"
     assert dialog.model_combo.currentData() == ""
     assert not dialog.model_combo.isEnabled()
     assert not dialog.sample_selector.isEnabled()

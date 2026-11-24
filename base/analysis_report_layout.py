@@ -161,7 +161,7 @@ def _fix_table_columns(body):
                 weights.append(1.5 if text.startswith("CH") else 8.0)
             elif text in {"样本", "序号"}:
                 weights.append(0.8)
-            elif text == "型号":
+            elif text == "测试设备型号":
                 weights.append(1.4)
             elif text == "轮次":
                 weights.append(1.1)

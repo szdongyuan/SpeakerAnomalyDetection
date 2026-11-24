@@ -407,7 +407,7 @@ class AnalysisReportExportDialog(QDialog):
 
         self.model_combo = QComboBox(self)
         self.model_combo.setObjectName("reportModelCombo")
-        self.model_combo.addItem("请选择型号", "")
+        self.model_combo.addItem("请选择测试设备型号", "")
         self.sample_selector = SampleMultiSelect(self)
         self.candidate_model = CandidateTableModel(self)
         self.details_button = QPushButton("查看 WAV", self)
@@ -416,7 +416,7 @@ class AnalysisReportExportDialog(QDialog):
         self.details_button.setToolTip("查看并调整已匹配的 WAV 明细")
         self.details_button.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
 
-        model_label = QLabel("型号：", self)
+        model_label = QLabel("测试设备型号：", self)
         sample_label = QLabel("样本编号：", self)
         scope_label_width = max(
             model_label.sizeHint().width(),
@@ -620,7 +620,7 @@ class AnalysisReportExportDialog(QDialog):
                         self.model_combo.addItem(model, model)
                     self.model_combo.setCurrentIndex(0)
                 else:
-                    self.model_combo.addItem("未发现型号", "")
+                    self.model_combo.addItem("未发现测试设备型号", "")
             finally:
                 self.model_combo.blockSignals(False)
         finally:
@@ -639,7 +639,7 @@ class AnalysisReportExportDialog(QDialog):
             self.model_combo.blockSignals(True)
             try:
                 self.model_combo.clear()
-                self.model_combo.addItem("请选择型号", "")
+                self.model_combo.addItem("请选择测试设备型号", "")
             finally:
                 self.model_combo.blockSignals(False)
             self.sample_selector.set_values(())
@@ -817,7 +817,7 @@ class AnalysisReportExportDialog(QDialog):
             QMessageBox.warning(self, "报告导出", "请先选择项目目录。")
             return
         if not self._selected_model():
-            QMessageBox.warning(self, "报告导出", "请选择型号。")
+            QMessageBox.warning(self, "报告导出", "请选择测试设备型号。")
             return
         if not self.sample_selector.selected_values():
             QMessageBox.warning(self, "报告导出", "请至少选择一个样本编号。")

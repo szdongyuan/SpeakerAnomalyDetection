@@ -16,7 +16,7 @@ def toolbar_host(ui_qapp, rendered_font):
     # Match MainWindow -> central widget -> SequenceWindow, including the
     # production minimum and margins. Never force a smaller layout geometry.
     window = QMainWindow()
-    window.setMinimumSize(1030, 760)
+    window.setMinimumSize(1140, 760)
     central = QWidget()
     window.setCentralWidget(central)
     main_layout = QVBoxLayout(central)
@@ -30,7 +30,7 @@ def toolbar_host(ui_qapp, rendered_font):
     sequence_layout.addWidget(toolbar)
     workspace = QWidget()
     sequence_layout.addWidget(workspace, 1)
-    window.resize(1030, 760)
+    window.resize(1140, 760)
     window.show()
     window.activateWindow()
     ui_qapp.processEvents()
@@ -76,7 +76,7 @@ def assert_row(window, toolbar, width):
     assert window.width() == width
     assert toolbar.width() == width - 2
     assert toolbar.height() == 42
-    assert 617 <= toolbar.minimumSizeHint().width() <= 1028
+    assert 617 <= toolbar.minimumSizeHint().width() <= 1138
     controls = ordered_controls(toolbar)
     assert len(controls) == 20
     assert all(widget.isVisible() for widget in controls)
@@ -107,7 +107,7 @@ def assert_row(window, toolbar, width):
     assert toolbar.condition_mode_combobox.isHidden()
 
 
-@pytest.mark.parametrize("width", [1030, 1280, 1440, 1920])
+@pytest.mark.parametrize("width", [1140, 1280, 1440, 1920])
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5])
 def test_single_row_at_real_parent_width(width, scale, toolbar_host, ui_qapp, monkeypatch):
     window, toolbar, workspace = toolbar_host
@@ -119,8 +119,8 @@ def test_single_row_at_real_parent_width(width, scale, toolbar_host, ui_qapp, mo
     assert_row(window, toolbar, width)
     assert toolbar.lineedit_type.font().pixelSize() == round(18 * scale)
     assert workspace.height() > 650
-    expected = (["型号：", "配置：", "样本：", "轮次："] if toolbar.serial_trigger_btn.compact
-                else ["型号：", "使用配置：", "样本编号：", "当前测试轮次："])
+    expected = (["测试设备型号：", "配置：", "样本：", "轮次："] if toolbar.serial_trigger_btn.compact
+                else ["测试设备型号：", "使用配置：", "样本编号：", "当前测试轮次："])
     for label, text in zip(field_labels(toolbar), expected):
         assert label._display_text() == text
         assert "…" not in text
@@ -138,7 +138,7 @@ def test_single_row_at_real_parent_width(width, scale, toolbar_host, ui_qapp, mo
     switch.initStyleOption(option)
     rect = switch.style().subElementRect(QStyle.SE_CheckBoxContents, option, switch)
     assert rect.contains(switch.fontMetrics().boundingRect(rect, Qt.AlignLeft | Qt.AlignVCenter, switch.text()))
-    if width == 1030:
+    if width == 1140:
         assert toolbar.serial_trigger_btn.compact
     if width == 1920 and scale == 1:
         assert not toolbar.serial_trigger_btn.compact
@@ -169,7 +169,7 @@ def test_minimum_fields_show_ellipsis_with_real_fonts(scale, toolbar_host, ui_qa
     toolbar.player_btn.setFocus()
     ui_qapp.processEvents()
     toolbar.grab()
-    assert_row(window, toolbar, 1030)
+    assert_row(window, toolbar, 1140)
     for widget in (toolbar.lineedit_type, toolbar.sample_number_lineedit,
                    toolbar.using_file_combobox, toolbar.lineedit_s_or_n):
         assert "…" in widget._display_text()
@@ -213,7 +213,7 @@ def test_resize_preserves_values_focus_selection_and_signals(toolbar_host, ui_qa
     toolbar.lineedit_s_or_n.setFocus()
     toolbar.lineedit_s_or_n.setSelection(3, 8)
     selected = toolbar.lineedit_s_or_n.selectedText()
-    for width in (1030, 1920, 1280, 1030):
+    for width in (1140, 1920, 1280, 1140):
         window.resize(width, 760)
         ui_qapp.processEvents()
         toolbar.grab()
@@ -230,13 +230,17 @@ def test_resize_preserves_values_focus_selection_and_signals(toolbar_host, ui_qa
     assert ui_qapp.clipboard().text() == originals[-1]
 
 
-def test_production_blocked_config_and_barcode_updates_keep_full_hints(toolbar_host, ui_qapp):
+def test_production_blocked_config_and_barcode_updates_keep_full_hints(toolbar_host, ui_qapp, tmp_path):
+    from types import SimpleNamespace
     from ui.sequence.sequence_widget_barcode_ops import SequenceWidgetBarcodeOpsMixin
     from ui.sequence.sequence_widget_config_ops import SequenceWidgetConfigOpsMixin
 
     class Operations(SequenceWidgetBarcodeOpsMixin, SequenceWidgetConfigOpsMixin):
         def _get_product_program_registry(self):
             return self.registry
+
+        def _get_product_program_manager(self):
+            return SimpleNamespace(program_dir=str(tmp_path))
 
     _, toolbar, _ = toolbar_host
     operations = Operations()
@@ -252,6 +256,9 @@ def test_production_blocked_config_and_barcode_updates_keep_full_hints(toolbar_h
         {"project_name": "OLD", "file": "old.json"},
         {"project_name": "当前完整配置-CURRENT-0123456789", "file": "current.json"},
     ]}
+    operations.active_product_program_file = "current.json"
+    for item in operations.registry["configs"]:
+        (tmp_path / item["file"]).write_text("{}", encoding="utf-8")
     combo = toolbar.using_file_combobox
     editor = toolbar.lineedit_s_or_n
     combo.setToolTip("选择配置")
@@ -320,7 +327,7 @@ def test_popup_scan_reset_and_status_survive_resize(toolbar_host, ui_qapp):
         {"connected": True, "has_response": True, "message": "ok"})
     toolbar.data_btn.setEnabled(True)
     toolbar.data_btn.set_analyzing(7, 20, "A口")
-    for width in (1920, 1030):
+    for width in (1920, 1140):
         window.resize(width, 760)
         ui_qapp.processEvents()
         assert_row(window, toolbar, width)
@@ -329,7 +336,7 @@ def test_popup_scan_reset_and_status_survive_resize(toolbar_host, ui_qapp):
         assert toolbar.data_btn.analysis_state == toolbar.data_btn.STATE_ANALYZING
         assert toolbar.data_btn.status_badge.text() == "7/20"
         assert toolbar.data_btn.rect().contains(toolbar.data_btn.status_badge.geometry())
-    for index, width in enumerate((1920, 1030, 1920)):
+    for index, width in enumerate((1920, 1140, 1920)):
         window.resize(width, 760)
         ui_qapp.processEvents()
         if index == 0:
@@ -350,18 +357,18 @@ def test_render_toolbar_review_images(toolbar_host, ui_qapp, tmp_path):
     toolbar.data_btn.setEnabled(True)
     toolbar.data_btn.set_analyzing(7, 20, "A口")
     toolbar.player_btn.setFocus()
-    for width in (1030, 1920):
+    for width in (1140, 1920):
         window.resize(width, 760)
         ui_qapp.processEvents()
         assert toolbar.grab().save(str(tmp_path / f"toolbar-{width}.png"))
     scale_fonts(toolbar, 1.5)
-    window.resize(1030, 760)
+    window.resize(1140, 760)
     ui_qapp.processEvents()
-    assert toolbar.grab().save(str(tmp_path / "toolbar-1030-font150.png"))
+    assert toolbar.grab().save(str(tmp_path / "toolbar-1140-font150.png"))
     toolbar.lineedit_s_or_n.setFocus()
     toolbar.lineedit_s_or_n.selectAll()
     ui_qapp.processEvents()
-    assert toolbar.grab().save(str(tmp_path / "toolbar-1030-font150-focus.png"))
+    assert toolbar.grab().save(str(tmp_path / "toolbar-1140-font150-focus.png"))
 
 
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5])
@@ -421,11 +428,11 @@ def test_serial_states_paint_without_losing_native_status(scale, toolbar_host, u
     for index, (status, text, color) in enumerate(cases):
         if status is not None:
             host.on_serial_trigger_status_changed(status)
-        for width in (1030, wide_width, 1030, wide_width, 1030):
+        for width in (1140, wide_width, 1140, wide_width, 1140):
             window.resize(width, 760)
             ui_qapp.processEvents()
             image = button.grab().toImage()
-            assert painted[-1] == ("" if width == 1030 else text)
+            assert painted[-1] == ("" if width == 1140 else text)
             assert button.text() == text
             assert text in button.toolTip() and text in button.accessibleName()
             assert text in button.accessibleDescription()
@@ -435,7 +442,7 @@ def test_serial_states_paint_without_losing_native_status(scale, toolbar_host, u
                 assert status["message"] in button.toolTip()
                 assert status["message"] in button.accessibleDescription()
             assert button.height() == 40 and button.isEnabled()
-            if width == 1030:
+            if width == 1140:
                 assert button.width() == 48
                 dot = button.status_dot_rect()
                 icon = button.compact_icon_rect()
@@ -488,7 +495,7 @@ def test_serial_click_uses_production_signal_and_configuration_entry(toolbar_hos
             return None
     monkeypatch.setattr(serial_ops, "SerialDiscreteInputConfigDialog", Dialog)
     host.set_member_connect()
-    for index, width in enumerate((1030, 1920, 1030), 1):
+    for index, width in enumerate((1140, 1920, 1140), 1):
         window.resize(width, 760)
         ui_qapp.processEvents()
         QTest.mouseClick(toolbar.serial_trigger_btn, Qt.LeftButton)

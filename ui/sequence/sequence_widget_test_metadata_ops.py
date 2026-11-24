@@ -63,7 +63,7 @@ class SequenceWidgetTestMetadataOpsMixin:
         locked_model = self._test_round_product_model
         if locked_model is not None:
             if editor.text() != locked_model:
-                return self._show_test_metadata_error(editor, "本轮型号已锁定，不能在测试中途修改。")
+                return self._show_test_metadata_error(editor, "本轮测试设备型号已锁定，不能在测试中途修改。")
             return True
         try:
             model = validate_product_model(editor.text())

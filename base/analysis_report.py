@@ -442,7 +442,7 @@ def _build_summary_html(
 <table class="meta" width="100%">
   <tr><th>项目</th><td>{_html(project)}</td><th>导出时间</th><td>{_html(generated_at.strftime('%Y-%m-%d %H:%M:%S'))}</td></tr>
   <tr><th>已选 WAV</th><td colspan="3">{len(candidates)}</td></tr>
-  <tr><th>型号</th><td>{_html(models)}</td><th>端口</th><td>{_html(ports)}</td></tr>
+  <tr><th>测试设备型号</th><td>{_html(models)}</td><th>端口</th><td>{_html(ports)}</td></tr>
   <tr><th>档位</th><td>{_html(conditions)}</td><th>轮次</th><td>{_html(rounds)}</td></tr>
   <tr><th>报告内容</th><td>{_html(mode_text)}</td><th>数据缺失</th><td>{completeness_text}</td></tr>
   <tr><th>结果统计</th><td colspan="3">OK {result_counts['OK']}　NG {result_counts['NG']}　无判定结果 {result_counts['无判定结果']}</td></tr>
@@ -527,7 +527,7 @@ def _append_data_tables(layout, prepared_by_item, report_content, summary):
             for group_index, channel_group in enumerate(channel_groups, start=1):
                 channel_suffix = f" - 续表 {group_index}" if len(channel_groups) > 1 else ""
                 context = (
-                    f"型号：{model}｜样品：{sample}｜轮次：{group_records[0].candidate.round_text}｜"
+                    f"测试设备型号：{model}｜样品：{sample}｜轮次：{group_records[0].candidate.round_text}｜"
                     f"端口：{port or '—'}｜档位：{condition or '—'}｜"
                     f"分析项：{identity.key}（{identity.analysis_type}）"
                     + (f"｜单位：{unit}" if unit else "")
@@ -545,7 +545,7 @@ def _append_data_tables(layout, prepared_by_item, report_content, summary):
                     for record in group_records
                 ]
                 all_headers = (
-                    "<th>样本</th><th>型号</th><th>轮次</th>"
+                    "<th>样本</th><th>测试设备型号</th><th>轮次</th>"
                     f"{segment_headers}{headers}<th>判定标准</th><th>总体判定</th><th>数据状态</th>"
                 )
                 layout.append_table(context + channel_suffix, all_headers, rows, lead=lead)
@@ -770,7 +770,7 @@ def _append_completeness_table(layout, records):
                 "<td>" + "<br>".join(_html(issue) for issue in record.issues) + "</td></tr>"
             )
         layout.append_table(
-            f"缺失明细｜型号：{model or '—'}", headers, rows,
+            f"缺失明细｜测试设备型号：{model or '—'}", headers, rows,
             lead=lead, table_class="completeness-table",
         )
         lead = ""

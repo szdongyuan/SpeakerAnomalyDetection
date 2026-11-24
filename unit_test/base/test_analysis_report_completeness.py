@@ -117,7 +117,7 @@ def test_many_missing_recordings_paginate_with_every_row_and_header(tmp_path):
     assert len(rows) > 1
     assert sum(row.count("<tr>") for row in rows) == 60
     assert report.count("<th>缺失内容</th>") == len(rows)
-    assert "缺失明细｜型号：M1 - 续页 2" in report
+    assert "缺失明细｜测试设备型号：M1 - 续页 2" in report
     for n in range(60):
         assert "".join(rows).count(f">S{n:03d}</td>") == 1
 
@@ -126,6 +126,6 @@ def test_model_context_moves_to_separate_detail_titles(tmp_path):
     template = replace(_candidate(tmp_path), analysis_items=())
     other = replace(template, model="M2", wav_path=str(tmp_path / "other.wav"))
     report, _ = _html([template, other], [AnalysisItemIdentity("FBA_1", "FBA")])
-    assert "缺失明细｜型号：M1" in report
-    assert "缺失明细｜型号：M2" in report
+    assert "缺失明细｜测试设备型号：M1" in report
+    assert "缺失明细｜测试设备型号：M2" in report
     assert "涉及 2 条录音" in report

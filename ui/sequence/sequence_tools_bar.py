@@ -195,7 +195,7 @@ class SequenceToolsBar(QWidget):
         layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
         self._configure_fields()
         for text, short_text, widget, preferred in (
-            ("型号：", "型号：", self.lineedit_type, 160),
+            ("测试设备型号：", "测试设备型号：", self.lineedit_type, 160),
             ("使用配置：", "配置：", self.using_file_combobox, 200),
             ("样本编号：", "样本：", self.sample_number_lineedit, 100),
             ("当前测试轮次：", "轮次：", self.current_round_spinbox, 60),
@@ -269,7 +269,7 @@ class SequenceToolsBar(QWidget):
             editor.setMinimumWidth(55)
             editor.setAlignment(Qt.AlignCenter)
             editor.setStyleSheet(ui_style_const.toolbar_input_style)
-        self.lineedit_type.setAccessibleName("型号")
+        self.lineedit_type.setAccessibleName("测试设备型号")
         self.lineedit_s_or_n.setAccessibleName("S/N")
         self.using_file_combobox.setMinimumWidth(55)
         self.using_file_combobox.setFixedHeight(35)
