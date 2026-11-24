@@ -1,3 +1,4 @@
+import os
 import re
 from typing import List, Optional
 
@@ -20,6 +21,7 @@ from consts.acoustic_analysis.specific_consts.fft_consts import (
     MIN_FFT_SIZE,
 )
 from consts.running_consts import DEFAULT_DIR
+from ui import file_dialog_history as path_history
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import (
     CheckBox,
@@ -363,10 +365,13 @@ class FftConfigWindow(SemanticAnalysisConfigDialogBase):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "选择背景噪声音频",
-            DEFAULT_DIR,
+            path_history.get_initial_directory(path_history.FFT_BACKGROUND_AUDIO_SELECT, DEFAULT_DIR),
             filter="音频文件 (*.wav *.flac *.mp3);;所有文件 (*.*)",
         )
         if file_path:
+            path_history.remember_directory(
+                path_history.FFT_BACKGROUND_AUDIO_SELECT, os.path.dirname(file_path),
+            )
             self.baseline_path_edit.setText(file_path)
 
     def get_default_config(self):

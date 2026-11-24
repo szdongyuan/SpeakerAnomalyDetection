@@ -30,6 +30,7 @@ from base.product_test_program_config import (
 )
 from consts import error_code, ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui import file_dialog_history as path_history
 from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.config_dialog_base import ConfigDialogBase
 from ui.dialog_enter_policy import install_dialog_enter_policy
@@ -554,11 +555,12 @@ class ProductTestProgramConfigDialog(ConfigDialogBase):
         source_path, _ = QFileDialog.getOpenFileName(
             self,
             "导入产品测试程序",
-            "",
+            path_history.get_initial_directory(path_history.PRODUCT_PROGRAM_IMPORT, ""),
             "JSON 配置 (*.json)",
         )
         if not source_path:
             return
+        path_history.remember_directory(path_history.PRODUCT_PROGRAM_IMPORT, os.path.dirname(source_path))
         success, message = self.manager.import_program(source_path)
         if not success:
             QMessageBox.warning(self, "导入失败", message)

@@ -31,6 +31,7 @@ from base.log_manager import LogManager
 from base.playback_controller import PlaybackController
 from consts import error_code, model_consts
 from consts.running_consts import DEFAULT_DIR
+from ui import file_dialog_history as path_history
 from ui.archive_audio_delete_dialog import ArchiveAudioDeleteDialog
 from ui.archive_audio_filter_dialog import ArchiveAudioFilterDialog
 from ui.archive_audio_package_dialog import ArchiveAudioPackageDialog
@@ -610,16 +611,20 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
                 return
 
         file_name = "audio_data_export_%s" % datetime.now().strftime("%Y%m%d")
+        initial = path_history.get_initial_directory(
+            path_history.AUDIO_ARCHIVE_EXPORT, model_consts.STORED_PACKAGE_PATH,
+        )
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "选择保存位置",
-            os.path.join(model_consts.STORED_PACKAGE_PATH, file_name),
+            os.path.join(initial, file_name),
             "压缩文件 (*.zip)",
         )
 
         if not file_path:
             return
 
+        path_history.remember_directory(path_history.AUDIO_ARCHIVE_EXPORT, os.path.dirname(file_path))
         if not file_path.endswith(".zip"):
             file_path += ".zip"
 

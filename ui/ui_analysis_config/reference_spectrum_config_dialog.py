@@ -37,6 +37,7 @@ from base.reference_spectrum_cache import (
     save_reference_data,
 )
 from consts.running_consts import DEFAULT_DIR
+from ui import file_dialog_history as path_history
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.ui_analysis_config.common_widgets import (
     SemanticAnalysisConfigDialogBase,
@@ -482,12 +483,15 @@ class ReferenceSpectrumConfigWindow(SemanticAnalysisConfigDialogBase):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "选择参考音频文件",
-            DEFAULT_DIR + "audio_data/stored_data",
+            path_history.get_initial_directory(
+                path_history.REFERENCE_AUDIO_SELECT, DEFAULT_DIR + "audio_data/stored_data",
+            ),
             "WAV Files (*.wav)",
         )
         if not file_path:
             return
         file_path = file_path.replace("\\", "/")
+        path_history.remember_directory(path_history.REFERENCE_AUDIO_SELECT, os.path.dirname(file_path))
         self.reference_source_path_edit.setText(file_path)
         self._reference_data_path = self._build_default_reference_data_path(file_path)
         self._reference_data_last_generated_at = None

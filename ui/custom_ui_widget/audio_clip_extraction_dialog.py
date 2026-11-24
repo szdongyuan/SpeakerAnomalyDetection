@@ -1,3 +1,4 @@
+import os
 import sys
 
 import librosa
@@ -15,6 +16,7 @@ from base.save_data import save_audio_simple
 from base.wav_pcm24 import quantize_pcm24
 from consts import ui_style_const
 from consts.running_consts import DEFAULT_DIR
+from ui import file_dialog_history as path_history
 from ui.graph_widget import DraggablePlotWidget
 from ui.dialog_enter_policy import install_dialog_enter_policy
 
@@ -133,8 +135,12 @@ class AudioClipExtractionDialog(QDialog):
         return layout
 
     def open_audio_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "选择音频文件", "", "音频文件 (*.wav)")
+        initial = path_history.get_initial_directory(path_history.AUDIO_CLIP_SOURCE_SELECT, "")
+        file_path, _ = QFileDialog.getOpenFileName(self, "选择音频文件", initial, "音频文件 (*.wav)")
         if file_path:
+            path_history.remember_directory(
+                path_history.AUDIO_CLIP_SOURCE_SELECT, os.path.dirname(file_path),
+            )
             self.source_file = file_path
             self.file_path_edit.setText(file_path)
             self.load_and_display_waveform(file_path)
@@ -194,11 +200,22 @@ class AudioClipExtractionDialog(QDialog):
             relative_path = self.save_clip_path
             if self.save_clip:
                 if not self.save_clip_path:
-                    self.save_clip_path, _ = QFileDialog.getSaveFileName(self, "保存片段", "", "WAV 文件 (*.wav)")
+                    initial = path_history.get_initial_directory(path_history.AUDIO_CLIP_SAVE, "")
+                    self.save_clip_path, _ = QFileDialog.getSaveFileName(
+                        self, "保存片段", initial, "WAV 文件 (*.wav)",
+                    )
+                    if not self.save_clip_path:
+                        return
+                    path_history.remember_directory(
+                        path_history.AUDIO_CLIP_SAVE, os.path.dirname(self.save_clip_path),
+                    )
 
-                relative_path = FileOps.get_relative_path(self.save_clip_path, DEFAULT_DIR)
-                if self.save_clip_path:
-                    clip_data = quantize_pcm24(clip_data)
+                try:
+                    relative_path = FileOps.get_relative_path(self.save_clip_path, DEFAULT_DIR)
+                except ValueError:
+                    # Windows cannot express a path on another drive relatively.
+                    relative_path = os.path.abspath(self.save_clip_path)
+                clip_data = quantize_pcm24(clip_data)
                 save_audio_simple(self.save_clip_path, clip_data, self.sample_rate)
 
             self.accept()

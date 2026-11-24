@@ -31,6 +31,7 @@ from base.config_deletion import ConfigDeletionService
 from base.product_test_project_config import ProductTestProjectConfigManager
 from base.ve3668n_recording_config import resolve_ve_recording_config
 from consts.ve3668n_consts import VE_BACKEND, VE_RANGE_INDEX_CONFIG_KEY
+from ui import file_dialog_history as path_history
 from ui.confirmation_message_box import ConfirmationMessageBox
 from ui.shared_queue_save_dialog import SharedQueueSaveDialog
 from base.recording_preview_config import resolve_recording_preview_time_mode
@@ -339,21 +340,18 @@ class AnalysisModelSelect(ConfigDialogBase):
         default_dir = os.path.normpath(
             os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
         )
-        try:
-            os.makedirs(default_dir, exist_ok=True)
-        except OSError as error:
-            self.default_logger.error(f"Failed to prepare queue save directory {default_dir}: {error}")
-            QMessageBox.warning(self, "保存失败", str(error))
-            return None
+        initial = path_history.get_initial_directory(path_history.QUEUE_FIRST_SAVE, default_dir)
         dialog = QFileDialog(self, "保存测试队列")
         dialog.setAcceptMode(QFileDialog.AcceptSave)
         dialog.setFileMode(QFileDialog.AnyFile)
         dialog.setNameFilter("JSON Files (*.json)")
         dialog.setDefaultSuffix("json")
-        dialog.setDirectory(default_dir)
+        dialog.setDirectory(initial)
         if dialog.exec_() != QDialog.Accepted:
             return None
         selected = dialog.selectedFiles()
+        if selected:
+            path_history.remember_directory(path_history.QUEUE_FIRST_SAVE, os.path.dirname(selected[0]))
         return selected[0] if selected else None
 
     def _save_current_config_explicitly(self):
@@ -654,17 +652,15 @@ class AnalysisModelSelect(ConfigDialogBase):
         default_dir = os.path.normpath(
             os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
         )
-        try:
-            os.makedirs(default_dir, exist_ok=True)
-        except Exception:
-            pass
+        initial = path_history.get_initial_directory(path_history.QUEUE_IMPORT, default_dir)
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "导入配置文件",
-            default_dir,
+            initial,
             filter="JSON Files (*.json)",
         )
         if file_path:
+            path_history.remember_directory(path_history.QUEUE_IMPORT, os.path.dirname(file_path))
             try:
                 self._validate_queue_suffix(file_path)
             except ValueError as error:
@@ -704,17 +700,14 @@ class AnalysisModelSelect(ConfigDialogBase):
         default_dir = os.path.normpath(
             os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
         )
-        try:
-            os.makedirs(default_dir, exist_ok=True)
-        except Exception:
-            pass
+        initial = path_history.get_initial_directory(path_history.QUEUE_NEW, default_dir)
         # Use a non-native dialog so we can control button text ("确认").
         dialog = QFileDialog(self, "新建配置文件")
         dialog.setAcceptMode(QFileDialog.AcceptSave)
         dialog.setFileMode(QFileDialog.AnyFile)
         dialog.setNameFilter("JSON Files (*.json)")
         dialog.setDefaultSuffix("json")
-        dialog.setDirectory(default_dir)
+        dialog.setDirectory(initial)
         dialog.setLabelText(QFileDialog.Accept, "确认")
         dialog.setLabelText(QFileDialog.Reject, "取消")
 
@@ -724,6 +717,7 @@ class AnalysisModelSelect(ConfigDialogBase):
         file_path = selected[0] if selected else ""
         if not file_path:
             return
+        path_history.remember_directory(path_history.QUEUE_NEW, os.path.dirname(file_path))
         # If user didn't type extension, default to .json
         if not os.path.splitext(file_path)[1]:
             file_path = file_path + ".json"
@@ -784,17 +778,15 @@ class AnalysisModelSelect(ConfigDialogBase):
         default_dir = os.path.normpath(
             os.path.join(DEFAULT_DIR, "ui", "ui_config", "analysis_sequence_config")
         )
-        try:
-            os.makedirs(default_dir, exist_ok=True)
-        except Exception:
-            pass
+        initial = path_history.get_initial_directory(path_history.QUEUE_SAVE_AS, default_dir)
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "另存为",
-            default_dir,
+            initial,
             filter="JSON Files (*.json)",
         )
         if file_path:
+            path_history.remember_directory(path_history.QUEUE_SAVE_AS, os.path.dirname(file_path))
             if self._save_queue(file_path, explicit=True) in {"saved", "unchanged"}:
                 self.using_config_path = file_path
                 self._new_target_path_selected = False

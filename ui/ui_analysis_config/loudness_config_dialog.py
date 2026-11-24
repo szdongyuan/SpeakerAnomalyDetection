@@ -1,4 +1,5 @@
 import copy
+import os
 from typing import List, Optional
 
 from PyQt5.QtGui import QIcon
@@ -25,6 +26,7 @@ _DEFAULT_FRAME_S = LOUDNESS_DEFAULT_STATIONARY_FRAME_DURATION_S
 _DEFAULT_HOP_S = LOUDNESS_DEFAULT_STATIONARY_HOP_DURATION_S
 _DEFAULT_OVERLAP = LOUDNESS_DEFAULT_STATIONARY_OVERLAP_PERCENT
 _DEFAULT_OUTPUT_TIME_RESOLUTION_MS = LOUDNESS_DEFAULT_OUTPUT_TIME_RESOLUTION_MS
+from ui import file_dialog_history as path_history
 from ui.custom_ui_widget.popuputils import PopupUtils
 from ui.custom_ui_widget.widgets import (
     CheckBox,
@@ -173,7 +175,9 @@ class LoudnessConfigPanel(QWidget):
     def _on_background_noise_file_clicked(self):
         from PyQt5.QtWidgets import QFileDialog
 
-        start_dir = DEFAULT_DIR
+        start_dir = path_history.get_initial_directory(
+            path_history.LOUDNESS_BACKGROUND_AUDIO_SELECT, DEFAULT_DIR,
+        )
         path, _ = QFileDialog.getOpenFileName(
             self,
             "选择背景噪声音频文件",
@@ -181,6 +185,9 @@ class LoudnessConfigPanel(QWidget):
             "Audio Files (*.wav *.WAV);;All Files (*)",
         )
         if path:
+            path_history.remember_directory(
+                path_history.LOUDNESS_BACKGROUND_AUDIO_SELECT, os.path.dirname(path),
+            )
             self.background_noise_path_edit.setText(path)
 
     def _create_output_group(self):
