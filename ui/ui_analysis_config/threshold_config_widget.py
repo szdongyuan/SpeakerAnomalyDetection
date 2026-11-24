@@ -30,6 +30,7 @@ from consts.acoustic_analysis.curve_style_consts import (
     LOWER_LIMIT_COLOR,
     UPPER_LIMIT_COLOR,
 )
+from ui import file_dialog_history as path_history
 from ui.config_dialog_base import ConfigDialogBase
 from ui.dialog_enter_policy import install_dialog_enter_policy
 from ui.curve_style import (
@@ -758,12 +759,15 @@ class _ManualLimitEditorDialog(ConfigDialogBase):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "导出阈值CSV",
-            DEFAULT_DIR + "ui/ui_config",
+            path_history.get_initial_directory(
+                path_history.THRESHOLD_CSV_EXPORT, DEFAULT_DIR + "ui/ui_config",
+            ),
             "CSV 文件 (*.csv)",
         )
         if not file_path:
             return
 
+        path_history.remember_directory(path_history.THRESHOLD_CSV_EXPORT, os.path.dirname(file_path))
         try:
             write_manual_config_csv(
                 self.editor.manual_config(),
@@ -1366,9 +1370,14 @@ class ThresholdConfigWidget(QWidget):
     def _on_config_dir_btn_clicked(self):
         """配置文件选择按钮点击处理"""
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择配置文件路径", DEFAULT_DIR + "ui/ui_config", filter="CSV 文件 (*.csv)"
+            self, "选择配置文件路径",
+            path_history.get_initial_directory(
+                path_history.THRESHOLD_CSV_IMPORT, DEFAULT_DIR + "ui/ui_config",
+            ),
+            filter="CSV 文件 (*.csv)",
         )
         if file_path:
+            path_history.remember_directory(path_history.THRESHOLD_CSV_IMPORT, os.path.dirname(file_path))
             # 如果提供了验证函数，则进行验证
             if self.csv_validator is not None:
                 result = self.csv_validator(file_path)
