@@ -48,7 +48,7 @@ def parse_recording_stem(stem: str, project: str, model: str, sample: str):
     """Shared historical naming contract used by reports and audio filters."""
     prefix = f"{project}_{model}_{sample}_"
     if not stem.startswith(prefix):
-        return {}, "WAV 文件名与项目/型号/样本目录不一致"
+        return {}, "WAV 文件名与项目/测试设备型号/样本目录不一致"
     tail = stem[len(prefix):]
     match = _RECORDING_TAIL_RE.fullmatch(tail)
     if match is None:

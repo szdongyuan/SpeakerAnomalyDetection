@@ -97,7 +97,7 @@ class ArchiveAudioDataDialog(AudioDataManageDialog):
         self.delete_btn = QPushButton(" 删  除 ")
 
         self.set_h_header([
-            "", "文件名称", "产品型号", "条形码", "音频标签",
+            "", "文件名称", "测试设备型号", "条形码", "音频标签",
             "采样率", "录音时间", "播放", "分析结果",
         ])
         self.horizontalHeader().setSectionsClickable(False)

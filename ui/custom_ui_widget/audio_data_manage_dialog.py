@@ -123,7 +123,7 @@ class AudioDataManageDialog(DataManageDialog):
 
     def init_base_ui(self):
         self.set_checkable_of_column([0])
-        self.set_h_header(["", "文件名称", "产品型号", "音频标签", "采样率", "录音时间", "激励信号"])
+        self.set_h_header(["", "文件名称", "测试设备型号", "音频标签", "采样率", "录音时间", "激励信号"])
         self.verticalHeader().setVisible(False)
 
         self.set_top_layout()
@@ -448,7 +448,7 @@ class FilterAudioDialog(ConfigDialogBase):
             self.select_not_label_check_box.show()
 
     def create_product_model_filter_groupbox(self):
-        product_model_filter_groupbox = QGroupBox("产品型号")
+        product_model_filter_groupbox = QGroupBox("测试设备型号")
         product_model_combobox = QComboBox()
         product_model_combobox.setEditable(True)
         product_model_combobox.addItem("ALL")

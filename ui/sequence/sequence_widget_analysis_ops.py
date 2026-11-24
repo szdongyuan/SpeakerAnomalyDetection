@@ -1527,7 +1527,7 @@ class SequenceWidgetAnalysisOpsMixin(
             return True
         if self._get_active_product_condition_key():
             if not self.lineedit_type.text().strip():
-                QMessageBox.warning(self, "测试信息未填写完整", "请先填写型号，再开始测试。")
+                QMessageBox.warning(self, "测试信息未填写完整", "请先填写测试设备型号，再开始测试。")
                 self.lineedit_type.setFocus()
                 return True
             project_context = dict(

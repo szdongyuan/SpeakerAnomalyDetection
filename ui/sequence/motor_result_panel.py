@@ -320,7 +320,7 @@ class MotorResultPanel(QWidget):
             capture_bar.setRange(0, 1000)
             capture_bar.setValue(0)
             capture_bar.setTextVisible(False)
-            capture_bar.setMinimumWidth(32)
+            capture_bar.setMinimumWidth(24)
             capture_bar.setMaximumWidth(150)
             capture_bar.setFixedHeight(8)
             capture_bar.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -870,10 +870,6 @@ class MotorResultPanel(QWidget):
             tone = row.get("tone")
             visual_tone = tone if tone in ("ok", "ng", "running") else "pending"
             self._set_style_property(labels["result"], "resultTone", visual_tone)
-            # Processing text is longer than the ordinary OK/NG state.
-            labels["result"].setFixedWidth(
-                max(60, labels["result"].fontMetrics().horizontalAdvance("数据保存中") + 12)
-                if row.get("result") == "数据保存中" else 60)
         self._render_capture_progress(row)
 
     def start_condition_capture(self, condition, duration):
@@ -912,6 +908,22 @@ class MotorResultPanel(QWidget):
         # Queued progress may arrive after finalizing. Never move acquired time back.
         row["capture_seconds"] = min(duration, max(row["capture_seconds"], elapsed))
         row["capture_last_data_at"] = monotonic()
+        self._render_capture_progress(row)
+        return True
+
+    def restore_condition_capture_completed(self, condition):
+        """Restore completed capture presentation without starting a live clock."""
+        key = self._resolve_key(condition)
+        if not key:
+            return False
+        row = self.rows[key]
+        duration = row["configured_duration"]
+        if duration <= 0:
+            return False
+        self._stop_capture_clock(row)
+        row.update(capture_seconds=duration, capture_duration=duration,
+                   capture_has_started=True, capture_last_data_at=None,
+                   capture_elapsed_seconds=0.0)
         self._render_capture_progress(row)
         return True
 
@@ -964,15 +976,13 @@ class MotorResultPanel(QWidget):
         result_label = row["labels"]["result"]
         result_text = "等待数据" if waiting or stalled else row["result"]
         result_label.setText(result_text)
-        result_label.setFixedWidth(max(60, result_label.fontMetrics().horizontalAdvance(result_text) + 12))
         if result_text != row["capture_display_status"]:
             row["capture_display_status"] = result_text
             if result_text in ("等待数据", "采集中", "数据保存中", "采集失败", "已停止"):
                 self.capture_status_changed.emit(row["key"], result_text)
         label = row["labels"]["capture_time"]
         label.setText(text)
-        widest_time = f"{duration:.1f} / {duration:.1f} 秒" if duration > 0 else "-- / -- 秒"
-        label.setFixedWidth(label.fontMetrics().horizontalAdvance(widest_time) + 4)
+        self._sync_capture_column_widths()
         tooltip = f"{phase}；已采集 {elapsed:.1f} 秒" + (
             f" / 目标 {duration:.1f} 秒" if duration > 0 else "")
         tooltip += f"；采集阶段已用 {row['capture_elapsed_seconds']:.1f} 秒"
@@ -984,6 +994,28 @@ class MotorResultPanel(QWidget):
         bar.setToolTip(tooltip)
         bar.setAccessibleName("档位采集进度")
         bar.setAccessibleDescription(tooltip)
+
+    def _sync_capture_column_widths(self):
+        # Independent row layouts need identical fixed columns to align their bars.
+        time_width = 0
+        result_width = 60
+        for row in self.rows.values():
+            duration = row["capture_duration"]
+            widest_time = f"{duration:.1f} / {duration:.1f} 秒" if duration > 0 else "-- / -- 秒"
+            labels = row["labels"]
+            time_width = max(
+                time_width,
+                labels["capture_time"].fontMetrics().horizontalAdvance(widest_time) + 4,
+            )
+            result_width = max(
+                result_width,
+                labels["result"].fontMetrics().horizontalAdvance(labels["result"].text()) + 12,
+            )
+        for row in self.rows.values():
+            for name, width in (("capture_time", time_width), ("result", result_width)):
+                label = row["labels"][name]
+                if label.minimumWidth() != width:
+                    label.setFixedWidth(width)
 
     def _update_port_summary(self):
         visible_rows = [

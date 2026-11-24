@@ -456,7 +456,7 @@ class MainWindow(QMainWindow):
         title_layout.addWidget(title_label)
         title_layout.addItem(h_spacer)
         title_layout.addLayout(title_btn_layout)
-        self.setMinimumSize(1030, 760)
+        self.setMinimumSize(1140, 760)
         title_layout.setContentsMargins(10, 3, 15, 0)
         self.setStyleSheet(
             ui_style_const.main_window_base_style
@@ -1131,7 +1131,7 @@ class MainWindow(QMainWindow):
                 self.move(event.globalPos() - self.drag_position)
             # clicked the window border, resize the window according to the direction
             pos = event.globalPos() - self.last_pos
-            is_update_width = width - pos.x() > 1030
+            is_update_width = width - pos.x() > 1140
             is_update_height = height - pos.y() > 760
             self.geometry_window(
                 self.window_x, self.window_y, pos, is_update_width, is_update_height, self.resize_direction

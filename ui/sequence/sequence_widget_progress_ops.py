@@ -182,7 +182,7 @@ class SequenceWidgetProgressOpsMixin:
             isinstance(identity.get(key), str) and identity[key].strip()
             for key in ("product_model", "sample_number")
         ):
-            raise ValueError("型号或样本编号无效")
+            raise ValueError("测试设备型号或样本编号无效")
         validate_product_model(identity["product_model"], allow_legacy=True)
         number = identity.get("test_round")
         if type(number) is not int or not 1 <= number <= 9999:
@@ -336,7 +336,7 @@ class SequenceWidgetProgressOpsMixin:
             next_test = f"下一测试：{position}" if position else "当前状态：本轮工况已完成，等待结束信号"
             details = [
                 f"使用配置：{state['config_name'] or state['config_file']}",
-                f"型号：{identity['product_model']}",
+                f"测试设备型号：{identity['product_model']}",
                 f"样本编号：{identity['sample_number']}",
                 f"当前测试轮次：第 {identity['test_round']} 轮",
                 f"已完成：{len(state['completed_conditions'])} 项工况",
@@ -469,6 +469,7 @@ class SequenceWidgetProgressOpsMixin:
             elif any(item["result"] == "结果不完整" for item in result["channel_results"]):
                 text, tone = "结果不完整", "ng"
             self.left_panel.set_condition_result(key, text, tone=tone)
+            self.left_panel.result_panel.restore_condition_capture_completed(key)
         keys = self._manual_product_condition_keys()
         next_key = state["next_key"]
         self._manual_product_condition_index = keys.index(next_key) if next_key else 0

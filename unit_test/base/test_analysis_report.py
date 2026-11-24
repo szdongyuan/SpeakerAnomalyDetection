@@ -146,7 +146,7 @@ def test_html_uses_exact_selected_item_and_channel_label_headings(tmp_path):
     assert "<th>判定标准</th>" in report_html
     assert report_html.count("60.00～80.00 dB(A)") == 1
     assert "限值 " not in report_html
-    assert "<th>型号</th>" in report_html
+    assert "<th>测试设备型号</th>" in report_html
     assert warnings == ()
 
 
@@ -195,7 +195,7 @@ def test_different_sample_model_or_round_has_its_own_table(tmp_path, changed):
         report_content="values_only", generated_at=datetime(2026, 9, 15))
     assert report_html.count("<table class='data-table'") == 2
     assert report_html.count("60.00～80.00 dB(A)") == 3
-    assert "型号：M1｜样品：S001｜轮次：R0002" in report_html
+    assert "测试设备型号：M1｜样品：S001｜轮次：R0002" in report_html
 
 
 def test_html_omits_dedicated_channel_mapping_section(tmp_path):

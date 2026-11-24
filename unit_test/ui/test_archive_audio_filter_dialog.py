@@ -70,12 +70,77 @@ def test_project_selection_restricts_options_and_clears_unavailable_values(dialo
 def test_unknown_selection_and_duplicate_projects_have_distinct_values(dialog):
     projects = dialog.combos["select_project"]
     same_named = [projects.itemText(i) for i in range(projects.count()) if "项目A" in projects.itemText(i)]
-    assert len(set(same_named)) == 2
+    assert same_named == ["项目A（1）", "项目A（2）"]
+    assert projects.itemText(projects.findData(dialog.metadata_by_id["two"].project_key)) == "项目B"
+    for identifier in ("one", "same_name"):
+        project_key = dialog.metadata_by_id[identifier].project_key
+        index = projects.findData(project_key)
+        assert projects.itemData(index, Qt.ToolTipRole) == project_key
+        choose(projects, project_key)
+        assert projects.toolTip() == project_key
+        dialog.apply_filters()
+        assert dialog.filter_config == {"select_project": project_key}
     choose(projects, UNKNOWN)
     assert choices(dialog.combos["select_port"]) == [None, UNKNOWN]
     choose(dialog.combos["select_port"], UNKNOWN)
     dialog.apply_filters()
     assert dialog.filter_config == {"select_project": UNKNOWN, "select_port": UNKNOWN}
+
+
+@pytest.mark.parametrize("names, expected", [
+    (["项目A", "项目A", "项目A（1）"],
+     ["项目A（2）", "项目A（3）", "项目A（1）"]),
+    (["项目A", "项目A", "项目A（1）", "项目A（2）"],
+     ["项目A（3）", "项目A（4）", "项目A（1）", "项目A（2）"]),
+    (["项目A", "项目A", "项目A（1）", "项目A（1）", "项目A（1）（1）"],
+     ["项目A（2）", "项目A（3）", "项目A（1）（2）", "项目A（1）（3）", "项目A（1）（1）"]),
+    (["全部项目", "未识别", "全部项目（1）", "未识别（1）"],
+     ["全部项目（2）", "未识别（2）", "全部项目（1）", "未识别（1）"]),
+])
+@pytest.mark.parametrize("include_unknown", [False, True])
+def test_project_labels_avoid_real_names_and_system_options(qapp, names, expected, include_unknown):
+    rows = [audio_row(str(index), recording_path(root=f"C:/results-{index}", project=name))
+            for index, name in enumerate(names)]
+    if include_unknown:
+        rows.append(audio_row("unknown", "old.wav"))
+    metadata = {row[0]: parse_audio_filter_metadata(row[1]) for row in rows}
+    expected_by_key = {metadata[str(index)].project_key: text
+                       for index, text in enumerate(expected)}
+    assert None not in expected_by_key
+    for ordered_rows in (rows, list(reversed(rows))):
+        ordered_metadata = {row[0]: metadata[row[0]] for row in ordered_rows}
+        instance = ArchiveAudioFilterDialog(ordered_rows, ordered_metadata)
+        try:
+            combo = instance.combos["select_project"]
+            labels = [combo.itemText(index) for index in range(combo.count())]
+            assert len(labels) == len(set(labels))
+            for key, text in expected_by_key.items():
+                index = combo.findData(key)
+                assert index >= 0 and combo.itemText(index) == text
+                assert combo.itemData(index, Qt.ToolTipRole) == key
+                combo.setCurrentIndex(index)
+                instance.apply_filters()
+                assert instance.filter_config == {"select_project": key}
+                reopened = ArchiveAudioFilterDialog(ordered_rows, ordered_metadata, instance.filter_config)
+                try:
+                    restored = reopened.combos["select_project"]
+                    assert restored.currentData() == key
+                    assert restored.currentText() == text
+                    assert restored.toolTip() == key
+                finally:
+                    reopened.close()
+                    reopened.deleteLater()
+            if include_unknown:
+                choose(combo, UNKNOWN)
+                instance.apply_filters()
+                assert instance.filter_config == {"select_project": UNKNOWN}
+            choose(combo, None)
+            instance.apply_filters()
+            assert instance.filter_config == {}
+        finally:
+            instance.close()
+            instance.deleteLater()
+            qapp.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
 def test_apply_reopen_and_reset_preserve_draft_semantics(qapp, rows, dialog):

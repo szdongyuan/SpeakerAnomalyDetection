@@ -147,6 +147,59 @@ def save_partial(factory):
     return original
 
 
+@pytest.mark.parametrize("durations", [(30, 45), (600, 30)])
+@pytest.mark.parametrize("second_result", ["OK", "NG", "分析失败"])
+def test_resume_restores_capture_bars_without_restarting_capture(
+        factory, durations, second_result, ui_qapp, tmp_path):
+    if os.name == "nt" and not QFontDatabase().families():
+        assert QFontDatabase.addApplicationFont(
+            str(Path(os.environ["WINDIR"]) / "Fonts" / "msyh.ttc")) >= 0
+    catalog = {"q1": {"duration": durations[0]}, "q2": {"duration": durations[1]}}
+    original = factory()
+    original.left_panel.result_panel.set_condition_configs(
+        original.product_test_condition_configs, queue_catalog=catalog)
+    begin_partial_round(original)
+    assert original._prepare_next_manual_product_condition_recording()
+    complete_condition(original, "b", "not_labeled" if second_result == "分析失败" else second_result)
+    if second_result == "分析失败":
+        original.left_panel.set_condition_result("b", second_result, tone="ng")
+    original._advance_manual_product_condition_cycle_after_recording()
+    original._save_product_test_progress_before_exit()
+    saved = original._product_progress_store.load()
+    assert set(saved["completed_conditions"]) == {"a", "b"}
+    audio_before = {path: path.read_bytes() for path in original.directory.glob("*.wav")}
+
+    reopened = factory()
+    panel = reopened.left_panel.result_panel
+    panel.set_condition_configs(reopened.product_test_condition_configs, queue_catalog=catalog)
+    reopened._prepare_next_manual_product_condition_recording = Mock()
+    assert reopened._offer_product_test_resume()
+    for key, duration in zip(("a", "b"), durations):
+        row = panel.rows[key]
+        assert row["capture_bar"].value() == 1000
+        assert row["labels"]["capture_time"].text() == f"{duration:.1f} / {duration:.1f} 秒"
+        assert row["capture_started_at"] is None
+        assert row["capture_last_data_at"] is None
+    assert panel.rows["a"]["result"] == "OK"
+    assert panel.rows["b"]["result"] == second_result
+    assert panel.rows["c"]["capture_bar"].value() == 0
+    assert panel.rows["c"]["labels"]["capture_time"].text() == f"-- / {durations[1]:.1f} 秒"
+    assert not panel._capture_timer.isActive()
+    assert reopened._manual_product_condition_index == 2
+    reopened._prepare_next_manual_product_condition_recording.assert_not_called()
+    for path, content in audio_before.items():
+        assert path.read_bytes() == content
+
+    if durations == (30, 45) and second_result == "OK":
+        reopened.left_panel.resize(570, 950)
+        reopened.left_panel.show()
+        ui_qapp.processEvents()
+        assert panel.grab().save(str(tmp_path / "restored_capture_progress.png"))
+    panel.reset()
+    assert all(row["capture_bar"].value() == 0 for row in panel.rows.values())
+    assert not panel._capture_timer.isActive()
+
+
 @pytest.mark.parametrize("model", ["test_prodect", "ABC.1", "ABC（旧版）"])
 def test_legacy_model_continues_only_the_saved_round(factory, model):
     original = save_partial(factory)
@@ -1738,7 +1791,7 @@ def test_resume_dialog_choices(factory, monkeypatch, button_text, expected):
         assert dialog.textFormat() == Qt.PlainText
         assert dialog.informativeText().splitlines() == [
             "使用配置：新项目",
-            "型号：model-A",
+            "测试设备型号：model-A",
             "样本编号：sample-7",
             "当前测试轮次：第 7 轮",
             "已完成：1 项工况",

@@ -92,7 +92,7 @@ def test_report_auxiliary_enter_reaches_existing_export(dialogs, report_io, tmp_
 
 @pytest.mark.parametrize("case,expected", [
     ("project", "请先选择项目目录。"),
-    ("empty", "请选择型号。"),
+    ("empty", "请选择测试设备型号。"),
     ("samples", "请至少选择一个样本编号。"),
     ("wav", "请至少勾选一个 WAV。"),
     ("items", "请至少勾选一个具体分析项。"),
