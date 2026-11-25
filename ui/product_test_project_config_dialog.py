@@ -18,6 +18,8 @@ from ui.config_dialog_base import ConfigDialogBase
 from ui.config_delete_dialog import ConfigDeleteDialog
 from ui.product_test.station_editor import StationEditor
 from ui.product_test.condition_editor import ConditionEditor
+from ui.product_test.execution_settings_dialog import ExecutionSettingsDialog
+from base.product_test.config_model import execution_settings
 from ui.product_test.style import DIALOG_STYLE
 from ui.dialog_enter_policy import install_dialog_enter_policy
 
@@ -115,6 +117,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self.station_editor.changed.connect(self._stations_changed)
         self.condition_editor.changed.connect(self._set_dirty)
         self.condition_editor.edit_queue.connect(self._edit_queue)
+        self.condition_editor.edit_execution.connect(self._edit_execution)
         self.select_result_root_btn.clicked.connect(self._select_result_root)
         self.cancel_btn.clicked.connect(self.reject)
         self.save_btn.clicked.connect(lambda: self._save_project())
@@ -169,6 +172,14 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
 
     def _set_dirty(self, dirty=True):
         self._dirty = dirty
+
+    def _edit_execution(self):
+        dialog = ExecutionSettingsDialog(execution_settings(self.project_data), self)
+        if dialog.exec_() == dialog.Accepted:
+            self.project_data["execution"] = dialog.settings()
+            self.condition_editor.refresh_execution_summary()
+            self._set_dirty()
+        dialog.deleteLater()
 
     def _stations_changed(self):
         self.condition_editor.set_project(self.project_data, self.queue_catalog)

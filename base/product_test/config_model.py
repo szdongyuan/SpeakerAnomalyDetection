@@ -10,6 +10,21 @@ SIGNAL_TYPES = {"sound_pressure": "声学（麦克风）", "acceleration": "振�
 RUNTIME_UNAVAILABLE = "新产品配置的采集与分析执行流程尚未接通；当前可编辑、保存配置。"
 
 
+def execution_settings(project):
+    """Parse the optional execution section; only absence selects defaults."""
+    if "execution" not in project:
+        return {"mode": "per_condition", "condition_gap_seconds": 0.5}
+    value = project["execution"]
+    if not isinstance(value, dict) or set(value) != {"mode", "condition_gap_seconds"}:
+        raise ValueError("启动与间隔配置必须包含 mode 和 condition_gap_seconds")
+    if value["mode"] not in ("per_condition", "full_cycle"):
+        raise ValueError("启动方式必须为逐工况触发或整轮触发")
+    gap = value["condition_gap_seconds"]
+    if type(gap) not in (int, float) or not 0 <= gap <= 86400 or round(gap, 3) != gap:
+        raise ValueError("工况间隔必须为 0 至 86400 秒的有限数值，最多三位小数")
+    return {"mode": value["mode"], "condition_gap_seconds": float(gap)}
+
+
 def new_channel(number):
     return {"channel_id": str(uuid4()), "channel_name": f"CH{number}",
             "signal_type": "", "hardware_channel": {
@@ -29,7 +44,8 @@ def new_condition(number, station_ids=()):
 def default_project():
     station = new_station(1)
     return {"project_id": str(uuid4()), "project_name": "", "result_root_directory": "",
-            "stations": [station], "conditions": [new_condition(1, [station["station_id"]])]}
+            "stations": [station], "conditions": [new_condition(1, [station["station_id"]])],
+            "execution": execution_settings({})}
 
 
 def resize_stations(project, count):
@@ -66,6 +82,7 @@ def copy_project(project, name):
 def normalize_project(project):
     """Normalize a validated draft without generating IDs or reordering channels."""
     result = deepcopy(project)
+    result["execution"] = execution_settings(project)
     for key in ("project_name", "result_root_directory"):
         result[key] = result[key].strip()
     for station in result["stations"]:

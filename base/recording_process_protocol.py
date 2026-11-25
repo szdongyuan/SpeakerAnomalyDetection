@@ -196,6 +196,7 @@ class RecordingRequest:
     validation_thresholds: Mapping
     preview_time_mode: str = PREVIEW_TIME_MODE_RELATIVE_LATEST
     station_group: StationRecordingGroup | None = None
+    report_capture_timing: bool = False
 
     def __post_init__(self):
         if not isinstance(self.request_id, str) or not self.request_id:
@@ -215,6 +216,8 @@ class RecordingRequest:
         object.__setattr__(self, "device", _device(self.device, channels, "input"))
         if not isinstance(self.path, str) or not os.path.isabs(self.path):
             raise ValueError("recording path must be absolute")
+        if type(self.report_capture_timing) is not bool:
+            raise ValueError("report_capture_timing must be a boolean")
         if not isinstance(self.streaming, bool):
             raise ValueError("streaming must be a boolean")
         object.__setattr__(
@@ -445,6 +448,26 @@ class WorkbenchFilesOwned:
             raise ValueError("station ownership attempt must be 1 or 2")
         if type(self.files) is not tuple or (not self.files and self.attempt == 1):
             raise ValueError("station ownership requires a file list or a retry reset")
+
+
+@dataclass(frozen=True)
+class RecordingCaptureTiming:
+    """Host monotonic times of the first and last accepted input blocks."""
+    request_id: str
+    generation: int
+    started_at: float
+    ended_at: float
+    frames: int
+
+    def __post_init__(self):
+        if type(self.request_id) is not str or not self.request_id:
+            raise ValueError("capture timing request_id is required")
+        _integer("generation", self.generation, 1)
+        _integer("frames", self.frames, 1)
+        _monotonic_time("started_at", self.started_at)
+        _monotonic_time("ended_at", self.ended_at)
+        if self.ended_at < self.started_at:
+            raise ValueError("last block cannot precede first block")
 
 
 @dataclass(frozen=True)
@@ -836,6 +859,7 @@ class RecordingEvent:
         if self.kind not in ("start", "cancel", "preview_ack", "result_ack", "shutdown",
                              "ready", "started", "finalizing", "preview", "progress",
                              "completed", "failed", "cancelled", "capture_slot_released",
+                             "capture_timing", "soundcard_capture_released",
                              "release_ve", "ve_released", "ve_release_failed", "worker_fatal",
                              VE_PREWARM_COMMAND, VE_PREWARM_STARTED, VE_PREWARM_PROGRESS,
                              VE_PREWARM_DETACHING, VE_PREWARM_TERMINAL, VE_RESOURCE_RETRY,
@@ -880,6 +904,8 @@ class RecordingEvent:
                           "completed": RecordingResult, "failed": RecordingFailure,
                           "cancelled": RecordingCancelled,
                           "capture_slot_released": CaptureSlotReleased,
+                          "capture_timing": RecordingCaptureTiming,
+                          "soundcard_capture_released": RecordingCaptureTiming,
                           "ve_released": VeReleaseOutcome,
                           "ve_release_failed": VeReleaseOutcome,
                           "worker_fatal": WorkerFatal,
@@ -911,7 +937,7 @@ class RecordingEvent:
                             raise ValueError("station WAV channel descriptor is invalid")
                         StationWavChannel.__post_init__(channel)
                     StationWav.__post_init__(station)
-            if expected in (CaptureSlotReleased, VeReleaseOutcome, WorkerFatal,
+            if expected in (RecordingCaptureTiming, CaptureSlotReleased, VeReleaseOutcome, WorkerFatal,
                             VePrewarmRequest, VePrewarmStarted, VePrewarmProgress,
                             VePrewarmResult, VeResourceRetryProof, WorkbenchFilesOwned,
                             SoundcardPrepareRequest, SoundcardPrepareResult):

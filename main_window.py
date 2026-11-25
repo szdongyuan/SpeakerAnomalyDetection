@@ -324,6 +324,12 @@ class MainWindow(QMainWindow):
 
     def _bind_workbench_recording(self):
         controller = self.workbench_controller
+        self._execution_timer = QTimer(self)
+        self._execution_timer.setSingleShot(True)
+        self._execution_timer.setTimerType(Qt.PreciseTimer)
+        self._execution_callback = None
+        self._execution_timer.timeout.connect(self._on_execution_timeout)
+        controller.bind_execution_timer(self._schedule_execution, self._cancel_execution)
         sequence = self.sequence_window
         controller.tcp_result_callback = sequence.toolsbar.tcp_dialog.publish_result
         device = self.workbench_recording_device
@@ -356,6 +362,24 @@ class MainWindow(QMainWindow):
         sequence.player_btn.clicked.connect(controller.start_recording)
         device.changed.connect(controller.refresh_recording_state)
 
+    def _schedule_execution(self, seconds, callback):
+        import math
+        self._execution_callback = callback
+        self._execution_timer.start(min(2147483647, max(0, math.ceil(seconds * 1000))))
+
+    def _cancel_execution(self):
+        self._execution_timer.stop()
+        self._execution_callback = None
+
+    def _on_execution_timeout(self):
+        callback, self._execution_callback = self._execution_callback, None
+        if callback is not None:
+            callback()
+
+    def _automatic_execution_busy(self):
+        controller = getattr(self, "workbench_controller", None)
+        return bool(controller is not None and controller.automatic_execution_busy)
+
     def _hardware_busy(self):
         bridge = getattr(self, "recording_bridge", None)
         hardware_busy = getattr(bridge, "hardware_busy", None)
@@ -379,6 +403,7 @@ class MainWindow(QMainWindow):
 
     def _hardware_selection_admission_available(self):
         return bool(not getattr(self, "_closing", False)
+                    and not self._automatic_execution_busy()
                     and not getattr(self, "_configuration_editor_open", False)
                     and self.ve_prewarm_lifetime.snapshot().state != "pending"
                     and not self._hardware_busy())
@@ -387,6 +412,7 @@ class MainWindow(QMainWindow):
         """Calibration may overlap finalization once native hardware is free."""
         bridge = getattr(self, "recording_bridge", None)
         return bool(not getattr(self, "_closing", False)
+                    and not self._automatic_execution_busy()
                     and not getattr(self, "_configuration_editor_open", False)
                     and self.ve_prewarm_lifetime.admission_for(None) == "allowed"
                     and not self._hardware_busy()
@@ -1242,6 +1268,8 @@ class MainWindow(QMainWindow):
         sequence = getattr(self, "sequence_window", None)
         if not getattr(self, "_closing", False):
             self._closing = True
+            if getattr(self, "workbench_controller", None) is not None:
+                self.workbench_controller.stop_automatic_execution()
             if getattr(self, "_analysis_timer", None) is not None:
                 self._begin_analysis_shutdown()
             workbench_device = getattr(self, "workbench_recording_device", None)

@@ -16,6 +16,7 @@ class WorkerCaptureState:
     next_preview_at: float = 0.0
     next_progress_at: float = 0.0
     capture_slot_sent: bool = False
+    capture_timing_sent: bool = False
     terminal_sent: bool = False
     input_refresh_used: bool = False
     retry_input_device: object = None

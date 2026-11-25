@@ -4,7 +4,7 @@ import ntpath
 from uuid import UUID
 
 from base.analysis_segments import normalize_segmented_analysis, segment_count
-from base.product_test.config_model import SIGNAL_TYPES
+from base.product_test.config_model import SIGNAL_TYPES, execution_settings
 
 
 def validate_structure(project):
@@ -41,8 +41,15 @@ def validate_structure(project):
 
     if isinstance(project, dict) and ("test_groups" in project or "sub_configs" in project):
         return ["旧产品配置结构不再支持，请重新配置；原文件未修改。"]
-    if not fields(project, ("project_id", "project_name", "result_root_directory", "stations", "conditions"), "项目"):
+    required = ("project_id", "project_name", "result_root_directory", "stations", "conditions")
+    if isinstance(project, dict) and "execution" in project:
+        required += ("execution",)
+    if not fields(project, required, "项目"):
         return errors
+    try:
+        execution_settings(project)
+    except ValueError as error:
+        errors.append(str(error))
     identity(project, "project_id", "项目")
     text(project, "project_name", "项目")
     text(project, "result_root_directory", "项目")

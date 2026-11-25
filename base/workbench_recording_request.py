@@ -190,14 +190,14 @@ def build_recording_request(recording, condition_id, device_snapshot, recording_
         project_name=context.project_name, result_root_directory=context.result_root_directory,
         recorded_at=recorded_at, product_model=product_model, sample_number=sample_number,
         serial_number=serial_number, ve_calibration_store=ve_calibration_store,
-        preview_time_mode=preview_time_mode,
+        preview_time_mode=preview_time_mode, report_capture_timing=context.execution.mode == "full_cycle",
     )
 
 
 def _build_recording_request(condition, stations, detail, device_snapshot, recording_id, *,
                              project_id, project_name, result_root_directory, recorded_at,
                              product_model, sample_number, serial_number,
-                             ve_calibration_store, preview_time_mode=None):
+                             ve_calibration_store, preview_time_mode=None, report_capture_timing=False):
     """Freeze the full capture and each station's ordered PCM24 WAV mapping."""
     label = f"产品 {project_id} 工况「{condition.condition_name}」({condition.condition_id})"
     recorded_at = datetime.now() if recorded_at is None else recorded_at
@@ -250,7 +250,8 @@ def _build_recording_request(condition, stations, detail, device_snapshot, recor
             recording_id, "main", sample_rate, kept_frames + trim_samples, device_snapshot.channels,
             device, os.path.join(wav_directory, f".{timestamp}-{recording_id}.staging"),
             True, trim_samples, {}, None,
-            thresholds, station_group=group, **preview_options,
+            thresholds, station_group=group,
+            report_capture_timing=report_capture_timing, **preview_options,
         )
     except (ValueError, OverflowError, OSError) as exc:
         raise WorkbenchRecordingRequestError(f"{label} 录制配置错误：{exc}") from exc

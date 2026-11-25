@@ -6,11 +6,13 @@ import os
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 
+from base.product_test.config_model import execution_settings
+
 from base.recording_preview_config import resolve_recording_preview_time_mode
 from base.workbench_analysis_config import AnalysisTestQueue, WorkbenchAnalysisConfig
 from base.workbench_config_values import (
     WorkbenchChannel, WorkbenchCondition, WorkbenchContext, WorkbenchHardwareChannel,
-    WorkbenchStation, _freeze_config,
+    WorkbenchStation, WorkbenchExecution, _freeze_config,
 )
 from base.workbench_recording_config import WorkbenchRecordingConfig
 from base.workbench_ui_config import WorkbenchPlotCell, WorkbenchPlotLayout, WorkbenchUiConfig
@@ -392,6 +394,7 @@ def _load_active_configuration(program_registry_path, queue_registry_path, plot_
         result_root_directory=result_directory,
         stations=stations,
         conditions=conditions,
+        execution=_config_value(path, "execution", lambda: WorkbenchExecution(**execution_settings(product))),
     )
     return WorkbenchConfiguration(
         recording=WorkbenchRecordingConfig(context=context, parameters_by_queue=parameters),

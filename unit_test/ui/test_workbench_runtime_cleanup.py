@@ -8,16 +8,18 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import QMainWindow
 
 from main_window import MainWindow
+from unit_test.base.test_motor_workbench_config import config_files, repository
 from unit_test.ui.test_workbench_recording_startup import startup
 
 @pytest.mark.parametrize('launcher', [False, True])
 @pytest.mark.parametrize('injected', [False, True])
-def test_real_entrypoint_does_not_initialize_legacy_runtime(startup, monkeypatch, launcher, injected, ui_qapp):
+def test_real_entrypoint_does_not_initialize_legacy_runtime(startup, monkeypatch, launcher, injected, ui_qapp, repository):
     import builtins
     import importlib
     from base.unified_hid_device_manager import UnifiedHardwareManager
     from base.analysis import service as current_analysis
     from ui.sequence.workbench_input_ops import WorkbenchInputOpsMixin
+    monkeypatch.setattr("main_window.MotorWorkbenchConfigRepository", lambda: repository)
     factory = Mock(return_value=startup.analysis_service)
     monkeypatch.setattr(current_analysis, 'AnalysisService', factory)
     forbidden = Mock(side_effect=AssertionError('legacy runtime initialized'))
@@ -119,6 +121,7 @@ def test_real_entrypoint_does_not_initialize_legacy_runtime(startup, monkeypatch
     ('analysis', True, True, True, True),
     ('deletion failure', True, True, True, True),
     ('archive', True, True, True, True),
+    ('full cycle', True, False, False, False),
     ('capture', True, False, False, False),
     ('service', True, True, False, False),
     ('editor', True, False, False, False),
@@ -134,7 +137,9 @@ def test_admission_uses_each_current_owner(ui_qapp, state, configuration, hardwa
     window.recording_bridge = SimpleNamespace(
         hardware_busy=state == 'capture',
         service=SimpleNamespace(busy=state == 'service', can_start_recording=state != 'service'))
-    window.workbench_controller = SimpleNamespace(recording_busy=state == 'archive')
+    window.workbench_controller = SimpleNamespace(
+        recording_busy=state in ('archive', 'full cycle'),
+        automatic_execution_busy=state == 'full cycle')
     window.analysis_service = SimpleNamespace(pending_task_count=int(state == 'analysis'))
     window.ve_prewarm_lifetime = SimpleNamespace(
         snapshot=lambda: SimpleNamespace(state='pending' if state == 'prewarm' else 'ready'),

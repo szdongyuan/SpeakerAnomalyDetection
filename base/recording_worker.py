@@ -15,6 +15,7 @@ from base.recording_capture import RecordingCapture, sounddevice_backend
 from base.recording_input_device import resolve_input_device, validate_input_device
 from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_process_protocol import (
+    RecordingCaptureTiming,
     CaptureSlotReleased,
     FrozenConfig,
     RecordingEvent,
@@ -929,7 +930,27 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                         and capture.raw_frames >= capture.request.target_samples):
                     state.finalizing = True
                     emit("finalizing", state.request_id)
-                if state.started and capture.request.device.get("backend") == VE_BACKEND:
+                if state.started and capture.request.report_capture_timing:
+                    timing = capture.sample_timing
+                    if timing is not None and not state.capture_timing_sent:
+                        emit("capture_timing", state.request_id, RecordingCaptureTiming(
+                            state.request_id, generation, timing[0], timing[1],
+                            capture.request.target_samples,
+                        ))
+                        state.capture_timing_sent = True
+                    slot_event = getattr(capture, "capture_slot_released", None)
+                    if (capture.request.device.get("backend") != VE_BACKEND and timing is not None
+                            and slot_event.is_set()):
+                        slot = capture.capture_slot
+                        if (slot is None or not slot.adapter_released or not slot.writer_released
+                                or slot.raw_frames != capture.request.target_samples):
+                            raise RuntimeError("soundcard capture slot has no release proof")
+                        emit("soundcard_capture_released", state.request_id, RecordingCaptureTiming(
+                            state.request_id, generation, timing[0], timing[1], slot.raw_frames,
+                        ))
+                        pipeline.capture_released(state.request_id)
+                        state = None
+                if state is not None and state.started and capture.request.device.get("backend") == VE_BACKEND:
                     progress = capture.progress_snapshot()
                     if (progress is not None and progress.frames > state.progress_frames
                             and (now >= state.next_progress_at
@@ -947,7 +968,8 @@ def recording_worker(control, preview, generation, backend_factory, backend_opti
                         state.next_progress_at = now + .2
 
                     slot_event = getattr(capture, "capture_slot_released", None)
-                    if slot_event is not None and slot_event.is_set():
+                    if (slot_event is not None and slot_event.is_set()
+                            and (not capture.request.report_capture_timing or state.capture_timing_sent)):
                         slot = capture.capture_slot
                         if slot is None:
                             raise RuntimeError(
