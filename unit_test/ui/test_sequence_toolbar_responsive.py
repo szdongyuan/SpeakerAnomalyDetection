@@ -73,13 +73,14 @@ def test_workbench_round_is_read_only(toolbar_host, ui_qapp):
 def ordered_controls(toolbar):
     labels = field_labels(toolbar)
     groups = [[toolbar.player_btn],
+              [toolbar.tcp_btn],
               [labels[0], toolbar.lineedit_type],
               [labels[1], toolbar.using_file_combobox],
               [labels[2], toolbar.sample_number_lineedit],
               [toolbar.barcode_scanner_box, toolbar.lineedit_s_or_n]]
     dividers = sorted((w for w in toolbar.findChildren(QFrame)
                        if w.frameShape() == QFrame.VLine), key=lambda w: w.x())
-    assert len(dividers) == 5
+    assert len(dividers) == 6
     return [widget for group, divider in zip(groups, dividers) for widget in [*group, divider]]
 
 
@@ -89,7 +90,7 @@ def assert_row(window, toolbar, width):
     assert toolbar.height() == 42
     assert 400 <= toolbar.minimumSizeHint().width() <= 1028
     controls = ordered_controls(toolbar)
-    assert len(controls) == 14
+    assert len(controls) == 16
     assert all(widget.isVisible() for widget in controls)
     rects = [QRect(widget.mapTo(toolbar, QPoint()), widget.size())
              for widget in controls]

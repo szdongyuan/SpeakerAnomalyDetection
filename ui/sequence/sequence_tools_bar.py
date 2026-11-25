@@ -15,6 +15,7 @@ from ui.sequence.toolbar_eliding_widgets import (
     ModelLineEdit, ToolbarFieldLabel,
 )
 from ui.sequence.toolbar_row_layout import ToolbarRowLayout
+from ui.sequence.tcp_service_dialog import TcpServiceDialog
 
 
 class RefreshBeforePopupComboBox(ElidingComboBox):
@@ -37,6 +38,13 @@ class SequenceToolsBar(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self.player_btn = QPushButton()
+        self.tcp_btn = QPushButton('TCP')
+        self.tcp_btn.setFixedHeight(40)
+        self.tcp_btn.setToolTip('TCP 服务设置')
+        self.tcp_btn.setStyleSheet(ui_style_const.main_window_toolbar_button_style)
+        self.tcp_dialog = TcpServiceDialog(self)
+        self.tcp_dialog.set_start_button(self.player_btn)
+        self.tcp_btn.clicked.connect(self.tcp_dialog.show)
         self.using_file_combobox = RefreshBeforePopupComboBox()
         self.sample_number_lineedit = ElidingLineEdit()
         self.lineedit_type = ModelLineEdit()
@@ -75,6 +83,8 @@ class SequenceToolsBar(QWidget):
         buttons = (self.player_btn,)
         for button in buttons:
             layout.add_control(button, "action", ui_style_const.TOOLBAR_ICON_BUTTON_WIDTH, 120)
+        layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
+        layout.add_control(self.tcp_btn, "action", 55, 65)
         layout.add_control(self._create_separator(QFrame.VLine), "fixed", 1, 1)
         self._configure_fields()
         for text, short_text, widget, preferred in (

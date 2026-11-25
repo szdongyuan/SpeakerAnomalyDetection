@@ -325,6 +325,7 @@ class MainWindow(QMainWindow):
     def _bind_workbench_recording(self):
         controller = self.workbench_controller
         sequence = self.sequence_window
+        controller.tcp_result_callback = sequence.toolsbar.tcp_dialog.publish_result
         device = self.workbench_recording_device
         self._workbench_archive_bridge = WorkbenchRecordingArchiveBridge(WorkbenchRecordingArchive(DATABASE_PATH), self)
         self._workbench_archive_close_state = "new"
