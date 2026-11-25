@@ -186,8 +186,9 @@ class MotorWorkbenchController:
         self._activated_round_ids: set[str] = set()
         self._result_state = WorkbenchResultState()
         self.tcp_result_callback = None
-        self._tcp_spl_round = None
         self._tcp_spl_values = {}
+        self._tcp_failed = set()
+        self._tcp_result_sent = False
         self._plot_columns = {}
         self._set_daily_records = None
         self._set_summary_counts: Callable[[WorkbenchSummarySnapshot], None] | None = None
@@ -660,19 +661,7 @@ class MotorWorkbenchController:
             )
         if is_current:
             if self.tcp_result_callback is not None:
-                if self._tcp_spl_round != context['round_id']:
-                    self._tcp_spl_round = context['round_id']
-                    self._tcp_spl_values = {}
-                self._tcp_spl_values[context['station_id'], context['condition_id']] = _tcp_spl_value(payload)
-                directions = context['condition_ids']
-                self.tcp_result_callback({
-                    'type': 'station_result', 'round_id': context['round_id'],
-                    'station': context['station_ordinal'],
-                    'forward': snapshot.forward, 'reverse': snapshot.reverse,
-                    'result': snapshot.result,
-                    'forward_spl': self._tcp_spl_values.get((context['station_id'], directions[0])) if directions else None,
-                    'reverse_spl': self._tcp_spl_values.get((context['station_id'], directions[1])) if len(directions) > 1 else None,
-                })
+                self._publish_completed_tcp_round(context, payload)
             self._show_analysis_snapshot(context, snapshot)
         if snapshot.complete and (self._set_daily_records is not None or self._set_summary_counts is not None):
             today = datetime.now().date()
@@ -683,6 +672,41 @@ class MotorWorkbenchController:
             context["request_id"], context["station_id"], payload,
         ):
             self._refresh_live_wav_details(datetime.now().date())
+
+    def _publish_completed_tcp_round(self, context, payload):
+        if self._tcp_result_sent:
+            return
+        key = context['station_id'], context['condition_id']
+        self._tcp_spl_values[key] = _tcp_spl_value(payload)
+        if payload.get('execution_status') != '分析完成' or payload.get('error') is not None:
+            self._tcp_failed.add(key)
+        stations = self._result_state.station_snapshots(context['round_id'])
+        if not all(snapshot.complete for _, _, snapshot in stations.values()):
+            return
+        self._tcp_result_sent = True
+        directions = tuple(context['condition_ids'])
+        messages = []
+        if (len(directions) != 2 or {item[0] for item in stations.values()} != {1, 2, 3, 4}
+                or any(tuple(expected) != directions for _, expected, _ in stations.values())):
+            error = 'PLC 回传需要四个工位及两个完整工况'
+        else:
+            error = ''
+            for station_id, (ordinal, _, snapshot) in sorted(stations.items(), key=lambda item: item[1][0]):
+                keys = [(station_id, condition) for condition in directions]
+                values = [self._tcp_spl_values.get(key) for key in keys]
+                if (any(key in self._tcp_failed for key in keys) or any(value is None for value in values)
+                        or any(value not in ('OK', 'NG') for value in (snapshot.forward, snapshot.reverse, snapshot.result))):
+                    error = f'工位 {ordinal} 分析失败或结果不完整'
+                    break
+                messages.append({'type': 'station_result', 'round_id': context['round_id'], 'station': ordinal,
+                                 'forward': snapshot.forward, 'reverse': snapshot.reverse, 'result': snapshot.result,
+                                 'forward_spl': values[0], 'reverse_spl': values[1]})
+        if error:
+            self.tcp_result_callback({'type': 'analysis_failed', 'success': False,
+                                      'round_id': context['round_id'], 'message': error})
+            return
+        for message in messages:
+            self.tcp_result_callback(message)
 
     def _show_analysis_snapshot(self, context, snapshot):
         self._station_panel.show_condition_result(
@@ -779,6 +803,10 @@ class MotorWorkbenchController:
                                        context.round_id, datetime.now().date())
         if context.round_id != self._current_round_id:
             return
+        if self.tcp_result_callback is not None and not self._tcp_result_sent:
+            self._tcp_result_sent = True
+            self.tcp_result_callback({'type': 'analysis_failed', 'success': False,
+                                      'round_id': context.round_id, 'message': '分析任务未能提交，本轮已取消'})
         self._condition_index = 0
         self._recording_round = None
         self._current_round_id = None
@@ -1069,6 +1097,9 @@ class MotorWorkbenchController:
             return
         self._recording_round = context
         self._current_round_id = context.round_id
+        self._tcp_spl_values = {}
+        self._tcp_failed = set()
+        self._tcp_result_sent = False
         self._plot_grid.clear_station_results()
         for _, ordinal, keys in context.stations:
             self._station_panel.show_condition_result(

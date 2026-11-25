@@ -186,3 +186,9 @@ class WorkbenchResultState:
         """Return independent complete records belonging to the recording day."""
         return [dict(record) for record in self._records
                 if record["completed_at"].date() == day]
+
+    def station_snapshots(self, round_id):
+        """Return the frozen station identities and current results for a round."""
+        state = self._rounds[round_id]
+        return {key: (station.ordinal, station.expected_conditions, station.snapshot(state.condition_ids))
+                for key, station in state.stations.items()}
