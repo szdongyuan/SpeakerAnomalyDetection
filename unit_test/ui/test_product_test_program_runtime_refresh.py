@@ -3,6 +3,7 @@ import json
 import logging
 from copy import deepcopy
 from pathlib import Path
+from time import perf_counter_ns
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -172,11 +173,14 @@ def test_hardware_channel_save_failure_blocks_stale_runtime_and_retry_recovers(r
     assert not host.player_btn.isEnabled()
     assert path.read_bytes() == previous
     assert "分析通道同步失败" in warnings[-1][1]
+    host.update_using_file_combobox()
+    assert host.using_file_combobox.currentIndex() == -1
 
     monkeypatch.setattr(LoadUiConfig, "save_sequence_config_to_json", save)
     assert host.synchronize_hardware_analysis_channels() is True
     assert host.analysis_config["SPL"]["analysis_channels"] == [0, 2, 4]
     assert host._product_config_refresh_state == "ready"
+    assert host.using_file_combobox.currentText() == "A"
 
 
 def test_hardware_sync_preserves_active_round_results_and_pending_task(refresh_host):
@@ -435,6 +439,47 @@ def test_registry_failure_does_not_change_running_a(refresh_host, monkeypatch):
     assert warnings[0][0] == "产品配置切换失败"
 
 
+def test_queue_save_does_not_repeat_existing_serial_conflict(refresh_host, tmp_path, monkeypatch):
+    from base.sequence_queue_references import SequenceQueueReferenceScanner
+    from ui.operation_sequence import AnalysisModelSelect
+
+    host, project, queue_path, warnings = refresh_host
+    monkeypatch.setattr(LoadUiConfig, "get_serial_discrete_input_config_path",
+                        lambda: str(tmp_path / "serial.json"))
+    assert LoadUiConfig.save_serial_discrete_input_config({"enabled": True})
+    for group in project["test_groups"]:
+        group["test_conditions"] = group["test_conditions"][:1]
+        group["test_conditions"][0]["trigger_state"] = "02 01 0D 0A"
+    assert host.product_program_manager.save_project("A.json", project)[0]
+    host.on_sequence_config_updated()
+    assert warnings == [("无法启用串口自动触发",
+                         "当前使用配置“A”中，端口0的末档与端口1的首档状态码相同。"
+                         "请在【功能 → 产品测试程序配置】中核对并修改状态码。")]
+    warnings.clear()
+
+    manager = host.product_program_manager
+    queue = json.loads(queue_path.read_text(encoding="utf-8"))
+    queue[0]["seq1"]["acq"]["name"] = "录制音频"
+    assert LoadUiConfig.save_sequence_config_to_json(queue, str(queue_path))
+    editor = AnalysisModelSelect(
+        str(queue_path), confirm_shared_save=lambda *_: True,
+        reference_scanner=SequenceQueueReferenceScanner(manager.program_dir, manager.registry_path, manager.queue_registry_path),
+    )
+    editor.select_list.config[0].detail["total_time"] = 20
+    save = next(button for button in editor.findChildren(QPushButton) if button.text() == "保存")
+    save.click()
+    assert json.loads(queue_path.read_text(encoding="utf-8"))[0]["seq1"]["acq"]["detail"]["total_time"] == 20
+    host.on_sequence_config_updated()
+    assert not warnings
+    assert host._product_config_refresh_state == "failed"
+    assert not host.player_btn.isEnabled()
+
+    assert LoadUiConfig.save_serial_discrete_input_config({"enabled": False})
+    host.on_sequence_config_updated()
+    assert host._product_config_refresh_state == "ready"
+    assert host.sequence_config[0]["seq1"]["acq"]["detail"]["total_time"] == 20
+
+
 def test_queue_callback_compares_before_mutating_runtime(refresh_host):
     host, _, queue_path, warnings = refresh_host
     old_sequence = host.sequence_config
@@ -530,6 +575,46 @@ def test_combobox_refresh_preserves_signal_block_state(refresh_host):
     host.using_file_combobox.blockSignals(True)
     host.update_using_file_combobox()
     assert host.using_file_combobox.signalsBlocked()
+
+
+def test_product_save_reports_serial_conflict_once(refresh_host, tmp_path, monkeypatch):
+    from ui.product_test_project_config_dialog import ProductTestProjectConfigDialog
+
+    host, project, _, notices = refresh_host
+    monkeypatch.setattr(LoadUiConfig, "get_serial_discrete_input_config_path",
+                        lambda: str(tmp_path / "serial.json"))
+    assert LoadUiConfig.save_serial_discrete_input_config({"enabled": True})
+    for group in project["test_groups"]:
+        group["test_conditions"] = group["test_conditions"][:1]
+        group["test_conditions"][0]["trigger_state"] = "02 01 0D 0A"
+    monkeypatch.setattr(QMessageBox, "information", lambda _, title, text: notices.append((title, text)))
+    manager = host.product_program_manager
+    dialog = ProductTestProjectConfigDialog(manager)
+    dialog.programs_changed.connect(host.on_product_test_program_updated)
+    try:
+        dialog._show_project(project, "A.json")
+        dialog.save_btn.click()
+        assert notices == [("保存成功", "配置已保存。无法使用串口自动触发：端口0的末档与端口1的首档状态码相同。"
+                                      "请在【功能 → 产品测试程序配置】中核对并修改状态码。")]
+        assert host._product_config_refresh_state == "failed"
+        assert not host.player_btn.isEnabled()
+        saved = manager.load_project("A.json")[1]
+        assert saved["test_groups"][1]["test_conditions"][0]["trigger_state"] == "02 01 0D 0A"
+
+        saved["test_groups"][1]["test_conditions"][0]["trigger_state"] = "02 02 0D 0A"
+        dialog._show_project(saved, "A.json")
+        notices.clear()
+        selection_changes = []
+        host.using_file_combobox.currentTextChanged.connect(selection_changes.append)
+        dialog.save_btn.click()
+        assert notices == [("保存成功", "产品测试配置已保存。")]
+        assert host._product_config_refresh_state == "ready"
+        assert host.using_file_combobox.currentData() == host._applied_product_snapshot.active_file == "A.json"
+        assert host.using_file_combobox.currentText() == "A"
+        assert selection_changes == []
+    finally:
+        dialog.close()
+        dialog.deleteLater()
 
 
 def test_real_dialog_unchanged_save_keeps_legacy_defaults_and_results(refresh_host, monkeypatch):
@@ -869,7 +954,7 @@ def _load_main_window_method(method_name, globals_dict):
         for node in main_window_node.body
         if isinstance(node, ast.FunctionDef) and node.name == method_name
     )
-    namespace = dict(globals_dict)
+    namespace = {"perf_counter_ns": perf_counter_ns, **globals_dict}
     exec(
         compile(
             ast.fix_missing_locations(ast.Module(body=[method_node], type_ignores=[])),

@@ -406,7 +406,7 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
     )
 
     projects_changed = pyqtSignal()
-    programs_changed = pyqtSignal()
+    programs_changed = pyqtSignal(str, str)  # Saved file and validation errors shown by this dialog.
 
     def __init__(self, manager=None, queue_editor_callback=None, parent=None, *, contextual_queue_editor_callback=None,
                  deletion_busy=None, deletion_completed=None, deletion_failed=None, deletion_error=None,
@@ -1535,6 +1535,13 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             result_text = f"已另存为“{copied_name}”，当前仍在编辑“{current_name}”。"
         else:
             result_text = f"已另存为“{copied_name}”，当前草稿保持不变。"
+        load_code, saved_copy = self.manager.load_project(message)
+        if load_code == error_code.OK:
+            use_errors = self.manager.validate_project(saved_copy, message)["use_errors"]
+            if use_errors:
+                result_text = f"已另存为“{copied_name}”。" + "\n".join(use_errors)
+        else:
+            result_text += "\n未能读取副本，请重新打开配置检查。"
         self._emit_projects_changed()
         QMessageBox.information(self, "另存为成功", result_text)
 
@@ -1636,12 +1643,15 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
         self.project_data = project_data
         self.project_name_input.setText(project_data[PROJECT_NAME_KEY])
         self._set_dirty(False)
-        self._emit_projects_changed()
+        reported_error = "\n".join(validation["use_errors"])
+        self._emit_projects_changed(message, reported_error)
         active_file = self.manager.load_registry().get(REGISTRY_ACTIVE_FILE_KEY)
         needs_selection = bool(active_file) and not os.path.isfile(
             os.path.join(self.manager.program_dir, active_file)
         )
-        if validation["use_warnings"]:
+        if reported_error:
+            result_text = "配置已保存。" + reported_error
+        elif validation["use_warnings"]:
             result_text = "配置已保存，部分测试队列不能自动输出 OK/NG。"
             if needs_selection:
                 result_text += "\n请在主界面选择使用配置。"
@@ -1654,9 +1664,9 @@ class ProductTestProjectConfigDialog(ConfigDialogBase):
             self.accept()
         return True
 
-    def _emit_projects_changed(self):
+    def _emit_projects_changed(self, saved_file="", reported_error=""):
         self.projects_changed.emit()
-        self.programs_changed.emit()
+        self.programs_changed.emit(saved_file, reported_error)
 
     def _set_dirty(self, dirty):
         self._dirty = bool(dirty)

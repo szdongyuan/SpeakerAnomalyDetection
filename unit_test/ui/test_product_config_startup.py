@@ -14,17 +14,25 @@ from ui.sequence.sequence_widget import SequenceWindow
 from unit_test.base.test_product_test_config_refresh import make_refresh_manager
 
 
-@pytest.mark.parametrize("configuration", ["valid", "empty", "invalid", "missing"])
+@pytest.mark.parametrize("configuration", ["valid", "empty", "invalid", "missing", "shared_code"])
 def test_startup_prepares_once_before_widgets_and_registers_after_ui(
     tmp_path, monkeypatch, configuration,
 ):
-    manager, _, queue_path = make_refresh_manager(tmp_path, condition_count=2, port_count=2)
+    manager, project, queue_path = make_refresh_manager(tmp_path, condition_count=2, port_count=2)
     if configuration == "empty":
         manager.save_registry({"active_file": None, "configs": []})
     elif configuration == "invalid":
         (Path(manager.program_dir) / "A.json").write_text("{", encoding="utf-8")
     elif configuration == "missing":
         (Path(manager.program_dir) / "A.json").replace(tmp_path / "moved.json")
+    elif configuration == "shared_code":
+        monkeypatch.setattr(sequence_module.LoadUiConfig, "get_serial_discrete_input_config_path",
+                            lambda: str(tmp_path / "serial.json"))
+        assert sequence_module.LoadUiConfig.save_serial_discrete_input_config({"enabled": True})
+        for group in project["test_groups"]:
+            group["test_conditions"] = group["test_conditions"][:1]
+            group["test_conditions"][0]["trigger_state"] = "02 01 0D 0A"
+        assert manager.save_project("A.json", project)[0]
     read = Mock(wraps=manager.load_project)
     monkeypatch.setattr(manager, "load_project", read)
     monkeypatch.setattr(SequenceWindow, "_get_product_program_manager", lambda self: manager)
@@ -40,7 +48,7 @@ def test_startup_prepares_once_before_widgets_and_registers_after_ui(
     monkeypatch.setattr(sequence_module, "UnifiedHardwareManager", Mock())
     monkeypatch.setattr(sequence_module.LogManager, "set_log_handler", lambda _: logging.getLogger("startup-test"))
     warnings = []
-    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    monkeypatch.setattr(QMessageBox, "warning", lambda _, title, text: warnings.append((title, text)))
     registry_before = Path(manager.registry_path).read_bytes()
     original_open = builtins.open
 
@@ -53,7 +61,7 @@ def test_startup_prepares_once_before_widgets_and_registers_after_ui(
     monkeypatch.setattr(builtins, "open", no_statistics_open)
     window = SequenceWindow()
     try:
-        expected = {"valid": "ready", "empty": "empty", "invalid": "failed", "missing": "failed"}[configuration]
+        expected = {"valid": "ready", "empty": "empty"}.get(configuration, "failed")
         assert window._product_config_refresh_state == expected
         assert window._pending_initial_product_snapshot is None
         assert read.call_count == (0 if configuration == "empty" else 1)
@@ -79,9 +87,13 @@ def test_startup_prepares_once_before_widgets_and_registers_after_ui(
             assert warnings == []
         else:
             assert len(warnings) == 1
-            assert "功能-测试队列" not in warnings[0]
+            assert "功能-测试队列" not in warnings[0][1]
             if configuration in {"missing", "empty"}:
-                assert warnings[0] == "暂无可用配置。"
+                assert warnings[0][1] == "暂无可用配置。"
+            if configuration == "shared_code":
+                assert warnings[0] == ("无法启用串口自动触发",
+                                       "当前使用配置“A”中，端口0的末档与端口1的首档状态码相同。"
+                                       "请在【功能 → 产品测试程序配置】中核对并修改状态码。")
             window.hide()
             window.show()
             QApplication.processEvents()

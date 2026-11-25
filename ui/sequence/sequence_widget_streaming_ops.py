@@ -693,7 +693,7 @@ class SequenceWidgetStreamingOpsMixin:
     def on_sequence_config_updated(self, *_):
         """A shared queue edit uses the same comparison as a product save."""
         self.update_using_file_combobox()
-        self._refresh_active_product_configuration()
+        self._refresh_active_product_configuration(after_queue_edit=True)
 
     def _refresh_test_mode_availability(self):
         """
@@ -2209,6 +2209,11 @@ class SequenceWidgetStreamingOpsMixin:
 
             # Update player button state
             self._record_workflow_busy = False
+            self._serial_round_received_after_ns = perf_counter_ns()
+            if not getattr(self, "_recording_publication_in_progress", False):
+                refresh_port = getattr(self, "_refresh_serial_product_port_state", None)
+                if callable(refresh_port):
+                    refresh_port()
             _refresh_manual_analysis_action(self, fallback_enabled=True)
             self.update_player_btn_is_paused()
             try:

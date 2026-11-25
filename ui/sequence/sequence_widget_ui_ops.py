@@ -102,8 +102,7 @@ class SequenceWidgetUiOpsMixin:
         if not self.sequence_config and not self._missing_config_prompted:
             QMessageBox.warning(
                 self,
-                "提示",
-                self._missing_configuration_message(),
+                *self._missing_configuration_warning(),
             )
             self._missing_config_prompted = True
 

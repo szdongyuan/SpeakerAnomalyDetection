@@ -728,6 +728,11 @@ class SequenceWidgetRecordingProcessOpsMixin(SequenceWidgetRecordingRetryOpsMixi
             context.publication_delivered = True
             self._drop_recording_context(context)
             self._recording_publication_in_progress = False
+            # Process recordings retain ownership past the recording business callback.
+            self._serial_round_received_after_ns = time.perf_counter_ns()
+            refresh_port = getattr(self, "_refresh_serial_product_port_state", None)
+            if callable(refresh_port) and not (context.failed or context.cancelled):
+                refresh_port()
             record_gui_stage(self, "gui_complete", gui_started, request=context.request)
             published_at = time.monotonic()
             self.default_logger.info(

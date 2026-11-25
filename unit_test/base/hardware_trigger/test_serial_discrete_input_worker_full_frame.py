@@ -76,6 +76,7 @@ def test_active_report_full_frame_mode_does_not_write_query(monkeypatch):
         SimpleNamespace(Serial=lambda **_kwargs: port),
     )
     monkeypatch.setattr(worker_module.time, "monotonic", lambda: 123.5)
+    monkeypatch.setattr(worker_module, "perf_counter_ns", lambda: 123456789)
     events = []
     worker.sig_state_changed.connect(events.append)
 
@@ -85,6 +86,7 @@ def test_active_report_full_frame_mode_does_not_write_query(monkeypatch):
     assert [event["raw_hex"] for event in events] == [FRAME]
     assert events[0]["product_full_frame"] is True
     assert events[0]["received_monotonic"] == 123.5
+    assert events[0]["received_perf_ns"] == 123456789
 
 
 def test_active_report_logs_raw_data_and_matched_state_code_without_stdout(
@@ -133,6 +135,38 @@ def test_active_report_worker_emits_every_transport_duplicate(monkeypatch):
     worker.run()
 
     assert [event["raw_hex"] for event in events] == [FRAME, FRAME]
+
+
+def test_delayed_match_keeps_the_read_time_of_each_frames_last_byte(monkeypatch):
+    short = "00 00 00 00"
+    long = "A5 00 00 00 00 0D"
+    worker = SerialDiscreteInputWorker(
+        {"serial_settings": {"port": "FAKE"}}, full_frame_candidates=[short, long],
+    )
+    chunks = [bytes.fromhex(part) for part in ("A5 00", "00 00 00", "FF 00 00", "00 00")]
+    port = _FakeSerialPort(worker, chunks[0])
+    read_count = 0
+    events = []
+
+    def read(_size):
+        nonlocal read_count
+        chunk = chunks.pop(0)
+        read_count += 1
+        port.data = chunks[0] if chunks else b""
+        worker._is_running = bool(chunks)
+        return chunk
+
+    monkeypatch.setattr(port, "read", read)
+    monkeypatch.setattr(worker_module, "serial", SimpleNamespace(Serial=lambda **kwargs: port))
+    monkeypatch.setattr(worker_module, "perf_counter_ns", lambda: read_count * 100)
+    monkeypatch.setattr(worker_module, "time", SimpleNamespace(monotonic=lambda: float(read_count)))
+    worker.sig_state_changed.connect(lambda event: events.append((
+        read_count, event["raw_hex"], event["received_perf_ns"], event["received_monotonic"],
+    )))
+    worker.run()
+
+    # First B was complete on read 2, but the long candidate is ruled out only on read 3.
+    assert events == [(3, short, 200, 2.0), (4, short, 400, 4.0)]
 
 
 def test_unconfigured_active_report_is_logged_without_stdout_or_business_event(
@@ -203,12 +237,14 @@ def test_hardware_manager_forwards_product_full_frame_without_direction_mapping(
             "raw_hex": FRAME,
             "product_full_frame": True,
             "received_monotonic": 123.5,
+            "received_perf_ns": 123456789,
         }
     )
 
     assert [event["raw_hex"] for event in full_frames] == [FRAME]
     assert directions == []
     assert full_frames[0]["received_monotonic"] == 123.5
+    assert full_frames[0]["received_perf_ns"] == 123456789
 
 
 def test_passive_connection_test_treats_an_open_port_as_connected(monkeypatch):

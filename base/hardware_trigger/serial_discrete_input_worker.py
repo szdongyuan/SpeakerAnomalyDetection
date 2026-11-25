@@ -1,4 +1,5 @@
 import time
+from time import perf_counter_ns
 from threading import Event
 
 try:
@@ -148,6 +149,8 @@ class SerialDiscreteInputWorker(QThread):
 
                 waiting = getattr(self.serial_port, "in_waiting", 0)
                 received_bytes = self.serial_port.read(waiting) if waiting > 0 else b""
+                # Windows monotonic() can give two successive reads the same 15 ms tick.
+                received_ns = perf_counter_ns()
                 now = time.monotonic()
                 if not received_bytes:
                     # Passive fixtures may legitimately remain silent between reports.
@@ -179,7 +182,8 @@ class SerialDiscreteInputWorker(QThread):
                         value="",
                         mode="full_frame",
                     )
-                    for frame_bytes in self._full_frame_matcher.feed(received_bytes):
+                    frames = self._full_frame_matcher.feed_with_timestamps(received_bytes, now, received_ns)
+                    for frame_bytes, frame_received_at, frame_received_ns in frames:
                         frame_hex = " ".join(f"{byte:02X}" for byte in frame_bytes)
                         self.logger.info(
                             f"serial_product_frame_matched frame={frame_hex}"
@@ -190,7 +194,8 @@ class SerialDiscreteInputWorker(QThread):
                                 "value": frame_hex,
                                 "raw_hex": frame_hex,
                                 "product_full_frame": True,
-                                "received_monotonic": now,
+                                "received_monotonic": frame_received_at,
+                                "received_perf_ns": frame_received_ns,
                             }
                         )
                     continue

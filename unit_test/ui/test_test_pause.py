@@ -90,12 +90,19 @@ def paused(host):
     return host._test_pause is not None and host._test_pause.phase == "paused"
 
 
-@pytest.mark.parametrize("blocked_by", [None, "round_analysis", "recording_resources"])
+@pytest.mark.parametrize("blocked_by,analysis_pending", [
+    (None, True), (None, False), ("round_analysis", True), ("recording_resources", True),
+])
+@pytest.mark.parametrize("coded_ports", [False, True])
 def test_background_analysis_allows_next_manual_capture_only_when_ready(
-        host, service, ui_qapp, blocked_by):
+        host, service, ui_qapp, blocked_by, analysis_pending, coded_ports):
     from ui.sequence.sequence_widget_analysis_ops import SequenceWidgetAnalysisOpsMixin
 
-    host._analysis_has_pending_tasks.return_value = True
+    host._serial_trigger_config = {"enabled": False}
+    if coded_ports:
+        for condition in host.product_test_condition_configs:
+            condition["trigger_state"] = "02 01 0D 0A"
+    host._analysis_has_pending_tasks.return_value = analysis_pending
     host.player_status_flag = host._record_workflow_busy = False
     host._analysis_round_completion_pending = blocked_by == "round_analysis"
     host._load_sequence_config_for_product_condition = Mock()
@@ -121,7 +128,7 @@ def test_background_analysis_allows_next_manual_capture_only_when_ready(
     session = host._recording_process_session
     pump(ui_qapp, lambda: session.released.is_set() and not host._recording_contexts())
     assert session.state == "completed"
-    assert host._analysis_has_pending_tasks()
+    assert host._analysis_has_pending_tasks() == analysis_pending
     assert host.left_panel.result_panel.rows["first"]["result"] == "OK"
     assert host._manual_product_condition_completed_keys == {"first"}
     assert host._test_pause is None
@@ -214,16 +221,24 @@ def test_waits_for_existing_analysis_without_stopping_its_queue(host, ui_qapp):
     pump(ui_qapp, lambda: paused(host))
 
 
-def test_serial_resume_waits_for_new_frame_and_does_not_start_capture(host):
+def test_serial_resume_waits_for_new_frame_and_does_not_start_capture(host, monkeypatch):
+    from ui.sequence import sequence_widget_pause_ops
+
+    host._serial_trigger_config = {"enabled": True}
+    host.product_test_condition_configs[0]["trigger_state"] = "BB"
     host.product_test_condition_configs[1]["trigger_state"] = "AA"
     host._request_test_pause()
     assert paused(host)
     host.on_clicked_player_btn = Mock()
-    before = time.monotonic()
+    # Windows can report the same coarse tick for frames on both sides of resume.
+    clock = SimpleNamespace(monotonic=lambda: 10.0, perf_counter_ns=lambda: 10_000_000_000)
+    monkeypatch.setattr(sequence_widget_pause_ops, "time", clock)
     host._resume_test()
     host.on_clicked_player_btn.assert_not_called()
-    assert host._test_resume_after >= before
     assert host._test_pause is None
+    for offset_ns, expected in ((-1, False), (0, False), (1_000_000, True)):
+        frame = {"received_monotonic": 10.0, "received_perf_ns": 10_000_000_000 + offset_ns}
+        assert host._test_pause_accepts_serial_frame(frame) is expected
 
 
 def test_real_button_refresh_exposes_pause_while_capturing(host, service, ui_qapp):
@@ -298,11 +313,11 @@ def test_resume_uses_original_condition_preparation_without_rewinding_completed(
     assert widget._manual_product_condition_group_id == "original-round"
 
 
-@pytest.mark.parametrize("received", [None, -1.0, 10.0, float("nan"), "bad"])
+@pytest.mark.parametrize("received", [None, -1, 10, float("nan"), "bad", True])
 def test_resume_ignores_stale_or_missing_serial_timestamp(host, received):
-    host._test_resume_after = 10.0
-    assert not host._test_pause_accepts_serial_frame({"received_monotonic": received})
-    assert host._test_pause_accepts_serial_frame({"received_monotonic": 10.01})
+    host._test_resume_after_ns = 10
+    assert not host._test_pause_accepts_serial_frame({"received_perf_ns": received})
+    assert host._test_pause_accepts_serial_frame({"received_perf_ns": 11})
 
 
 def test_serial_handler_cannot_advance_on_idle_close_or_start_during_pause():
@@ -332,6 +347,8 @@ def test_serial_abort_during_pause_keeps_completed_records_and_round():
 def test_serial_resume_keeps_pause_until_connection_returns(host, monkeypatch):
     from ui.sequence.sequence_widget_pause_ops import QMessageBox
     monkeypatch.setattr(QMessageBox, "information", Mock())
+    host._serial_trigger_config = {"enabled": True}
+    host.product_test_condition_configs[0]["trigger_state"] = "BB"
     host.product_test_condition_configs[1]["trigger_state"] = "AA"
     host._request_test_pause()
     host._serial_trigger_runtime_status = {"connected": False}

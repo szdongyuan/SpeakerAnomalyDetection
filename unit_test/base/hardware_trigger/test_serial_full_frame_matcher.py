@@ -53,6 +53,30 @@ def test_matcher_extracts_sticky_frames_and_preserves_transport_duplicates():
     assert matcher.feed(first + second + second) == [first, second, second]
 
 
+@pytest.mark.parametrize("split", range(1, 6))
+def test_partial_gear_keeps_its_embedded_idle_until_complete(split):
+    idle = bytes.fromhex("00 00 00 00")
+    gear = bytes.fromhex("A5 00 00 00 00 0D")
+    matcher = SerialFullFrameMatcher([idle, gear])
+
+    assert matcher.feed(idle) == [idle]
+    assert matcher.feed(gear[:split]) == []
+    assert matcher.buffered_bytes == gear[:split]
+    assert matcher.feed(gear[split:] + idle + gear) == [gear, idle, gear]
+    assert matcher.buffered_bytes == b""
+    assert matcher.discarded_byte_count == 0
+
+
+def test_incomplete_gear_followed_by_noise_does_not_hide_next_idle():
+    idle = bytes.fromhex("00 00 00 00")
+    gear = bytes.fromhex("A5 00 00 00 00 0D")
+    matcher = SerialFullFrameMatcher([gear, idle])
+
+    assert matcher.feed(gear[:3]) == []
+    assert matcher.feed(b"\xff" + idle) == [idle]
+    assert matcher.discarded_byte_count == 4
+
+
 def test_matcher_discards_noise_and_recovers_at_the_next_known_frame():
     frame = bytes.fromhex(FRAME_8000)
     matcher = SerialFullFrameMatcher([FRAME_8000])

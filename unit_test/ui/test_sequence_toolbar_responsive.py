@@ -465,7 +465,7 @@ def test_serial_states_paint_without_losing_native_status(scale, toolbar_host, u
     host.close()
 
 
-def test_serial_click_uses_production_signal_and_configuration_entry(toolbar_host, ui_qapp, monkeypatch):
+def test_serial_click_uses_production_signal_and_configuration_entry(toolbar_host, ui_qapp, monkeypatch, tmp_path):
     from types import SimpleNamespace
     from ui.sequence import sequence_widget_serial_trigger_ops as serial_ops
     from ui.sequence.sequence_widget_ui_ops import SequenceWidgetUiOpsMixin
@@ -486,6 +486,10 @@ def test_serial_click_uses_production_signal_and_configuration_entry(toolbar_hos
     host.count_board = SimpleNamespace(mode="test",
                                       reset_btn=QPushButton(), mark_btn=QPushButton())
     host._serial_trigger_config = {"enabled": False, "port": "TEST"}
+    monkeypatch.setattr(serial_ops.LoadUiConfig, "get_serial_discrete_input_config_path",
+                        lambda: str(tmp_path / "serial.json"))
+    assert serial_ops.LoadUiConfig.save_serial_discrete_input_config({"enabled": True})
+    saved_config = serial_ops.LoadUiConfig.load_serial_discrete_input_config()[1]
     host.hw_manager = SimpleNamespace(get_serial_discrete_input_status=lambda: {"connected": False})
     dialogs = []
     class Dialog:
@@ -500,7 +504,7 @@ def test_serial_click_uses_production_signal_and_configuration_entry(toolbar_hos
         ui_qapp.processEvents()
         QTest.mouseClick(toolbar.serial_trigger_btn, Qt.LeftButton)
         assert len(dialogs) == index
-        assert dialogs[-1][0] == host._serial_trigger_config
+        assert dialogs[-1][0] == saved_config
         assert dialogs[-1][1] == {"connected": False}
         assert dialogs[-1][2] == host._test_serial_trigger_connection
         assert dialogs[-1][3] is host

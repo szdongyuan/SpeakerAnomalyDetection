@@ -16,7 +16,11 @@ class SerialProductPortPlan:
     candidates: tuple[str, ...]
 
 
-def build_serial_product_port_plan(conditions, idle_code=""):
+_EDIT_TRIGGER_STATES = "请在【功能 → 产品测试程序配置】中核对并修改状态码。"
+
+
+def build_serial_product_port_plan(conditions, idle_code="", *, validate_boundaries=True):
+    """Validate frames; saved drafts may defer boundary checks until use."""
     if not isinstance(idle_code, str):
         raise ValueError("端口切换空闲码必须是字符串")
     idle_frame = normalize_hex_frame(idle_code) if idle_code.strip() else ""
@@ -36,17 +40,16 @@ def build_serial_product_port_plan(conditions, idle_code=""):
     if idle_frame:
         if idle_frame in frames:
             raise ValueError(f"端口切换空闲码与档位状态码重复：{idle_frame}")
-    else:
+    elif validate_boundaries:
         for index in range(1, len(ports)):
             if frames[ports[index - 1][-1]] == frames[ports[index][0]]:
                 raise ValueError(
-                    f"{names[index - 1]}末档与{names[index]}首档状态码重复："
-                    f"{frames[ports[index][0]]}；请配置端口切换空闲码或修改状态码"
+                    f"{names[index - 1]}的末档与{names[index]}的首档状态码相同。"
+                    f"{_EDIT_TRIGGER_STATES}"
                 )
-        if ports and frames[ports[-1][-1]] == frames[ports[0][0]]:
+        if len(frames) > 1 and frames[ports[-1][-1]] == frames[ports[0][0]]:
             raise ValueError(
-                f"本轮末档与下一轮首档状态码相同：{frames[ports[0][0]]}；"
-                "请配置空闲码或修改状态码"
+                f"本轮末档与下一轮首档状态码相同：{frames[ports[0][0]]}。{_EDIT_TRIGGER_STATES}"
             )
     candidates = list(dict.fromkeys(frames))
     if idle_frame:

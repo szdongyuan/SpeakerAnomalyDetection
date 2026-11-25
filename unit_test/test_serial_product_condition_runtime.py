@@ -1,5 +1,6 @@
 import ast
 from pathlib import Path
+from time import perf_counter_ns
 from types import SimpleNamespace
 
 from base.product_test_project_config import (
@@ -283,7 +284,7 @@ class _SerialProductHost(SequenceWidgetSerialTriggerOpsMixin):
 
 
 def _payload(frame):
-    return {"raw_hex": frame, "product_full_frame": True}
+    return {"raw_hex": frame, "product_full_frame": True, "received_perf_ns": perf_counter_ns()}
 
 
 def test_serial_frames_follow_configured_order_within_one_round():
@@ -822,6 +823,24 @@ def test_condition_index_alone_does_not_make_a_round_active():
 
     assert host.reset_count == 0
     assert host.discarded_groups == []
+
+
+def test_disconnect_keeps_manual_recording_when_serial_is_enabled(monkeypatch):
+    host = _SerialProductHost()
+    host._serial_trigger_config = {"enabled": True}
+    for condition in host.product_test_condition_configs:
+        condition["trigger_state"] = ""
+    _load_analysis_method("on_clicked_player_btn")(host)
+    group = host._manual_product_condition_group_id
+    assert group and host._record_workflow_busy
+    monkeypatch.setattr(host, "_show_serial_product_error_once", lambda reason: None)
+
+    host.on_serial_trigger_status_changed({"connected": False, "running": False, "error": "disconnected"})
+
+    assert host._manual_product_condition_group_id == group
+    assert host._record_workflow_busy
+    assert host.discarded_groups == []
+    assert not host._serial_trigger_runtime_status["connected"]
 
 
 def test_connection_failure_aborts_an_active_round(monkeypatch):

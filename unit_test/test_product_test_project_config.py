@@ -547,7 +547,7 @@ def test_project_status_code_length_does_not_constrain_idle_code(tmp_path):
     ) == []
 
 
-def test_status_codes_must_be_all_empty_or_present_and_port_boundary_valid(tmp_path):
+def test_status_codes_must_be_all_empty_or_present_but_boundaries_can_be_saved(tmp_path):
     project = make_project(tmp_path)
     conditions = flatten_test_conditions(project)
     assert classify_project_trigger_mode(conditions) == "manual"
@@ -572,7 +572,7 @@ def test_status_codes_must_be_all_empty_or_present_and_port_boundary_valid(tmp_p
         {"active_file": None, "configs": []},
         None,
     )
-    assert any("末档" in error and "首档" in error for error in duplicate_errors)
+    assert duplicate_errors == []
 
 
 def test_registry_keeps_missing_file_record_until_explicit_delete(tmp_path):
