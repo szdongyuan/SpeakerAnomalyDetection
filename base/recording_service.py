@@ -38,6 +38,7 @@ from base.log_exit import ProcessLogDrain, run_with_log_drain
 from base.recording_timing_logger import RecordingTimingLogger
 from base.recording_diagnostics import RecordingDiagnostics
 from base.recording_process_protocol import (
+    RecordingCaptureTiming,
     CaptureSlotReleased, FrozenConfig, RecordingCancelled, RecordingEvent,
     RecordingFailure, RecordingFinalEnvelope, RecordingProgress, RecordingRequest, RecordingResult,
     SOUNDCARD_PREPARE, SOUNDCARD_PREPARE_RESULT, SoundcardPrepareRequest, SoundcardPrepareResult,
@@ -71,6 +72,7 @@ _DISPATCH_KINDS = (
     SOUNDCARD_PREPARE, SOUNDCARD_PREPARE_RESULT,
     "ready", "started", WORKBENCH_FILES_OWNED, "finalizing", "preview", "progress", "completed",
     "failed", "cancelled", "capture_slot_released", "ve_released",
+    "capture_timing", "soundcard_capture_released",
     "ve_release_failed", "worker_fatal", VE_PREWARM_STARTED,
     VE_PREWARM_PROGRESS, VE_PREWARM_DETACHING, VE_PREWARM_TERMINAL, VE_RESOURCE_RETRY, "unknown")
 
@@ -153,6 +155,8 @@ class RecordingCallbacks:
     release_failed: object = None
     finalizing: object = None
     workbench_completed: object = None
+    capture_timing: object = None
+    capture_available: object = None
 
 
 @dataclass(frozen=True)
@@ -222,6 +226,7 @@ class RecordingSession:
         self._finalizing_notified = False
         self._completion_observed_at = None
         self._target_reached_at = None
+        self.capture_timing: RecordingCaptureTiming | None = None
         self._slot_released_at = None
         self._slot_lifecycle_counts = None
         self._admission_reason = None
@@ -2460,6 +2465,23 @@ class RecordingService:
                 with self._lock:
                     if not session.cancel_requested and not self._closing:
                         self._command(WORKBENCH_FILES_ACK, session, proof.attempt)
+        elif event.kind == "capture_timing":
+            timing = event.payload
+            if (not session.request.report_capture_timing or session._terminal or session.capture_timing is not None
+                    or timing.frames != session.request.target_samples):
+                self._retire_generation(worker, "protocol", "invalid soundcard capture timing", session)
+                return
+            session.capture_timing = timing
+            self._notify(session, "capture_timing", timing)
+        elif event.kind == "soundcard_capture_released":
+            if (is_ve or session is not self._capture_session
+                    or session.capture_timing != event.payload or session._slot_released_at is not None):
+                self._retire_generation(worker, "protocol", "invalid soundcard capture release", session)
+                return
+            with self._lock:
+                self._capture_session = None
+                session._slot_released_at = self._clock()
+            self._notify(session, "capture_available", event.payload)
         elif event.kind == "progress":
             deadline = session._capture_deadline
             if not is_ve or deadline is None or session._terminal:
@@ -2531,6 +2553,8 @@ class RecordingService:
                 self._release_timeout_evidence(session, admitted_at)
                 self._retire_generation(worker, "capture_release_timeout",
                                         f"capture slot release exceeded target + {VE_CAPTURE_RELEASE_TIMEOUT_SECONDS:.1f} seconds", session)
+            elif session.capture_timing is not None:
+                self._notify(session, "capture_available", session.capture_timing)
         elif event.kind == "preview":
             snapshot = event.payload
             if snapshot.sequence == session._preview_pending:

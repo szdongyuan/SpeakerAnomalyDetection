@@ -195,7 +195,7 @@ def test_snapshot_equality_distinguishes_boolean_and_integer(part):
 def test_values_have_only_their_owned_fields_and_share_same_queue_parameters():
     recording, analysis, ui = make_values(workbench_source())
     assert {f.name for f in fields(recording.context)} == {
-        "project_id", "project_name", "result_root_directory", "stations", "conditions",
+        "project_id", "project_name", "result_root_directory", "stations", "conditions", "execution",
     }
     assert {f.name for f in fields(recording.context.conditions[0])} == {
         "condition_id", "condition_name", "test_queue", "applicable_station_ids", "trigger_state", "segmented_analysis",

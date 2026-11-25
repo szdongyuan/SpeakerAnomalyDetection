@@ -1,7 +1,7 @@
 """Shared workbench identity values and JSON snapshot operations, without I/O."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from types import MappingProxyType
 
 
@@ -112,12 +112,19 @@ class WorkbenchCondition(_SnapshotValue):
 
 
 @dataclass(frozen=True, eq=False)
+class WorkbenchExecution(_SnapshotValue):
+    mode: str = "per_condition"
+    condition_gap_seconds: float = 0.5
+
+
+@dataclass(frozen=True, eq=False)
 class WorkbenchContext(_SnapshotValue):
     project_id: str
     project_name: str
     result_root_directory: str
     stations: tuple[WorkbenchStation, ...]
     conditions: tuple[WorkbenchCondition, ...]
+    execution: WorkbenchExecution = field(default_factory=WorkbenchExecution)
 
     def __post_init__(self):
         object.__setattr__(self, "stations", tuple(self.stations))

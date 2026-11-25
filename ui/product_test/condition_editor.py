@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QComboBox, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QMenu, QLabel, QCheckBox, QWidgetAction,
 )
-from base.product_test.config_model import new_condition
+from base.product_test.config_model import new_condition, execution_settings
 from ui.output_load_config_dialog import OutputLoadConfigDialog
 from ui.queue_display import queue_display_name, queue_display_options
 from ui.product_test.style import CONTROL_STYLE, SELECTOR_STYLE, STATION_MENU_STYLE, TABLE_STYLE
@@ -56,6 +56,7 @@ class StationSelection(QComboBox):
 class ConditionEditor(QWidget):
     changed = pyqtSignal()
     edit_queue = pyqtSignal(str)
+    edit_execution = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -72,9 +73,15 @@ class ConditionEditor(QWidget):
         title = QLabel("工况配置")
         title.setObjectName("productProjectConditionTitle")
         bar.addWidget(title)
-        self.add_button = QPushButton("+ 添加工况")
-        self.remove_button = QPushButton("删除选中工况")
+        self.execution_summary = QLabel()
+        bar.addWidget(self.execution_summary)
+        self.execution_button = QPushButton("启动与间隔…")
+        self.execution_button.setFixedHeight(30)
+        self.execution_button.clicked.connect(self.edit_execution)
+        self.add_button = QPushButton('+ 添加工况')
+        self.remove_button = QPushButton('删除选中工况')
         bar.addStretch()
+        bar.addWidget(self.execution_button)
         bar.addWidget(self.add_button)
         bar.addWidget(self.remove_button)
         for button in (self.add_button, self.remove_button):
@@ -100,6 +107,7 @@ class ConditionEditor(QWidget):
 
     def set_project(self, project, catalog):
         self.project, self.catalog = project, catalog
+        self.refresh_execution_summary()
         self.table.setRowCount(0)
         for row, condition in enumerate(project["conditions"]):
             self.table.insertRow(row)
@@ -157,6 +165,13 @@ class ConditionEditor(QWidget):
             segment_layout.addWidget(segments)
             self.table.setCellWidget(row, 7, segment_cell)
             self._summary(condition, row)
+
+    def refresh_execution_summary(self):
+        settings = execution_settings(self.project)
+        self.execution_summary.setText(
+            "整轮触发 · 间隔 {gap} 秒".format(gap=f'{settings["condition_gap_seconds"]:g}')
+            if settings["mode"] == "full_cycle" else "逐工况触发"
+        )
 
     def _set_cell_control(self, row, column, control):
         cell = QWidget()

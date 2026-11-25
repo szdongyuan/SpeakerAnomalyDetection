@@ -9,9 +9,10 @@ import logging
 import math
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
+from time import monotonic
 from uuid import uuid4
 
 from base.audio_label_policy import (
@@ -109,6 +110,23 @@ class _InFlightRecording:
     analysis_context: AnalysisRecordingContext | None = None
     archiving: bool = False
     starts_round: bool = False
+    condition_index: int = 0
+    execution_token: str | None = None
+    target_started_at: float | None = None
+
+
+@dataclass
+class _FullCycle:
+    config: WorkbenchConfiguration
+    identity: tuple[str, str, str]
+    device_snapshot: WorkbenchRecordingDeviceSnapshot
+    token: str = field(default_factory=lambda: uuid4().hex)
+    round_context: _RecordingRound | None = None
+    next_at: float | None = None
+    capture_done: bool = False
+    pending: set[str] = field(default_factory=set)
+    timings: set[str] = field(default_factory=set)
+    archived: set[str] = field(default_factory=set)
 
 
 class MotorWorkbenchController:
@@ -155,6 +173,12 @@ class MotorWorkbenchController:
         self._configuration_revision = 0
         self._condition_index = 0
         self._in_flight: _InFlightRecording | None = None
+        self._recording_requests: dict[str, _InFlightRecording] = {}
+        self._recording_started_ids: set[str] = set()
+        self._full_cycle: _FullCycle | None = None
+        self._execution_clock = monotonic
+        self._schedule_execution = None
+        self._cancel_execution_timer = None
         self._metric_keys = {}
         self._display_revision = 0
         self._recording_round: _RecordingRound | None = None
@@ -181,7 +205,95 @@ class MotorWorkbenchController:
     @property
     def recording_busy(self) -> bool:
         """Capture and archive ownership remain in flight until completion."""
-        return self._in_flight is not None
+        return self._in_flight is not None or bool(self._recording_requests) or self.automatic_execution_busy
+
+    @property
+    def automatic_execution_busy(self) -> bool:
+        return self._full_cycle is not None
+
+    def bind_execution_timer(self, schedule, cancel, *, clock=monotonic):
+        """MainWindow owns the timer; only this controller decides its action."""
+        self._schedule_execution = schedule
+        self._cancel_execution_timer = cancel
+        self._execution_clock = clock
+
+    def stop_automatic_execution(self, detail=""):
+        run = self._full_cycle
+        if run is None:
+            return
+        self._full_cycle = None
+        self._cancel_execution_timer()
+        self._condition_index = 0
+        attempt = self._in_flight
+        if attempt is not None and attempt.execution_token == run.token and not attempt.archiving:
+            self._recording.bridge.service.cancel(attempt.request_id)
+        if run.round_context is not None:
+            self._cancel_rejected_round(run.round_context)
+        self.refresh_recording_state()
+        if detail and not self._recording.is_closing():
+            self._recording.notify_cleanup_error(detail)
+
+    def _schedule_next_condition(self):
+        run = self._full_cycle
+        if run is None or run.next_at is None:
+            return
+        self._schedule_execution(max(0.0, run.next_at - self._execution_clock()),
+                                 lambda token=run.token: self._continue_full_cycle(token))
+
+    def _continue_full_cycle(self, token):
+        run = self._full_cycle
+        if run is None or run.token != token or run.next_at is None:
+            return
+        ports = self._recording
+        if ports.is_closing():
+            self.stop_automatic_execution()
+            return
+        if not ports.device.login_ready or ports.device.snapshot is not run.device_snapshot:
+            self.stop_automatic_execution("录制设备或登录状态变化，整轮测试已停止。")
+            return
+        if self._execution_clock() < run.next_at:
+            self._schedule_next_condition()
+            return
+        if (self._in_flight is not None or not ports.bridge.service.can_start_recording
+                or not ports.hardware_available(ports.device.snapshot)):
+            self._schedule_execution(0.05, lambda: self._continue_full_cycle(token))
+            return
+        target = run.next_at
+        run.next_at = None
+        self._start_current_condition(target_started_at=target)
+
+    def _recording_capture_timing(self, session, timing):
+        attempt = self._recording_requests.get(session.request.request_id)
+        run = self._full_cycle
+        if (attempt is None or run is None or attempt.execution_token != run.token
+                or timing.request_id != attempt.request_id or attempt.request_id in run.timings):
+            return
+        run.timings.add(attempt.request_id)
+        logging.getLogger("core").info(
+            "Full cycle capture condition=%s start=%.6f end=%.6f",
+            attempt.condition_name, timing.started_at, timing.ended_at,
+        )
+        if attempt.target_started_at is not None:
+            logging.getLogger("core").info(
+                "Full cycle first input block delay condition=%s milliseconds=%.3f",
+                attempt.condition_name, (timing.started_at - attempt.target_started_at) * 1000,
+            )
+        self._condition_index = (attempt.condition_index + 1) % len(run.config.recording.context.conditions)
+        if self._condition_index == 0:
+            run.capture_done = True
+        else:
+            run.next_at = timing.ended_at + run.config.recording.context.execution.condition_gap_seconds
+            self._schedule_next_condition()
+        self.refresh_recording_state()
+
+    def _recording_capture_available(self, session, timing):
+        self._recording_capture_timing(session, timing)
+        attempt = self._recording_requests.get(session.request.request_id)
+        if (attempt is not None and attempt.execution_token is not None
+                and self._in_flight is not None and self._in_flight.request_id == attempt.request_id):
+            self._in_flight = None
+        self._schedule_next_condition()
+        self.refresh_recording_state()
 
     def bind_round_counter(self, counter, show_round, notify_error) -> None:
         """Attach the persisted daily number; standalone legacy callers may omit it."""
@@ -229,6 +341,7 @@ class MotorWorkbenchController:
         except WorkbenchConfigurationError as error:
             logging.getLogger("core").warning("Motor workbench configuration: %s", error)
             self._configuration_valid = False
+            self.stop_automatic_execution("配置不可用，整轮测试已停止。")
             self.refresh_recording_state()
             return
 
@@ -254,7 +367,7 @@ class MotorWorkbenchController:
     def _product_selection_allowed(self) -> bool:
         ports = self._product_selection
         return (
-            ports is not None and self._in_flight is None
+            ports is not None and not self.recording_busy
             and not ports.is_closing() and not ports.is_busy()
         )
 
@@ -656,6 +769,10 @@ class MotorWorkbenchController:
 
     def _cancel_rejected_round(self, context):
         """A rejected attempt has no verdict and must not wait for a worker event."""
+        if self._full_cycle is not None and self._full_cycle.round_context is not None:
+            if self._full_cycle.round_context.round_id == context.round_id:
+                self.stop_automatic_execution()
+                return
         cancelled = self._result_state.cancel_round(context.round_id)
         if self._round_counter is not None:
             self._update_round_counter(self._round_counter.cancel_round,
@@ -695,6 +812,7 @@ class MotorWorkbenchController:
     def _apply_configuration(
         self, config: WorkbenchConfiguration | None, projection: WorkbenchUiProjection | None = None,
     ) -> None:
+        self.stop_automatic_execution("配置已变化，整轮测试已停止。")
         source_identity = self._repository.source_identity if config is not None else ""
         if config is None:
             stations, names, cells, bindings, product_name = (), (), (), (), ""
@@ -785,31 +903,61 @@ class MotorWorkbenchController:
         return snapshot, f"开始录制工况「{config.recording.context.conditions[self._condition_index].condition_name}」"
 
     def refresh_recording_state(self) -> None:
+        run = self._full_cycle
+        if run is not None and (not self._recording.device.login_ready
+                                or self._recording.device.snapshot is not run.device_snapshot):
+            self.stop_automatic_execution("录制设备或登录状态变化，整轮测试已停止。")
         self.refresh_product_selection_state()
         round_ready = self._refresh_round_counter()
         if self._recording is not None:
             snapshot, detail = self._recording_admission()
             if not round_ready:
                 snapshot, detail = None, self._round_error
-            self._recording.set_button_state(snapshot is not None, detail, self._in_flight is not None)
+            if self._full_cycle is not None:
+                snapshot = None
+                detail = ("整轮测试：等待下一工况。" if self._full_cycle.next_at is not None
+                          else "整轮测试执行及收尾中。")
+            elif self._recording_requests:
+                snapshot = None
+            self._recording.set_button_state(snapshot is not None, detail, self.recording_busy)
 
     def start_recording(self) -> None:
-        """Submit one frozen condition and hold the cursor through archival."""
+        """Unified start intent; its origin does not affect execution rules."""
+        if self._recording is None or self.recording_busy:
+            return
+        config = self._applied_config
+        if config is not None and config.recording.context.execution.mode == "full_cycle":
+            if self._schedule_execution is None:
+                self._recording.notify_error("整轮测试定时器尚未就绪。")
+                return
+            snapshot, detail = self._recording_admission()
+            if snapshot is None:
+                self._recording.set_button_state(False, detail, False)
+                return
+            self._condition_index = 0
+            self._full_cycle = _FullCycle(config, self._recording.read_wav_identity(), snapshot)
+        self._start_current_condition()
+
+    def _start_current_condition(self, *, target_started_at=None) -> None:
+        """Submit one frozen condition, with admission reserved before service calls."""
         recorded_at = datetime.now()
         ports = self._recording
         if ports is None:
             return
         if not self._refresh_round_counter(recorded_at.date()):
+            self.stop_automatic_execution(self._round_error)
             ports.set_button_state(False, self._round_error, self._in_flight is not None)
             return
         snapshot, detail = self._recording_admission()
         if snapshot is None:
+            self.stop_automatic_execution(detail)
             ports.set_button_state(False, detail, self._in_flight is not None)
             return
-        config = self._applied_config
+        run = self._full_cycle
+        config = run.config if run is not None else self._applied_config
         analysis_version = self._analysis_version
         condition = config.recording.context.conditions[self._condition_index]
-        product_model, sample_number, serial_number = ports.read_wav_identity()
+        product_model, sample_number, serial_number = run.identity if run is not None else ports.read_wav_identity()
         round_context = self._recording_round
         if self._condition_index == 0 or round_context is None:
             round_snapshot = None
@@ -821,6 +969,7 @@ class MotorWorkbenchController:
             )
             if self._round_counter is not None:
                 if not self._update_round_counter(self._round_counter.prepare_new_round, recorded_at.date()):
+                    self.stop_automatic_execution(self._round_error)
                     ports.set_button_state(False, self._round_error, False)
                     return
                 round_snapshot = self._round_counter.current_snapshot
@@ -839,8 +988,14 @@ class MotorWorkbenchController:
             uuid4().hex, self._configuration_revision, condition.condition_name,
             config.recording.context.project_name, recorded_at.date(), recorded_at, round_context,
             starts_round=self._condition_index == 0,
+            condition_index=self._condition_index,
+            execution_token=run.token if run is not None else None,
+            target_started_at=target_started_at,
         )
         self._in_flight = attempt
+        self._recording_requests[attempt.request_id] = attempt
+        if run is not None:
+            run.pending.add(attempt.request_id)
         self.refresh_recording_state()
         try:
             request = build_recording_request(
@@ -858,6 +1013,7 @@ class MotorWorkbenchController:
             config.analysis, analysis_version, request,
         ))
         self._in_flight = attempt
+        self._recording_requests[attempt.request_id] = attempt
 
         # The worker can retire while calibration is read. Require the same
         # prepared device immediately before entering service admission.
@@ -874,9 +1030,11 @@ class MotorWorkbenchController:
                 cancelled=self._recording_cancelled,
                 released=self._recording_released,
                 release_failed=lambda session, detail: self._recording_release_failed(attempt, session, detail),
+                capture_timing=self._recording_capture_timing,
+                capture_available=self._recording_capture_available,
             ))
         except (RuntimeError, ValueError, OSError) as exc:
-            if self._in_flight is not attempt:
+            if self._recording_requests.get(attempt.request_id) is not attempt:
                 # A synchronous terminal callback already completed this request.
                 # Consumer failures must not become recording admission errors.
                 raise
@@ -887,6 +1045,8 @@ class MotorWorkbenchController:
     def _activate_recording_round(self, attempt):
         """Activate only admitted requests, once, before any terminal consumer runs."""
         context = attempt.round_context
+        if self._full_cycle is not None and attempt.execution_token == self._full_cycle.token:
+            self._full_cycle.round_context = context
         if context.round_id in self._activated_round_ids:
             return
         self._activated_round_ids.add(context.round_id)
@@ -917,26 +1077,34 @@ class MotorWorkbenchController:
             )
 
     def _recording_started(self, session):
-        attempt = self._in_flight
+        attempt = self._recording_requests.get(session.request.request_id)
         if (attempt is None or attempt.request_id != session.request.request_id
+                or attempt.request_id in self._recording_started_ids
                 or attempt.analysis_context is None
                 or attempt.analysis_context.analysis_version != self._analysis_version):
             return
+        self._recording_started_ids.add(attempt.request_id)
         self._plot_presenter.recording_started(attempt.analysis_context, starts_round=attempt.starts_round)
 
     def _reject_recording(self, attempt, detail):
         if self._in_flight is attempt:
             self._in_flight = None
+            self._recording_requests.pop(attempt.request_id, None)
+            self._recording_started_ids.discard(attempt.request_id)
+            self.stop_automatic_execution()
             self.refresh_recording_state()
             self._report_recording_error(attempt, detail)
 
     def _report_recording_error(self, attempt, detail):
         logging.getLogger("core").warning("Workbench recording %s: %s", attempt.request_id, detail)
         if not self._recording.is_closing():
-            self._recording.notify_error(detail)
+            if attempt.execution_token is not None:
+                self._recording.notify_cleanup_error(detail)
+            else:
+                self._recording.notify_error(detail)
 
     def _matching_recording_terminal(self, session, result):
-        attempt = self._in_flight
+        attempt = self._recording_requests.get(session.request.request_id)
         if attempt is None or attempt.archiving or attempt.request_id != session.request.request_id:
             return None
         if attempt.request_id != result.request_id:
@@ -946,9 +1114,14 @@ class MotorWorkbenchController:
     def _take_recording_terminal(self, session, result):
         attempt = self._matching_recording_terminal(session, result)
         if attempt is not None:
-            self._in_flight = None
+            self._recording_requests.pop(attempt.request_id, None)
+            self._recording_started_ids.discard(attempt.request_id)
+            if self._in_flight is not None and self._in_flight.request_id == attempt.request_id:
+                self._in_flight = None
             self._activate_recording_round(attempt)
-            if self._round_counter is not None and self._condition_index == 0:
+            if attempt.execution_token is not None:
+                self.stop_automatic_execution()
+            if self._round_counter is not None and attempt.starts_round:
                 # A failed first condition has no saved WAV identity to continue.
                 # A later condition retries the existing, partially saved round.
                 self._update_round_counter(
@@ -965,8 +1138,13 @@ class MotorWorkbenchController:
         self._recording_started(session)
         self._plot_presenter.recording_state(attempt.analysis_context, '保存中')
         archiving = replace(attempt, archiving=True)
-        self._in_flight = archiving
+        self._recording_requests[attempt.request_id] = archiving
+        if self._in_flight is not None and self._in_flight.request_id == attempt.request_id:
+            self._in_flight = archiving if attempt.execution_token is None else None
         self._activate_recording_round(attempt)
+        run = self._full_cycle
+        if run is not None and attempt.execution_token == run.token and attempt.request_id not in run.timings:
+            self.stop_automatic_execution("未收到本工况采集完成时间，已停止自动续接；录音仍保存。")
         self.refresh_recording_state()
         station_numbers = {station_id: ordinal
                            for station_id, ordinal, _ in attempt.round_context.stations}
@@ -987,18 +1165,21 @@ class MotorWorkbenchController:
                 lambda request_id, error: self._recording_archived(request_id, result, error),
             )
         except Exception as error:
-            if self._in_flight is not archiving:
+            if self._recording_requests.get(attempt.request_id) is not archiving:
                 # A synchronous callback already finished archival. Preserve consumer errors.
                 raise
             logging.getLogger("core").exception("Could not submit workbench archive %s", result.request_id)
             self._recording_archived(result.request_id, result, error)
 
     def _recording_archived(self, request_id, result, error):
-        attempt = self._in_flight
+        attempt = self._recording_requests.get(request_id)
         if attempt is None or not attempt.archiving or attempt.request_id != request_id:
             return
-        self._in_flight = None
-        if attempt.configuration_revision == self._configuration_revision:
+        self._recording_requests.pop(request_id)
+        self._recording_started_ids.discard(request_id)
+        if self._in_flight is not None and self._in_flight.request_id == request_id:
+            self._in_flight = None
+        if attempt.execution_token is None and attempt.configuration_revision == self._configuration_revision:
             self._condition_index = (self._condition_index + 1) % len(self._applied_config.recording.context.conditions)
             if self._condition_index == 0 and self._round_counter is not None:
                 self._update_round_counter(
@@ -1020,6 +1201,20 @@ class MotorWorkbenchController:
         if self._analysis_service is not None and not self._recording.is_closing():
             # Submit before outward completion callbacks can start another round.
             self._submit_saved_recording(item, attempt.round_context)
+        run = self._full_cycle
+        if run is not None and attempt.execution_token == run.token:
+            run.pending.discard(request_id)
+            run.archived.add(attempt.analysis_context.condition_id)
+            if run.capture_done and not run.pending and len(run.archived) == len(run.config.recording.context.conditions):
+                self._full_cycle = None
+                self._cancel_execution_timer()
+                self._condition_index = 0
+                if self._round_counter is not None:
+                    self._update_round_counter(self._round_counter.recordings_completed,
+                                               attempt.round_context.round_id, datetime.now().date())
+            else:
+                self._schedule_next_condition()
+        self.refresh_recording_state()
         self._recording.completed(result)
         if self._analysis_input_ready is not None and not self._recording.is_closing():
             self._analysis_input_ready(item)

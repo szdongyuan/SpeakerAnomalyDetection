@@ -10,6 +10,11 @@
 
 ## 控制器的职责
 
+- 产品配置可选 `execution.mode`（`per_condition`／`full_cycle`）及 `condition_gap_seconds`，缺省为逐工况、0.5 秒。整轮调度保留在控制器内部，所有开始请求沿用 `start_recording()`；不在此层解析串口或 PLC 信号。
+- 普通／USB 声卡和 VKing 共用整轮调度。录音线程收齐目标样本时记录单调时间，加上项目间隔后得到下一工况的目标时刻；实际启动仍需设备释放及服务有容量。首块到达日志包含设备缓冲延迟。
+- 整轮执行及间隔等待期间禁止重复开始、产品／设备切换、校准和扫码设置变化；这是整轮模式的附加准入，不改变逐工况模式原有收尾并行规则。实际配置、设备代次或登录状态变化时终止自动执行；旧请求合法结果继续收尾，下一次从首工况重新开始。
+- 采集结束、归档完成、分析完成分别处理；按请求保存收尾记录，迟到或重复回调不推进整轮游标、不清空后续工况显示。对应覆盖见 `unit_test/ui/test_workbench_full_cycle.py` 和 `unit_test/base/test_soundcard_capture_timing.py`。
+
 [`MotorWorkbenchController`](motor_workbench_controller.py) 是主工作台的中介者，负责决定跨控件的业务更新。它持有最近一次成功应用的配置快照，把配置转换成视图数据，并通过控件的公开接口提交。`MainWindow.init_sequence_widget()` 负责创建控制器、注入依赖和连接 Qt 信号，刷新与显示更新在 GUI 线程执行。
 
 | 组件 | 职责 |

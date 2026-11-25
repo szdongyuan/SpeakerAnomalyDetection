@@ -131,6 +131,8 @@ class RecordingCapture:
         self.consumed_frames = 0
         self._sample_digest = hashlib.sha256() if request.purpose != "main" else None
         self._target_sample_arrival = None
+        self._first_block_at = None
+        self.sample_timing = None
         self._file_closed_at = None
         self.written_frames = 0
         self._final_frames = 0
@@ -400,9 +402,13 @@ class RecordingCapture:
                 return None
             self._blocks.append(owned)
             self._queued_frames += accepted
+            if self.request.report_capture_timing and self.raw_frames == 0:
+                self._first_block_at = time.monotonic()
             self.raw_frames += accepted
             if self.raw_frames == self.request.target_samples:
                 self._target_sample_arrival = time.monotonic()
+                if self.request.report_capture_timing:
+                    self.sample_timing = (self._first_block_at, self._target_sample_arrival)
                 self._stop_requested.set()
         finally:
             self._queue_lock.release()
@@ -715,6 +721,8 @@ class RecordingCapture:
                 # defer retirement. Actual native failures still win above.
             self._stream_close_diagnostics = tuple(stream.diagnostics)
             self._adapter_released = released and stream.handles_released
+        else:
+            self._adapter_released = released
         if released:
             self._stream = None
 
@@ -785,17 +793,24 @@ class RecordingCapture:
                 self._warnings.append(f"WAV finalization log failed: {type(exc).__name__}: {exc}"[:512])
 
     def _publish_capture_slot(self):
-        if (not self._is_ve or self.capture_slot_released.is_set()
+        if (self.capture_slot_released.is_set()
                 or not self._adapter_released or not self._writer_released
                 or self.raw_frames != self.request.target_samples
-                or self.queued_frames != 0):
+                or self.queued_frames != 0
+                or (not self._is_ve and (self._failure is not None or self._cancelled.is_set()))):
             return
-        progress = self.progress_snapshot()
-        if (progress is None or progress.frames != self.raw_frames
-                or progress.last_frame_at is None):
-            return
+        if self._is_ve:
+            progress = self.progress_snapshot()
+            if (progress is None or progress.frames != self.raw_frames
+                    or progress.last_frame_at is None):
+                return
+            end = progress.last_frame_at
+        else:
+            if self.sample_timing is None:
+                return
+            end = self.sample_timing[1]
         self.capture_slot = CaptureSlotState(
-            target_reached_at=progress.last_frame_at,
+            target_reached_at=end,
             raw_frames=self.raw_frames,
             adapter_released=True,
             writer_released=True,
