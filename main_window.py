@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from time import perf_counter_ns
 
 if __name__ == "__main__":
     # Frozen spawn children must be diverted before loading GUI/hardware modules.
@@ -685,6 +686,7 @@ class MainWindow(QMainWindow):
             try:
                 sequence.on_sequence_config_updated()
             finally:
+                sequence._serial_dialog_closed_ns = perf_counter_ns()
                 sequence._test_queue_config_dialog_open = was_open
                 sequence.update_player_btn_is_paused()
 
@@ -723,6 +725,7 @@ class MainWindow(QMainWindow):
             )
             dialog.exec()
         finally:
+            self.sequence_window._serial_dialog_closed_ns = perf_counter_ns()
             self.sequence_window._product_test_program_config_dialog_open = False
             self.sequence_window.update_player_btn_is_paused()
 

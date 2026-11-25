@@ -1,16 +1,21 @@
+from time import perf_counter_ns
+
 from PyQt5.QtWidgets import QMessageBox
 
 from base.hardware_trigger.serial_full_frame_matcher import normalize_frame_candidates
 from base.hardware_trigger.serial_product_port_plan import build_serial_product_port_plan
 from base.load_config import LoadUiConfig
+from base.product_test_config_refresh import ProductTestConfigurationError, build_product_test_refresh_snapshot
 from base.product_test_project_config import classify_project_trigger_mode
 from base.recording_management import RecordingManager
 from consts import error_code, ui_style_const
 from consts.product_test_project_consts import (
     PRODUCT_TRIGGER_MODE_MANUAL,
     PRODUCT_TRIGGER_MODE_MIXED,
+    PRODUCT_TRIGGER_MODE_SERIAL,
 )
 from ui.serial_discrete_input_config_dialog import SerialDiscreteInputConfigDialog
+from ui.sequence.sequence_widget_config_ops import product_config_warning, serial_trigger_warning
 from ui.sequence.toolbar_serial_button import ToolbarSerialButton
 
 
@@ -54,6 +59,7 @@ class SequenceWidgetSerialTriggerOpsMixin:
         return build_serial_product_port_plan(
             [condition for condition, _frame in conditions],
             config.get("port_switch_idle_code", ""),
+            validate_boundaries=config.get("enabled", True),
         )
 
     def _serial_full_frame_candidates(self, config=None):
@@ -79,6 +85,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
             raise ValueError(f"关闭测试报文: {error}") from error
 
     def _start_serial_product_listener(self, config):
+        if getattr(self, "_product_config_refresh_state", "") == "failed":
+            return {"ok": False, "message": self._product_config_refresh_error}
         try:
             candidates = self._serial_full_frame_candidates(config)
         except ValueError as error:
@@ -110,14 +118,15 @@ class SequenceWidgetSerialTriggerOpsMixin:
             return resolver(condition, index)
         return condition.get("key") or condition.get("trigger_state", "")
 
-    def _refresh_serial_product_port_state(self):
-        """Advance only at a recorded port boundary after analysis has drained."""
+    def _refresh_serial_product_port_state(self, *, restore_stage=False):
+        """Advance at a released recording boundary; analysis may overlap the next port."""
         if not (getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", True):
             return False
         if not getattr(self, "_manual_product_condition_group_id", ""):
             return False
-        # Recording completion calls this before releasing the workflow busy flag.
-        if getattr(self, "_serial_product_condition_executing", False):
+        if (getattr(self, "_serial_product_condition_executing", False)
+                or getattr(self, "_record_workflow_busy", False)
+                or getattr(self, "_recording_publication_in_progress", False)):
             return False
         try:
             conditions = self._serial_product_conditions()
@@ -129,6 +138,12 @@ class SequenceWidgetSerialTriggerOpsMixin:
             return False
         port_index = getattr(self, "_serial_product_port_index", 0)
         completed = getattr(self, "_manual_product_condition_completed_keys", set())
+        first_index = plan.ports[port_index][0]
+        if (restore_stage and port_index > 0
+                and self._serial_condition_key(conditions[first_index][0], first_index) not in completed):
+            name = conditions[first_index][0].get("group_name") or "下一端口"
+            self._set_serial_port_stage(f"等待{name}档位状态码")
+            return True
         if not all(
             self._serial_condition_key(conditions[index][0], index) in completed
             for index in plan.ports[port_index]
@@ -136,13 +151,9 @@ class SequenceWidgetSerialTriggerOpsMixin:
             return False
         if port_index + 1 == len(plan.ports):
             return False  # Existing whole-round completion owns the final port.
-        pending = getattr(self, "_analysis_has_pending_tasks", None)
-        if callable(pending) and pending():
-            self._set_serial_port_stage("当前端口录音完成，等待分析", "running")
-            return True
         if plan.idle_frame:
             self._serial_product_waiting_port_idle = True
-            self._set_serial_port_stage("当前端口分析结束，等待切换空闲码")
+            self._set_serial_port_stage("当前端口录音完成，等待切换空闲码")
         else:
             self._advance_serial_product_port(plan, conditions)
         return True
@@ -220,6 +231,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
 
     def _sync_product_progress_after_trigger_switch(self):
         """Keep recorded results; align the new trigger source to the next gear."""
+        waiting_port = (self._serial_product_port_index
+                        if getattr(self, "_serial_product_waiting_port_idle", False) else None)
         self._serial_product_waiting_port_idle = False
         self._serial_product_waiting_for_close = False
         self._serial_product_pending_close_frame = ""
@@ -245,9 +258,16 @@ class SequenceWidgetSerialTriggerOpsMixin:
         serial_conditions = self._serial_product_conditions()
         if serial_conditions:
             plan = self._serial_product_port_plan(serial_conditions)
-            self._serial_product_port_index = next(
+            next_port = next(
                 index for index, port in enumerate(plan.ports) if next_index in port
             )
+            # Manual recording may have advanced past the boundary while serial was off.
+            if (plan.idle_frame and waiting_port is not None and next_port == waiting_port + 1
+                    and next_index == plan.ports[next_port][0]):
+                self._serial_product_port_index = waiting_port
+                self._serial_product_waiting_port_idle = True
+            else:
+                self._serial_product_port_index = next_port
         self._set_serial_port_stage("等待下一档位")
 
     def on_serial_trigger_btn_clicked(self):
@@ -269,21 +289,57 @@ class SequenceWidgetSerialTriggerOpsMixin:
         self._serial_trigger_config_dialog_open = True
         try:
             result = dialog.exec()
+            if result:
+                _action, config = result
+                self._apply_serial_trigger_settings(config)
         finally:
+            self._serial_dialog_closed_ns = perf_counter_ns()
             self._serial_trigger_config_dialog_open = False
-        if not result:
-            return
+            self.update_player_btn_is_paused()
 
-        _action, config = result
+    def _apply_serial_trigger_settings(self, config):
         next_config = LoadUiConfig.normalize_serial_discrete_input_config(
             dict(config or {})
         )
 
+        was_enabled = (getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", False)
+        project_failed = getattr(self, "_product_config_refresh_state", "") == "failed"
+        recovery_snapshot = None
+        if project_failed and next_config["enabled"]:
+            # After a failed load the UI can hold an empty or previously applied project.
+            manager = self._get_product_program_manager()
+            active_file = manager.load_registry().get("active_file")
+            if not active_file or getattr(self, "_configuration_deletion_error", ""):
+                QMessageBox.warning(self, *product_config_warning(
+                    "无法启用串口自动触发", self._product_config_refresh_error, active_file=active_file,
+                ))
+                return
+            try:
+                recovery_snapshot = build_product_test_refresh_snapshot(
+                    manager, active_file, serial_config=next_config,
+                )
+            except ProductTestConfigurationError as error:
+                QMessageBox.warning(self, *product_config_warning("无法启用串口自动触发", str(error), active_file=active_file))
+                return
+        elif (next_config["enabled"] and not was_enabled
+                and getattr(self, "product_test_condition_configs", [])):
+            try:
+                self._serial_full_frame_candidates(next_config)
+            except ValueError as error:
+                QMessageBox.warning(self, *serial_trigger_warning(str(error), getattr(self, "active_product_program_file", None)))
+                return
+
         if not LoadUiConfig.save_serial_discrete_input_config(next_config):
             QMessageBox.warning(self, "保存失败", "无法保存串口离散输入触发配置。")
             return
-        was_enabled = (getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", False)
         self._serial_trigger_config = next_config
+        if project_failed:
+            if recovery_snapshot is not None:
+                self._apply_product_test_snapshot(recovery_snapshot)
+            else:
+                self.hw_manager.stop_serial_discrete_input_listener()
+                self._refresh_active_product_configuration()
+            return
         if was_enabled != next_config.get("enabled", False):
             self._sync_product_progress_after_trigger_switch()
 
@@ -296,7 +352,6 @@ class SequenceWidgetSerialTriggerOpsMixin:
         if not ret.get("ok", False):
             QMessageBox.warning(self, "串口离散输入触发", ret.get("message", "启动失败"))
         self.on_serial_trigger_status_changed(self.hw_manager.get_serial_discrete_input_status())
-        self.update_player_btn_is_paused()
 
     def refresh_serial_product_trigger_runtime(self):
         config = getattr(self, "_serial_trigger_config", {}) or {}
@@ -333,6 +388,11 @@ class SequenceWidgetSerialTriggerOpsMixin:
         if getattr(self, "_product_test_program_config_dialog_open", False):
             self.default_logger.info("serial_product_frame_ignored_product_config_open")
             return
+        # A frame queued during a modal dialog can reach this slot after it closes.
+        received = (payload or {}).get("received_perf_ns")
+        dialog_closed = getattr(self, "_serial_dialog_closed_ns", None)
+        if dialog_closed is not None and (type(received) is not int or received <= dialog_closed):
+            return
         raw_hex = str((payload or {}).get("raw_hex", "") or "").strip()
         if not raw_hex:
             return
@@ -359,13 +419,20 @@ class SequenceWidgetSerialTriggerOpsMixin:
         if plan is None:
             self.default_logger.info(f"serial_product_frame_unconfigured frame={received_frame}")
             return
+        # Check before an idle or out-of-order frame can unlock a new port/round.
+        cutoff = getattr(self, "_serial_round_received_after_ns", None)
+        if cutoff is not None and (type(received) is not int or received <= cutoff):
+            return
+        if (getattr(self, "_analysis_round_completion_pending", False)
+                or getattr(self, "_recording_publication_in_progress", False)):
+            return
         group_id = getattr(self, "_manual_product_condition_group_id", "")
         if not group_id:
-            if getattr(self, "_analysis_round_completion_pending", False):
-                return
             self._reset_serial_product_port_state()
         self._refresh_serial_product_port_state()
         if received_frame == plan.idle_frame:
+            if getattr(self, "_record_workflow_busy", False):
+                return
             if getattr(self, "_serial_product_waiting_port_idle", False):
                 self._advance_serial_product_port(plan, conditions)
             elif not group_id:
@@ -383,12 +450,6 @@ class SequenceWidgetSerialTriggerOpsMixin:
             if self._serial_condition_key(conditions[index][0], index) not in completed
         ]
         eligible_indexes = eligible_indexes[:1]
-        if (
-            not group_id
-            and received_frame in plan.frames
-            and received_frame != getattr(self, "_serial_product_latched_frame", "")
-        ):
-            self._serial_product_latched_frame = ""
         frame_index = next(
             (index for index in eligible_indexes if plan.frames[index] == received_frame),
             None,
@@ -455,15 +516,12 @@ class SequenceWidgetSerialTriggerOpsMixin:
             )
             return
 
-        if not group_id:
-            latched_frame = str(
-                getattr(self, "_serial_product_latched_frame", "") or ""
-            ).strip()
-            if received_frame == latched_frame:
-                self.default_logger.info(
-                    f"serial_product_held_frame_ignored frame={received_frame}"
-                )
-                return
+        if (not group_id and (len(plan.frames) > 1 or plan.idle_frame)
+                and received_frame == getattr(self, "_serial_product_latched_frame", "")):
+            self.default_logger.info(
+                f"serial_product_held_frame_ignored frame={received_frame}"
+            )
+            return
 
         from ui.sequence.sequence_widget_raw_csv_ops import CsvRecordingAdmissionScope
         with CsvRecordingAdmissionScope(self) as csv_scope:
@@ -723,7 +781,6 @@ class SequenceWidgetSerialTriggerOpsMixin:
     def _on_serial_product_condition_completed(self):
         self._serial_product_condition_executing = False
         self._serial_product_session_started = False
-        self._refresh_serial_product_port_state()
         pending_close_frame = str(
             getattr(self, "_serial_product_pending_close_frame", "") or ""
         ).strip()
@@ -909,6 +966,7 @@ class SequenceWidgetSerialTriggerOpsMixin:
         try:
             QMessageBox.warning(self, str(title or "提示"), str(message or ""))
         finally:
+            self._serial_dialog_closed_ns = perf_counter_ns()
             self._serial_product_error_dialog_open = False
         return True
 
@@ -940,7 +998,8 @@ class SequenceWidgetSerialTriggerOpsMixin:
         serial_enabled = (getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", True)
         if (connection_failed and round_in_progress and serial_enabled
                 and not status.get("reconfiguring", False)
-                and not getattr(self, "_serial_trigger_config_dialog_open", False)):
+                and not getattr(self, "_serial_trigger_config_dialog_open", False)
+                and classify_project_trigger_mode(self.product_test_condition_configs) == PRODUCT_TRIGGER_MODE_SERIAL):
             self._abort_serial_product_round(message or "串口连接中断")
 
         if connected and has_response:

@@ -1244,8 +1244,7 @@ class SequenceWidgetAnalysisOpsMixin(
         if not self.sequence_config:
             QMessageBox.warning(
                 self,
-                "提示",
-                self._missing_configuration_message(),
+                *self._missing_configuration_warning(),
             )
             return
         manual_direction_fallback = getattr(self, "_is_manual_direction_fallback_active", None)
@@ -1545,8 +1544,7 @@ class SequenceWidgetAnalysisOpsMixin(
         if not self.sequence_config:
             QMessageBox.warning(
                 self,
-                "提示",
-                self._missing_configuration_message(),
+                *self._missing_configuration_warning(),
             )
             return True
 

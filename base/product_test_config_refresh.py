@@ -28,7 +28,7 @@ class ProductTestRefreshSnapshot:
     validation: dict
 
 
-def build_product_test_refresh_snapshot(manager, active_file):
+def build_product_test_refresh_snapshot(manager, active_file, *, serial_config=None):
     """Read each referenced queue once; the signature stays separate from live data."""
     active_file = str(active_file or "").strip()
     if not active_file:
@@ -47,7 +47,9 @@ def build_product_test_refresh_snapshot(manager, active_file):
             f"产品配置的端口或工况列表格式错误：{active_file}"
         ) from error
     catalog = manager.load_queue_catalog(queue_names=queue_names)
-    validation = manager.validate_project(project, active_file, queue_catalog=catalog)
+    validation = manager.validate_project(
+        project, active_file, queue_catalog=catalog, serial_config=serial_config,
+    )
     if not validation["is_usable"]:
         raise ProductTestConfigurationError("\n".join(validation["use_errors"]) or "产品配置不可用")
     for name, info in catalog.items():

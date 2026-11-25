@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from time import perf_counter_ns
 import uuid
 
 from PyQt5.QtCore import QSignalBlocker, QTimer
@@ -250,6 +251,7 @@ class SequenceWidgetRoundResetOpsMixin:
                     + "\n".join(errors),
                 )
         finally:
+            self._serial_dialog_closed_ns = perf_counter_ns()
             self._record_workflow_busy = False
             self._round_reset_in_progress = False
             self.update_player_btn_is_paused()

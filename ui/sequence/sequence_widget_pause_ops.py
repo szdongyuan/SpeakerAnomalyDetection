@@ -2,13 +2,14 @@
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
-import math
 import time
 
 from PyQt5.QtCore import QTimer, QSize
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QMessageBox
 
+from base.product_test_project_config import classify_project_trigger_mode
+from consts.product_test_project_consts import PRODUCT_TRIGGER_MODE_SERIAL
 from consts.running_consts import DEFAULT_DIR
 
 
@@ -39,7 +40,7 @@ class SequenceWidgetPauseOpsMixin:
     def _init_test_pause(self):
         self._test_pause = None
         self._test_trigger_epoch = 0
-        self._test_resume_after = 0.0
+        self._test_resume_after_ns = None
         self._test_pause_timer = QTimer(self)
         self._test_pause_timer.setInterval(100)
         self._test_pause_timer.timeout.connect(self._poll_test_pause)
@@ -68,8 +69,9 @@ class SequenceWidgetPauseOpsMixin:
         )
 
     def _pause_uses_serial_trigger(self):
-        return any(str(item.get("trigger_state") or "").strip()
-                   for item in self.product_test_condition_configs)
+        serial_config = getattr(self, "_serial_trigger_config", {}) or {}
+        return (serial_config.get("enabled", False)
+                and classify_project_trigger_mode(self.product_test_condition_configs) == PRODUCT_TRIGGER_MODE_SERIAL)
 
     def _handle_test_pause_button(self):
         pause = getattr(self, "_test_pause", None)
@@ -262,7 +264,7 @@ class SequenceWidgetPauseOpsMixin:
             QMessageBox.information(self, "暂不能继续", "设备或保存任务仍在占用资源，请稍后重试。")
             return
         self._test_trigger_epoch += 1
-        self._test_resume_after = time.monotonic()
+        self._test_resume_after_ns = time.perf_counter_ns()
         if serial:
             self._serial_product_latched_frame = ""
             self.left_panel.set_current_stage("等待新的工况状态码", tone="pending")
@@ -286,12 +288,11 @@ class SequenceWidgetPauseOpsMixin:
     def _test_pause_accepts_serial_frame(self, payload):
         if self._test_pause_blocks_start():
             return False
-        resumed_at = getattr(self, "_test_resume_after", 0.0)
-        if not resumed_at:
+        resumed_at_ns = getattr(self, "_test_resume_after_ns", None)
+        if resumed_at_ns is None:
             return True
-        received = (payload or {}).get("received_monotonic")
-        return (type(received) in (int, float) and math.isfinite(received)
-                and received > resumed_at)
+        received_ns = (payload or {}).get("received_perf_ns")
+        return type(received_ns) is int and received_ns > resumed_at_ns
 
     def _apply_test_pause_presentation(self):
         pause = getattr(self, "_test_pause", None)

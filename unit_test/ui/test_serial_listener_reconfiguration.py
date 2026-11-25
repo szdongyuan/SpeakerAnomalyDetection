@@ -2,14 +2,18 @@
 
 from copy import deepcopy
 from threading import Thread
+from time import perf_counter_ns
+from unittest.mock import Mock
 
 import pytest
 from PyQt5 import sip
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtCore import QObject, Qt, pyqtSignal
 
 from base.hardware_trigger import serial_discrete_input_worker as worker_module
 from base.load_config import LoadUiConfig
 from base.unified_hid_device_manager import UnifiedHardwareManager
+from ui.sequence import sequence_widget_serial_trigger_ops as serial_ops
+from unit_test.test_serial_product_condition_runtime import _load_analysis_method
 from unit_test.test_serial_product_ports import A, B, IDLE, PortHost
 
 
@@ -47,7 +51,9 @@ class FakeWorker(QObject):
         })
 
     def frame(self, frame):
-        self.sig_state_changed.emit({"raw_hex": frame, "product_full_frame": True})
+        self.sig_state_changed.emit({
+            "raw_hex": frame, "product_full_frame": True, "received_perf_ns": perf_counter_ns(),
+        })
 
 
 @pytest.fixture
@@ -105,6 +111,52 @@ def reconfigure(host, field, value):
     return host._start_serial_product_listener(config)
 
 
+@pytest.mark.parametrize("action", ["cancel", "save", "error_notice"])
+def test_serial_dialog_accepts_only_frames_received_after_close(
+    connected_round, ui_qapp, monkeypatch, tmp_path, action,
+):
+    host, manager = connected_round((A, B))
+    wire = FakeWorker({})
+    wire.sig_state_changed.connect(host.on_serial_full_frame_received, Qt.QueuedConnection)
+
+    def receive_while_open(*_args):
+        wire.frame(B)
+        ui_qapp.processEvents()
+        assert len(host.started) == 1
+        wire.frame(B)  # Already received, but delivered after returning from the dialog.
+
+    if action == "error_notice":
+        monkeypatch.setattr(serial_ops.QMessageBox, "warning", receive_while_open)
+        host._show_serial_product_notice_once("测试异常", "测试")
+    else:
+        monkeypatch.setattr(LoadUiConfig, "get_serial_discrete_input_config_path",
+                            lambda: str(tmp_path / "serial.json"))
+        assert LoadUiConfig.save_serial_discrete_input_config(host._serial_trigger_config)
+        dialog = Mock()
+
+        def close_dialog():
+            receive_while_open()
+            if action == "save":
+                return "save", host._serial_trigger_config
+
+        dialog.exec.side_effect = close_dialog
+        monkeypatch.setattr(serial_ops, "SerialDiscreteInputConfigDialog", Mock(return_value=dialog))
+        if action == "save":
+            save_config = LoadUiConfig.save_serial_discrete_input_config
+
+            def receive_during_save(config):
+                receive_while_open()
+                return save_config(config)
+
+            monkeypatch.setattr(LoadUiConfig, "save_serial_discrete_input_config", receive_during_save)
+        host.on_serial_trigger_btn_clicked()
+
+    ui_qapp.processEvents()
+    assert host.started == ["group_1:condition_1"]
+    manager.serial_worker.frame(B)
+    assert host.started == ["group_1:condition_1", "group_1:condition_2"]
+
+
 @pytest.mark.parametrize("polling,field,value", [
     (False, "enabled", True), (True, "enabled", False), (True, "interval_ms", 1200),
 ])
@@ -141,6 +193,41 @@ def test_port_boundary_survives_reconfiguration(connected_round, idle):
     manager.serial_worker.frame(A if idle else B)
     assert host.started == ["group_1:condition_1", "group_2:condition_1"]
     assert host._manual_product_condition_group_id == before["round"]
+
+
+@pytest.mark.parametrize("at_boundary", ["waiting", "idle_received", "manual_advance"])
+def test_disable_enable_serial_preserves_outstanding_idle_only_at_same_boundary(
+    connected_round, monkeypatch, tmp_path, at_boundary,
+):
+    host, manager = connected_round((A,), (A, B), idle=IDLE)
+    monkeypatch.setattr(LoadUiConfig, "get_serial_discrete_input_config_path",
+                        lambda: str(tmp_path / "serial.json"))
+    assert LoadUiConfig.save_serial_discrete_input_config(host._serial_trigger_config)
+    dialog = Mock()
+    monkeypatch.setattr(serial_ops, "SerialDiscreteInputConfigDialog", lambda *args, **kwargs: dialog)
+
+    def set_enabled(enabled):
+        dialog.exec.return_value = ("save", dict(host._serial_trigger_config, enabled=enabled))
+        host.on_serial_trigger_btn_clicked()
+        assert host._serial_trigger_config["enabled"] is enabled
+
+    if at_boundary == "idle_received":
+        manager.serial_worker.frame(IDLE)
+    set_enabled(False)
+    if at_boundary == "manual_advance":
+        _load_analysis_method("on_clicked_player_btn")(host)
+        host.complete_current()
+    set_enabled(True)
+    manager.serial_worker.opened()
+    if at_boundary == "waiting":
+        manager.serial_worker.frame(A)
+        assert len(host.started) == 1
+        manager.serial_worker.frame(IDLE)
+    manager.serial_worker.frame(B if at_boundary == "manual_advance" else A)
+    expected = ["group_1:condition_1", "group_2:condition_1"]
+    if at_boundary == "manual_advance":
+        expected.append("group_2:condition_2")
+    assert host.started == expected
 
 
 @pytest.mark.parametrize("field,value", [

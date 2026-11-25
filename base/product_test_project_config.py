@@ -45,6 +45,9 @@ from consts.running_consts import (
 )
 
 
+SERIAL_TRIGGER_ERROR_PREFIX = "无法使用串口自动触发："
+
+
 def normalize_project_name(name):
     project_name = str(name or "").strip()
     if project_name.lower().endswith(".json"):
@@ -376,7 +379,8 @@ class ProductTestProjectValidator(object):
         ):
             try:
                 build_serial_product_port_plan(
-                    flatten_test_conditions(project_data), port_switch_idle_code
+                    flatten_test_conditions(project_data), port_switch_idle_code,
+                    validate_boundaries=False,
                 )
             except ValueError as error:
                 errors.append(str(error))
@@ -530,7 +534,9 @@ class ProductTestProjectConfigManager(object):
 
         registry = self.load_registry()
         errors, _queue_catalog = self._collect_save_errors(
-            project_data, registry, current_file, check_acquisition_consistency=True
+            project_data, registry, current_file,
+            port_switch_idle_code=self._serial_trigger_config().get("port_switch_idle_code", ""),
+            check_acquisition_consistency=True,
         )
         if errors:
             return False, errors[0] if len(errors) == 1 else "\n".join(errors)
@@ -651,14 +657,18 @@ class ProductTestProjectConfigManager(object):
 
     def validate_project(
         self, project_data, current_file, queue_catalog=None, *,
-        check_acquisition_consistency=False,
+        check_acquisition_consistency=False, serial_config=None,
     ):
         registry = self.load_registry()
+        if serial_config is None:
+            serial_config = self._serial_trigger_config()
+        idle_code = serial_config.get("port_switch_idle_code", "")
         save_errors, queue_catalog = self._collect_save_errors(
             project_data,
             registry,
             current_file,
             queue_catalog,
+            port_switch_idle_code=idle_code,
             check_acquisition_consistency=check_acquisition_consistency,
         )
         use_errors = list(save_errors)
@@ -669,6 +679,18 @@ class ProductTestProjectConfigManager(object):
                     queue_catalog,
                 )
             )
+
+            # Shared boundary codes only affect automatic serial triggering.
+            conditions = flatten_test_conditions(project_data)
+            if (
+                serial_config.get("enabled", False)
+                and conditions
+                and classify_project_trigger_mode(conditions) != PRODUCT_TRIGGER_MODE_MANUAL
+            ):
+                try:
+                    build_serial_product_port_plan(conditions, idle_code)
+                except ValueError as error:
+                    use_errors.append(f"{SERIAL_TRIGGER_ERROR_PREFIX}{error}")
 
         use_warnings = []
         test_mode_errors = []
@@ -707,6 +729,11 @@ class ProductTestProjectConfigManager(object):
             "test_mode_errors": test_mode_errors,
         }
 
+    @staticmethod
+    def _serial_trigger_config():
+        code, config = LoadUiConfig.load_serial_discrete_input_config()
+        return config if code == error_code.OK and isinstance(config, dict) else {}
+
     def _collect_save_errors(
         self,
         project_data,
@@ -714,19 +741,15 @@ class ProductTestProjectConfigManager(object):
         current_file,
         queue_catalog=None,
         *,
+        port_switch_idle_code,
         check_acquisition_consistency=False,
     ):
         """Return errors and the shared catalog, loading it after structure checks."""
-        _serial_error, serial_config = LoadUiConfig.load_serial_discrete_input_config()
-        idle_code = (
-            serial_config.get("port_switch_idle_code", "")
-            if isinstance(serial_config, dict) else ""
-        )
         errors = ProductTestProjectValidator.validate_for_save(
             project_data,
             registry,
             current_file,
-            port_switch_idle_code=idle_code,
+            port_switch_idle_code=port_switch_idle_code,
         )
         if errors:
             return errors, queue_catalog

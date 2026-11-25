@@ -990,7 +990,7 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             left_panel.clear_current_stage()
             return True
         refresh_serial_port = getattr(self, "_refresh_serial_product_port_state", None)
-        if callable(refresh_serial_port) and refresh_serial_port():
+        if callable(refresh_serial_port) and refresh_serial_port(restore_stage=True):
             return True
         left_panel.set_current_stage("等待下一档位", tone="pending")
         return True
@@ -1087,6 +1087,7 @@ class SequenceWidgetAnalysisProcessOpsMixin:
             self._serial_product_waiting_for_close = True
         else:
             self._manual_product_condition_group_id = ""
+            self._serial_round_received_after_ns = time.perf_counter_ns()
             self._current_cycle_recorded_count = None
             unlock_barcode = getattr(self, "_unlock_sn_for_product_round", None)
             if callable(unlock_barcode):

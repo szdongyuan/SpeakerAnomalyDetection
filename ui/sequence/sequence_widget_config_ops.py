@@ -8,7 +8,9 @@ from PyQt5.QtWidgets import QApplication, QMessageBox, QLineEdit
 
 from base.load_config import LoadUiConfig
 from base.data_struct.data_deal_struct import DataDealStruct
-from base.product_test_project_config import ProductTestProjectConfigManager
+from base.product_test_project_config import (
+    ProductTestProjectConfigManager, SERIAL_TRIGGER_ERROR_PREFIX, normalize_project_name,
+)
 from base.product_test_config_refresh import (
     ProductTestConfigurationError,
     build_product_test_refresh_snapshot,
@@ -20,6 +22,18 @@ from consts.product_test_project_consts import (
     RESULT_ROOT_DIRECTORY_KEY,
 )
 from consts.running_consts import DEFAULT_DIR
+
+
+def serial_trigger_warning(error, active_file):
+    name = normalize_project_name(active_file)
+    config = f"当前使用配置“{name}”" if name else "当前使用配置"
+    return "无法启用串口自动触发", f"{config}中，{error}"
+
+
+def product_config_warning(title, error, guidance="", *, active_file=None):
+    if error.startswith(SERIAL_TRIGGER_ERROR_PREFIX):
+        return serial_trigger_warning(error[len(SERIAL_TRIGGER_ERROR_PREFIX):], active_file)
+    return title, f"{error}\n{guidance}" if guidance else error
 
 
 class SequenceWidgetConfigOpsMixin:
@@ -59,11 +73,7 @@ class SequenceWidgetConfigOpsMixin:
                 f"{error}\n请重新确认硬件选择以重试分析通道同步。"
             )
             return False
-        self._applied_product_snapshot = snapshot
-        self._product_config_refresh_error = ""
-        self._product_config_refresh_state = "ready" if snapshot.active_file else "empty"
-        self._refresh_test_mode_availability()
-        self.update_player_btn_is_paused()
+        self._finish_product_configuration_refresh(snapshot)
         return True
 
     def _prepare_initial_product_configuration(self):
@@ -115,8 +125,10 @@ class SequenceWidgetConfigOpsMixin:
         if not show_warning:
             return
         first_error = str(error).split("\n", 1)[0]
-        title = "配置无法应用"
-        message = f"{first_error}\n请修正配置并保存，再开始新测试。"
+        title, message = product_config_warning(
+            "配置无法应用", first_error, "请修正配置并保存，再开始新测试。",
+            active_file=getattr(self, "active_product_program_file", None),
+        )
         if deleted_target is not None:
             title = f"配置已{deleted_target.action}"
             message = (
@@ -129,20 +141,21 @@ class SequenceWidgetConfigOpsMixin:
         dialog.button(QMessageBox.Ok).setText("确定")
         dialog.exec_()
 
-    def _missing_configuration_message(self):
+    def _missing_configuration_warning(self):
         if self.using_file_combobox.count() == 0:
-            return "暂无可用配置。"
+            return "提示", "暂无可用配置。"
         active_file = getattr(self, "active_product_program_file", None)
         if active_file:
             manager = self._get_product_program_manager()
             if not os.path.isfile(os.path.join(manager.program_dir, active_file)):
-                return f"产品配置“{active_file}”不存在，请选择其他配置或恢复文件。"
+                return "提示", f"产品配置“{active_file}”不存在，请选择其他配置或恢复文件。"
         error = str(getattr(self, "_product_config_refresh_error", "") or "").split("\n", 1)[0]
         if error:
-            return f"{error}\n请选择其他产品配置，或检查当前配置。"
-        return "请先选择产品配置，或到【功能-产品测试配置】中新建或导入。"
+            return product_config_warning("提示", error, "请选择其他产品配置，或检查当前配置。", active_file=active_file)
+        return "提示", "请先选择产品配置，或到【功能-产品测试配置】中新建或导入。"
 
-    def _refresh_active_product_configuration(self, *, deleted_target=None):
+    def _refresh_active_product_configuration(self, *, deleted_target=None, after_queue_edit=False,
+                                              reported_error=""):
         """Compare before changing any runtime parameters, results or waveform state."""
         if getattr(self, "_configuration_deletion_error", ""):
             return False
@@ -152,7 +165,13 @@ class SequenceWidgetConfigOpsMixin:
             snapshot = build_product_test_refresh_snapshot(manager, registry.get("active_file"))
         except ProductTestConfigurationError as error:
             # Invalid product data disables testing, but must remain repairable.
-            self._product_configuration_apply_failed(error, deleted_target=deleted_target)
+            if (after_queue_edit and self._product_config_refresh_state == "failed"
+                    and str(error) == self._product_config_refresh_error
+                    and str(error).startswith(SERIAL_TRIGGER_ERROR_PREFIX)):
+                return False
+            self._product_configuration_apply_failed(
+                error, deleted_target=deleted_target, show_warning=str(error) != reported_error,
+            )
             return False
         except Exception as error:
             self._product_configuration_apply_failed(error)
@@ -221,12 +240,18 @@ class SequenceWidgetConfigOpsMixin:
             self._product_configuration_apply_failed(error)
             return False
 
+        self._finish_product_configuration_refresh(snapshot)
+        return True
+
+    def _finish_product_configuration_refresh(self, snapshot):
         self._applied_product_snapshot = snapshot
         self._product_config_refresh_error = ""
         self._product_config_refresh_state = "ready" if snapshot.active_file else "empty"
+        selector = self.using_file_combobox
+        with QSignalBlocker(selector):
+            selector.setCurrentIndex(selector.findData(snapshot.active_file) if snapshot.active_file else -1)
         self._refresh_test_mode_availability()
         self.update_player_btn_is_paused()
-        return True
 
     def _product_configuration_refresh_busy(self):
         if any(bool(getattr(self, name, False)) for name in (
@@ -765,7 +790,7 @@ class SequenceWidgetConfigOpsMixin:
                 f"产品配置文件不存在：{active_file}", show_warning=False,
             )
 
-    def on_product_test_program_updated(self, *_):
+    def on_product_test_program_updated(self, saved_file="", reported_error=""):
         """Saving another program changes only the selector unless a shared queue changed."""
         self.update_using_file_combobox()
         # Saving another product must not repeat a known missing-current-file error.
@@ -775,7 +800,9 @@ class SequenceWidgetConfigOpsMixin:
                     self._get_product_program_manager().program_dir, active_file,
                 ))):
             return
-        self._refresh_active_product_configuration()
+        self._refresh_active_product_configuration(
+            reported_error=reported_error if active_file == saved_file else "",
+        )
 
     def add_file_to_using_file_combobox(self):
         """
@@ -972,8 +999,7 @@ class SequenceWidgetConfigOpsMixin:
             ):
                 QMessageBox.warning(
                     self,
-                    "提示",
-                    self._missing_configuration_message(),
+                    *self._missing_configuration_warning(),
                 )
                 self._missing_config_prompted = True
     def _set_sequence_config_available_state(self, available: bool):

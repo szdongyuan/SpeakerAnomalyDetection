@@ -77,49 +77,52 @@ class SerialFullFrameMatcher:
 
     def clear(self):
         self._buffer.clear()
+        self._read_boundaries = []
 
     def feed(self, data):
+        return [frame for frame, _, _ in self.feed_with_timestamps(data, None, None)]
+
+    def feed_with_timestamps(self, data, received_monotonic, received_perf_ns):
+        """Return frames with the read timestamps of their final bytes."""
         chunk = bytes(data or b"")
         if not chunk:
             return []
 
-        self._buffer.extend(chunk)
         if not self._frames:
-            self.discarded_byte_count += len(self._buffer)
-            self._buffer.clear()
+            self.discarded_byte_count += len(chunk)
             return []
 
+        self._buffer.extend(chunk)
+        self._read_boundaries.append((len(self._buffer), received_monotonic, received_perf_ns))
+        read_index = 0
         matched = []
-        while self._buffer:
-            located = []
-            buffer_bytes = bytes(self._buffer)
-            for order, frame in enumerate(self._frames):
-                position = buffer_bytes.find(frame)
-                if position >= 0:
-                    located.append((position, order, frame))
-
-            if located:
-                position, _, frame = min(located, key=lambda item: (item[0], item[1]))
-                if position:
-                    self.discarded_byte_count += position
-                del self._buffer[: position + len(frame)]
-                matched.append(frame)
+        offset = 0
+        while offset < len(self._buffer):
+            frame = next(
+                (candidate for candidate in self._frames if self._buffer.startswith(candidate, offset)),
+                None,
+            )
+            if frame is not None:
+                offset += len(frame)
+                while self._read_boundaries[read_index][0] < offset:
+                    read_index += 1
+                _, final_monotonic, final_perf_ns = self._read_boundaries[read_index]
+                matched.append((frame, final_monotonic, final_perf_ns))
                 continue
 
-            keep_length = self._longest_candidate_prefix_suffix()
-            discard_length = len(self._buffer) - keep_length
-            if discard_length > 0:
-                self.discarded_byte_count += discard_length
-                del self._buffer[:discard_length]
-            break
+            if len(self._buffer) - offset < self._max_frame_length:
+                # A short frame inside this prefix may be payload of the earlier frame.
+                suffix = self._buffer[offset:]
+                if any(candidate.startswith(suffix) for candidate in self._frames):
+                    break
+            self.discarded_byte_count += 1
+            offset += 1
 
+        del self._buffer[:offset]
+        if offset:
+            self._read_boundaries = [
+                (end - offset, monotonic, perf_ns)
+                for end, monotonic, perf_ns in self._read_boundaries[read_index:]
+                if end > offset
+            ]
         return matched
-
-    def _longest_candidate_prefix_suffix(self):
-        max_length = min(len(self._buffer), max(0, self._max_frame_length - 1))
-        buffer_bytes = bytes(self._buffer)
-        for length in range(max_length, 0, -1):
-            suffix = buffer_bytes[-length:]
-            if any(frame.startswith(suffix) for frame in self._frames):
-                return length
-        return 0

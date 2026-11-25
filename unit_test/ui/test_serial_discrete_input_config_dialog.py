@@ -103,6 +103,68 @@ class Host(QWidget, serial_ops.SequenceWidgetSerialTriggerOpsMixin):
         pass
 
 
+@pytest.mark.parametrize("repair", ["disable", "idle"])
+def test_failed_product_reports_port_conflict_and_recovers(ui_qapp, tmp_path, config_file, monkeypatch, repair):
+    from unit_test.base.test_product_test_config_refresh import make_refresh_manager
+    from unit_test.ui.test_product_test_program_runtime_refresh import ProductRefreshHost
+
+    class ProductHost(ProductRefreshHost, serial_ops.SequenceWidgetSerialTriggerOpsMixin):
+        def _product_condition_sequence(self):
+            return self.product_test_condition_configs
+
+        def on_serial_trigger_status_changed(self, status):
+            pass
+
+    manager, project, _ = make_refresh_manager(tmp_path, condition_count=1, port_count=2)
+    for group in project["test_groups"]:
+        group["test_conditions"][0]["trigger_state"] = "02 01 0D 0A"
+    assert manager.save_project("A.json", project)[0]
+    assert LoadUiConfig.save_serial_discrete_input_config({"enabled": True})
+    host = ProductHost(manager)
+    del host.refresh_serial_product_trigger_runtime  # Use the real listener refresh during recovery.
+    host._serial_trigger_config = LoadUiConfig.load_serial_discrete_input_config()[1]
+    host.hw_manager = Hardware(host._serial_trigger_config)
+    host.hw_manager.running = False
+    set_ports(monkeypatch, ["COM4"])
+    warnings = []
+    monkeypatch.setattr(serial_ops.QMessageBox, "warning", lambda _, title, msg: warnings.append(msg))
+    enable = True
+
+    def open_settings(*args, **kwargs):
+        dialog = Dialog(*args, **kwargs)
+        dialog.enabled_checkbox.setChecked(enable)
+        QTimer.singleShot(0, dialog.ok_btn.click)
+        return dialog
+
+    monkeypatch.setattr(serial_ops, "SerialDiscreteInputConfigDialog", open_settings)
+    try:
+        assert host._product_config_refresh_state == "failed"
+        assert host.product_test_condition_configs == []
+        reason = host._product_config_refresh_error
+        detail = ("当前使用配置“A”中，端口0的末档与端口1的首档状态码相同。"
+                  "请在【功能 → 产品测试程序配置】中核对并修改状态码。")
+        before = config_file.read_bytes()
+        host.on_serial_trigger_btn_clicked()
+        assert warnings == [detail]
+        assert config_file.read_bytes() == before
+        assert not host.hw_manager.events
+        assert host._start_serial_product_listener(host._serial_trigger_config) == {"ok": False, "message": reason}
+        assert not host.hw_manager.events
+
+        enable = repair == "idle"
+        if enable:
+            assert LoadUiConfig.save_serial_discrete_input_config({"port_switch_idle_code": "00 00 0D 0A"})
+        host.on_serial_trigger_btn_clicked()
+        assert warnings == [detail]
+        assert host._product_config_refresh_state == "ready"
+        assert len(host.product_test_condition_configs) == 2
+        assert host.hw_manager.running == enable
+        assert host.player_btn.isEnabled() == (not enable)
+    finally:
+        host.close()
+        host.deleteLater()
+
+
 @pytest.mark.parametrize("action", ["save", "disable", "cancel", "test_cancel", "save_failure"])
 @pytest.mark.parametrize("polling", [False, True])
 def test_dialog_json_and_listener_lifecycle(ui_qapp, monkeypatch, config_file, action, polling):

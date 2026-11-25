@@ -1984,6 +1984,11 @@ def test_recording_consumes_manual_intent_and_saves_once_after_release(
     service._backend_options["manual"] = True
     host, save = workflow_host(service, tmp_path, monkeypatch, manual=manual)
     completion = []
+    port_release = []
+    def refresh_port():
+        port_release.append((host._record_workflow_busy, host._recording_publication_in_progress,
+                             bool(host._recording_process_contexts)))
+    host._refresh_serial_product_port_state = refresh_port
     host._drain_queued_directional_trigger = lambda: completion.append("business complete")
     publish = host._on_recording_envelope_complete
     def publish_after_release(audio, context):
@@ -1992,6 +1997,7 @@ def test_recording_consumes_manual_intent_and_saves_once_after_release(
         save.assert_called_once()
         assert completion == ["business complete"]
         assert not host._record_workflow_busy
+        assert not port_release
         completion.append("published")
         return result
     host._on_recording_envelope_complete = publish_after_release
@@ -2004,6 +2010,7 @@ def test_recording_consumes_manual_intent_and_saves_once_after_release(
         (tmp_path / f"feed-{index}").touch()
     pump(ui_qapp, lambda: session.released.is_set() and not host._record_workflow_busy)
     assert completion == ["business complete", "published", "business complete"]
+    assert port_release == [(False, False, False)]
     save.assert_called_once()
     host._on_process_recording_released(session)
     save.assert_called_once()
