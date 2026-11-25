@@ -6,6 +6,7 @@ configuration editors own writes and send commit notifications to the caller.
 """
 
 import logging
+import math
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
@@ -45,6 +46,15 @@ from base.workbench_recording_request import (
 )
 from ui.recording_service_bridge import RecordingServiceBridge
 from ui.workbench_recording_device import WorkbenchRecordingDevice, WorkbenchRecordingDeviceSnapshot
+
+
+def _tcp_spl_value(payload):
+    items = [item for item in payload.get('instance_results', ())
+             if item.get('analysis_type') == 'SPL']
+    if len(items) != 1 or items[0].get('execution_status') != '分析完成':
+        return None
+    raw = items[0].get('metrics', {}).get('overall_spl')
+    return raw if type(raw) in (int, float) and math.isfinite(raw) else None
 
 
 @dataclass(frozen=True)
@@ -151,6 +161,9 @@ class MotorWorkbenchController:
         self._current_round_id: str | None = None
         self._activated_round_ids: set[str] = set()
         self._result_state = WorkbenchResultState()
+        self.tcp_result_callback = None
+        self._tcp_spl_round = None
+        self._tcp_spl_values = {}
         self._plot_columns = {}
         self._set_daily_records = None
         self._set_summary_counts: Callable[[WorkbenchSummarySnapshot], None] | None = None
@@ -533,6 +546,20 @@ class MotorWorkbenchController:
                 (context["condition_id"], context["station_id"]), datetime.now().date(),
             )
         if is_current:
+            if self.tcp_result_callback is not None:
+                if self._tcp_spl_round != context['round_id']:
+                    self._tcp_spl_round = context['round_id']
+                    self._tcp_spl_values = {}
+                self._tcp_spl_values[context['station_id'], context['condition_id']] = _tcp_spl_value(payload)
+                directions = context['condition_ids']
+                self.tcp_result_callback({
+                    'type': 'station_result', 'round_id': context['round_id'],
+                    'station': context['station_ordinal'],
+                    'forward': snapshot.forward, 'reverse': snapshot.reverse,
+                    'result': snapshot.result,
+                    'forward_spl': self._tcp_spl_values.get((context['station_id'], directions[0])) if directions else None,
+                    'reverse_spl': self._tcp_spl_values.get((context['station_id'], directions[1])) if len(directions) > 1 else None,
+                })
             self._show_analysis_snapshot(context, snapshot)
         if snapshot.complete and (self._set_daily_records is not None or self._set_summary_counts is not None):
             today = datetime.now().date()
