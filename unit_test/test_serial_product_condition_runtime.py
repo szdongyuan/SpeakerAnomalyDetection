@@ -3,11 +3,14 @@ from pathlib import Path
 from time import perf_counter_ns
 from types import SimpleNamespace
 
+import pytest
+
 from base.product_test_project_config import (
     classify_project_trigger_mode,
     is_manual_project_play_allowed,
 )
 from ui.sequence.sequence_widget_serial_trigger_ops import SequenceWidgetSerialTriggerOpsMixin
+from ui.sequence.sequence_widget_raw_csv_ops import SequenceWidgetRawCsvOpsMixin
 
 
 FRAME_6000 = "01 04 02 00 01 78 F0"
@@ -841,6 +844,51 @@ def test_disconnect_keeps_manual_recording_when_serial_is_enabled(monkeypatch):
     assert host._record_workflow_busy
     assert host.discarded_groups == []
     assert not host._serial_trigger_runtime_status["connected"]
+
+
+@pytest.mark.parametrize("application_exit", [False, True])
+@pytest.mark.parametrize("between_conditions", [False, True])
+def test_serial_listener_stop_preserves_round_only_during_application_exit(
+    monkeypatch, application_exit, between_conditions
+):
+    warnings = []
+    monkeypatch.setattr(
+        "ui.sequence.sequence_widget_serial_trigger_ops.QMessageBox.warning",
+        lambda _parent, _title, message: warnings.append(message),
+    )
+    host = _SerialProductHost()
+    host.on_serial_full_frame_received(_payload(FRAME_6000))
+    if between_conditions:
+        host.complete_current("OK")
+    group_id = host._manual_product_condition_group_id
+    results = dict(host._manual_product_condition_results)
+    completed = set(host._manual_product_condition_completed_keys)
+    if application_exit:
+        SequenceWidgetRawCsvOpsMixin._begin_raw_audio_csv_close(
+            host, application_exit=True
+        )
+
+    status = {
+        "enabled": True,
+        "connected": False,
+        "running": False,
+        "message": "串口离散输入监听已停止",
+    }
+    host.on_serial_trigger_status_changed(status)
+
+    assert host._serial_trigger_runtime_status == status
+    if application_exit:
+        assert host._manual_product_condition_group_id == group_id
+        assert host._manual_product_condition_results == results
+        assert host._manual_product_condition_completed_keys == completed
+        assert host.reset_count == 0
+        assert host.cleanup_count == 0
+        assert host.discarded_groups == []
+        assert warnings == []
+    else:
+        assert host.reset_count == 1
+        assert host.discarded_groups == [(group_id, True)]
+        assert len(warnings) == 1
 
 
 def test_connection_failure_aborts_an_active_round(monkeypatch):

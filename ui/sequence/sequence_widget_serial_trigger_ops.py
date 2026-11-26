@@ -996,7 +996,10 @@ class SequenceWidgetSerialTriggerOpsMixin:
             or str(getattr(self, "_manual_product_condition_group_id", "") or "").strip()
         )
         serial_enabled = (getattr(self, "_serial_trigger_config", {}) or {}).get("enabled", True)
+        # Application shutdown stops the listener after saving round progress.
+        # That expected disconnect must not abort or delete the saved round.
         if (connection_failed and round_in_progress and serial_enabled
+                and not getattr(self, "_application_close_in_progress", False)
                 and not status.get("reconfiguring", False)
                 and not getattr(self, "_serial_trigger_config_dialog_open", False)
                 and classify_project_trigger_mode(self.product_test_condition_configs) == PRODUCT_TRIGGER_MODE_SERIAL):
