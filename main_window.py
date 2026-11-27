@@ -357,6 +357,7 @@ class MainWindow(QMainWindow):
             notify_archive_error=lambda detail: self.statusBar().showMessage(detail),
             is_closing=lambda: getattr(self, "_closing", False),
             ve_calibration_store=self.ve_calibration_store,
+            read_station_sn_codes=lambda: sequence.toolsbar.tcp_dialog.active_station_sn_codes,
         ))
         controller.bind_analysis_input(self.workbench_analysis_input_ready.emit)
         sequence.player_btn.clicked.connect(controller.start_recording)

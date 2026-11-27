@@ -21,7 +21,8 @@ class TcpServiceDialog(QDialog):
         self.port.setRange(1, 65535)
         self.port.setValue(9000)
         self.status = QLabel('未启动')
-        self.station_sn_codes = None
+        self._station_sn_by_client = {}
+        self.active_station_sn_codes = None
         self.start_button = QPushButton('启动服务')
         self.stop_button = QPushButton('停止服务')
         self.stop_button.setEnabled(False)
@@ -81,6 +82,7 @@ class TcpServiceDialog(QDialog):
 
     def _disconnect(self, client):
         self._clients.pop(client, None)
+        self._station_sn_by_client.pop(client, None)
         client.deleteLater()
 
     def _read(self, client):
@@ -102,7 +104,7 @@ class TcpServiceDialog(QDialog):
                 if isinstance(message, dict) and message.get('type') == 'station_sn_codes':
                     codes = message.get('sn_codes')
                     if isinstance(codes, list) and len(codes) == 4 and all(isinstance(code, str) for code in codes):
-                        self.station_sn_codes = tuple(codes)
+                        self._station_sn_by_client[client] = tuple(codes)
                         logging.getLogger('core').info('收到 PLC 工位 SN 报文: %s',
                                                        json.dumps(message, ensure_ascii=False))
                         client.write((json.dumps({'type': 'station_sn_codes_received'}, ensure_ascii=False) + '\n').encode('utf-8'))
@@ -111,9 +113,14 @@ class TcpServiceDialog(QDialog):
             if line.strip() != b'true':
                 response = {'success': False, 'error': '未知指令'}
             elif self._start_button is None or not self._start_button.isEnabled():
+                self._station_sn_by_client.pop(client, None)
                 response = {'success': False, 'error': '检测项目未就绪或正在运行'}
             else:
-                self._start_button.click()
+                self.active_station_sn_codes = self._station_sn_by_client.pop(client, None)
+                try:
+                    self._start_button.click()
+                finally:
+                    self.active_station_sn_codes = None
                 response = {'success': True, 'status': '启动指令已提交'}
             client.write((json.dumps(response, ensure_ascii=False) + '\n').encode('utf-8'))
         if len(data) > 4096:

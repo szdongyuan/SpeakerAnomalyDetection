@@ -168,3 +168,12 @@ def test_unavailable_database_directory_is_reported(tmp_path, recording):
         archive.save(*recording)
 
     assert isinstance(failure_result.value.__cause__, sqlite3.OperationalError)
+
+
+def test_archive_saves_station_specific_barcodes(database_path, recording):
+    from dataclasses import replace
+    completion, product, day = recording
+    completion = replace(completion, station_barcodes=(("station-a", "0001"), ("station-b", "SN/B")))
+    WorkbenchRecordingArchive(database_path).save(completion, product, day)
+    rows = _read_rows(database_path)
+    assert {row[1].split("/")[-1]: row[6] for row in rows} == {"station-a.wav": "0001", "station-b.wav": "SN/B"}
