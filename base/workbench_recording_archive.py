@@ -25,14 +25,15 @@ class WorkbenchRecordingArchive:
         try:
             with closing(sqlite3.connect(self._database_path, timeout=self._timeout)) as database, database:
                 database.execute("PRAGMA foreign_keys = ON")
+                barcodes = dict(completion.station_barcodes)
                 for station in completion.stations:
                     file_path = RecordingManager.normalize_audio_path_for_db(station.path)
                     insert = database.execute(
                         "INSERT INTO audio_data_table "
                         "(audio_data_id, file_path, product_model, sample_rate, record_date, "
-                        "labels, barcode, stimulus_id) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL) "
+                        "labels, barcode, stimulus_id) VALUES (?, ?, ?, ?, ?, ?, ?, NULL) "
                         "ON CONFLICT(file_path) DO NOTHING",
-                        (str(uuid1()), file_path, *metadata, "not_labeled"),
+                        (str(uuid1()), file_path, *metadata, "not_labeled", barcodes.get(station.station_id) or None),
                     )
                     if insert.rowcount == 0:
                         existing = database.execute(

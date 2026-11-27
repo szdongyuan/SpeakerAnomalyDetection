@@ -72,6 +72,7 @@ class WorkbenchRecordingPorts:
     notify_archive_error: Callable[[str], None]
     is_closing: Callable[[], bool] = lambda: False
     ve_calibration_store: object = None
+    read_station_sn_codes: Callable[[], object] = lambda: None
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ class _RecordingRound:
     product_code: str
     round_snapshot: RoundSnapshot | None = None
     expected_analysis_keys: frozenset[tuple[str, str]] = frozenset()
+    station_barcodes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1009,6 +1011,8 @@ class MotorWorkbenchController:
                       for ordinal, station in enumerate(config.analysis.context.stations, 1)),
                 sample_number,
                 round_snapshot, expected_keys,
+                tuple((station.station_id, code) for station, code in zip(
+                    config.analysis.context.stations, ports.read_station_sn_codes() or ())),
             )
         elif self._round_counter is not None:
             sample_number = str(round_context.round_snapshot.number)
@@ -1191,6 +1195,7 @@ class MotorWorkbenchController:
         ):
             self._refresh_live_wav_details(datetime.now().date())
         try:
+            result = replace(result, station_barcodes=attempt.round_context.station_barcodes)
             self._recording.submit_archive(
                 result, attempt.product_name, attempt.recorded_on,
                 lambda request_id, error: self._recording_archived(request_id, result, error),

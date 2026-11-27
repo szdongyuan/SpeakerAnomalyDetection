@@ -265,6 +265,7 @@ class WorkbenchRecordingCompletion:
     sample_rate: int
     final_frames: int
     stations: tuple[StationWav, ...]
+    station_barcodes: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self):
         validate_workbench_request_fields(self.request_id, self.sample_rate)
